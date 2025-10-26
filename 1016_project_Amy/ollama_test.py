@@ -15,8 +15,8 @@ for line in response.iter_lines():
     if line:
         data = json.loads(line.decode("utf-8"))
         # 顯示完整 JSON 回傳（方便看格式）
-        print("\n🟢 JSON回傳：", data)
+        print("\n JSON回傳：", data)
 
         # 若回傳已完成，顯示最終文字結果
         if data.get("done"):
-            print("\n💬 模型回覆：", data.get("response"))
+            print("\n 模型回覆：", data.get("response"))
