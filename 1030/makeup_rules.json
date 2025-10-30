@@ -1,0 +1,53 @@
+{
+  "makeup_styles": {
+    "日系妝": {
+      "main_colors": ["蜜桃粉", "珊瑚橘", "奶茶色"],
+      "tone_family": "暖粉調",
+      "base_style": "輕透自然",
+      "keywords": ["清新", "柔和", "自然光感"],
+      "suggested_use": {
+        "eye": "柔霧橘粉眼影，少量暈染",
+        "cheek": "蜜桃粉腮紅",
+        "lip": "珊瑚粉潤澤唇"
+      }
+    },
+    "韓系妝": {
+      "main_colors": ["豆沙粉", "珊瑚粉", "乾玫瑰色"],
+      "tone_family": "粉棕調",
+      "base_style": "水光亮澤",
+      "keywords": ["甜美", "透亮", "乾淨"],
+      "suggested_use": {
+        "eye": "粉棕眼影漸層，搭配淺眼線",
+        "cheek": "乾玫瑰色腮紅",
+        "lip": "豆沙粉漸層唇"
+      }
+    },
+    "歐美妝": {
+      "main_colors": ["暖棕色", "金銅色", "酒紅色"],
+      "tone_family": "暖棕調",
+      "base_style": "霧面立體",
+      "keywords": ["性感", "強烈", "修容明顯"],
+      "suggested_use": {
+        "eye": "深色暈染眼影搭配金屬光澤",
+        "cheek": "陰影修容與高光",
+        "lip": "酒紅或霧面裸棕色唇"
+      }
+    },
+    "泰系妝": {
+      "main_colors": ["焦糖橘", "玫瑰金", "古銅棕"],
+      "tone_family": "金橘調",
+      "base_style": "光澤立體",
+      "keywords": ["異國感", "艷麗", "陽光"],
+      "suggested_use": {
+        "eye": "金橘眼影＋亮片層次",
+        "cheek": "古銅色修容腮紅",
+        "lip": "玫瑰金或橘棕潤澤唇"
+      }
+    }
+  },
+  "metadata": {
+    "version": "0.1-draft",
+    "created_by": "Hsieh Chia Hsuan (Iris)",
+    "description": "妝容風格與色塊對應規則 Placeholder，提供給核心AI模組測試使用"
+  }
+}
