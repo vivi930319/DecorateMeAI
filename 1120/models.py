@@ -1,6 +1,3 @@
-from email.policy import default
-from enum import unique
-from tokenize import String
 from flask_login import UserMixin
 from extensions import bcrypt
 

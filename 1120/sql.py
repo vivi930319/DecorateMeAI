@@ -1,6 +1,6 @@
-from app import app,db
+from app import app
 from extensions import db
-from models import Members, Products, Checkin
+from models import Members
 
 with app.app_context():
     email = "alice4@example.com"
