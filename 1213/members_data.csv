@@ -1,0 +1,4 @@
+phone_number,name,email,raw_password,level,age
+0910111111,Leo Chen,leo@example.com,p12345,gold,35
+0910222222,Mia Lin,mia@example.com,p67890,silver,28
+0910333333,Ken Wu,ken@example.com,p98765,bronze,42
