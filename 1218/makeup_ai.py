@@ -16,7 +16,7 @@ makeup_database = {
         "lip": "濃郁磚紅色或正紅色的霧面唇膏",
         "keywords": "復古、90年代、氣場"
     },
-    "清冷妝(白開水妝)": {
+    "韓式白開水妝": {
         "base": "清透自然偽素顏，像原生肌膚般透亮",
         "eye": "低飽和杏色打底，搭配極細內眼線",
         "lip": "嫩粉色或冷粉色的光澤唇釉",
@@ -52,6 +52,7 @@ def get_ai_makeup_advice(style_name, user_skin_tone="一般膚色"):
     # 這是你在 LM Studio 實驗出的「黃金 System Prompt」
     system_instruction = (
         "你是一位台灣資深專櫃彩妝顧問。說話溫柔、親切且專業。"
+        "你會特別注意色彩學，知道莓果色的唇釉對偏黃膚色有去黃提亮的顯白效果。"
         "請根據提供的產品資訊，為用戶寫一段有畫面感的妝容推薦。"
         "規則：1.多用『親愛的』、『喔』、『呢』。 2.正確使用『唇釉』一詞。"
         "3.禁止提到服裝、場合或出去玩，專注在臉部妝容建議。 4.一律繁體中文。"
@@ -91,11 +92,11 @@ def get_ai_makeup_advice(style_name, user_skin_tone="一般膚色"):
 
 # --- 第三步：主程式執行 ---
 if __name__ == "__main__":
-    print("✨ 歡迎使用 MacBook M3 專業妝容顧問系統 ✨")
+    print("歡迎使用妝容顧問")
     print("-" * 40)
     
     # 模擬 App 傳入參數 (實際應用時可由使用者點選)
-    selected_style = "清冷妝(白開水妝)"
+    selected_style = "韓式白開水妝"
     detected_tone = "膚色偏黃但追求透亮感的女孩"
     
     # 取得建議
