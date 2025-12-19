@@ -1,7 +1,7 @@
 import requests
 import json
 
-# --- 第一步：定義妝容風格字典 ---
+# --- 妝容風格字典 ---
 makeup_database = {
     "泰系妝": {
         "base": "光澤立體底妝",
@@ -35,14 +35,14 @@ makeup_database = {
     }
 }
 
-# --- 第二步：定義呼叫 Ollama 的函式 ---
+# --- 呼叫 Ollama ---
 def get_ai_makeup_advice(style_name, user_skin_tone="一般膚色"):
     # 1. 檢查風格是否存在
     style_info = makeup_database.get(style_name)
     if not style_info:
         return f"抱歉親愛的，『{style_name}』目前還在研發中，敬請期待喔！"
 
-    # 2. 【核心修改】：動態換色邏輯
+    # 2. 換色邏輯
     # 先抓取資料庫預設唇色
     current_lip_color = style_info['lip']
     
@@ -53,7 +53,7 @@ def get_ai_makeup_advice(style_name, user_skin_tone="一般膚色"):
     # 3. 設定 Ollama API 位址
     url = "http://localhost:11434/api/chat"
     
-    # 4. 這是經過 LM Studio 驗證過的「穩定版人格設定」
+    # 4. 經過 LM Studio 驗證過
     system_instruction = (
         "你是一位台灣資深專櫃彩妝顧問。說話溫柔、親切且專業。"
         "請根據提供的產品資訊，為用戶寫一段有畫面感的妝容推薦。"
@@ -61,7 +61,7 @@ def get_ai_makeup_advice(style_name, user_skin_tone="一般膚色"):
         "3.禁止提到服裝、場合或出去玩，專注在臉部妝容建議。 4.一律繁體中文。"
     )
 
-    # 5. 組合 Prompt（傳入已經修正過的唇色）
+    # 5.傳入已經修正過的唇色
     prompt_content = f"""
     請針對以下資訊生成建議：
     【目標風格】：{style_name} (特點：{style_info['keywords']})
@@ -79,7 +79,7 @@ def get_ai_makeup_advice(style_name, user_skin_tone="一般膚色"):
         ],
         "stream": False,
         "options": {
-            "temperature": 0.7,  # 稍微降低一點，讓回答更穩定
+            "temperature": 0.7,  
             "num_predict": 400
         }
     }
@@ -91,12 +91,12 @@ def get_ai_makeup_advice(style_name, user_skin_tone="一般膚色"):
     except Exception as e:
         return f"系統繁忙中，請稍後再試（錯誤：{str(e)}）"
 
-# --- 第三步：主程式執行 ---
+# --- 主程式執行
 if __name__ == "__main__":
-    print("✨ 歡迎使用 MacBook M3 專業妝容顧問系統 ✨")
+    print(" 歡迎使用彩妝顧問 ")
     print("-" * 40)
     
-    # 測試情境
+    # 測試
     selected_style = "韓式白開水妝"
     detected_tone = "膚色偏黃但追求透亮感的女孩"
     
