@@ -100,7 +100,7 @@ def insert_single_test_member():
         print(f"單次插入過程中發生錯誤，已回滾：{e}")
 
 
-# 區塊三：執行入口
+# 執行入口
 if __name__ == '__main__':
     with app.app_context():
         # 執行批量插入 CSV

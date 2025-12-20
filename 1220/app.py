@@ -4,6 +4,7 @@ import config
 from models import Members
 from forms import RegistrationForm, LoginForm , ChangePasswordForm # 修正導入
 from flask_login import login_user, current_user, logout_user, login_required
+from flask import jsonify
 
 
 #app.py 是整個 Flask 應用程式的主程式和入口點，負責設定環境、連接資料庫、定義網頁路徑（路由），以及處理所有的使用者互動邏輯（註冊、登入）
@@ -123,6 +124,25 @@ def logout():
 @login_required
 def profile():
     return f"歡迎來到會員中心，{current_user.name}！您的電話號碼是 {current_user.phone_number}，等級是 {current_user.level}。"
+
+
+@app.route('/api/members', methods=['GET'])
+def get_members_api():
+    members = Members.query.all()
+
+    # 將會員物件轉換為字典列表
+    output = []
+    for member in members:
+        member_data = {
+            'phone_number': member.phone_number,
+            'name': member.name,
+            'email': member.email,
+            'level': member.level,
+            'age': member.age
+        }
+        output.append(member_data)
+
+    return jsonify({'members': output})
 
 
 if __name__ == "__main__":
