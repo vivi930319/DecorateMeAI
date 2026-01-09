@@ -53,7 +53,7 @@ def get_customized_makeup_advice(style_name, face_shape, skin_detail):
         "4. **隨機開場**：每次回答的開頭都要不同，不要總是重複『妳好』。"
     )
 
-    # 修改：Prompt 結構改為「背景參考資料」，而非「命令清單」
+   
     prompt_content = f"""
     以下是這位女孩的【專屬分析】，請妳用妳的創意把它們串成一段溫暖的建議：
     
