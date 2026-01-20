@@ -1,10 +1,11 @@
 from flask import Flask, url_for, flash, redirect, request, render_template
 from extensions import db, bcrypt, login_manager
 import config
-from models import Members
-from forms import RegistrationForm, LoginForm , ChangePasswordForm # 修正導入
+from models import Members, Products, Favorites
+from forms import RegistrationForm, LoginForm , ChangePasswordForm
 from flask_login import login_user, current_user, logout_user, login_required
 from flask import jsonify
+from extensions import db
 
 
 #app.py 是整個 Flask 應用程式的主程式和入口點，負責設定環境、連接資料庫、定義網頁路徑（路由），以及處理所有的使用者互動邏輯（註冊、登入）
@@ -110,6 +111,42 @@ def change_password():
     # 需要 change_password.html 模板
     return render_template('change_password.html', title='更改密碼', form=form)
 
+#我的最愛清單-點擊收藏 (新增/刪除）
+@app.route('/api/favorites/toggle', methods=['POST'])
+def toggle_favorite():
+    data = request.json
+    phone = data.get('phone_number')
+    p_id = data.get('product_id')
+
+    # 檢查是否已收藏
+    fav = Favorites.query.filter_by(member_id=phone, product_id=p_id).first()
+
+    # 取消收藏
+    if fav:
+        db.session.delete(fav)
+        db.session.commit()
+        return jsonify({"status": "removed", "message": "已從我的最愛移除"})
+    #加入收藏
+    else:
+        new_fav = Favorites(member_id=phone, product_id=p_id)
+        db.session.add(new_fav)
+        db.session.commit()
+        return jsonify({"status": "added", "message": "已加入我的最愛"})
+
+
+@app.route('/api/members/<phone>/favorites', methods=['GET'])
+def get_user_favorites(phone):
+    # 找出該會員的所有收藏
+    favs = Favorites.query.filter_by(member_id=phone).all()
+    # 透過關聯取得產品詳細資訊
+    product_list = [{
+        "id": f.product.id,
+        "name": f.product.name,
+        "price": float(f.product.price),
+        "image_url": f.product.image_url
+    } for f in favs]
+    return jsonify({"favorites": product_list})
+
 
 # 登出功能
 @app.route("/logout")
@@ -126,23 +163,37 @@ def profile():
     return f"歡迎來到會員中心，{current_user.name}！您的電話號碼是 {current_user.phone_number}，等級是 {current_user.level}。"
 
 
+# 新增 API 路由給 Swift 使用
 @app.route('/api/members', methods=['GET'])
 def get_members_api():
+    # 查詢資料庫中所有的會員
     members = Members.query.all()
 
-    # 將會員物件轉換為字典列表
-    output = []
-    for member in members:
-        member_data = {
-            'phone_number': member.phone_number,
-            'name': member.name,
-            'email': member.email,
-            'level': member.level,
-            'age': member.age
-        }
-        output.append(member_data)
+    # JSON 格式
+    member_list = []
+    for m in members:
+        member_list.append({
+            "name": m.name,
+            "phone_number": m.phone_number,
+            "level": m.level,
+            "email": m.email
+        })
+    return jsonify({"members": member_list})
 
-    return jsonify({'members': output})
+@app.route('/api/products', methods=['GET'])
+def get_products_api():
+    products = Products.query.all()
+    return jsonify({
+        "products": [
+            {
+                "id": p.id,
+                "image_url": p.image_url if p.image_url else "https://via.placeholder.com/150.png",
+                "name": p.name,
+                "price": float(p.price),
+                "description": p.description or "暫無描述"
+            } for p in products
+        ]
+    })
 
 
 if __name__ == "__main__":

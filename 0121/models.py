@@ -39,12 +39,13 @@ class Members(db.Model, UserMixin):
 
 #產品資料，用於儲存和管理應用程式中所有可供銷售、展示或追蹤的商品信息，裡面包括了每件產品的唯一識別碼（id 欄位）、名稱（name）和定價（price），stock 欄位追蹤每件商品
 # 的庫存數量，也包含詳細的描述（description）和商品創建的時間
+ # 儲存圖片網址
 class Products(db.Model):
     __tablename__ = "products"
     id = db.Column(db.Integer, primary_key=True)
+    image_url = db.Column(db.String(255), nullable=True)
     name = db.Column(db.String(50), nullable=False)
     price = db.Column(db.Numeric(10, 2), nullable=False)
-    stock = db.Column(db.Integer, default=0)
     description = db.Column(db.Text)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
@@ -56,3 +57,18 @@ class Checkin(db.Model):
     member_id = db.Column(db.String(20), db.ForeignKey('members.phone_number'), nullable=False)
     checkin_time = db.Column(db.DateTime, server_default=db.func.now())
     note = db.Column(db.Text)
+
+
+class Favorites(db.Model):
+    __tablename__ = 'favorites'
+    id = db.Column(db.Integer, primary_key=True)
+
+    # 指向會員的電話 (外鍵)
+    member_id = db.Column(db.String(20), db.ForeignKey('members.phone_number'), nullable=False)
+    # 指向產品的 ID (外鍵)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    # 建立關聯，方便在 Python 裡直接查詢物件
+    member = db.relationship('Members', backref=db.backref('favorite_list', lazy=True))
+    product = db.relationship('Products', backref=db.backref('favorited_by', lazy=True))
