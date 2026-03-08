@@ -1,0 +1,31 @@
+#一定要先去把json檔轉yolo再來跑這個
+# my_data.yaml 示例
+#這裡是轉yaml為了去跑模型
+
+#路徑，複製完整的比較不會出錯
+#這裡自己創建一個資料夾，要跟yolo模組的放在一起比較好
+path: C:\Users\isach\PycharmProjects\makeup_facing\My_Project_Data
+
+# 這裡要開資料夾，相對路徑
+train: images/train
+val: images/val
+
+# 標記標籤數量
+nc: 10  # 比如您标注了猫、狗、人 3个类别，则填 3
+
+
+# 標籤名稱
+# 顺序必须跟在 TXT 文件中使用的类别 ID (0, 1, 2...) 的順序對應
+#ID都嘗試照list的方向去排序不用特別去記，只是json轉yolo的時候這兩個list直接複製即可
+names:
+  [ "dark_circle_L",
+    "dark_circle_R",
+    "mouth",
+    "eyebrow_L",
+    "eyebrow_R",
+    "nose_hightlight_up",
+    "nose_hightlight_down",
+    "eye_left",
+    "eye_right",
+    "acne"
+    ]
