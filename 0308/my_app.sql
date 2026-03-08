@@ -4,6 +4,7 @@ DROP TABLE IF EXISTS favorites;
 DROP TABLE IF EXISTS checkins;
 DROP TABLE IF EXISTS products;
 DROP TABLE IF EXISTS members;
+DROP TABLE IF EXISTS color_palettes;
 
 -- 創建 members 表格 (會員)
 -- 主鍵: phone_number
@@ -67,3 +68,13 @@ CREATE TABLE favorites (
   -- 確保同一個會員不會重複收藏同一個產品
   UNIQUE KEY unique_user_product (member_id, product_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- 創建色碼資料庫表格
+CREATE TABLE color_palettes (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(100),           -- 顏色、組合、名稱
+    hex_code VARCHAR(7) NOT NULL UNIQUE,-- 色碼
+    source_url VARCHAR(255),      -- 爬蟲來源網址
+    tags VARCHAR(100),            -- 標籤 （溫暖, 色調）
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

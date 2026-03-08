@@ -1,7 +1,7 @@
 from flask import Flask, url_for, flash, redirect, request, render_template
 from extensions import db, bcrypt, login_manager
 import config
-from models import Members, Products, Favorites
+from models import Members, Products, Favorites,ColorPalettes
 from forms import RegistrationForm, LoginForm , ChangePasswordForm
 from flask_login import login_user, current_user, logout_user, login_required
 from flask import jsonify
@@ -192,6 +192,19 @@ def get_products_api():
                 "price": float(p.price),
                 "description": p.description or "暫無描述"
             } for p in products
+        ]
+    })
+
+@app.route('/api/colors', methods=['GET'])
+def get_colors():
+    colors = ColorPalettes.query.all()
+    return jsonify({
+        "colors": [
+            {
+                "title": c.title,
+                "hex": c.hex_code,
+                "tags": c.tags
+            } for c in colors
         ]
     })
 

@@ -61,7 +61,15 @@ class Checkin(db.Model):
 
 class Favorites(db.Model):
     __tablename__ = 'favorites'
+
     id = db.Column(db.Integer, primary_key=True)
+    member_id = db.Column(db.String(20), db.ForeignKey('members.phone_number'), nullable=False)
+    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
+
+    # 建立關聯，方便查詢
+    member = db.relationship('Members', backref=db.backref('favorites_assoc', lazy=True))
+    product = db.relationship('Products', backref=db.backref('favorited_by_assoc', lazy=True))
 
     # 指向會員的電話 (外鍵)
     member_id = db.Column(db.String(20), db.ForeignKey('members.phone_number'), nullable=False)
@@ -72,3 +80,13 @@ class Favorites(db.Model):
     # 建立關聯，方便在 Python 裡直接查詢物件
     member = db.relationship('Members', backref=db.backref('favorite_list', lazy=True))
     product = db.relationship('Products', backref=db.backref('favorited_by', lazy=True))
+
+class ColorPalettes(db.Model):
+    __tablename__ = 'color_palettes'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    title = db.Column(db.String(100))
+    hex_code = db.Column(db.String(7), nullable=False, unique=True)
+    source_url = db.Column(db.String(255))
+    tags = db.Column(db.String(100))
+    created_at = db.Column(db.DateTime, server_default=db.func.now())
