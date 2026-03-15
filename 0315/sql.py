@@ -111,13 +111,15 @@ def batch_insert_products_from_csv():
         with open(PRODUCT_CSV, mode='r', encoding='utf-8') as file:
             reader = csv.DictReader(file)
             for row in reader:
+                raw_price = row['price']
+                clean_price = raw_price.replace('NT$', '').replace(',', '').strip()
                 if Products.query.filter_by(name=row['name']).first():
                     print(f"產品「{row['name']}」已存在，跳過。")
                     continue
                 p = Products(
-                    image_url=row['image_url'],
                     name=row['name'],
-                    price=float(row['price']),
+                    price=float(clean_price),
+                    image_url=row['image_url'] or "https://via.placeholder.com/150.png",
                     description=row['description']
                 )
                 db.session.add(p)
@@ -138,9 +140,9 @@ def insert_single_product():
             existing = Products.query.filter_by(name=item['name']).first()
             if not existing:
                 new_product = Products(
-                    image_url=item['img'],
                     name=item['name'],
                     price=item['price'],
+                    image_url=item['img'],
                     description=item['desc']
                 )
                 db.session.add(new_product) # 修正：確保在 if 內部

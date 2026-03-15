@@ -10,7 +10,7 @@ class Members(db.Model, UserMixin):
     # 使用 phone_number 作為主鍵
     phone_number = db.Column(db.String(20), primary_key=True, unique=True)
 
-    name = db.Column(db.String(50), primary_key=False)
+    name = db.Column(db.String(50), nullable=True)
     email = db.Column(db.String(100), unique=True, nullable=False)
     # 密碼儲存雜湊值
     password_hash = db.Column(db.String(255), nullable=False)
@@ -43,10 +43,11 @@ class Members(db.Model, UserMixin):
 class Products(db.Model):
     __tablename__ = "products"
     id = db.Column(db.Integer, primary_key=True)
-    image_url = db.Column(db.String(255), nullable=True)
-    name = db.Column(db.String(50), nullable=False)
+    name = db.Column(db.String(255), nullable=False)
     price = db.Column(db.Numeric(10, 2), nullable=False)
+    image_url = db.Column(db.String(255), nullable=False)
     description = db.Column(db.Text)
+    favorite_count = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
 
@@ -61,16 +62,11 @@ class Checkin(db.Model):
 
 class Favorites(db.Model):
     __tablename__ = 'favorites'
+    __table_args__ = (
+        db.UniqueConstraint('member_id', 'product_id', name='uq_member_product'),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
-    member_id = db.Column(db.String(20), db.ForeignKey('members.phone_number'), nullable=False)
-    product_id = db.Column(db.Integer, db.ForeignKey('products.id'), nullable=False)
-    created_at = db.Column(db.DateTime, server_default=db.func.now())
-
-    # 建立關聯，方便查詢
-    member = db.relationship('Members', backref=db.backref('favorites_assoc', lazy=True))
-    product = db.relationship('Products', backref=db.backref('favorited_by_assoc', lazy=True))
-
     # 指向會員的電話 (外鍵)
     member_id = db.Column(db.String(20), db.ForeignKey('members.phone_number'), nullable=False)
     # 指向產品的 ID (外鍵)

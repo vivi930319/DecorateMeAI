@@ -1,11 +1,12 @@
-from flask import Flask, url_for, flash, redirect, request, render_template
-from extensions import db, bcrypt, login_manager
-import config
-from models import Members, Products, Favorites,ColorPalettes
-from forms import RegistrationForm, LoginForm , ChangePasswordForm
+from datetime import date
+from flask import Flask, url_for, flash, redirect, request, render_template, jsonify
 from flask_login import login_user, current_user, logout_user, login_required
-from flask import jsonify
-from extensions import db
+from sqlalchemy.exc import IntegrityError
+
+import config
+from extensions import db, bcrypt, login_manager
+from models import Members, Products, Favorites, ColorPalettes, Checkin
+from forms import RegistrationForm, LoginForm, ChangePasswordForm
 
 
 #app.py 是整個 Flask 應用程式的主程式和入口點，負責設定環境、連接資料庫、定義網頁路徑（路由），以及處理所有的使用者互動邏輯（註冊、登入）
@@ -13,7 +14,7 @@ app = Flask(__name__)
 #從config.py 檔案中載入所有設定，和資料庫的連線資訊 (SQLALCHEMY_DATABASE_URI)
 app.config.from_object(config)
 #設定一個秘密金鑰，這是 Flask 用於保護網站安全
-app.config['SECRET_KEY'] = 'your_secret_key_here'
+app.config['SECRET_KEY'] = getattr(config, 'SECRET_KEY', 'change-me')
 db.init_app(app)
 bcrypt.init_app(app)
 login_manager.init_app(app)
@@ -45,18 +46,25 @@ def register():
 
     form = RegistrationForm()
     if form.validate_on_submit():
-        member = Members(
-            phone_number=form.phone_number.data,
-            name=form.name.data,
-            email=form.email.data,
-            password=form.password.data,
-            age=form.age.data,
-            level=form.level.data
-        )
-        db.session.add(member)
-        db.session.commit()
-        flash('您的帳號已建立！現在可以登入了。', 'success')
-        return redirect(url_for('login'))
+        try:
+            member = Members(
+                phone_number=form.phone_number.data,
+                name=form.name.data,
+                email=form.email.data.strip().lower(),
+                password=form.password.data,
+                age=form.age.data,
+                level=form.level.data if form.level.data in {"bronze", "silver", "gold"} else "bronze"
+            )
+            db.session.add(member)
+            db.session.commit()
+            flash('您的帳號已建立！現在可以登入了。', 'success')
+            return redirect(url_for('login'))
+        except IntegrityError:
+            db.session.rollback()
+            flash('電話或 Email 已存在，請改用其他資訊。', 'danger')
+        except Exception:
+            db.session.rollback()
+            flash('註冊失敗，請稍後再試。', 'danger')
 
     # 需要 register.html 模板
     return render_template('register.html', title='註冊', form=form)
@@ -70,7 +78,7 @@ def login():
 
     form = LoginForm()
     if form.validate_on_submit():
-        member = Members.query.filter_by(email=form.email.data).first()
+        member = Members.query.filter_by(email=form.email.data.strip().lower()).first()
         if member and member.verify_password(form.password.data):
             login_user(member)
             next_page = request.args.get('next')
@@ -114,9 +122,12 @@ def change_password():
 #我的最愛清單-點擊收藏 (新增/刪除）
 @app.route('/api/favorites/toggle', methods=['POST'])
 def toggle_favorite():
-    data = request.json
+    data = request.get_json(silent=True) or {}
     phone = data.get('phone_number')
     p_id = data.get('product_id')
+
+    if not phone or p_id is None:
+        return jsonify({"status": "error", "message": "缺少 phone_number 或 product_id"}), 400
 
     # 檢查是否已收藏
     fav = Favorites.query.filter_by(member_id=phone, product_id=p_id).first()
@@ -124,14 +135,24 @@ def toggle_favorite():
     # 取消收藏
     if fav:
         db.session.delete(fav)
+        product = Products.query.get(p_id)
+        if product and product.favorite_count > 0:
+            product.favorite_count -= 1
         db.session.commit()
         return jsonify({"status": "removed", "message": "已從我的最愛移除"})
     #加入收藏
     else:
-        new_fav = Favorites(member_id=phone, product_id=p_id)
-        db.session.add(new_fav)
-        db.session.commit()
-        return jsonify({"status": "added", "message": "已加入我的最愛"})
+        try:
+            new_fav = Favorites(member_id=phone, product_id=p_id)
+            db.session.add(new_fav)
+            product = Products.query.get(p_id)
+            if product:
+                product.favorite_count = (product.favorite_count or 0) + 1
+            db.session.commit()
+            return jsonify({"status": "added", "message": "已加入我的最愛"})
+        except IntegrityError:
+            db.session.rollback()
+            return jsonify({"status": "error", "message": "此商品已在收藏清單"}), 400
 
 
 @app.route('/api/members/<phone>/favorites', methods=['GET'])
@@ -143,9 +164,32 @@ def get_user_favorites(phone):
         "id": f.product.id,
         "name": f.product.name,
         "price": float(f.product.price),
-        "image_url": f.product.image_url
+        "image_url": f.product.image_url or "https://via.placeholder.com/150.png",
+        "description": f.product.description or "暫無描述",
+        "favorite_count": f.product.favorite_count or 0
     } for f in favs]
     return jsonify({"favorites": product_list})
+
+# 會員簽到，對應資料庫 sp_member_checkin
+@app.route('/api/checkins', methods=['POST'])
+@login_required
+def add_checkin():
+    data = request.get_json(silent=True) or {}
+    note = data.get('note', '')
+    today = date.today()
+
+    # 防止同一天重複簽到 (模擬 trigger trg_prevent_multiple_checkin)
+    exists = Checkin.query.filter(
+        Checkin.member_id == current_user.phone_number,
+        db.func.date(Checkin.checkin_time) == today
+    ).first()
+    if exists:
+        return jsonify({"message": "今日已簽到"}), 400
+
+    new_checkin = Checkin(member_id=current_user.phone_number, note=note)
+    db.session.add(new_checkin)
+    db.session.commit()
+    return jsonify({"message": "簽到完成", "checkin_time": new_checkin.checkin_time})
 
 
 # 登出功能
@@ -180,6 +224,31 @@ def get_members_api():
         })
     return jsonify({"members": member_list})
 
+@app.route('/api/members/<phone>/stats', methods=['GET'])
+def get_member_stats(phone):
+    member = Members.query.get(phone)
+    if not member:
+        return jsonify({"message": "找不到會員"}), 404
+
+    checkins = Checkin.query.filter_by(member_id=phone).count()
+    favorites = Favorites.query.filter_by(member_id=phone).count()
+    last_checkin = db.session.query(db.func.max(Checkin.checkin_time)).filter_by(member_id=phone).scalar()
+
+    return jsonify({
+        "member": {
+            "name": member.name,
+            "level": member.level,
+            "email": member.email,
+            "phone_number": member.phone_number,
+            "age": member.age,
+        },
+        "stats": {
+            "total_checkins": checkins,
+            "total_favorites": favorites,
+            "last_checkin_at": last_checkin
+        }
+    })
+
 @app.route('/api/products', methods=['GET'])
 def get_products_api():
     products = Products.query.all()
@@ -189,10 +258,33 @@ def get_products_api():
                 "id": p.id,
                 "image_url": p.image_url if p.image_url else "https://via.placeholder.com/150.png",
                 "name": p.name,
-                "price": float(p.price),
-                "description": p.description or "暫無描述"
+                "price": f'NT${p.price:.0f}',
+                "description": p.description or "暫無描述",
+                "favorite_count": p.favorite_count or 0
             } for p in products
         ]
+    })
+
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    data = request.get_json(silent=True) or {}
+    email = (data.get('email') or '').strip().lower()
+    password = data.get('password') or ''
+
+    if not email or not password:
+        return jsonify({"message": "請輸入 email 與密碼"}), 400
+
+    member = Members.query.filter_by(email=email).first()
+    if not member or not member.verify_password(password):
+        return jsonify({"message": "帳號或密碼錯誤"}), 401
+
+    return jsonify({
+        "member": {
+            "name": member.name,
+            "phone_number": member.phone_number,
+            "level": member.level,
+            "email": member.email
+        }
     })
 
 @app.route('/api/colors', methods=['GET'])
