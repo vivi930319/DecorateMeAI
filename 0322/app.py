@@ -3,11 +3,17 @@ from flask import Flask, url_for, flash, redirect, request, render_template, jso
 from flask_cors import CORS
 from flask_login import login_user, current_user, logout_user, login_required
 from sqlalchemy.exc import IntegrityError
-
 import config
+import os, smtplib, random, string
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from dotenv import load_dotenv
+import redis
+
 from extensions import db, bcrypt, login_manager
 from models import Members, Products, Favorites, ColorPalettes, Checkin
 from forms import RegistrationForm, LoginForm, ChangePasswordForm
+load_dotenv()
 
 
 #app.py 是整個 Flask 應用程式的主程式和入口點，負責設定環境、連接資料庫、定義網頁路徑（路由），以及處理所有的使用者互動邏輯（註冊、登入）
@@ -20,6 +26,14 @@ app.config['SECRET_KEY'] = getattr(config, 'SECRET_KEY', 'change-me')
 db.init_app(app)
 bcrypt.init_app(app)
 login_manager.init_app(app)
+r = redis.Redis(
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", 6379)),
+    password=os.getenv("REDIS_PASSWORD") or None,
+    decode_responses=True
+)
+OTP_EXPIRE = int(os.getenv("OTP_EXPIRE_SECONDS", 300))
+
 
 #2. Flask-Login 會員管理，這部分是應用程式實現誰已登入的狀態
 login_manager.login_view = 'login'
@@ -120,6 +134,66 @@ def change_password():
 
     # 需要 change_password.html 模板
     return render_template('change_password.html', title='更改密碼', form=form)
+
+# ── OTP 工具函式 ──
+def generate_otp(length=6):
+    return ''.join(random.choices(string.digits, k=length))
+
+def redis_key(email):
+    return f"otp:{email}"
+
+def send_otp_email(to_email, otp_code):
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASS")
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = "您的驗證碼"
+    msg["From"]    = smtp_user
+    msg["To"]      = to_email
+    html = f"""
+    <html><body>
+      <h2>您的一次性驗證碼</h2>
+      <p style="font-size:32px;font-weight:bold;letter-spacing:8px;">{otp_code}</p>
+      <p>此驗證碼 <strong>{OTP_EXPIRE // 60} 分鐘</strong>內有效。</p>
+    </body></html>
+    """
+    msg.attach(MIMEText(html, "html"))
+    with smtplib.SMTP(os.getenv("SMTP_HOST", "smtp.gmail.com"),
+                      int(os.getenv("SMTP_PORT", 587))) as server:
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(smtp_user, to_email, msg.as_string())
+
+# ── OTP 路由 ──
+@app.route("/api/send-otp", methods=["POST"])
+def send_otp():
+    data  = request.get_json()
+    email = data.get("email", "").strip().lower()
+    if not email:
+        return jsonify({"error": "Email 不得為空"}), 400
+    ttl = r.ttl(redis_key(email))
+    if ttl and ttl > (OTP_EXPIRE - 60):
+        return jsonify({"error": "請稍後再重新發送"}), 429
+    otp = generate_otp()
+    r.setex(redis_key(email), OTP_EXPIRE, otp)
+    try:
+        send_otp_email(email, otp)
+        return jsonify({"message": "驗證碼已寄出"}), 200
+    except Exception as e:
+        r.delete(redis_key(email))
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/verify-otp", methods=["POST"])
+def verify_otp():
+    data  = request.get_json()
+    email = data.get("email", "").strip().lower()
+    otp   = data.get("otp", "").strip()
+    stored = r.get(redis_key(email))
+    if stored is None:
+        return jsonify({"success": False, "error": "驗證碼不存在或已逾時"}), 400
+    if otp != stored:
+        return jsonify({"success": False, "error": "驗證碼錯誤"}), 400
+    r.delete(redis_key(email))
+    return jsonify({"success": True, "message": "驗證成功"}), 200
 
 #我的最愛清單-點擊收藏 (新增/刪除）
 @app.route('/api/favorites/toggle', methods=['POST'])
