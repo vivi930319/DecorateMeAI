@@ -1,5 +1,6 @@
 from datetime import date
 from flask import Flask, url_for, flash, redirect, request, render_template, jsonify
+from flask_cors import CORS
 from flask_login import login_user, current_user, logout_user, login_required
 from sqlalchemy.exc import IntegrityError
 
@@ -11,6 +12,7 @@ from forms import RegistrationForm, LoginForm, ChangePasswordForm
 
 #app.py 是整個 Flask 應用程式的主程式和入口點，負責設定環境、連接資料庫、定義網頁路徑（路由），以及處理所有的使用者互動邏輯（註冊、登入）
 app = Flask(__name__)
+CORS(app)
 #從config.py 檔案中載入所有設定，和資料庫的連線資訊 (SQLALCHEMY_DATABASE_URI)
 app.config.from_object(config)
 #設定一個秘密金鑰，這是 Flask 用於保護網站安全
@@ -287,6 +289,49 @@ def api_login():
         }
     })
 
+@app.route('/api/register', methods=['POST'])
+def api_register():
+    data = request.get_json(silent=True) or {}
+    phone    = data.get('phone_number', '').strip()
+    name     = data.get('name', '').strip()
+    email    = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+    age      = data.get('age')
+
+    if not all([phone, name, email, password, age]):
+        return jsonify({"message": "所有欄位皆為必填"}), 400
+
+    if Members.query.filter_by(email=email).first():
+        return jsonify({"message": "Email 已被註冊"}), 409
+    if Members.query.filter_by(phone_number=phone).first():
+        return jsonify({"message": "電話號碼已被註冊"}), 409
+
+    try:
+        member = Members(
+            phone_number=phone,
+            name=name,
+            email=email,
+            password=password,
+            age=int(age),
+            level='bronze'
+        )
+        db.session.add(member)
+        db.session.commit()
+        return jsonify({
+            "message": "註冊成功",
+            "member": {
+                "phone_number": phone,
+                "name": name,
+                "email": email,
+                "level": "bronze"
+            }
+        }), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": f"註冊失敗：{e}"}), 500
+
+
+
 @app.route('/api/colors', methods=['GET'])
 def get_colors():
     colors = ColorPalettes.query.all()
@@ -304,4 +349,4 @@ def get_colors():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-        app.run(debug=True)
+        app.run(host='0.0.0.0', port=8080, debug=True)

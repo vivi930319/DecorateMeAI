@@ -1,8 +1,8 @@
 import os
-DB_USER ='root'
-DB_PASSWORD = '20050823'
-DB_HOST = 'localhost'
-DB_NAME = 'my_app'
+DB_USER ='B'
+DB_PASSWORD = 'YUchen0207'
+DB_HOST = '100.108.90.126'
+DB_NAME = 'app'
 
 SQLALCHEMY_DATABASE_URI = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}"
 SQLALCHEMY_TRACK_MODIFICATIONS = False
