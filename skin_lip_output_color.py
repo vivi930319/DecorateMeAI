@@ -5,7 +5,7 @@ import json
 
 # np.fromfile 解決 cv2.imread 不支援中文路徑和 webp 格式的問題
 frame = cv2.imdecode(
-    np.fromfile(r"C:\Users\isach\PycharmProjects\PythonProject12\c230aaf4233e477da62072669d342acf.webp", dtype=np.uint8),
+    np.fromfile(r"C:\Users\isach\PycharmProjects\PythonProject12\IMG_9929.JPG", dtype=np.uint8),
     cv2.IMREAD_COLOR
 )
 
@@ -36,7 +36,7 @@ face_mask = np.zeros((h, w), dtype=np.uint8)
 
 # 嘴唇遮罩要獨立出來
 # 因為等等cutout會把嘴唇從face_mask挖掉，先算才來得及
-lip_mask = np.zeros((h, w), dtype=np.uint8)
+lip_mask  = np.zeros((h, w), dtype=np.uint8)
 mean_lip_rgb = None
 
 # 如果沒偵測到臉multi_face_landmarks會是None，所以要先判斷
@@ -82,14 +82,14 @@ if results.multi_face_landmarks:
         cutout(mp_face_mesh.FACEMESH_LEFT_EYE)
         cutout(mp_face_mesh.FACEMESH_RIGHT_EYE)
 
-# hsv可以把顏色拆成色相、飽和、亮度，比bgr更好定義膚色範圍
-hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+# Lab可以把亮度獨立出來，ab才是純色彩，比HSV更適合膚色分析
+lab = cv2.cvtColor(frame, cv2.COLOR_BGR2Lab)
 
-# 膚色範圍根據大眾膚色定義，淺膚到深膚都涵蓋到
-# H(色相)  0~25  : 皮膚的橘紅色調，超過就不是皮膚
-# S(飽和) 20~180 : 下限排掉太灰的，上限排掉太豔的妝容
-# V(亮度) 50~255 : 下限排掉臉上太暗的陰影
-color_mask = cv2.inRange(hsv, np.array([0, 20, 50]), np.array([25, 180, 255]))
+# Lab膚色範圍，淺膚到深膚都涵蓋
+# L(亮度)   20~230 : 排掉太暗的陰影和太亮的反光
+# a(綠~紅) 135~175 : 皮膚偏紅調，低於135偏綠不是皮膚
+# b(藍~黃) 130~175 : 皮膚偏黃調，低於130偏藍不是皮膚
+color_mask = cv2.inRange(lab, np.array([20, 135, 130]), np.array([230, 175, 175]))
 
 # 橢圓形核比方形更貼合皮膚邊緣的自然曲線
 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
@@ -117,3 +117,42 @@ result = {
 }
 with open("skin_color.json", "w") as f:
     json.dump(result, f, indent=4)
+
+# ── 視覺化 ────────────────────────────────────────────────────────
+# rgb轉bgr，opencv畫圖要用bgr
+skin_bgr = (int(mean_rgb[2]),     int(mean_rgb[1]),     int(mean_rgb[0]))
+lip_bgr  = (int(mean_lip_rgb[2]), int(mean_lip_rgb[1]), int(mean_lip_rgb[0]))
+
+# 用小圖騙過cvtColor，它需要圖片格式才能轉色彩空間
+skin_lab = cv2.cvtColor(np.uint8([[skin_bgr]]), cv2.COLOR_BGR2Lab)[0][0]
+lip_lab  = cv2.cvtColor(np.uint8([[lip_bgr]]),  cv2.COLOR_BGR2Lab)[0][0]
+
+# 建一張空白畫布
+canvas = np.ones((320, 500, 3), dtype=np.uint8) * 30
+
+# 膚色色塊，-1是填滿
+cv2.rectangle(canvas, (50, 60),  (190, 180), skin_bgr, -1)
+cv2.rectangle(canvas, (50, 60),  (190, 180), (200, 200, 200), 1)
+
+# 嘴唇色塊
+cv2.rectangle(canvas, (260, 60), (400, 180), lip_bgr, -1)
+cv2.rectangle(canvas, (260, 60), (400, 180), (200, 200, 200), 1)
+
+# 標籤
+cv2.putText(canvas, "Skin", (85, 215),  cv2.FONT_HERSHEY_SIMPLEX, 0.7,  (200, 200, 200), 1)
+cv2.putText(canvas, "Lip",  (295, 215), cv2.FONT_HERSHEY_SIMPLEX, 0.7,  (200, 200, 200), 1)
+
+# RGB數值
+cv2.putText(canvas, f"R{int(mean_rgb[0])} G{int(mean_rgb[1])} B{int(mean_rgb[2])}",             (25, 245),  cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 180), 1)
+cv2.putText(canvas, f"R{int(mean_lip_rgb[0])} G{int(mean_lip_rgb[1])} B{int(mean_lip_rgb[2])}", (235, 245), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (180, 180, 180), 1)
+
+# ab軸減128才是真正的Lab數值，opencv的ab是0~255但實際Lab是-128~127
+cv2.putText(canvas, f"L{skin_lab[0]} a{skin_lab[1]-128} b{skin_lab[2]-128}", (25, 275),  cv2.FONT_HERSHEY_SIMPLEX, 0.42, (150, 150, 150), 1)
+cv2.putText(canvas, f"L{lip_lab[0]} a{lip_lab[1]-128} b{lip_lab[2]-128}",    (235, 275), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (150, 150, 150), 1)
+
+# 存成圖片，不用開視窗
+cv2.imwrite("color_result.png", canvas)
+print("color_result.png 已儲存")
+cv2.imshow("Color Result", canvas)
+cv2.waitKey(0)
+cv2.destroyAllWindows()
