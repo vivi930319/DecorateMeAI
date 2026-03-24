@@ -1,14 +1,14 @@
-import os, smtplib, random, string
+import os
 from flask import Flask, request, jsonify
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
 import redis
+
+from otp_utils import generate_otp, redis_key, send_otp_email, attempt_key
 
 load_dotenv()
 app = Flask(__name__)
 
-# ── Redis 連線
+# Redis 連線
 r = redis.Redis(
     host=os.getenv("REDIS_HOST", "localhost"),
     port=int(os.getenv("REDIS_PORT", 6379)),
@@ -18,38 +18,7 @@ r = redis.Redis(
 OTP_EXPIRE = int(os.getenv("OTP_EXPIRE_SECONDS", 300))
 
 
-def generate_otp(length=6):
-    return ''.join(random.choices(string.digits, k=length))
-
-def redis_key(email):
-    return f"otp:{email}"
-
-def send_otp_email(to_email, otp_code):
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("SMTP_PASS")
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = "您的驗證碼"
-    msg["From"]    = smtp_user
-    msg["To"]      = to_email
-
-    html = f"""
-    <html><body>
-      <h2>您的一次性驗證碼</h2>
-      <p style="font-size:32px;font-weight:bold;letter-spacing:8px;">{otp_code}</p>
-      <p>此驗證碼 <strong>{OTP_EXPIRE // 60} 分鐘</strong>內有效，請勿分享給他人。</p>
-    </body></html>
-    """
-    msg.attach(MIMEText(html, "html"))
-
-    with smtplib.SMTP(os.getenv("SMTP_HOST", "smtp.gmail.com"),
-                      int(os.getenv("SMTP_PORT", 587))) as server:
-        server.starttls()
-        server.login(smtp_user, smtp_pass)
-        server.sendmail(smtp_user, to_email, msg.as_string())
-
-
-# ── API：送出 OTP
+# API-送出 OTP
 @app.route("/send-otp", methods=["POST"])
 def send_otp():
     data  = request.get_json()
@@ -59,7 +28,7 @@ def send_otp():
 
     # 防止短時間內重複送
     ttl = r.ttl(redis_key(email))
-    if ttl and ttl > (OTP_EXPIRE - 60):
+    if ttl != -2 and ttl > (OTP_EXPIRE - 60):
         return jsonify({"error": "請稍後再重新發送"}), 429
 
     otp = generate_otp()
@@ -68,14 +37,14 @@ def send_otp():
     r.setex(redis_key(email), OTP_EXPIRE, otp)
 
     try:
-        send_otp_email(email, otp)
+        send_otp_email(email, otp, OTP_EXPIRE)
         return jsonify({"message": "驗證碼已寄出"}), 200
     except Exception as e:
         r.delete(redis_key(email))   # 寄信失敗就清掉，讓用戶可以重試
         return jsonify({"error": str(e)}), 500
 
 
-# ── API：驗證 OTP
+# API-驗證 OTP
 @app.route("/verify-otp", methods=["POST"])
 def verify_otp():
     data  = request.get_json()
@@ -87,11 +56,18 @@ def verify_otp():
     if stored is None:
         return jsonify({"success": False, "error": "驗證碼不存在或已逾時"}), 400
 
+    attempts = r.incr(attempt_key(email))
+    r.expire(attempt_key(email), OTP_EXPIRE)
+    if attempts > 5:
+        r.delete(redis_key(email))
+        return jsonify({"success": False, "error": "嘗試次數過多，請重新申請"}), 429
+
     if otp != stored:
         return jsonify({"success": False, "error": "驗證碼錯誤"}), 400
 
     # 驗證成功，刪除，一次性
     r.delete(redis_key(email))
+    r.delete(attempt_key(email))
     return jsonify({"success": True, "message": "驗證成功"}), 200
 
 

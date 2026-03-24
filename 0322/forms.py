@@ -15,7 +15,6 @@ class RegistrationForm(FlaskForm):
         EqualTo('password', message='密碼必須一致')
     ])
     age = IntegerField('年齡', validators=[DataRequired()])
-    level = StringField('會員等級 (bronze/silver/gold)', default='bronze')
     submit = SubmitField('註冊')
 
     # 檢查 Email 是否已存在

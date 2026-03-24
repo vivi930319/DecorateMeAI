@@ -4,15 +4,16 @@ from flask_cors import CORS
 from flask_login import login_user, current_user, logout_user, login_required
 from sqlalchemy.exc import IntegrityError
 import config
-import os, smtplib, random, string
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import os
 from dotenv import load_dotenv
 import redis
+from redis.exceptions import RedisError
 
 from extensions import db, bcrypt, login_manager
 from models import Members, Products, Favorites, ColorPalettes, Checkin
 from forms import RegistrationForm, LoginForm, ChangePasswordForm
+from otp_utils import generate_otp, redis_key, send_otp_email, attempt_key
+
 load_dotenv()
 
 
@@ -22,16 +23,20 @@ CORS(app)
 #從config.py 檔案中載入所有設定，和資料庫的連線資訊 (SQLALCHEMY_DATABASE_URI)
 app.config.from_object(config)
 #設定一個秘密金鑰，這是 Flask 用於保護網站安全
-app.config['SECRET_KEY'] = getattr(config, 'SECRET_KEY', 'change-me')
+app.config['SECRET_KEY'] = config.SECRET_KEY
 db.init_app(app)
 bcrypt.init_app(app)
 login_manager.init_app(app)
-r = redis.Redis(
-    host=os.getenv("REDIS_HOST", "localhost"),
-    port=int(os.getenv("REDIS_PORT", 6379)),
-    password=os.getenv("REDIS_PASSWORD") or None,
-    decode_responses=True
-)
+redis_url = os.getenv("REDIS_URL")
+if redis_url:
+    r = redis.from_url(redis_url, decode_responses=True)
+else:
+    r = redis.Redis(
+        host=os.getenv("REDIS_HOST", "localhost"),
+        port=int(os.getenv("REDIS_PORT", 6379)),
+        password=os.getenv("REDIS_PASSWORD") or None,
+        decode_responses=True
+    )
 OTP_EXPIRE = int(os.getenv("OTP_EXPIRE_SECONDS", 300))
 
 
@@ -54,6 +59,11 @@ def index():
     return f"Flask MySQL 應用程式已啟動。<p><a href='{url_for('register')}'>註冊</a> | <a href='{url_for('login')}'>登入</a></p>"
 
 
+@app.route('/healthz')
+def healthz():
+    return jsonify({"status": "ok"})
+
+
 # 註冊功能
 @app.route("/register", methods=['GET', 'POST'])
 def register():
@@ -69,7 +79,7 @@ def register():
                 email=form.email.data.strip().lower(),
                 password=form.password.data,
                 age=form.age.data,
-                level=form.level.data if form.level.data in {"bronze", "silver", "gold"} else "bronze"
+                level='bronze'
             )
             db.session.add(member)
             db.session.commit()
@@ -135,78 +145,70 @@ def change_password():
     # 需要 change_password.html 模板
     return render_template('change_password.html', title='更改密碼', form=form)
 
-# ── OTP 工具函式 ──
-def generate_otp(length=6):
-    return ''.join(random.choices(string.digits, k=length))
-
-def redis_key(email):
-    return f"otp:{email}"
-
-def send_otp_email(to_email, otp_code):
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("SMTP_PASS")
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = "您的驗證碼"
-    msg["From"]    = smtp_user
-    msg["To"]      = to_email
-    html = f"""
-    <html><body>
-      <h2>您的一次性驗證碼</h2>
-      <p style="font-size:32px;font-weight:bold;letter-spacing:8px;">{otp_code}</p>
-      <p>此驗證碼 <strong>{OTP_EXPIRE // 60} 分鐘</strong>內有效。</p>
-    </body></html>
-    """
-    msg.attach(MIMEText(html, "html"))
-    with smtplib.SMTP(os.getenv("SMTP_HOST", "smtp.gmail.com"),
-                      int(os.getenv("SMTP_PORT", 587))) as server:
-        server.starttls()
-        server.login(smtp_user, smtp_pass)
-        server.sendmail(smtp_user, to_email, msg.as_string())
-
 # ── OTP 路由 ──
 @app.route("/api/send-otp", methods=["POST"])
 def send_otp():
-    data  = request.get_json()
+    data = request.get_json(silent=True) or {}
     email = data.get("email", "").strip().lower()
     if not email:
         return jsonify({"error": "Email 不得為空"}), 400
-    ttl = r.ttl(redis_key(email))
-    if ttl and ttl > (OTP_EXPIRE - 60):
-        return jsonify({"error": "請稍後再重新發送"}), 429
-    otp = generate_otp()
-    r.setex(redis_key(email), OTP_EXPIRE, otp)
     try:
-        send_otp_email(email, otp)
+        ttl = r.ttl(redis_key(email))
+        if ttl != -2 and ttl > (OTP_EXPIRE - 60):
+            return jsonify({"error": "請稍後再重新發送"}), 429
+
+        otp = generate_otp()
+        r.setex(redis_key(email), OTP_EXPIRE, otp)
+        send_otp_email(email, otp, OTP_EXPIRE)
         return jsonify({"message": "驗證碼已寄出"}), 200
+    except RedisError:
+        return jsonify({"error": "OTP 服務暫時不可用"}), 503
     except Exception as e:
-        r.delete(redis_key(email))
+        try:
+            r.delete(redis_key(email))
+        except RedisError:
+            pass
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/verify-otp", methods=["POST"])
 def verify_otp():
-    data  = request.get_json()
+    data = request.get_json(silent=True) or {}
     email = data.get("email", "").strip().lower()
-    otp   = data.get("otp", "").strip()
-    stored = r.get(redis_key(email))
-    if stored is None:
-        return jsonify({"success": False, "error": "驗證碼不存在或已逾時"}), 400
-    if otp != stored:
-        return jsonify({"success": False, "error": "驗證碼錯誤"}), 400
-    r.delete(redis_key(email))
-    return jsonify({"success": True, "message": "驗證成功"}), 200
+    otp = data.get("otp", "").strip()
+
+    try:
+        stored = r.get(redis_key(email))
+
+        if stored is None:
+            return jsonify({"success": False, "error": "驗證碼不存在或已逾時"}), 400
+
+        attempts = r.incr(attempt_key(email))
+        r.expire(attempt_key(email), OTP_EXPIRE)
+        if attempts > 5:
+            r.delete(redis_key(email))
+            return jsonify({"success": False, "error": "嘗試次數過多，請重新申請"}), 429
+
+        if otp != stored:
+            return jsonify({"success": False, "error": "驗證碼錯誤"}), 400
+
+        r.delete(redis_key(email))
+        r.delete(attempt_key(email))
+        return jsonify({"success": True, "message": "驗證成功"}), 200
+    except RedisError:
+        return jsonify({"success": False, "error": "OTP 服務暫時不可用"}), 503
 
 #我的最愛清單-點擊收藏 (新增/刪除）
 @app.route('/api/favorites/toggle', methods=['POST'])
+@login_required
 def toggle_favorite():
     data = request.get_json(silent=True) or {}
-    phone = data.get('phone_number')
     p_id = data.get('product_id')
 
-    if not phone or p_id is None:
-        return jsonify({"status": "error", "message": "缺少 phone_number 或 product_id"}), 400
+    if p_id is None:
+        return jsonify({"status": "error", "message": "缺少 product_id"}), 400
 
     # 檢查是否已收藏
-    fav = Favorites.query.filter_by(member_id=phone, product_id=p_id).first()
+    fav = Favorites.query.filter_by(member_id=current_user.phone_number, product_id=p_id).first()
 
     # 取消收藏
     if fav:
@@ -219,7 +221,7 @@ def toggle_favorite():
     #加入收藏
     else:
         try:
-            new_fav = Favorites(member_id=phone, product_id=p_id)
+            new_fav = Favorites(member_id=current_user.phone_number, product_id=p_id)
             db.session.add(new_fav)
             product = Products.query.get(p_id)
             if product:
@@ -265,7 +267,10 @@ def add_checkin():
     new_checkin = Checkin(member_id=current_user.phone_number, note=note)
     db.session.add(new_checkin)
     db.session.commit()
-    return jsonify({"message": "簽到完成", "checkin_time": new_checkin.checkin_time})
+    return jsonify({
+        "message": "簽到完成",
+        "checkin_time": new_checkin.checkin_time.isoformat() if new_checkin.checkin_time else None
+    })
 
 
 # 登出功能
@@ -321,7 +326,7 @@ def get_member_stats(phone):
         "stats": {
             "total_checkins": checkins,
             "total_favorites": favorites,
-            "last_checkin_at": last_checkin
+            "last_checkin_at": last_checkin.isoformat() if last_checkin else None
         }
     })
 
@@ -353,6 +358,9 @@ def api_login():
     member = Members.query.filter_by(email=email).first()
     if not member or not member.verify_password(password):
         return jsonify({"message": "帳號或密碼錯誤"}), 401
+
+    # 需要會話的網頁端可直接獲得登入狀態
+    login_user(member)
 
     return jsonify({
         "member": {
@@ -423,4 +431,8 @@ def get_colors():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-        app.run(host='0.0.0.0', port=8080, debug=True)
+        app.run(
+            host='0.0.0.0',
+            port=int(os.getenv("PORT", 8080)),
+            debug=os.getenv("FLASK_DEBUG", "1") == "1"
+        )
