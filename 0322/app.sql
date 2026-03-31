@@ -1,4 +1,4 @@
-USE my_app;
+USE app;
 
 DROP VIEW IF EXISTS view_member_activity;
 DROP TRIGGER IF EXISTS trg_auto_upgrade_level;
