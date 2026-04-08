@@ -19,8 +19,17 @@ def attempt_key(email: str) -> str:
 
 
 def send_otp_email(to_email: str, otp_code: str, expire_seconds: int) -> None:
+    if os.getenv("OTP_DEV_MODE", "false").lower() == "true":
+        print(
+            f"[OTP DEV MODE] OTP for {to_email}: {otp_code} (expires in {expire_seconds}s)",
+            flush=True,
+        )
+        return
+
     smtp_user = os.getenv("SMTP_USER")
     smtp_pass = os.getenv("SMTP_PASS")
+    if not smtp_user or not smtp_pass:
+        raise RuntimeError("SMTP credentials are not configured")
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = "您的驗證碼"

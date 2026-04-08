@@ -2,7 +2,7 @@ services:
   - type: web
     name: pythonproject4-api
     runtime: python
-    rootDir: 0322
+    rootDir: Backend database
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app
     healthCheckPath: /healthz

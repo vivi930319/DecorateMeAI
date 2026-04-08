@@ -9,9 +9,10 @@ from models import Members, Checkin, Products, ColorPalettes
 
 # 檔案路徑
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CSV_FILE_PATH = os.path.join(BASE_DIR, 'members_data.csv')
-PRODUCT_CSV = os.path.join(BASE_DIR, 'products_data.csv')
-COLOR_CSV = os.path.join(BASE_DIR, 'colors_data.csv')
+CSV_DIR = os.path.join(BASE_DIR, 'csv')
+CSV_FILE_PATH = os.path.join(CSV_DIR, 'members_data.csv')
+PRODUCT_CSV = os.path.join(CSV_DIR, 'products_data.csv')
+COLOR_CSV = os.path.join(CSV_DIR, 'colors_data.csv')
 
 
 # 批量插入 CSV 資料的函式
@@ -153,9 +154,6 @@ def insert_single_product():
     except Exception as e:
         db.session.rollback()
         print(f"單次產品新增失敗: {e}")
-
-# --- 色碼批量插入 (CSV) ---
-COLOR_CSV = os.path.join(BASE_DIR, 'colors_data.csv')
 
 # 2. 修正批量插入函式
 def batch_insert_colors_from_csv():

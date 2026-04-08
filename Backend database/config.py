@@ -16,6 +16,7 @@ DATABASE_URL = _normalize_database_url(os.getenv("DATABASE_URL"))
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT", "3306")
 DB_NAME = os.getenv("DB_NAME", "app")
 SECRET_KEY = os.getenv("SECRET_KEY", "change-me")
 
@@ -33,7 +34,7 @@ else:
         )
 
     SQLALCHEMY_DATABASE_URI = (
-        f"mysql+pymysql://{quote_plus(DB_USER)}:{quote_plus(DB_PASSWORD)}@{DB_HOST}/{DB_NAME}"
+        f"mysql+pymysql://{quote_plus(DB_USER)}:{quote_plus(DB_PASSWORD)}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
 
 SQLALCHEMY_TRACK_MODIFICATIONS = False
