@@ -11,7 +11,13 @@ from redis.exceptions import RedisError
 
 from extensions import db, bcrypt, login_manager
 from models import Members, Products, Favorites, ColorPalettes, Checkin
-from forms import RegistrationForm, LoginForm, ChangePasswordForm
+from forms import (
+    RegistrationForm,
+    LoginForm,
+    ChangePasswordForm,
+    ForgotPasswordRequestForm,
+    ResetPasswordForm,
+)
 from otp_utils import generate_otp, redis_key, send_otp_email, attempt_key
 
 load_dotenv()
@@ -116,6 +122,94 @@ def login():
 
     # 需要 login.html 模板
     return render_template('login.html', title='登入', form=form)
+
+
+# 忘記密碼 - 寄送 OTP
+@app.route("/forgot_password", methods=['GET', 'POST'])
+def forgot_password():
+    form = ForgotPasswordRequestForm()
+
+    if form.validate_on_submit():
+        email = form.email.data.strip().lower()
+        member = Members.query.filter_by(email=email).first()
+
+        try:
+            if member:
+                ttl = r.ttl(redis_key(email))
+                if ttl != -2 and ttl > (OTP_EXPIRE - 60):
+                    flash('驗證碼已寄出，請稍候再重新申請。', 'warning')
+                    return redirect(url_for('reset_password', email=email))
+
+                otp = generate_otp()
+                r.setex(redis_key(email), OTP_EXPIRE, otp)
+                r.delete(attempt_key(email))
+                send_otp_email(email, otp, OTP_EXPIRE)
+
+            flash('若該 Email 已註冊，系統已寄出重設密碼驗證碼。', 'info')
+            return redirect(url_for('reset_password', email=email))
+        except RedisError:
+            flash('OTP 服務暫時不可用，請稍後再試。', 'danger')
+        except Exception:
+            try:
+                r.delete(redis_key(email))
+            except RedisError:
+                pass
+            flash('寄送驗證碼失敗，請稍後再試。', 'danger')
+
+    return render_template('forgot_password.html', title='忘記密碼', form=form)
+
+
+# 忘記密碼 - 驗證 OTP 並重設密碼
+@app.route("/reset_password", methods=['GET', 'POST'])
+def reset_password():
+    form = ResetPasswordForm()
+
+    if request.method == 'GET':
+        prefill_email = request.args.get('email', '').strip().lower()
+        if prefill_email:
+            form.email.data = prefill_email
+
+    if form.validate_on_submit():
+        email = form.email.data.strip().lower()
+        otp = form.otp.data.strip()
+        member = Members.query.filter_by(email=email).first()
+
+        if not member:
+            flash('查無此 Email 對應的帳號。', 'danger')
+            return render_template('reset_password.html', title='重設密碼', form=form)
+
+        try:
+            stored = r.get(redis_key(email))
+            if stored is None:
+                flash('驗證碼不存在或已逾時，請重新申請。', 'danger')
+                return redirect(url_for('forgot_password'))
+
+            attempts = r.incr(attempt_key(email))
+            r.expire(attempt_key(email), OTP_EXPIRE)
+
+            if attempts > 5:
+                r.delete(redis_key(email))
+                r.delete(attempt_key(email))
+                flash('驗證失敗次數過多，請重新申請驗證碼。', 'danger')
+                return redirect(url_for('forgot_password'))
+
+            if otp != stored:
+                flash('驗證碼錯誤，請重新輸入。', 'danger')
+                return render_template('reset_password.html', title='重設密碼', form=form)
+
+            member.password = form.new_password.data
+            db.session.commit()
+            r.delete(redis_key(email))
+            r.delete(attempt_key(email))
+            flash('密碼已重設成功，請使用新密碼登入。', 'success')
+            return redirect(url_for('login'))
+        except RedisError:
+            flash('OTP 服務暫時不可用，請稍後再試。', 'danger')
+        except Exception:
+            db.session.rollback()
+            flash('重設密碼失敗，請稍後再試。', 'danger')
+
+    return render_template('reset_password.html', title='重設密碼', form=form)
 
 
 # 更改密碼功能

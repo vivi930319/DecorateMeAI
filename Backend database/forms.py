@@ -38,6 +38,22 @@ class LoginForm(FlaskForm):
     submit = SubmitField('登入')
 
 
+class ForgotPasswordRequestForm(FlaskForm):
+    email = StringField('註冊電子郵件', validators=[DataRequired(), Email()])
+    submit = SubmitField('寄送驗證碼')
+
+
+class ResetPasswordForm(FlaskForm):
+    email = StringField('註冊電子郵件', validators=[DataRequired(), Email()])
+    otp = StringField('驗證碼', validators=[DataRequired(), Length(min=6, max=6)])
+    new_password = PasswordField('新密碼', validators=[DataRequired(), Length(min=6)])
+    confirm_new_password = PasswordField('確認新密碼', validators=[
+        DataRequired(),
+        EqualTo('new_password', message='新密碼必須一致')
+    ])
+    submit = SubmitField('重設密碼')
+
+
 # 更改密碼表單
 class ChangePasswordForm(FlaskForm):
     # 舊密碼用於驗證使用者身份
