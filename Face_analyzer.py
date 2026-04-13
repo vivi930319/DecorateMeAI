@@ -5,6 +5,7 @@ import json
 from fastapi import FastAPI, UploadFile, HTTPException, File
 from fastapi.middleware.cors import CORSMiddleware
 
+#初版上線docker 先調整膚色文獻 之後慢慢微調
 app = FastAPI()
 
 # 前端串接要開 CORS，不然瀏覽器會擋
@@ -240,7 +241,7 @@ class FaceAnalyzer:
             return "菱形臉"
         else:
             return "鵝蛋臉"
-    # 眉型
+    # 眉型 (還要調數據)
     def get_eyebrow_shape(self):
         brow_head_y = (self._pt(46)[1] + self._pt(276)[1]) / 2
         brow_peak_y = (self._pt(55)[1] + self._pt(285)[1]) / 2
@@ -259,7 +260,7 @@ class FaceAnalyzer:
         else:
             return "標準眉"  # 其餘都是標準眉
 
-    # 眼型
+    # 眼型 (成功後看要不要調整成 桃花眼 杏眼)
     def get_eye_shape(self):
         # 左右眼各取：眼頭、眼尾、上眼瞼、下眼瞼
 
@@ -290,7 +291,7 @@ class FaceAnalyzer:
         else:
             return "單眼皮"
 
-    # 鼻型
+    # 鼻型 (數據要考證)
     def get_nose_shape(self):
         # 用鼻翼寬、鼻高、鼻尖/鼻底相對位置做分類
         nose_width  = self._dist(129, 358)   # 鼻翼寬
@@ -316,7 +317,7 @@ class FaceAnalyzer:
         else:
             return "蒜頭鼻"
 
-    # 嘴型
+    # 嘴型 (考證數據)
     def get_lip_shape(self):
         # 先算唇厚，再看 M 峰跟嘴角弧度
         lip_width   = self._dist(61, 291)    # 嘴寬
@@ -395,34 +396,67 @@ class FaceAnalyzer:
         mean_bgr = cv2.mean(self.frame, mask=combined_mask)[:3]
         skin_rgb = [round(mean_bgr[2], 1), round(mean_bgr[1], 1), round(mean_bgr[0], 1)]
 
+
         def classify_shade_12grid(lab_img, hsv_img, mask_u8):
-            """12 格分級：粉/黃/中/橄欖 + 一白/二白/三白。"""
-            l_mean, a_mean_cv, b_mean_cv, _ = cv2.mean(lab_img, mask=mask_u8)
-            l_mean = float(l_mean)             # 0~255 (OpenCV Lab)
+
+            '''
+            未完成
+            新的分類方式以mac分類為主軸
+            -因為有大牌販售出品保證
+                新更新邏輯
+                  H 可以直接判斷冷暖色（紅黃 = 暖，藍綠 = 冷）(0/360紅色 60黃色 120綠色 240藍色)
+                  S 可以判斷色彩鮮豔程度（高 = spring/winter，低 = summer/autumn）(0-100 判斷灰階程度)
+                  V 可以判斷明暗（明亮 = spring/summer，暗 = autumn/winter）(0-100 判斷黑白)
+
+                  a → 紅綠軸 → 偏紅 = 暖色基底、偏綠
+                  b → 黃藍軸 → 偏黃 = 暖色基底、偏藍
+                  L → 明暗 → 明亮 = spring/summer，深色 = autumn/winter (0-100)
+                  用比例去比較冷暖
+                  因為膚色出來不可能有藍綠感
+                  用大概的比例差去做
+                  L V 判斷明暗 (先區分 春夏 秋冬兩大類)
+                  '''
+            '''先用DICT 去把官網的分類邏輯羅列出來 全程我是用網頁抓的到的HEX去轉換成LAB 在做交叉比對去寫出範圍
+            '''
+            mac_sort={
+                "白皙自然色":{ "L_MIN":73.2,"L_MAX":80.54,"A_MIN":5.12,"A_MAX":9.96,"B_MIN":15.58,"B_MAX":22.67 },
+                "中等亮白自然色":{"L_MIN":69.26,"L_MAX":77.82,"A_MIN":7.41,"A_MAX":8.61,"B_MIN":17.1,"B_MAX":19.59},
+                "白皙象牙色":{"L_MIN":80.54,"L_MAX":85.37,"A_MIN":2.65,"A_MAX":5.12,"B_MIN":15.03,"B_MAX":15.58},
+                "自然象牙":{"L_MIN":68.88,"L_MAX":82.99,"A_MIN":2.97,"A_MAX":9.85,"B_MIN":19.55,"B_MAX":25.1},
+                "健康象牙":{"L_MIN":65.32,"L_MAX":76.37,"A_MIN":7.16,"A_MAX":9.05,"B_MIN":23.08,"B_MAX":28.86},
+                "古銅象牙":{"L_MIN":65.93,"L_MAX":65.93,"A_MIN":11.4,"A_MAX":11.4,"B_MIN":30.85,"B_MAX":30.85 },
+                "健康玫瑰色":{"L_MIN":68.88,"L_MAX":68.88,"A_MIN":9.85,"A_MAX":9.85,"B_MIN":25.1,"B_MAX":25.1}
+            }
+
+            l_mean, a_meancv, b_mean_cv, _ = cv2.mean(lab_img, mask=mask_u8)
+            l_mean = float(l_mean)/2.55          # 0~255 (OpenCV Lab)/2.55才會是標準lab
             a_axis = float(a_mean_cv - 128.0)  # +紅 / -綠
             b_axis = float(b_mean_cv - 128.0)  # +黃 / -藍
+            #但人臉不可能出來偏藍綠所以在判斷冷暖色調跟膚色基礎還是要以出來的數據做分析
 
-            # 先判底色
-            if a_axis <= -6.0 and b_axis >= 6.0:
-                undertone = "橄欖"
-            elif a_axis >= 7.0 and b_axis <= 12.0:
-                undertone = "粉"
-            elif b_axis >= 13.0:
-                undertone = "黃"
-            else:
-                undertone = "中"
+            matched = None
+            for name, r in mac_sort.items():
+                if (r["L_MIN"] <= l_mean<= r["L_MAX"] and
+                        r["A_MIN"] <=  a_axis <= r["A_MAX"] and
+                        r["B_MIN"] <= b_axis <= r["B_MAX"]):
+                    matched = name
+                    break
 
-            # 再判深淺
-            if l_mean >= 175.0:
-                depth = "一白"
-            elif l_mean >= 155.0:
-                depth = "二白"
-            else:
-                depth = "三白"
+            if matched is None:
+                best_dist = float("inf")
+                for name, r in mac_sort.items():
+                    Lc = (r["L_MIN"] + r["L_MAX"]) / 2
+                    ac = (r["A_MIN"] + r["A_MAX"]) / 2
+                    bc = (r["B_MIN"] + r["B_MAX"]) / 2
+                    dist = ((l_mean  - Lc) ** 2 + (a_axis- ac) ** 2 + (b_axis - bc) ** 2) ** 0.5
+                    if dist < best_dist:
+                        best_dist = dist
+                        matched = name
 
-            return f"{undertone}{depth}", undertone, depth
+            return matched, l_mean, a_axis, b_axis
 
-        # 步驟6：四季型先判冷暖，再判亮/柔/清晰
+        # 四季型先判冷暖，再判亮/柔/清晰
+
         hsv = cv2.cvtColor(self.frame, cv2.COLOR_BGR2HSV)
         h_mean, s_mean, v_mean, _ = cv2.mean(hsv, mask=combined_mask)
         h_mean = float(h_mean)  # OpenCV Hue: 0~179
@@ -435,7 +469,8 @@ class FaceAnalyzer:
         a_axis = float(a_mean_cv - 128.0)  # +偏紅 / -偏綠
         b_axis = float(b_mean_cv - 128.0)  # +偏黃 / -偏藍
 
-        # 冷暖主看 b 軸：越大越黃(暖)、越小越冷
+        # 冷暖主看 b 軸：越大越黃(暖)
+        # 未完成:新更新 a軸加入判斷 越大越紅(暖)
         if b_axis >= 12.0:
             undertone = "warm"
         elif b_axis <= 8.5:
@@ -444,6 +479,7 @@ class FaceAnalyzer:
             undertone = "neutral"
 
         # bright / soft / clear 三個訊號分季型
+        # 新:亮度看L
         bright = (l_mean >= 158.0) or (v_mean >= 168.0)
         soft = s_mean <= 110.0
 
@@ -472,13 +508,12 @@ class FaceAnalyzer:
             else:
                 season = "秋季"
 
-        shade_label, shade_undertone, shade_depth = classify_shade_12grid(lab, hsv, combined_mask)
-
-        return skin_rgb, lip_rgb, season, shade_label, shade_undertone, shade_depth
+        shade_label, L, a, b = classify_shade_12grid(lab, hsv, combined_mask)
+        return skin_rgb, lip_rgb, season, shade_label, L, a, b
 
     # 輸出
     def export_json(self, save_path=None):
-        skin_rgb, lip_rgb, season, shade_label, shade_undertone, shade_depth = self.get_skin_color()
+        skin_rgb, lip_rgb, season, shade_label, L, a, b = self.get_skin_color()
 
         result = {
             "臉型":    self.get_face_shape(),       # → face_logic key
@@ -488,7 +523,12 @@ class FaceAnalyzer:
             "嘴型":    self.get_lip_shape(),         # → lip_logic key
             "膚色": {
                 "四季型": season,
-                "膚色分級": shade_label
+                "膚色分級": shade_label,
+                "LAB": {
+                    "L": round(L, 2),
+                    "a": round(a, 2),
+                    "b": round(b, 2)
+                }
             },
             "膚色_RGB": skin_rgb,
             "嘴唇_RGB": lip_rgb
@@ -502,12 +542,15 @@ class FaceAnalyzer:
         return result
 
 if __name__ == "__main__":
-    import uvicorn
+   import uvicorn
 
     # 本地跑
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+   uvicorn.run(app, host="0.0.0.0", port=8001)
 
-    # 本地單張圖測試
-    # analyzer = FaceAnalyzer(r"C:\Users\isach\PycharmProjects\PythonProject12\IMG_9929.JPG")
-    # result = analyzer.export_json(save_path="face_result.json")
-    # print(json.dumps(result, indent=4, ensure_ascii=False))
+
+
+    #本地單張圖測試
+
+    #analyzer = FaceAnalyzer(r"C:\Users\isach\PycharmProjects\PythonProject12\IMG_9927.jpg")
+    #result = analyzer.export_json(save_path="face_result.json")
+    #print(json.dumps(result, indent=4, ensure_ascii=False))
