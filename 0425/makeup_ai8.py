@@ -3,7 +3,7 @@ import json
 import base64
 import re
 
-# 1. 專業妝容風格資料庫
+# 妝容風格資料庫
 makeup_database = {
     "Soft baddie": {
         "description": "更鬆弛自然卻不失辣妹氣場，強調光澤感底妝與煙燻感眼妝。",
@@ -43,7 +43,7 @@ makeup_database = {
     },
     "港風妝": {
         "description": "復古90年代明豔對比，成熟大氣。",
-        "tone": "復古復古紅棕色與冷灰色",
+        "tone": "復古紅棕色與冷灰色",
         "eye_layers": "先用淺灰色眼影在整個眼窩大範圍打底，再取炭咖啡色眼影沿著睫毛根部向上暈染出半包圍陰影，眼頭與鼻影銜接處要適度加深層次。",
         "base_detail": "陶瓷般的全霧面底妝，刻畫出明顯的立體輪廓。",
         "lip_detail": "先用唇筆精確畫出飽和的正紅色輪廓，填滿霧面大紅色唇膏，展現濃郁的復古氣場。",
@@ -61,7 +61,7 @@ makeup_database = {
     }
 }
 
-# 2. 專業五官與四季膚色邏輯資料庫
+# 五官與四季膚色邏輯資料庫
 face_logic = {"鵝蛋臉": "比例完美流暢", "菱形臉": "顴骨突出有神", "圓形臉": "雙頰圓潤飽滿", "長形臉": "比例顯得成熟", "正三角臉": "下顎線條分明", "方形臉": "輪廓英氣硬朗", "心形臉": "下巴精緻纖細", "梯形臉": "下顎厚實穩重"}
 eyebrow_logic = {"標準眉": "眉頭眼頭垂直", "一字眉": "眉型平直無邪", "彎月眉": "弧度圓潤溫柔", "落尾眉": "眉尾優雅下落"}
 eye_logic = {"圓眼": "眼神圓潤清澈", "長眼": "眼神嫵媚狹長", "雙眼皮": "褶皺層次分明", "單眼皮": "眼皮厚實有神"}
@@ -69,11 +69,10 @@ nose_logic = {"直鼻": "鼻樑高挺筆直", "朝天鼻": "鼻尖微翹俏皮",
 lip_logic = {"M型唇": "唇峰稜角立體", "花瓣唇": "唇形飽滿豐盈", "微笑唇": "嘴角天然上揚", "厚唇": "唇部感性飽滿", "薄唇": "唇線俐落清秀"}
 skin_logic = {"春季型": "適合亮暖黃系", "夏季型": "適合冷粉灰系", "秋季型": "適合深邃暖米", "冬季型": "適合對比冷青"}
 
-# 專業手法敘述庫 (內部組合用)
+
 face_method = {"鵝蛋臉": "輕掃下顎線；腮紅斜上暈染；打亮額頭鼻尖。", "菱形臉": "修容顴骨最高點；太陽穴打亮；腮紅銜接修容。", "圓形臉": "從耳際斜下刷修容；腮紅調高拉提；打亮下巴。", "長形臉": "修容額頭頂與下巴底；腮紅橫平刷；打亮眼下。", "正三角臉": "加強下顎陰影；太陽穴打亮擴張；腮紅斜向延伸。", "方形臉": "下頷稜角圓潤修容；蘋果肌打圈腮紅；打亮中心。", "心形臉": "顴骨下方向內收縮；下巴尖端打亮；腮紅斜掃顴骨。", "梯形臉": "下顎兩側收縮；額頭太陽穴打亮；腮紅向斜上延伸。"}
 eyebrow_method = {"標準眉": "順原生毛流填補空隙。", "一字眉": "縮短中庭，眉尾拉平。", "彎月眉": "圓潤轉折，修飾硬朗。", "落尾眉": "眉峰後移，輕輕下撇。"}
 
-# 3. 執行函式
 def encode_image(image_path):
     with open(image_path, "rb") as image_file:
         return base64.b64encode(image_file.read()).decode('utf-8')
@@ -92,11 +91,11 @@ def get_makeup_advice_by_vision(image_path, style_name):
         f"臉型：{list(face_logic.keys())}\n鼻型：{list(nose_logic.keys())}\n"
         f"眼型：{list(eye_logic.keys())}\n眉型：{list(eyebrow_logic.keys())}\n"
         f"唇型：{list(lip_logic.keys())}\n膚色類型：{list(skin_logic.keys())}\n"
-        "回答格式必須是 JSON：{\"臉型\": \"...\", \"眉型\": \"...\", \"眼型\": \"...\", \"鼻型\": \"...\", \"唇型\": \"...\", \"膚色\": \"...\"}"
+        "回答格式必須是 JSON 且無廢話：{\"臉型\": \"...\", \"眉型\": \"...\", \"眼型\": \"...\", \"鼻型\": \"...\", \"唇型\": \"...\", \"膚色\": \"...\"}"
     )
 
     try:
-        print(f" 顧問正在觀察您的五官與膚色...")
+        print(f"🔍 顧問正在觀察您的五官與膚色...")
         res_vision = requests.post(
             "http://localhost:11434/api/chat",
             json={
@@ -110,37 +109,38 @@ def get_makeup_advice_by_vision(image_path, style_name):
         match = re.search(r'\{.*\}', full_text, re.DOTALL)
         features = json.loads(match.group()) if match else {"臉型": "鵝蛋臉", "眉型": "標準眉", "眼型": "雙眼皮", "鼻型": "直鼻", "唇型": "微笑唇", "膚色": "春季型"}
 
-        # --- 精確分析 + 條列妝容建議 ---
+        
         system_instruction = (
-            "你是一位彩妝總監。語氣專業、溫柔且不廢話。\n"
-            "【嚴格輸出格式】：\n"
-            "一、五官與膚色分析回饋：\n"
-            "(條列式簡短描述辨識到的特徵)\n\n"
-            "二、專屬妝容建議：\n"
-            "底妝：內容\n"
-            "眉毛：內容\n"
-            "眼妝：內容\n"
-            "腮紅/修容：內容\n"
-            "唇妝：內容\n\n"
-            "【規則】：全程繁體中文，禁止英文與贅字（首先、然後）。"
+            "你是一位專業彩妝總監。語氣專業、乾淨，絕對禁止使用星號「*」或任何 Markdown 符號。\n"
+            "【格式規範】：\n"
+            "1. 全程繁體中文，禁止英文、贅字與符號。\n"
+            "2. 第一部分標題為：五官與膚色分析回饋\n"
+            "   (直接條列描述特徵，不加任何符號)\n"
+            "3. 第二部分標題為：專屬妝容建議\n"
+            "底妝：(內容)\n"
+            "眉毛：(內容)\n"
+            "眼妝：(內容)\n"
+            "腮紅/修容：(內容)\n"
+            "唇妝：(內容)"
         )
 
         prompt_content = f"""
-        根據辨識結果為這位女孩提供「{style_name}」的報告。
+        請為這位女孩提供「{style_name}」的深度報告。
         
-        【分析回饋素材】：
-        臉型：{features['臉型']} ({face_logic.get(features['臉型'])})
-        眉型：{features['眉型']} ({eyebrow_logic.get(features['眉型'])})
-        鼻型：{features['鼻型']} ({nose_logic.get(features['鼻型'])})
-        唇型：{features['唇型']} ({lip_logic.get(features['唇型'])})
-        膚色：{features['膚色']} ({skin_logic.get(features['膚色'])})
+        【分析回饋內容】：
+        臉型：{features['臉型']}，{face_logic.get(features['臉型'])}
+        眉型：{features['眉型']}，{eyebrow_logic.get(features['眉型'])}
+        眼型：{features['眼型']}，{eye_logic.get(features['眼型'])}
+        鼻型：{features['鼻型']}，{nose_logic.get(features['鼻型'])}
+        唇型：{features['唇型']}，{lip_logic.get(features['唇型'])}
+        膚色：{features['膚色']}，{skin_logic.get(features['膚色'])}
 
-        【妝容建議素材】：
-        底妝：針對「{features['膚色']}」，選用「{style['tone']}」色調。打造「{style['base_detail']}」。
-        眉毛：執行「{eyebrow_method.get(features['眉型'])}」。
-        眼妝：步驟為「{style['eye_layers']}」。
-        腮紅/修容：執行「{face_method.get(features['臉型'])}」。搭配腮紅手法「{style['blush_detail']}」。鼻影執行「{nose_logic.get(features['鼻型'])}」。
-        唇妝：手法為「{style['lip_detail']}」。
+        【妝容建議內容】：
+        底妝：針對{features['膚色']}屬性，打造{style['base_detail']}。
+        眉毛：執行{eyebrow_method.get(features['眉型'])}。
+        眼妝：步驟為{style['eye_layers']}。
+        腮紅/修容：執行{face_method.get(features['臉型'])}。腮紅手法{style['blush_detail']}。鼻部修飾執行{nose_logic.get(features['鼻型'])}。
+        唇妝：手法為{style['lip_detail']}。
         """
 
         res_text = requests.post(
@@ -152,10 +152,10 @@ def get_makeup_advice_by_vision(image_path, style_name):
                     {"role": "user", "content": prompt_content}
                 ],
                 "stream": False,
-                "options": {"temperature": 0.2} # 極低溫度確保格式穩定
+                "options": {"temperature": 0.1} # 極低溫度確保不亂加符號
             }
         )
-        return res_text.json().get('message', {}).get('content', '再試一次。')
+        return res_text.json().get('message', {}).get('content', '請再試一次。')
 
     except Exception as e:
         return f"發生錯誤：{e}"
@@ -164,6 +164,4 @@ if __name__ == "__main__":
     image_file = "/Users/liaolingya/Documents/GitHub/new_poject/0411/face6.jpg" 
     target_style = "韓系亞裔妝" 
     report = get_makeup_advice_by_vision(image_file, target_style)
-    print("\n【專業美妝分析與建議回報】")
-    print("-" * 50)
-    print(report)
+    print("\n" + report)
