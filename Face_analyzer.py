@@ -260,38 +260,98 @@ class FaceAnalyzer:
         else:
             return "標準眉"  # 其餘都是標準眉
 
-    # 眼型 (成功後看要不要調整成 桃花眼 杏眼)
     def get_eye_shape(self):
-        # 左右眼各取：眼頭、眼尾、上眼瞼、下眼瞼
+        # 先抓左右眼關鍵點（就抓最基本那幾個就好）
+        left_inner = self._pt(33)  # 左眼頭
+        left_outer = self._pt(133)  # 左眼尾
+        right_inner = self._pt(362)
+        right_outer = self._pt(263)
 
-        left_eye_w  = self._dist(33,  133)
-        right_eye_w = self._dist(362, 263)
-        eye_width   = (left_eye_w + right_eye_w) / 2
+        # 上下眼皮，用來算開合
+        left_top = self._pt(159)
+        left_bottom = self._pt(145)
+        right_top = self._pt(386)
+        right_bottom = self._pt(374)
 
-        left_eye_h  = self._dist(159, 145)
-        right_eye_h = self._dist(386, 374)
-        eye_height  = (left_eye_h + right_eye_h) / 2
+        # 算眼睛寬度（左右平均一下，避免單邊歪掉）
+        left_w = np.linalg.norm(left_outer - left_inner)
+        right_w = np.linalg.norm(right_outer - right_inner)
+        eye_width = (left_w + right_w) / 2
 
-        # 眼尾 y - 眼頭 y：負值偏上揚，正值偏下垂
-        left_angle  = self._pt(133)[1] - self._pt(33)[1]
-        right_angle = self._pt(263)[1] - self._pt(362)[1]
-        avg_angle   = (left_angle + right_angle) / 2
+        # 算高度（同樣左右平均）
+        left_h = np.linalg.norm(left_top - left_bottom)
+        right_h = np.linalg.norm(right_top - right_bottom)
+        eye_height = (left_h + right_h) / 2
 
-        ratio = eye_height / eye_width
+        if eye_width < 1e-6:
+            return "未知"
 
-        # 這段先留著當參考量，後面需要可再拿來加規則
-        lid_dist_left  = self._pt(46)[1]  - self._pt(159)[1]
+        # 眼睛開合比例（之後很多判斷都會用到）
+        ear = eye_height / eye_width
+
+        # 算眼尾是上還是下（用角度比較穩）
+        dx = left_outer[0] - left_inner[0]
+        dy = left_outer[1] - left_inner[1]
+        angle = np.degrees(np.arctan2(dy, dx))
+        # angle < 0 → 上揚
+        # angle > 0 → 下垂
+
+        # 看眼睛在整張臉裡佔多少（抓那種很小的眼睛）
+        face_width = self._dist(234, 454)
+        ratio_to_face = eye_width / face_width if face_width > 0 else 0
+
+        # 眼皮（單 / 雙）先另外算，不跟眼型混在一起
+        # 用眉毛到上眼皮距離當一個大概的參考
+        lid_dist_left = self._pt(46)[1] - self._pt(159)[1]
         lid_dist_right = self._pt(276)[1] - self._pt(386)[1]
         avg_lid = (lid_dist_left + lid_dist_right) / 2
 
-        if ratio > 0.28:
-            return "雙眼皮"
-        elif ratio > 0.22:
-            return "長眼"
+        #這是根據圖片去調整過後的數據(寫入文件書)
+        if avg_lid > 18:
+            eyelid_type = "雙眼皮"
         else:
-            return "單眼皮"
+            eyelid_type = "單眼皮"
 
-    # 鼻型 (數據要考證)
+        # 先做一層大分類（避免後面互撞）
+
+        # 很小顆的直接抓出來
+        if ratio_to_face < 0.055:
+            eye_type = "瞇縫眼"
+
+        # 明顯往下
+        elif angle > 8:
+            eye_type = "下垂眼"
+
+        # 很明顯往上
+        elif angle < -15:
+            eye_type = "上斜眼"
+
+        # 很圓
+        elif ear > 0.38:
+            eye_type = "圓杏眼"
+
+        else:
+            #  再細分（這裡開始才分什麼桃花、丹鳳）
+
+            # 有點斜 + 偏細
+            if -15 < angle < -5 and ear < 0.25:
+                eye_type = "丹鳳眼"
+
+            # 微上揚 + 比例中間
+            elif -8 < angle < 0 and 0.25 < ear < 0.34:
+                eye_type = "桃花眼"
+
+            # 很細長
+            elif ear < 0.20:
+                eye_type = "瑞鳳眼"
+
+            else:
+                eye_type = "杏仁眼"
+
+        # 回傳眼型分類，特意把單雙眼皮跟眼型分開
+        return f"{eyelid_type}・{eye_type}"
+
+    # 鼻型
     def get_nose_shape(self):
         # 用鼻翼寬、鼻高、鼻尖/鼻底相對位置做分類
         nose_width  = self._dist(129, 358)   # 鼻翼寬
@@ -317,7 +377,7 @@ class FaceAnalyzer:
         else:
             return "蒜頭鼻"
 
-    # 嘴型 (考證數據)
+    # 嘴型
     def get_lip_shape(self):
         # 先算唇厚，再看 M 峰跟嘴角弧度
         lip_width   = self._dist(61, 291)    # 嘴寬
