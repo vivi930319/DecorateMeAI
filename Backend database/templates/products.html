@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<style>
+    .catalog-header {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 1.25rem;
+    }
+
+    .category-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .5rem;
+        margin-bottom: 1.25rem;
+    }
+
+    .category-tabs .btn {
+        border-radius: 999px;
+    }
+
+    .product-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 1rem;
+    }
+
+    .product-card {
+        overflow: hidden;
+        border: 1px solid rgba(0, 0, 0, .08);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 10px 28px rgba(20, 18, 16, .06);
+    }
+
+    .product-image {
+        display: block;
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        object-fit: cover;
+        background: linear-gradient(135deg, #f6f2ef, #e9eef1);
+    }
+
+    .product-empty-image {
+        display: grid;
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        place-items: center;
+        color: #777;
+        background: linear-gradient(135deg, #f6f2ef, #e9eef1);
+        font-size: .95rem;
+    }
+
+    .product-body {
+        padding: .9rem;
+    }
+
+    .product-brand {
+        min-height: 1.25rem;
+        color: #6c757d;
+        font-size: .85rem;
+    }
+
+    .product-name {
+        min-height: 3rem;
+        margin: .25rem 0 .5rem;
+        font-weight: 700;
+        line-height: 1.45;
+    }
+
+    .product-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: .75rem;
+    }
+
+    .product-price {
+        font-weight: 700;
+        color: #a04437;
+    }
+
+    .product-tag {
+        overflow: hidden;
+        max-width: 50%;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+</style>
+
+<section class="catalog-header">
+    <div>
+        <h1 class="h3 mb-1">商品瀏覽</h1>
+        <p class="text-secondary mb-0">{{ selected_category.name }}</p>
+    </div>
+    <span class="badge text-bg-light">{{ pagination.total }} 筆商品</span>
+</section>
+
+<nav class="category-tabs" aria-label="商品分類">
+    {% for category in categories %}
+        <a
+            class="btn btn-sm {% if category.type == selected_category.type %}btn-dark{% else %}btn-outline-dark{% endif %}"
+            href="{{ url_for('products_page', category_type=category.type) }}"
+        >
+            {{ category.name }}
+        </a>
+    {% endfor %}
+</nav>
+
+{% if products %}
+    <section class="product-grid">
+        {% for product in products %}
+            <article class="product-card">
+                {% if product.image_src %}
+                    <img class="product-image" src="{{ product.image_src }}" alt="{{ product.name }}">
+                {% else %}
+                    <div class="product-empty-image">無圖片</div>
+                {% endif %}
+                <div class="product-body">
+                    <div class="product-brand">{{ product.brand }}</div>
+                    <div class="product-name">{{ product.name }}</div>
+                    <div class="product-meta">
+                        <span class="product-price">{{ product.price }}</span>
+                        {% if product.shade_name %}
+                            <span class="badge text-bg-secondary product-tag">{{ product.shade_name }}</span>
+                        {% elif product.category_name %}
+                            <span class="badge text-bg-secondary product-tag">{{ product.category_name }}</span>
+                        {% elif product.sale_page_id %}
+                            <span class="badge text-bg-secondary product-tag">{{ product.sale_page_id }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </article>
+        {% endfor %}
+    </section>
+
+    {% if pagination.pages > 1 %}
+        <nav class="mt-4" aria-label="商品分頁">
+            <ul class="pagination justify-content-center">
+                <li class="page-item {% if not pagination.has_prev %}disabled{% endif %}">
+                    <a class="page-link" href="{{ url_for('products_page', category_type=selected_category.type, page=pagination.prev_num) }}">上一頁</a>
+                </li>
+                <li class="page-item disabled">
+                    <span class="page-link">{{ pagination.page }} / {{ pagination.pages }}</span>
+                </li>
+                <li class="page-item {% if not pagination.has_next %}disabled{% endif %}">
+                    <a class="page-link" href="{{ url_for('products_page', category_type=selected_category.type, page=pagination.next_num) }}">下一頁</a>
+                </li>
+            </ul>
+        </nav>
+    {% endif %}
+{% else %}
+    <div class="alert alert-light border">目前這個分類沒有商品。</div>
+{% endif %}
+{% endblock %}

@@ -7,16 +7,18 @@ import config
 import os
 from dotenv import load_dotenv
 import redis
+import base64
 from redis.exceptions import RedisError
 
 from extensions import db, bcrypt, login_manager
-from models import Members, Products, Favorites, ColorPalettes, Checkin
+from models import (
+    Members, Products, Favorites, ColorPalettes, Checkin,
+    Blushes, Contouring, Eyebrows, EyelinerMascara,
+    Eyeshadows, Foundations, Highlighters, Lipsticks
+)
 from forms import (
-    RegistrationForm,
-    LoginForm,
-    ChangePasswordForm,
-    ForgotPasswordRequestForm,
-    ResetPasswordForm,
+    RegistrationForm, LoginForm, ChangePasswordForm,
+    ForgotPasswordRequestForm, ResetPasswordForm,
 )
 from otp_utils import generate_otp, redis_key, send_otp_email, attempt_key
 
@@ -296,50 +298,64 @@ def verify_otp():
 @login_required
 def toggle_favorite():
     data = request.get_json(silent=True) or {}
-    p_id = data.get('product_id')
+    i_id = data.get('item_id')
+    i_type = data.get('item_type')
 
-    if p_id is None:
-        return jsonify({"status": "error", "message": "缺少 product_id"}), 400
+    if not i_id or not i_type:
+        return jsonify({"status": "error", "message": "缺少 item_id 或 item_type"}), 400
 
-    # 檢查是否已收藏
-    fav = Favorites.query.filter_by(member_id=current_user.phone_number, product_id=p_id).first()
+    fav = Favorites.query.filter_by(member_id=current_user.phone_number, item_id=i_id, item_type=i_type).first()
 
-    # 取消收藏
     if fav:
         db.session.delete(fav)
-        product = Products.query.get(p_id)
-        if product and product.favorite_count > 0:
-            product.favorite_count -= 1
         db.session.commit()
-        return jsonify({"status": "removed", "message": "已從我的最愛移除"})
-    #加入收藏
+        return jsonify({"status": "removed", "message": "已取消收藏"})
     else:
         try:
-            new_fav = Favorites(member_id=current_user.phone_number, product_id=p_id)
+            new_fav = Favorites(member_id=current_user.phone_number, item_id=i_id, item_type=i_type)
             db.session.add(new_fav)
-            product = Products.query.get(p_id)
-            if product:
-                product.favorite_count = (product.favorite_count or 0) + 1
             db.session.commit()
-            return jsonify({"status": "added", "message": "已加入我的最愛"})
+            return jsonify({"status": "added", "message": "已加入收藏"})
         except IntegrityError:
             db.session.rollback()
-            return jsonify({"status": "error", "message": "此商品已在收藏清單"}), 400
+            return jsonify({"status": "error", "message": "加入收藏失敗"}), 400
 
 
 @app.route('/api/members/<phone>/favorites', methods=['GET'])
 def get_user_favorites(phone):
-    # 找出該會員的所有收藏
     favs = Favorites.query.filter_by(member_id=phone).all()
-    # 透過關聯取得產品詳細資訊
-    product_list = [{
-        "id": f.product.id,
-        "name": f.product.name,
-        "price": float(f.product.price),
-        "image_url": f.product.image_url or "https://via.placeholder.com/150.png",
-        "description": f.product.description or "暫無描述",
-        "favorite_count": f.product.favorite_count or 0
-    } for f in favs]
+
+    model_mapping = {
+        'lipsticks': Lipsticks,
+        'blushes': Blushes,
+        'contouring': Contouring,
+        'eyebrows': Eyebrows,
+        'eyeliner_mascara': EyelinerMascara,
+        'eyeshadows': Eyeshadows,
+        'foundations': Foundations,
+        'highlighters': Highlighters,
+        'products': Products
+    }
+
+    product_list = []
+    for f in favs:
+        model_class = model_mapping.get(f.item_type)
+        if model_class:
+            item = model_class.query.get(f.item_id)
+            if item:
+                name = getattr(item, 'name', getattr(item, 'product_name', '未知商品'))
+                price = float(item.price) if getattr(item, 'price', None) else 0.0
+                image = getattr(item, 'image_data', getattr(item, 'image_url', ''))
+
+                product_list.append({
+                    "id": f.item_id,
+                    "type": f.item_type,
+                    "name": name,
+                    "price": price,
+                    "image_data": image,
+                    "description": getattr(item, 'description', '暫無描述')
+                })
+
     return jsonify({"favorites": product_list})
 
 # 會員簽到，對應資料庫 sp_member_checkin
@@ -522,11 +538,253 @@ def get_colors():
     })
 
 
+MAKEUP_CATEGORIES = [
+    {"name": "口紅", "type": "lipsticks", "endpoint": "/api/lipsticks", "model": Lipsticks},
+    {"name": "粉底", "type": "foundations", "endpoint": "/api/foundations", "model": Foundations},
+    {"name": "腮紅", "type": "blushes", "endpoint": "/api/blushes", "model": Blushes},
+    {"name": "眼影", "type": "eyeshadows", "endpoint": "/api/eyeshadows", "model": Eyeshadows},
+    {"name": "眼線與睫毛膏", "type": "eyeliner_mascara", "endpoint": "/api/eyeliner_mascara", "model": EyelinerMascara},
+    {"name": "修容", "type": "contouring", "endpoint": "/api/contouring", "model": Contouring},
+    {"name": "打亮", "type": "highlighters", "endpoint": "/api/highlighters", "model": Highlighters},
+    {"name": "眉彩", "type": "eyebrows", "endpoint": "/api/eyebrows", "model": Eyebrows},
+]
+
+
+def category_payload(category):
+    return {
+        "name": category["name"],
+        "type": category["type"],
+        "endpoint": category["endpoint"],
+    }
+
+
+def find_makeup_category(category_type):
+    for category in MAKEUP_CATEGORIES:
+        if category["type"] == category_type:
+            return category
+    return None
+
+
+def guess_image_mime_from_base64(data):
+    if data.startswith("/9j/"):
+        return "image/jpeg"
+    if data.startswith("iVBOR"):
+        return "image/png"
+    if data.startswith("R0lG"):
+        return "image/gif"
+    if data.startswith("UklGR"):
+        return "image/webp"
+    return "image/jpeg"
+
+
+def guess_image_mime_from_bytes(data):
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG"):
+        return "image/png"
+    if data.startswith(b"GIF"):
+        return "image/gif"
+    if data.startswith(b"RIFF"):
+        return "image/webp"
+    return "image/jpeg"
+
+
+def image_src(data):
+    if not data:
+        return ""
+
+    if isinstance(data, bytes):
+        mime = guess_image_mime_from_bytes(data)
+        encoded = base64.b64encode(data).decode("utf-8")
+        return f"data:{mime};base64,{encoded}"
+
+    value = str(data).strip()
+    if not value:
+        return ""
+    if value.startswith(("http://", "https://", "data:", "/")):
+        return value
+    if value.startswith("//"):
+        return f"https:{value}"
+
+    compact_value = "".join(value.split())
+    mime = guess_image_mime_from_base64(compact_value)
+    return f"data:{mime};base64,{compact_value}"
+
+
+def display_price(value):
+    if value is None:
+        return "NT$0"
+    try:
+        return f"NT${float(value):.0f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def product_card_payload(item, category_type):
+    return {
+        "id": item.id,
+        "type": category_type,
+        "brand": getattr(item, "brand", "") or "",
+        "name": getattr(item, "product_name", None) or getattr(item, "name", "未命名商品"),
+        "price": display_price(getattr(item, "price", None)),
+        "description": getattr(item, "description", "") or "暫無描述",
+        "image_src": image_src(getattr(item, "image_data", "")),
+        "shade_name": getattr(item, "shade_name", "") or "",
+        "category_name": getattr(item, "category_name", "") or "",
+        "sale_page_id": getattr(item, "sale_page_id", "") or "",
+    }
+
+
+@app.route('/products-page')
+@app.route('/products-page/<category_type>')
+def products_page(category_type='lipsticks'):
+    selected_category = find_makeup_category(category_type) or MAKEUP_CATEGORIES[0]
+    page = request.args.get("page", 1, type=int)
+    pagination = (
+        selected_category["model"]
+        .query
+        .order_by(selected_category["model"].id.desc())
+        .paginate(page=page, per_page=24, error_out=False)
+    )
+    products = [
+        product_card_payload(item, selected_category["type"])
+        for item in pagination.items
+    ]
+
+    return render_template(
+        "products.html",
+        title="商品瀏覽",
+        categories=[category_payload(category) for category in MAKEUP_CATEGORIES],
+        selected_category=category_payload(selected_category),
+        products=products,
+        pagination=pagination,
+    )
+
+
+def decode_image(data):
+    #將資料庫的 BLOB 圖片轉為前端可用的 Base64 字串
+    if isinstance(data, bytes):
+        return base64.b64encode(data).decode('utf-8')
+    return data
+
+def decode_text(data):
+    #將資料庫的二進位文字解碼為一般字串
+    if isinstance(data, bytes):
+        try:
+            return data.decode('utf-8')
+        except UnicodeDecodeError:
+            return ""
+    return data
+
+@app.route('/api/products/all', methods=['GET'])
+def get_all_makeup_categories():
+    return jsonify({
+        "categories": [category_payload(category) for category in MAKEUP_CATEGORIES]
+    })
+
+@app.route('/api/lipsticks', methods=['GET'])
+def get_lipsticks():
+    items = Lipsticks.query.all()
+    return jsonify({"products": [{
+        "id": i.id, "type": "lipsticks", "brand": getattr(i, 'brand', ''),
+        "name": getattr(i, 'product_name', ''),
+        "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
+        "image_data": decode_image(i.image_data),
+        "lab_json": decode_text(getattr(i, 'lab_json', '')),
+        "shade_name": getattr(i, 'shade_name', '')
+    } for i in items]})
+
+@app.route('/api/foundations', methods=['GET'])
+def get_foundations():
+    items = Foundations.query.all()
+    return jsonify({"products": [{
+        "id": i.id, "type": "foundations", "brand": getattr(i, 'brand', ''),
+        "name": i.name,
+        "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
+        "image_data": decode_image(i.image_data),
+        "lab_json": decode_text(getattr(i, 'lab', '')),
+        "shade_name": getattr(i, 'shade_name', '')
+    } for i in items]})
+
+@app.route('/api/blushes', methods=['GET'])
+def get_blushes():
+    items = Blushes.query.all()
+    return jsonify({"products": [{
+        "id": i.id, "type": "blushes", "brand": getattr(i, 'brand', ''),
+        "name": i.name,
+        "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
+        "image_data": decode_image(i.image_data),
+        "lab_json": decode_text(getattr(i, 'lab', '')),
+        "sale_page_id": getattr(i, 'sale_page_id', '')
+    } for i in items]})
+
+@app.route('/api/eyeshadows', methods=['GET'])
+def get_eyeshadows():
+    items = Eyeshadows.query.all()
+    return jsonify({"products": [{
+        "id": i.id, "type": "eyeshadows", "brand": getattr(i, 'brand', ''),
+        "name": i.name,
+        "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
+        "image_data": decode_image(i.image_data),
+        "lab_json": decode_text(getattr(i, 'lab', '')),
+        "sale_page_id": getattr(i, 'sale_page_id', '')
+    } for i in items]})
+
+@app.route('/api/eyeliner_mascara', methods=['GET'])
+def get_eyeliner_mascara():
+    items = EyelinerMascara.query.all()
+    return jsonify({"products": [{
+        "id": i.id, "type": "eyeliner_mascara", "brand": getattr(i, 'brand', ''),
+        "name": i.name,
+        "category_name": getattr(i, 'category_name', ''),
+        "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
+        "image_data": decode_image(i.image_data),
+        "lab_json": decode_text(getattr(i, 'lab', '')),
+        "sale_page_id": getattr(i, 'sale_page_id', '')
+    } for i in items]})
+
+@app.route('/api/contouring', methods=['GET'])
+def get_contouring():
+    items = Contouring.query.all()
+    return jsonify({"products": [{
+        "id": i.id, "type": "contouring", "brand": getattr(i, 'brand', ''),
+        "name": i.name,
+        "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
+        "image_data": decode_image(i.image_data),
+        "lab_json": decode_text(getattr(i, 'lab', '')),
+        "sale_page_id": getattr(i, 'sale_page_id', '')
+    } for i in items]})
+
+@app.route('/api/highlighters', methods=['GET'])
+def get_highlighters():
+    items = Highlighters.query.all()
+    return jsonify({"products": [{
+        "id": i.id, "type": "highlighters", "brand": getattr(i, 'brand', ''),
+        "name": i.name,
+        "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
+        "image_data": decode_image(i.image_data),
+        "lab_json": decode_text(getattr(i, 'lab', '')),
+        "sale_page_id": getattr(i, 'sale_page_id', '')
+    } for i in items]})
+
+@app.route('/api/eyebrows', methods=['GET'])
+def get_eyebrows():
+    items = Eyebrows.query.all()
+    return jsonify({"products": [{
+        "id": i.id, "type": "eyebrows", "brand": getattr(i, 'brand', ''),
+        "name": i.name,
+        "category_name": getattr(i, 'category_name', ''),
+        "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
+        "image_data": decode_image(i.image_data),
+        "lab_json": decode_text(getattr(i, 'lab', '')),
+        "sale_page_id": getattr(i, 'sale_page_id', '')
+    } for i in items]})
+
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
         app.run(
             host='0.0.0.0',
-            port=int(os.getenv("PORT", 8080)),
+            port=int(os.getenv("PORT", 5001)),
             debug=os.getenv("FLASK_DEBUG", "1") == "1"
         )

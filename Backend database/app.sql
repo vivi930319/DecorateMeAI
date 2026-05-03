@@ -1,4 +1,4 @@
-USE app;
+USE virtual_makeup_server;
 
 DROP VIEW IF EXISTS view_member_activity;
 DROP TRIGGER IF EXISTS trg_auto_upgrade_level;
@@ -16,6 +16,7 @@ DROP PROCEDURE IF EXISTS sp_member_favorites;
 DROP EVENT IF EXISTS daily_member_stats;
 DROP FUNCTION IF EXISTS fn_member_checkin_count;
 DROP FUNCTION IF EXISTS fn_member_favorite_count;
+DROP PROCEDURE IF EXISTS sp_member_favorites;
 
 
 -- 創建 members 表格 (會員)
@@ -70,16 +71,14 @@ CREATE TABLE checkins (
 CREATE TABLE favorites (
   id INT NOT NULL AUTO_INCREMENT,
   member_id VARCHAR(20) NOT NULL,
-  product_id INT NOT NULL,
+  item_id INT NOT NULL,
+  item_type VARCHAR(50) NOT NULL,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
   PRIMARY KEY (id),
-  -- 會員或產品被刪除時自動刪除相關的收藏記錄
   CONSTRAINT fk_fav_member FOREIGN KEY (member_id)
     REFERENCES members (phone_number) ON DELETE CASCADE ON UPDATE CASCADE,
-  CONSTRAINT fk_fav_product FOREIGN KEY (product_id)
-    REFERENCES products (id) ON DELETE CASCADE ON UPDATE CASCADE,
-  -- 確保同一個會員不會重複收藏同一個產品
-  UNIQUE KEY unique_user_product (member_id, product_id)
+  UNIQUE KEY unique_user_item (member_id, item_id, item_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- 創建色碼資料庫表格
@@ -127,7 +126,7 @@ SELECT
     COUNT(f.id) AS favorite_count,
     COUNT(f.id) * p.price AS popularity_score
 FROM products p
-LEFT JOIN favorites f ON p.id = f.product_id
+LEFT JOIN favorites f ON p.id = f.item_id AND f.item_type = 'products'
 GROUP BY p.id
 ORDER BY favorite_count DESC;
 
@@ -178,8 +177,8 @@ CREATE TRIGGER trg_before_favorite_insert
 BEFORE INSERT ON favorites
 FOR EACH ROW
 BEGIN
-    IF EXISTS (SELECT 1 FROM favorites WHERE member_id = NEW.member_id AND product_id = NEW.product_id) THEN
-        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Error: This product is already in favorites!';
+    IF EXISTS (SELECT 1 FROM favorites WHERE member_id = NEW.member_id AND item_id = NEW.item_id AND item_type = NEW.item_type) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Error: This item is already in favorites!';
     END IF;
 END //
 
@@ -222,37 +221,6 @@ END$$
 
 DELIMITER ;
 
--- 收藏商品時自動更新人氣
-ALTER TABLE products
-ADD COLUMN favorite_count INT DEFAULT 0;
-
-DELIMITER $$
-
-CREATE TRIGGER trg_update_product_favorite
-AFTER INSERT ON favorites
-FOR EACH ROW
-BEGIN
-    UPDATE products
-    SET favorite_count = favorite_count + 1
-    WHERE id = NEW.product_id;
-END$$
-
-DELIMITER ;
-
--- 取消收藏時扣除人氣
-DELIMITER $$
-
-CREATE TRIGGER trg_reduce_product_favorite
-AFTER DELETE ON favorites
-FOR EACH ROW
-BEGIN
-    UPDATE products
-    SET favorite_count = favorite_count - 1
-    WHERE id = OLD.product_id;
-END$$
-
-DELIMITER ;
-
 -- stored procedures
 -- 會員簽到
 DELIMITER $$
@@ -267,35 +235,30 @@ DELIMITER ;
 
 -- 收藏商品
 DELIMITER $$
-
 CREATE PROCEDURE sp_add_favorite(
-IN p_member VARCHAR(20),
-IN p_product INT
+    IN p_member VARCHAR(20),
+    IN p_item INT,
+    IN p_type VARCHAR(50)
 )
 BEGIN
-
-INSERT INTO favorites(member_id, product_id)
-VALUES(p_member, p_product);
-
+    INSERT INTO favorites(member_id, item_id, item_type)
+    VALUES(p_member, p_item, p_type);
 END$$
-
 DELIMITER ;
 
 -- 取消收藏
 DELIMITER $$
-
 CREATE PROCEDURE sp_remove_favorite(
-IN p_member VARCHAR(20),
-IN p_product INT
+    IN p_member VARCHAR(20),
+    IN p_item INT,
+    IN p_type VARCHAR(50)
 )
 BEGIN
-
-DELETE FROM favorites
-WHERE member_id = p_member
-AND product_id = p_product;
-
+    DELETE FROM favorites
+    WHERE member_id = p_member
+    AND item_id = p_item
+    AND item_type = p_type;
 END$$
-
 DELIMITER ;
 
 -- 查詢熱門商品
@@ -318,12 +281,28 @@ DELIMITER $$
 
 CREATE PROCEDURE sp_member_favorites(IN p_member VARCHAR(20))
 BEGIN
-
-SELECT p.*
-FROM products p
-JOIN favorites f ON p.id = f.product_id
-WHERE f.member_id = p_member;
-
+    SELECT
+        f.item_id AS id,
+        f.item_type AS category,
+        -- 動態抓取名稱 (對應 lipsticks 的 product_name 或其他表的 name)
+        COALESCE(p.name, l.product_name, b.name, c.name, e.name, em.name, es.name, fd.name, h.name) AS name,
+        -- 動態抓取價格
+        COALESCE(p.price, l.price, b.price, c.price, e.price, em.price, es.price, fd.price, h.price) AS price,
+        -- 動態抓取描述
+        COALESCE(p.description, l.description, b.description, c.description, e.description, em.description, es.description, fd.description, h.description) AS description,
+        -- 動態抓取圖片 (對應 products 的 image_url 或其他表的 image_data)
+        COALESCE(p.image_url, l.image_data, b.image_data, c.image_data, e.image_data, em.image_data, es.image_data, fd.image_data, h.image_data) AS image_data
+    FROM favorites f
+    LEFT JOIN products p ON f.item_id = p.id AND f.item_type = 'products'
+    LEFT JOIN lipsticks l ON f.item_id = l.id AND f.item_type = 'lipsticks'
+    LEFT JOIN blushes b ON f.item_id = b.id AND f.item_type = 'blushes'
+    LEFT JOIN contouring c ON f.item_id = c.id AND f.item_type = 'contouring'
+    LEFT JOIN eyebrows e ON f.item_id = e.id AND f.item_type = 'eyebrows'
+    LEFT JOIN eyeliner_mascara em ON f.item_id = em.id AND f.item_type = 'eyeliner_mascara'
+    LEFT JOIN eyeshadows es ON f.item_id = es.id AND f.item_type = 'eyeshadows'
+    LEFT JOIN foundations fd ON f.item_id = fd.id AND f.item_type = 'foundations'
+    LEFT JOIN highlighters h ON f.item_id = h.id AND f.item_type = 'highlighters'
+    WHERE f.member_id = p_member;
 END$$
 
 DELIMITER ;

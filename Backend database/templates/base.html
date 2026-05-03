@@ -11,6 +11,7 @@
     <div class="container">
         <a class="navbar-brand" href="{{ url_for('index') }}">會員系統</a>
         <div class="d-flex gap-2">
+            <a class="btn btn-sm btn-outline-light" href="{{ url_for('products_page') }}">商品瀏覽</a>
             {% if current_user.is_authenticated %}
                 <a class="btn btn-sm btn-outline-light" href="{{ url_for('profile') }}">會員中心</a>
                 <a class="btn btn-sm btn-warning" href="{{ url_for('logout') }}">登出</a>
