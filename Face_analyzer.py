@@ -151,6 +151,8 @@ class FaceAnalyzer:
         if face_width < 1e-6 or jaw_width < 1e-6 or face_height < 1e-6:
             return None
 
+        ratio_cheekbone_face = cheekbone_width / face_width
+
         return {
             "face_width": face_width,
             "face_height": face_height,
@@ -161,6 +163,7 @@ class FaceAnalyzer:
             "ratio_forehead_jaw": round(forehead_width / jaw_width, 3),
             "ratio_cheekbone_jaw": round(cheekbone_width / jaw_width, 3),
             "ratio_jaw_face": round(jaw_width / face_width, 3),
+            "ratio_cheekbone_face": round(ratio_cheekbone_face, 3),
         }
 
     def _eye_side_metrics(self, inner_idx, outer_idx, upper_ids, lower_idx, brow_ids):
@@ -240,15 +243,15 @@ class FaceAnalyzer:
             )
         ) / 2.0
 
-        score = 0.0
-        if brow_gap_norm >= 0.042:
-            score += 1
-        if lid_curve >= 0.12:
-            score += 1
-        if crease >= 0.35:
-            score += 1
+        # 單眼皮也常因睫毛、眼線、陰影讓 crease 偏高，故改為「兩強訊號同時成立」才判雙眼皮
+        good_gap = brow_gap_norm >= 0.050
+        high_curve = lid_curve >= 0.17
+        strong_crease = crease >= 0.52
 
-        return "雙眼皮" if score >= 2 else "單眼皮", {
+        is_double = (good_gap and high_curve) or (good_gap and strong_crease) or (high_curve and strong_crease)
+        score = float(good_gap) + float(high_curve) + float(strong_crease)
+
+        return ("雙眼皮" if is_double else "單眼皮"), {
             "brow_gap_norm": round(brow_gap_norm, 4),
             "lid_curve": round(lid_curve, 3),
             "crease": round(crease, 3),
@@ -268,6 +271,7 @@ class FaceAnalyzer:
         ratio_forehead_jaw = ratios["ratio_forehead_jaw"]
         ratio_cheekbone_jaw = ratios["ratio_cheekbone_jaw"]
         ratio_jaw_face = ratios["ratio_jaw_face"]
+        ratio_cheekbone_face = ratios["ratio_cheekbone_face"]
 
         if ratio_height_width >= 1.33 or (ratio_height_width >= 1.26 and ratio_cheekbone_jaw >= 1.18):
             return "長形臉"
@@ -283,8 +287,23 @@ class FaceAnalyzer:
             return "正三角臉"
         elif ratio_forehead_jaw < 0.95 and ratio_cheekbone_jaw < 1.05:
             return "方形臉"
-        elif ratio_cheekbone_jaw > 1.2 and ratio_forehead_jaw < 0.9:
+        # 菱形臉擴充：顴骨明顯寬於下顎、下巴相對臉寬偏窄（舊版過度要求額頭極窄易誤判成鵝蛋臉）
+        elif (
+            ratio_cheekbone_jaw > 1.12
+            and ratio_forehead_jaw < 0.96
+            and ratio_jaw_face < 0.84
+        ):
             return "菱形臉"
+        # 顴骨佔臉寬比例高（側面輪廓外擴），亦視為菱形傾向
+        elif ratio_cheekbone_face >= 0.88 and ratio_cheekbone_jaw > 1.08 and ratio_jaw_face < 0.83:
+            return "菱形臉"
+        # 瘦長臉：高寬比未達極端長臉門檻，但下巴尖、額頭不特寬
+        elif (
+            1.18 <= ratio_height_width < 1.33
+            and ratio_jaw_face <= 0.83
+            and ratio_forehead_jaw < 1.10
+        ):
+            return "長形臉"
         else:
             return "鵝蛋臉"
     # 眉型
@@ -342,14 +361,28 @@ class FaceAnalyzer:
             eye_type = "上斜眼"
         elif ear > 0.38:
             eye_type = "圓杏眼"
-        elif -8 < angle < -3 and ear < 0.25:
-            eye_type = "丹鳳眼"
-        elif -5 < angle < 2 and 0.25 < ear < 0.34:
-            eye_type = "桃花眼"
+        # 鳳眼系：細長、外眼角略上揚或平拉——優先於桃花眼（桃花眼多指較圓、偏大的眼型）
         elif ear < 0.20:
             eye_type = "瑞鳳眼"
+        elif ear <= 0.31 and -10 < angle < -1:
+            eye_type = "丹鳳眼"
+        elif ear <= 0.31 and -1 <= angle < 4:
+            eye_type = "鳳眼"
+        elif -5 < angle < 2 and 0.31 < ear <= 0.38:
+            eye_type = "桃花眼"
         else:
             eye_type = "杏仁眼"
+
+        # 「桃花眼」在常見定義上多指雙眼皮、偏圓潤；單眼皮若落到桃花眼則改判鳳眼系或杏仁眼
+        if eyelid_type == "單眼皮" and eye_type == "桃花眼":
+            if -10 < angle < -1 and ear < 0.30:
+                eye_type = "丹鳳眼"
+            elif ear <= 0.32:
+                eye_type = "鳳眼"
+            elif ear < 0.22:
+                eye_type = "瑞鳳眼"
+            else:
+                eye_type = "杏仁眼"
 
         if debug:
             print(json.dumps({
