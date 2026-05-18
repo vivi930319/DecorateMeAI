@@ -128,103 +128,149 @@ class FaceAnalyzer:
         pts = points_xy.astype(np.float32)
         return (pts - pivot) @ R.T + pivot
 
+    def _width_between(self, left_idx, right_idx, aligned=False):
+        pts = np.array([self._pt(left_idx), self._pt(right_idx)], dtype=np.float32)
+        if aligned:
+            pts = self._align_points_by_eyes(pts)
+        return float(np.linalg.norm(pts[0] - pts[1]))
+
+    def _face_shape_ratios(self):
+        """固定 landmark 量測 + 眼睛水平校正，避免 oval 掃描額寬飄掉。"""
+        p234 = self._pt(234).astype(np.float32)
+        p454 = self._pt(454).astype(np.float32)
+        p10 = self._pt(10).astype(np.float32)
+        p152 = self._pt(152).astype(np.float32)
+        aligned = self._align_points_by_eyes(np.array([p10, p152, p234, p454], dtype=np.float32))
+
+        face_width = float(np.linalg.norm(aligned[2] - aligned[3]))
+        face_height = float(abs(aligned[1][1] - aligned[0][1]))
+        forehead_width = self._width_between(103, 332, aligned=True)
+        cheekbone_width = self._width_between(123, 352, aligned=True)
+        jaw_width = self._width_between(172, 397, aligned=True)
+
+        if face_width < 1e-6 or jaw_width < 1e-6 or face_height < 1e-6:
+            return None
+
+        return {
+            "face_width": face_width,
+            "face_height": face_height,
+            "forehead_width": forehead_width,
+            "cheekbone_width": cheekbone_width,
+            "jaw_width": jaw_width,
+            "ratio_height_width": round(face_height / face_width, 3),
+            "ratio_forehead_jaw": round(forehead_width / jaw_width, 3),
+            "ratio_cheekbone_jaw": round(cheekbone_width / jaw_width, 3),
+            "ratio_jaw_face": round(jaw_width / face_width, 3),
+        }
+
+    def _eye_side_metrics(self, inner_idx, outer_idx, upper_ids, lower_idx, brow_ids):
+        inner = self._pt(inner_idx).astype(np.float32)
+        outer = self._pt(outer_idx).astype(np.float32)
+        upper = np.array([self._pt(i) for i in upper_ids], dtype=np.float32)
+        lower = self._pt(lower_idx).astype(np.float32)
+        brows = np.array([self._pt(i) for i in brow_ids], dtype=np.float32)
+
+        eye_width = float(np.linalg.norm(outer - inner))
+        lid_center = upper.mean(axis=0)
+        eye_height = float(np.linalg.norm(lid_center - lower))
+        ear = eye_height / eye_width if eye_width > 0 else 0.0
+
+        aligned = self._align_points_by_eyes(np.array([outer, inner], dtype=np.float32))
+        if aligned[0][0] <= aligned[1][0]:
+            outer_a, inner_a = aligned[0], aligned[1]
+        else:
+            outer_a, inner_a = aligned[1], aligned[0]
+        dx = float(inner_a[0] - outer_a[0])
+        dy = float(inner_a[1] - outer_a[1])
+        angle = float(np.degrees(np.arctan2(dy, dx))) if dx > 1e-6 else 0.0
+
+        brow_y = float(np.mean(brows[:, 1]))
+        lid_y = float(np.mean(upper[:, 1]))
+        lid_spread = float(np.max(upper[:, 1]) - np.min(upper[:, 1]))
+        lid_curve = lid_spread / eye_height if eye_height > 0 else 0.0
+
+        return {
+            "eye_width": eye_width,
+            "eye_height": eye_height,
+            "ear": ear,
+            "angle": angle,
+            "brow_gap": max(0.0, lid_y - brow_y),
+            "lid_curve": lid_curve,
+        }
+
+    def _eyelid_crease_score(self, inner, outer, upper, lower):
+        """上眼皮區域水平梯度，雙眼皮摺線通常較明顯。"""
+        cx = int((inner[0] + outer[0]) / 2)
+        cy = int(np.mean(upper[:, 1]))
+        ew = max(8, int(np.linalg.norm(outer - inner)))
+        eye_h = max(4.0, float(np.linalg.norm(upper.mean(axis=0) - lower)))
+
+        y1 = max(0, cy - int(eye_h * 1.1))
+        y2 = min(self.h, cy + int(eye_h * 0.15))
+        x1 = max(0, cx - ew)
+        x2 = min(self.w, cx + ew)
+        patch = self.frame[y1:y2, x1:x2]
+        if patch.size == 0 or patch.shape[0] < 4:
+            return 0.0
+
+        gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+        gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        row_a = int(gray.shape[0] * 0.15)
+        row_b = int(gray.shape[0] * 0.70)
+        if row_b <= row_a:
+            return 0.0
+        grad = float(np.mean(np.abs(gy[row_a:row_b, :])))
+        return grad / max(1.0, float(np.std(gray)))
+
+    def _classify_eyelid_type(self, left, right, face_width):
+        brow_gap_norm = (left["brow_gap"] + right["brow_gap"]) / (2.0 * face_width)
+        lid_curve = (left["lid_curve"] + right["lid_curve"]) / 2.0
+        crease = (
+            self._eyelid_crease_score(
+                self._pt(133).astype(np.float32),
+                self._pt(33).astype(np.float32),
+                np.array([self._pt(i) for i in (157, 158, 159, 160, 161)], dtype=np.float32),
+                self._pt(145).astype(np.float32),
+            )
+            + self._eyelid_crease_score(
+                self._pt(362).astype(np.float32),
+                self._pt(263).astype(np.float32),
+                np.array([self._pt(i) for i in (385, 386, 387, 388, 398)], dtype=np.float32),
+                self._pt(374).astype(np.float32),
+            )
+        ) / 2.0
+
+        score = 0.0
+        if brow_gap_norm >= 0.042:
+            score += 1
+        if lid_curve >= 0.12:
+            score += 1
+        if crease >= 0.35:
+            score += 1
+
+        return "雙眼皮" if score >= 2 else "單眼皮", {
+            "brow_gap_norm": round(brow_gap_norm, 4),
+            "lid_curve": round(lid_curve, 3),
+            "crease": round(crease, 3),
+            "score": score,
+        }
+
     # 臉型
     def get_face_shape(self, debug=False):
-        # 流程：
-        # 步驟1：先把臉部點位對齊（眼睛轉平）
-        # 步驟2：用臉輪廓多點抓寬度，不只看單一點
-        # 步驟3：如果輪廓抓不到，再退回固定 landmark 算法
-
-        # 先拿臉外輪廓點
-        oval_indices = self._collect_landmark_indices(self.mp_face_mesh.FACEMESH_FACE_OVAL)
-        if len(oval_indices) < 5:
-            # 輪廓點不足，直接走舊版固定點量測
-            face_width = self._dist(234, 454)
-            forehead_width = self._dist(103, 332)
-            cheekbone_width = self._dist(123, 352)
-            jaw_width = self._dist(172, 397)
-            face_height = self._dist(10, 152)
-        else:
-            oval_pts = np.array([self._pt(i) for i in oval_indices], dtype=np.float32)
-            oval_pts_rot = self._align_points_by_eyes(oval_pts)
-
-            # 臉高改抓 10(額上) -> 152(下巴)
-            # 比直接用 oval 的上下界穩，較不會把臉高算太短
-            p10 = self._pt(10).astype(np.float32)[None, :]
-            p152 = self._pt(152).astype(np.float32)[None, :]
-            p10r = self._align_points_by_eyes(p10)[0]
-            p152r = self._align_points_by_eyes(p152)[0]
-            face_height = float(abs(p152r[1] - p10r[1]))
-
-            if face_height < 1e-6:
-                return "未知"
-
-            y_min = float(np.min(oval_pts_rot[:, 1]))
-            y_max = float(np.max(oval_pts_rot[:, 1]))
-
-            # 在不同高度切 y 帶去抓寬度，避免單點抖動
-            def width_at(level):
-                y_level = y_min + face_height * level
-                tol = face_height * 0.03  # 第一輪帶寬
-                sel = np.abs(oval_pts_rot[:, 1] - y_level) < tol
-                if int(np.sum(sel)) < 3:
-                    tol2 = face_height * 0.05
-                    sel = np.abs(oval_pts_rot[:, 1] - y_level) < tol2
-                if int(np.sum(sel)) < 3:
-                    return None
-                x_min = float(np.min(oval_pts_rot[sel, 0]))
-                x_max = float(np.max(oval_pts_rot[sel, 0]))
-                return x_max - x_min
-
-            # 掃一段高度，把最大寬當臉寬
-            widths = []
-            for lv in np.linspace(0.20, 0.85, 14):
-                w = width_at(float(lv))
-                if w is not None and w > 0:
-                    widths.append(w)
-
-            if not widths:
-                # 這輪抓不到寬度就回退舊算法
-                face_width = self._dist(234, 454)
-                forehead_width = self._dist(103, 332)
-                cheekbone_width = self._dist(123, 352)
-                jaw_width = self._dist(172, 397)
-            else:
-                face_width = float(max(widths))
-                forehead_width = width_at(0.27) or self._dist(103, 332)
-                cheekbone_width = width_at(0.50) or self._dist(123, 352)
-                jaw_width = width_at(0.80) or self._dist(172, 397)
-
-        if face_width < 1e-6 or jaw_width < 1e-6:
+        ratios = self._face_shape_ratios()
+        if ratios is None:
             return "未知"
 
-        ratio_height_width = round(face_height / face_width, 3)
-        ratio_forehead_jaw = round(forehead_width / jaw_width, 3)
-        ratio_cheekbone_jaw = round(cheekbone_width / jaw_width, 3)
-        ratio_jaw_face = round(jaw_width / face_width, 3)
-
         if debug:
-            print(
-                json.dumps(
-                    {
-                        "face_width": round(float(face_width), 2),
-                        "face_height": round(float(face_height), 2),
-                        "forehead_width": round(float(forehead_width), 2),
-                        "cheekbone_width": round(float(cheekbone_width), 2),
-                        "jaw_width": round(float(jaw_width), 2),
-                        "ratio_height_width": ratio_height_width,
-                        "ratio_forehead_jaw": ratio_forehead_jaw,
-                        "ratio_cheekbone_jaw": ratio_cheekbone_jaw,
-                        "ratio_jaw_face": ratio_jaw_face,
-                    },
-                    ensure_ascii=False,
-                )
-            )
+            print(json.dumps(ratios, ensure_ascii=False))
 
-        # 長臉不要只看高寬比，會過判；多加下顎比例一起看
+        ratio_height_width = ratios["ratio_height_width"]
+        ratio_forehead_jaw = ratios["ratio_forehead_jaw"]
+        ratio_cheekbone_jaw = ratios["ratio_cheekbone_jaw"]
+        ratio_jaw_face = ratios["ratio_jaw_face"]
+
         if ratio_height_width >= 1.33 or (ratio_height_width >= 1.26 and ratio_cheekbone_jaw >= 1.18):
             return "長形臉"
-        # V-line 且整體偏長時，優先當長形臉（不然常掉去心形）
         elif ratio_height_width >= 1.18 and ratio_forehead_jaw >= 1.30 and ratio_jaw_face <= 0.74:
             return "長形臉"
         elif ratio_height_width < 1.15 and ratio_cheekbone_jaw > 1.2 and ratio_forehead_jaw < 1.05:
@@ -241,7 +287,7 @@ class FaceAnalyzer:
             return "菱形臉"
         else:
             return "鵝蛋臉"
-    # 眉型 (還要調數據)
+    # 眉型
     def get_eyebrow_shape(self):
         brow_head_y = (self._pt(46)[1] + self._pt(276)[1]) / 2
         brow_peak_y = (self._pt(55)[1] + self._pt(285)[1]) / 2
@@ -260,95 +306,61 @@ class FaceAnalyzer:
         else:
             return "標準眉"  # 其餘都是標準眉
 
-    def get_eye_shape(self):
-        # 先抓左右眼關鍵點（就抓最基本那幾個就好）
-        left_inner = self._pt(33)  # 左眼頭
-        left_outer = self._pt(133)  # 左眼尾
-        right_inner = self._pt(362)
-        right_outer = self._pt(263)
+    def get_eye_shape(self, debug=False):
+        face_width = self._dist(234, 454)
+        if face_width < 1e-6:
+            return "未知"
 
-        # 上下眼皮，用來算開合
-        left_top = self._pt(159)
-        left_bottom = self._pt(145)
-        right_top = self._pt(386)
-        right_bottom = self._pt(374)
+        left = self._eye_side_metrics(
+            inner_idx=133, outer_idx=33,
+            upper_ids=(157, 158, 159, 160, 161),
+            lower_idx=145,
+            brow_ids=(46, 53, 52, 65, 55),
+        )
+        right = self._eye_side_metrics(
+            inner_idx=362, outer_idx=263,
+            upper_ids=(385, 386, 387, 388, 398),
+            lower_idx=374,
+            brow_ids=(276, 283, 282, 295, 285),
+        )
 
-        # 算眼睛寬度（左右平均一下，避免單邊歪掉）
-        left_w = np.linalg.norm(left_outer - left_inner)
-        right_w = np.linalg.norm(right_outer - right_inner)
-        eye_width = (left_w + right_w) / 2
-
-        # 算高度（同樣左右平均）
-        left_h = np.linalg.norm(left_top - left_bottom)
-        right_h = np.linalg.norm(right_top - right_bottom)
-        eye_height = (left_h + right_h) / 2
-
+        eye_width = (left["eye_width"] + right["eye_width"]) / 2.0
         if eye_width < 1e-6:
             return "未知"
 
-        # 眼睛開合比例（之後很多判斷都會用到）
-        ear = eye_height / eye_width
+        ear = (left["ear"] + right["ear"]) / 2.0
+        angle = (left["angle"] + right["angle"]) / 2.0
+        ratio_to_face = eye_width / face_width
 
-        # 算眼尾是上還是下（用角度比較穩）
-        dx = left_outer[0] - left_inner[0]
-        dy = left_outer[1] - left_inner[1]
-        angle = np.degrees(np.arctan2(dy, dx))
-        # angle < 0 → 上揚
-        # angle > 0 → 下垂
+        eyelid_type, eyelid_debug = self._classify_eyelid_type(left, right, face_width)
 
-        # 看眼睛在整張臉裡佔多少（抓那種很小的眼睛）
-        face_width = self._dist(234, 454)
-        ratio_to_face = eye_width / face_width if face_width > 0 else 0
-
-        # 眼皮（單 / 雙）先另外算，不跟眼型混在一起
-        # 用眉毛到上眼皮距離當一個大概的參考
-        lid_dist_left = self._pt(46)[1] - self._pt(159)[1]
-        lid_dist_right = self._pt(276)[1] - self._pt(386)[1]
-        avg_lid = (lid_dist_left + lid_dist_right) / 2
-
-        #這是根據圖片去調整過後的數據(寫入文件書)
-        if avg_lid > 18:
-            eyelid_type = "雙眼皮"
-        else:
-            eyelid_type = "單眼皮"
-
-        # 先做一層大分類（避免後面互撞）
-
-        # 很小顆的直接抓出來
         if ratio_to_face < 0.055:
             eye_type = "瞇縫眼"
-
-        # 明顯往下
         elif angle > 8:
             eye_type = "下垂眼"
-
-        # 很明顯往上
-        elif angle < -15:
+        elif angle < -8:
             eye_type = "上斜眼"
-
-        # 很圓
         elif ear > 0.38:
             eye_type = "圓杏眼"
-
+        elif -8 < angle < -3 and ear < 0.25:
+            eye_type = "丹鳳眼"
+        elif -5 < angle < 2 and 0.25 < ear < 0.34:
+            eye_type = "桃花眼"
+        elif ear < 0.20:
+            eye_type = "瑞鳳眼"
         else:
-            #  再細分（這裡開始才分什麼桃花、丹鳳）
+            eye_type = "杏仁眼"
 
-            # 有點斜 + 偏細
-            if -15 < angle < -5 and ear < 0.25:
-                eye_type = "丹鳳眼"
+        if debug:
+            print(json.dumps({
+                "ear": round(ear, 3),
+                "angle": round(angle, 2),
+                "ratio_to_face": round(ratio_to_face, 3),
+                "left": {k: round(v, 3) if isinstance(v, float) else v for k, v in left.items()},
+                "right": {k: round(v, 3) if isinstance(v, float) else v for k, v in right.items()},
+                "eyelid": eyelid_debug,
+            }, ensure_ascii=False))
 
-            # 微上揚 + 比例中間
-            elif -8 < angle < 0 and 0.25 < ear < 0.34:
-                eye_type = "桃花眼"
-
-            # 很細長
-            elif ear < 0.20:
-                eye_type = "瑞鳳眼"
-
-            else:
-                eye_type = "杏仁眼"
-
-        # 回傳眼型分類，特意把單雙眼皮跟眼型分開
         return f"{eyelid_type}・{eye_type}"
 
     # 鼻型
@@ -406,131 +418,81 @@ class FaceAnalyzer:
         else:
             return "花瓣唇"
 
-    # 膚色
-    def get_skin_color(self):
-        face_mask = np.zeros((self.h, self.w), dtype=np.uint8)
-        lip_mask  = np.zeros((self.h, self.w), dtype=np.uint8)
+    _MAC_SHADE_RANGES = {
+        "白皙自然色":     {"L_MIN": 73.2,  "L_MAX": 80.54, "A_MIN": 5.12, "A_MAX": 9.96,  "B_MIN": 15.58, "B_MAX": 22.67},
+        "中等亮白自然色": {"L_MIN": 69.26, "L_MAX": 77.82, "A_MIN": 7.41, "A_MAX": 8.61,  "B_MIN": 17.1,  "B_MAX": 19.59},
+        "白皙象牙色":     {"L_MIN": 80.54, "L_MAX": 85.37, "A_MIN": 2.65, "A_MAX": 5.12,  "B_MIN": 15.03, "B_MAX": 15.58},
+        "自然象牙":       {"L_MIN": 68.88, "L_MAX": 82.99, "A_MIN": 2.97, "A_MAX": 9.85,  "B_MIN": 19.55, "B_MAX": 25.1},
+        "健康象牙":       {"L_MIN": 65.32, "L_MAX": 76.37, "A_MIN": 7.16, "A_MAX": 9.05,  "B_MIN": 23.08, "B_MAX": 28.86},
+        "古銅象牙":       {"L_MIN": 65.93, "L_MAX": 65.93, "A_MIN": 11.4, "A_MAX": 11.4,  "B_MIN": 30.85, "B_MAX": 30.85},
+        "健康玫瑰色":     {"L_MIN": 68.88, "L_MAX": 68.88, "A_MIN": 9.85, "A_MAX": 9.85,  "B_MIN": 25.1,  "B_MAX": 25.1},
+    }
 
-        # 步驟1：先做整張臉遮罩
-        face_points = np.array(
-            [[int(lm.x * self.w), int(lm.y * self.h)] for lm in self.face_landmarks.landmark],
-            dtype=np.int32
+    def _landmark_region_mask(self, connections, fill=255):
+        """依 FACEMESH 連線建立凸包遮罩。"""
+        indices = self._collect_landmark_indices(connections)
+        mask = np.zeros((self.h, self.w), dtype=np.uint8)
+        if not indices:
+            return mask
+        pts = np.array([self._pt(i) for i in indices], dtype=np.int32)
+        cv2.fillConvexPoly(mask, cv2.convexHull(pts), fill)
+        return mask
+
+    def _bgr_mean_to_lab(self, mean_bgr):
+        """BGR 平均色轉標準 LAB（L: 0~100, a/b: 以 0 為中心）。"""
+        bgr_img = np.array([[[
+            int(mean_bgr[0]), int(mean_bgr[1]), int(mean_bgr[2])
+        ]]], dtype=np.uint8)
+        lab_px = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2Lab)[0, 0]
+        return (
+            round(float(lab_px[0]) / 2.55, 2),
+            round(float(lab_px[1]) - 128.0, 2),
+            round(float(lab_px[2]) - 128.0, 2),
         )
-        cv2.fillConvexPoly(face_mask, cv2.convexHull(face_points), 255)
 
-        # 步驟2：先做嘴唇遮罩，之後可直接算唇色
-        lip_pts = np.array(
-            [[int(self.face_landmarks.landmark[i].x * self.w),
-              int(self.face_landmarks.landmark[i].y * self.h)] for i, _ in self.mp_face_mesh.FACEMESH_LIPS],
-            dtype=np.int32
+    def _lab_mean_from_mask(self, lab_img, mask_u8):
+        """遮罩區域平均 LAB，回傳標準 L/a/b。"""
+        l_mean, a_mean_cv, b_mean_cv, _ = cv2.mean(lab_img, mask=mask_u8)
+        return (
+            float(l_mean) / 2.55,
+            float(a_mean_cv - 128.0),
+            float(b_mean_cv - 128.0),
         )
-        cv2.fillConvexPoly(lip_mask, cv2.convexHull(lip_pts), 255)
 
-        # 步驟3：先取嘴唇平均色
-        mean_lip_bgr = cv2.mean(self.frame, mask=lip_mask)[:3]
-        lip_rgb = [round(mean_lip_bgr[2], 1), round(mean_lip_bgr[1], 1), round(mean_lip_bgr[0], 1)]
+    def _classify_shade_12grid(self, lab_img, mask_u8):
+        """依 MAC 膚色範圍分級，超出範圍時取最近色號。"""
+        l_mean, a_axis, b_axis = self._lab_mean_from_mask(lab_img, mask_u8)
 
-        # 步驟4：把嘴、眼挖掉，盡量只留皮膚區
-        def cutout(landmark_ids):
-            pts = np.array(
-                [[int(self.face_landmarks.landmark[i].x * self.w),
-                  int(self.face_landmarks.landmark[i].y * self.h)] for i, _ in landmark_ids],
-                dtype=np.int32
-            )
-            cv2.fillConvexPoly(face_mask, cv2.convexHull(pts), 0)
+        matched = None
+        for name, r in self._MAC_SHADE_RANGES.items():
+            if (r["L_MIN"] <= l_mean <= r["L_MAX"] and
+                    r["A_MIN"] <= a_axis <= r["A_MAX"] and
+                    r["B_MIN"] <= b_axis <= r["B_MAX"]):
+                matched = name
+                break
 
-        cutout(self.mp_face_mesh.FACEMESH_LIPS)
-        cutout(self.mp_face_mesh.FACEMESH_LEFT_EYE)
-        cutout(self.mp_face_mesh.FACEMESH_RIGHT_EYE)
-
-        # 步驟5：用 Lab 做膚色範圍過濾（比 RGB 抗光）
-        lab = cv2.cvtColor(self.frame, cv2.COLOR_BGR2Lab)
-        color_mask = cv2.inRange(lab, np.array([20, 135, 130]), np.array([230, 175, 175]))
-
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN,  kernel)
-        color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
-
-        combined_mask = cv2.bitwise_and(face_mask, color_mask)
-
-        mean_bgr = cv2.mean(self.frame, mask=combined_mask)[:3]
-        skin_rgb = [round(mean_bgr[2], 1), round(mean_bgr[1], 1), round(mean_bgr[0], 1)]
-
-
-        def classify_shade_12grid(lab_img, hsv_img, mask_u8):
-
-            '''
-            未完成
-            新的分類方式以mac分類為主軸
-            -因為有大牌販售出品保證
-                新更新邏輯
-                  H 可以直接判斷冷暖色（紅黃 = 暖，藍綠 = 冷）(0/360紅色 60黃色 120綠色 240藍色)
-                  S 可以判斷色彩鮮豔程度（高 = spring/winter，低 = summer/autumn）(0-100 判斷灰階程度)
-                  V 可以判斷明暗（明亮 = spring/summer，暗 = autumn/winter）(0-100 判斷黑白)
-
-                  a → 紅綠軸 → 偏紅 = 暖色基底、偏綠
-                  b → 黃藍軸 → 偏黃 = 暖色基底、偏藍
-                  L → 明暗 → 明亮 = spring/summer，深色 = autumn/winter (0-100)
-                  用比例去比較冷暖
-                  因為膚色出來不可能有藍綠感
-                  用大概的比例差去做
-                  L V 判斷明暗 (先區分 春夏 秋冬兩大類)
-                  '''
-            '''先用DICT 去把官網的分類邏輯羅列出來 全程我是用網頁抓的到的HEX去轉換成LAB 在做交叉比對去寫出範圍
-            '''
-            mac_sort={
-                "白皙自然色":{ "L_MIN":73.2,"L_MAX":80.54,"A_MIN":5.12,"A_MAX":9.96,"B_MIN":15.58,"B_MAX":22.67 },
-                "中等亮白自然色":{"L_MIN":69.26,"L_MAX":77.82,"A_MIN":7.41,"A_MAX":8.61,"B_MIN":17.1,"B_MAX":19.59},
-                "白皙象牙色":{"L_MIN":80.54,"L_MAX":85.37,"A_MIN":2.65,"A_MAX":5.12,"B_MIN":15.03,"B_MAX":15.58},
-                "自然象牙":{"L_MIN":68.88,"L_MAX":82.99,"A_MIN":2.97,"A_MAX":9.85,"B_MIN":19.55,"B_MAX":25.1},
-                "健康象牙":{"L_MIN":65.32,"L_MAX":76.37,"A_MIN":7.16,"A_MAX":9.05,"B_MIN":23.08,"B_MAX":28.86},
-                "古銅象牙":{"L_MIN":65.93,"L_MAX":65.93,"A_MIN":11.4,"A_MAX":11.4,"B_MIN":30.85,"B_MAX":30.85 },
-                "健康玫瑰色":{"L_MIN":68.88,"L_MAX":68.88,"A_MIN":9.85,"A_MAX":9.85,"B_MIN":25.1,"B_MAX":25.1}
-            }
-
-            l_mean, a_meancv, b_mean_cv, _ = cv2.mean(lab_img, mask=mask_u8)
-            l_mean = float(l_mean)/2.55          # 0~255 (OpenCV Lab)/2.55才會是標準lab
-            a_axis = float(a_mean_cv - 128.0)  # +紅 / -綠
-            b_axis = float(b_mean_cv - 128.0)  # +黃 / -藍
-            #但人臉不可能出來偏藍綠所以在判斷冷暖色調跟膚色基礎還是要以出來的數據做分析
-
-            matched = None
-            for name, r in mac_sort.items():
-                if (r["L_MIN"] <= l_mean<= r["L_MAX"] and
-                        r["A_MIN"] <=  a_axis <= r["A_MAX"] and
-                        r["B_MIN"] <= b_axis <= r["B_MAX"]):
+        if matched is None:
+            best_dist = float("inf")
+            for name, r in self._MAC_SHADE_RANGES.items():
+                lc = (r["L_MIN"] + r["L_MAX"]) / 2
+                ac = (r["A_MIN"] + r["A_MAX"]) / 2
+                bc = (r["B_MIN"] + r["B_MAX"]) / 2
+                dist = ((l_mean - lc) ** 2 + (a_axis - ac) ** 2 + (b_axis - bc) ** 2) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
                     matched = name
-                    break
 
-            if matched is None:
-                best_dist = float("inf")
-                for name, r in mac_sort.items():
-                    Lc = (r["L_MIN"] + r["L_MAX"]) / 2
-                    ac = (r["A_MIN"] + r["A_MAX"]) / 2
-                    bc = (r["B_MIN"] + r["B_MAX"]) / 2
-                    dist = ((l_mean  - Lc) ** 2 + (a_axis- ac) ** 2 + (b_axis - bc) ** 2) ** 0.5
-                    if dist < best_dist:
-                        best_dist = dist
-                        matched = name
+        return matched, l_mean, a_axis, b_axis
 
-            return matched, l_mean, a_axis, b_axis
+    def _classify_season(self, lab, hsv, combined_mask):
+        """四季型：先判冷暖，再判亮/柔/清晰。"""
+        _, s_mean, v_mean, _ = cv2.mean(hsv, mask=combined_mask)
+        s_mean = float(s_mean)
+        v_mean = float(v_mean)
 
-        # 四季型先判冷暖，再判亮/柔/清晰
+        l_mean_cv, a_axis, b_axis = self._lab_mean_from_mask(lab, combined_mask)
+        l_mean = l_mean_cv * 2.55  # 四季型規則沿用 OpenCV L 尺度
 
-        hsv = cv2.cvtColor(self.frame, cv2.COLOR_BGR2HSV)
-        h_mean, s_mean, v_mean, _ = cv2.mean(hsv, mask=combined_mask)
-        h_mean = float(h_mean)  # OpenCV Hue: 0~179
-        s_mean = float(s_mean)  # 0~255
-        v_mean = float(v_mean)  # 0~255
-
-        # 用同一塊皮膚 mask 算平均，結果比較穩
-        l_mean, a_mean_cv, b_mean_cv, _ = cv2.mean(lab, mask=combined_mask)
-        l_mean = float(l_mean)             # 0~255
-        a_axis = float(a_mean_cv - 128.0)  # +偏紅 / -偏綠
-        b_axis = float(b_mean_cv - 128.0)  # +偏黃 / -偏藍
-
-        # 冷暖主看 b 軸：越大越黃(暖)
-        # 未完成:新更新 a軸加入判斷 越大越紅(暖)
         if b_axis >= 12.0:
             undertone = "warm"
         elif b_axis <= 8.5:
@@ -538,60 +500,87 @@ class FaceAnalyzer:
         else:
             undertone = "neutral"
 
-        # bright / soft / clear 三個訊號分季型
-        # 新:亮度看L
         bright = (l_mean >= 158.0) or (v_mean >= 168.0)
         soft = s_mean <= 110.0
 
-        v_chan = hsv[:, :, 2]
-        mask = combined_mask.astype(bool)
-        if np.any(mask):
-            v_vals = v_chan[mask].astype(np.float32)
-            v_std = float(np.std(v_vals))
+        mask_bool = combined_mask.astype(bool)
+        if np.any(mask_bool):
+            v_std = float(np.std(hsv[:, :, 2][mask_bool].astype(np.float32)))
         else:
             v_std = 0.0
         clear = (v_std >= 18.0) or (s_mean >= 125.0)
 
-        # 春秋夏冬規則在這裡分流
         if undertone == "warm":
-            season = "春季" if (bright and clear) else "秋季"
-        elif undertone == "cool":
-            season = "夏季" if (bright and soft and not clear) else "冬季"
-        else:
-            # 中性底色時，再用亮度/彩度補分
-            if clear and not soft:
-                season = "冬季"
-            elif bright and soft:
-                season = "夏季"
-            elif bright:
-                season = "春季"
-            else:
-                season = "秋季"
+            return "春季" if (bright and clear) else "秋季"
+        if undertone == "cool":
+            return "夏季" if (bright and soft and not clear) else "冬季"
+        if clear and not soft:
+            return "冬季"
+        if bright and soft:
+            return "夏季"
+        if bright:
+            return "春季"
+        return "秋季"
 
-        shade_label, L, a, b = classify_shade_12grid(lab, hsv, combined_mask)
-        return skin_rgb, lip_rgb, season, shade_label, L, a, b
+    # 膚色
+    def get_skin_color(self):
+        face_points = np.array([self._pt(i) for i in range(len(self.lm))], dtype=np.int32)
+        face_mask = np.zeros((self.h, self.w), dtype=np.uint8)
+        cv2.fillConvexPoly(face_mask, cv2.convexHull(face_points), 255)
+
+        lip_mask = self._landmark_region_mask(self.mp_face_mesh.FACEMESH_LIPS)
+        lip_L, lip_a, lip_b = self._bgr_mean_to_lab(cv2.mean(self.frame, mask=lip_mask)[:3])
+
+        for region in (
+            self.mp_face_mesh.FACEMESH_LIPS,
+            self.mp_face_mesh.FACEMESH_LEFT_EYE,
+            self.mp_face_mesh.FACEMESH_RIGHT_EYE,
+        ):
+            indices = self._collect_landmark_indices(region)
+            if not indices:
+                continue
+            pts = np.array([self._pt(i) for i in indices], dtype=np.int32)
+            cv2.fillConvexPoly(face_mask, cv2.convexHull(pts), 0)
+
+        # 步驟5：Lab 膚色範圍過濾
+        lab = cv2.cvtColor(self.frame, cv2.COLOR_BGR2Lab)
+        color_mask = cv2.inRange(lab, np.array([20, 135, 130]), np.array([230, 175, 175]))
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, kernel)
+        color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
+
+        combined_mask = cv2.bitwise_and(face_mask, color_mask)
+        hsv = cv2.cvtColor(self.frame, cv2.COLOR_BGR2HSV)
+
+        season = self._classify_season(lab, hsv, combined_mask)
+        shade_label, L, a, b = self._classify_shade_12grid(lab, combined_mask)
+        return lip_L, lip_a, lip_b, season, shade_label, L, a, b
 
     # 輸出
     def export_json(self, save_path=None):
-        skin_rgb, lip_rgb, season, shade_label, L, a, b = self.get_skin_color()
+        lip_L, lip_a, lip_b, season, shade_label, L, a, b = self.get_skin_color()
 
         result = {
-            "臉型":    self.get_face_shape(),       # → face_logic key
-            "眉型":    self.get_eyebrow_shape(),     # → eyebrow_logic key
-            "眼型":    self.get_eye_shape(),         # → eye_logic key
-            "鼻型":    self.get_nose_shape(),        # → nose_logic key
-            "嘴型":    self.get_lip_shape(),         # → lip_logic key
+            "臉型": self.get_face_shape(),
+            "眉型": self.get_eyebrow_shape(),
+            "眼型": self.get_eye_shape(),
+            "鼻型": self.get_nose_shape(),
+            "嘴型": self.get_lip_shape(),
             "膚色": {
                 "四季型": season,
                 "膚色分級": shade_label,
                 "LAB": {
                     "L": round(L, 2),
                     "a": round(a, 2),
-                    "b": round(b, 2)
-                }
+                    "b": round(b, 2),
+                },
             },
-            "膚色_RGB": skin_rgb,
-            "嘴唇_RGB": lip_rgb
+            "嘴唇_LAB": {
+                "L": lip_L,
+                "a": lip_a,
+                "b": lip_b,
+            },
         }
 
         # API 模式通常不存檔；本地 debug 才寫 json

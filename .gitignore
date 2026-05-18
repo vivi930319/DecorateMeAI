@@ -1,0 +1,8 @@
+# 只上傳 API 主程式與 Docker 部署檔，其餘本地檔案一律忽略
+*
+
+!.gitignore
+!.dockerignore
+!Face_analyzer.py
+!Dockerfile
+!requirements.txt
