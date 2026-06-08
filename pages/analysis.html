@@ -1,0 +1,85 @@
+<div class="page-header"><h1>臉部分析</h1><div class="divider"></div><p>上傳正面照片，AI 為你分析五官特徵</p></div>
+<div class="analyze-grid">
+    <div>
+        <div class="section-label"><span>NO.01</span>上 傳 照 片</div>
+        <div class="mode-tabs">
+            <button class="mode-tab active" id="basicModeBtn" data-mode="basic">BASIC</button>
+            <button class="mode-tab" id="proModeBtn" data-mode="pro">PRO</button>
+        </div>
+
+        <div class="mode-panel active" id="basicPanel">
+            <div class="upload-box" id="uploadBox">
+                <div class="upload-icon"><span>＋</span></div>
+                <div class="upload-label">選擇照片</div>
+                <div class="upload-hint">正面，光線均勻，效果最佳</div>
+                <input type="file" id="fileInput" accept="image/*" style="display:none;">
+            </div>
+            <div class="camera-actions">
+                <button class="btn-outline btn-sm" id="startCameraBtn">開啟鏡頭</button>
+                <button class="btn-outline btn-sm" id="capturePhotoBtn">拍照使用</button>
+            </div>
+            <div class="camera-box" id="cameraBox">
+                <video id="cameraVideo" autoplay playsinline></video>
+                <canvas id="cameraCanvas" style="display:none;"></canvas>
+            </div>
+        </div>
+
+        <div class="mode-panel" id="proPanel">
+            <div class="pro-upload-grid">
+                <div class="pro-slot" data-pro-slot="front">
+                    <div class="slot-title">正面照</div>
+                    <div class="slot-file" id="frontFileName">必填</div>
+                    <input type="file" id="frontInput" accept="image/*" style="display:none;">
+                </div>
+                <div class="pro-slot" data-pro-slot="left45">
+                    <div class="slot-title">左側 45 度</div>
+                    <div class="slot-file" id="left45FileName">選填</div>
+                    <input type="file" id="left45Input" accept="image/*" style="display:none;">
+                </div>
+                <div class="pro-slot" data-pro-slot="right45">
+                    <div class="slot-title">右側 45 度</div>
+                    <div class="slot-file" id="right45FileName">選填</div>
+                    <input type="file" id="right45Input" accept="image/*" style="display:none;">
+                </div>
+                <div class="pro-slot" data-pro-slot="side">
+                    <div class="slot-title">側面照</div>
+                    <div class="slot-file" id="sideFileName">選填</div>
+                    <input type="file" id="sideInput" accept="image/*" style="display:none;">
+                </div>
+            </div>
+            <div class="mode-note">
+                PRO 掃描版預留：之後會用鏡頭偵測 yaw，自動擷取正面、左右 45 度與側面照；目前先提供檔案上傳版。
+            </div>
+        </div>
+        <img id="preview" alt="preview" style="max-width:100%;margin-top:12px;border:1px solid var(--border);display:none;">
+        <div class="loading-bar" id="loadingBar"><div class="fill" id="loadingFill"></div></div>
+        <div class="loading-status" id="loadingStatus">等待圖片</div>
+        <div class="package-status" id="packageStatus">
+            <b>資料包狀態</b>
+            <span>尚未建立</span>
+        </div>
+        <button class="btn-gold btn-full" id="analyzeBtn" style="margin-top:14px;">開 始 分 析</button>
+    </div>
+    <div>
+        <div class="section-label"><span>NO.02</span>分 析 結 果</div>
+        <div class="result-grid">
+            <div class="result-cell"><div class="rlabel">臉型</div><div class="rvalue" id="r-face">—</div></div>
+            <div class="result-cell"><div class="rlabel">眉型</div><div class="rvalue" id="r-brow">—</div></div>
+            <div class="result-cell"><div class="rlabel">眼型</div><div class="rvalue" id="r-eye">—</div></div>
+            <div class="result-cell"><div class="rlabel">鼻型</div><div class="rvalue" id="r-nose">—</div></div>
+            <div class="result-cell"><div class="rlabel">嘴型</div><div class="rvalue" id="r-lip">—</div></div>
+            <div class="result-cell"><div class="rlabel">色彩季型</div><div class="rvalue" id="r-season">—</div></div>
+        </div>
+        <div class="skin-box">
+            <div class="skin-title">膚 色 基 準 · M A C</div>
+            <div class="skin-row"><div class="skin-swatch" id="skinSwatch"></div><div><div class="skin-name" id="skinName">—</div><div class="skin-lab" id="skinLab"></div></div></div>
+        </div>
+        <div class="skin-box">
+            <div class="skin-title">唇 色 原 始 值</div>
+            <div class="skin-row"><div class="skin-swatch" id="lipSwatch"></div><div><div class="skin-lab" id="lipLab"></div></div></div>
+        </div>
+        <div style="text-align:center;margin-top:20px;">
+            <button class="btn-gold" id="goStyleBtn" style="display:none;">選擇風格 →</button>
+        </div>
+    </div>
+</div>
