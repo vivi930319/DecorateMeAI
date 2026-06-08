@@ -15,7 +15,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY Face_analyzer.py .
+COPY Face_analyzer_BASIC.py .
+COPY Face_analyzer_PRO.py .
+COPY index.html .
 
 EXPOSE 8001
 
-CMD ["uvicorn", "Face_analyzer:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["uvicorn", "Face_analyzer_BASIC:app", "--host", "0.0.0.0", "--port", "8001"]

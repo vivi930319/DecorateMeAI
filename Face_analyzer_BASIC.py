@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 import insightface
 from insightface.app import FaceAnalysis as InsightFaceApp
 
-app = FastAPI()
+app = FastAPI(title="Face Analyzer BASIC")
 
 # 啟用 CORS 允許前端跨來源存取
 app.add_middleware(
@@ -70,6 +70,8 @@ async def read_index():
 
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...)):
+    # BASIC 同時支援「檔案上傳」與「拍照上傳」：
+    # 前端檔案 input 直接送 File；相機拍照則把 canvas/blob 包成 File 後送到同一個欄位。
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=400, detail="上傳檔案是空的")
@@ -488,6 +490,7 @@ class FaceAnalyzer:
     def export_json(self, save_path=None):
         lip_L, lip_a, lip_b, season, shade_label, L, a, b = self.get_skin_color()
         result = {
+            "分析版本": "BASIC",
             "臉型": self.get_face_shape(),
             "眉型": self.get_eyebrow_shape(),
             "眼型": self.get_eye_shape(),
