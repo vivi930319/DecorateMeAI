@@ -1,12 +1,15 @@
 import json
+import uuid
+from datetime import datetime, timezone
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from Face_analyzer_BASIC import FaceAnalyzer
 
 
 app = FastAPI(title="Face Analyzer PRO")
+_jobs = {}
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,7 +41,45 @@ def _merge_basic_and_pro(front_result, side_available=False):
     return result
 
 
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _job_view(job):
+    return {k: v for k, v in job.items() if k != "result"}
+
+
+def _run_pro_job(job_id, front_bytes, angle_bytes):
+    job = _jobs[job_id]
+    job.update({"status": "processing", "stage": "face_analysis", "progress": 35, "startedAt": _now_iso()})
+    try:
+        front_result = FaceAnalyzer(front_bytes).export_json()
+        side_available = any(angle_bytes.values())
+        result = _merge_basic_and_pro(front_result, side_available=side_available)
+        job.update({
+            "status": "completed",
+            "stage": "done",
+            "progress": 100,
+            "completedAt": _now_iso(),
+            "result": result,
+            "error": None,
+        })
+    except Exception as e:
+        job.update({
+            "status": "failed",
+            "stage": "failed",
+            "completedAt": _now_iso(),
+            "error": {"message": str(e)},
+        })
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "face-analyzer-pro"}
+
+
 @app.post("/analyze-pro")
+@app.post("/v1/face/analyze/pro")
 async def analyze_pro(
     front: UploadFile = File(...),
     left45: UploadFile | None = File(default=None),
@@ -75,6 +116,62 @@ async def analyze_pro(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v1/face/jobs/pro")
+async def create_pro_job(
+    background_tasks: BackgroundTasks,
+    front: UploadFile = File(...),
+    left45: UploadFile | None = File(default=None),
+    right45: UploadFile | None = File(default=None),
+    side: UploadFile | None = File(default=None),
+):
+    try:
+        front_bytes = await _read_image(front, "正面")
+        angle_bytes = {}
+        for label, role, upload in (("左45度", "left45", left45), ("右45度", "right45", right45), ("側面", "side", side)):
+            angle_bytes[role] = await _read_image(upload, label) if upload is not None else None
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": {"message": str(e)}})
+
+    job_id = f"JOB-{uuid.uuid4().hex[:12]}"
+    _jobs[job_id] = {
+        "jobId": job_id,
+        "analysisPackageId": None,
+        "status": "queued",
+        "progress": 0,
+        "stage": "upload",
+        "createdAt": _now_iso(),
+        "startedAt": None,
+        "completedAt": None,
+        "error": None,
+        "result": None,
+    }
+    background_tasks.add_task(_run_pro_job, job_id, front_bytes, angle_bytes)
+    return _job_view(_jobs[job_id])
+
+
+@app.get("/v1/face/jobs/{job_id}")
+async def get_pro_job(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
+    return _job_view(job)
+
+
+@app.get("/v1/face/jobs/{job_id}/result")
+async def get_pro_job_result(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
+    if job["status"] != "completed":
+        raise HTTPException(status_code=409, detail={"error": {"message": "job 尚未完成", "status": job["status"]}})
+    return {
+        "jobId": job_id,
+        "analysisPackageId": job["analysisPackageId"],
+        "status": "completed",
+        "result": job["result"],
+    }
 
 
 if __name__ == "__main__":

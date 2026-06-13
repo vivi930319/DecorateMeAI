@@ -8,4 +8,9 @@
 !Face_analyzer_PRO.py
 !index.html
 !Dockerfile
+!docker-compose.yml
 !requirements.txt
+!backend_smoke_test.py
+!select_basic_usable_images.py
+!auto_label_basic_dataset.py
+!make_review_sheets.py

@@ -3,8 +3,11 @@ import numpy as np
 import mediapipe as mp
 import json
 import onnxruntime as ort
+import os
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, HTTPException, File
+from fastapi import BackgroundTasks, FastAPI, UploadFile, HTTPException, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import insightface
@@ -23,8 +26,9 @@ app.add_middleware(
 _insight_app = None
 _eyelid_sess = None
 _face_mesh = None
+_jobs = {}
 
-MAX_IMAGE_SIZE = 1280
+MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "2048"))
 
 def _get_insight():
     global _insight_app
@@ -68,7 +72,13 @@ async def read_index():
     return FileResponse("index.html")
 
 
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "face-analyzer-basic"}
+
+
 @app.post("/analyze")
+@app.post("/v1/face/analyze/basic")
 async def analyze(file: UploadFile = File(...)):
     # BASIC 同時支援「檔案上傳」與「拍照上傳」：
     # 前端檔案 input 直接送 File；相機拍照則把 canvas/blob 包成 File 後送到同一個欄位。
@@ -85,6 +95,81 @@ async def analyze(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _job_view(job):
+    return {k: v for k, v in job.items() if k != "result"}
+
+
+def _run_basic_job(job_id, contents):
+    job = _jobs[job_id]
+    job.update({"status": "processing", "stage": "face_analysis", "progress": 35, "startedAt": _now_iso()})
+    try:
+        result = FaceAnalyzer(contents).export_json()
+        job.update({
+            "status": "completed",
+            "stage": "done",
+            "progress": 100,
+            "completedAt": _now_iso(),
+            "result": result,
+            "error": None,
+        })
+    except Exception as e:
+        job.update({
+            "status": "failed",
+            "stage": "failed",
+            "completedAt": _now_iso(),
+            "error": {"message": str(e)},
+        })
+
+
+@app.post("/v1/face/jobs/basic")
+async def create_basic_job(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail={"error": {"message": "上傳檔案是空的"}})
+    job_id = f"JOB-{uuid.uuid4().hex[:12]}"
+    _jobs[job_id] = {
+        "jobId": job_id,
+        "analysisPackageId": None,
+        "status": "queued",
+        "progress": 0,
+        "stage": "upload",
+        "createdAt": _now_iso(),
+        "startedAt": None,
+        "completedAt": None,
+        "error": None,
+        "result": None,
+    }
+    background_tasks.add_task(_run_basic_job, job_id, contents)
+    return _job_view(_jobs[job_id])
+
+
+@app.get("/v1/face/jobs/{job_id}")
+async def get_basic_job(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
+    return _job_view(job)
+
+
+@app.get("/v1/face/jobs/{job_id}/result")
+async def get_basic_job_result(job_id: str):
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
+    if job["status"] != "completed":
+        raise HTTPException(status_code=409, detail={"error": {"message": "job 尚未完成", "status": job["status"]}})
+    return {
+        "jobId": job_id,
+        "analysisPackageId": job["analysisPackageId"],
+        "status": "completed",
+        "result": job["result"],
+    }
 
 
 class FaceAnalyzer:

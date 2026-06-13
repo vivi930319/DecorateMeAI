@@ -19,6 +19,6 @@ COPY Face_analyzer_BASIC.py .
 COPY Face_analyzer_PRO.py .
 COPY index.html .
 
-EXPOSE 8001
+EXPOSE 8001 8002
 
 CMD ["uvicorn", "Face_analyzer_BASIC:app", "--host", "0.0.0.0", "--port", "8001"]
