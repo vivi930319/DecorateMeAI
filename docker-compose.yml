@@ -6,6 +6,9 @@ services:
       - "8001:8001"  # BASIC API
     environment:
       - MAX_IMAGE_SIZE=2048
+      - FACE_JOB_TIMEOUT_SECONDS=180
+      - FACE_JOB_RETENTION_SECONDS=3600
+      - FACE_JOB_MAX_COUNT=200
     volumes:
       - ./eyelid_model.onnx:/app/eyelid_model.onnx:ro
       - ./eyelid_model.onnx.data:/app/eyelid_model.onnx.data:ro
@@ -19,6 +22,9 @@ services:
       - "8002:8002"  # PRO API
     environment:
       - MAX_IMAGE_SIZE=2048
+      - FACE_JOB_TIMEOUT_SECONDS=180
+      - FACE_JOB_RETENTION_SECONDS=3600
+      - FACE_JOB_MAX_COUNT=200
     volumes:
       - ./eyelid_model.onnx:/app/eyelid_model.onnx:ro
       - ./eyelid_model.onnx.data:/app/eyelid_model.onnx.data:ro

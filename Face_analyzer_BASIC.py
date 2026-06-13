@@ -29,6 +29,9 @@ _face_mesh = None
 _jobs = {}
 
 MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "2048"))
+FACE_JOB_TIMEOUT_SECONDS = int(os.getenv("FACE_JOB_TIMEOUT_SECONDS", "180"))
+FACE_JOB_RETENTION_SECONDS = int(os.getenv("FACE_JOB_RETENTION_SECONDS", "3600"))
+FACE_JOB_MAX_COUNT = int(os.getenv("FACE_JOB_MAX_COUNT", "200"))
 
 def _get_insight():
     global _insight_app
@@ -74,7 +77,17 @@ async def read_index():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "face-analyzer-basic"}
+    _cleanup_jobs()
+    return {
+        "status": "ok",
+        "service": "face-analyzer-basic",
+        "jobs": _job_stats(),
+        "limits": {
+            "timeoutSeconds": FACE_JOB_TIMEOUT_SECONDS,
+            "retentionSeconds": FACE_JOB_RETENTION_SECONDS,
+            "maxCount": FACE_JOB_MAX_COUNT,
+        },
+    }
 
 
 @app.post("/analyze")
@@ -99,6 +112,67 @@ async def analyze(file: UploadFile = File(...)):
 
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_iso(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _seconds_since(value, now):
+    dt = _parse_iso(value)
+    if not dt:
+        return None
+    return (now - dt).total_seconds()
+
+
+def _mark_timed_out_jobs(now):
+    for job in _jobs.values():
+        if job.get("status") not in {"queued", "processing"}:
+            continue
+        anchor = job.get("startedAt") or job.get("createdAt")
+        age = _seconds_since(anchor, now)
+        if age is not None and age > FACE_JOB_TIMEOUT_SECONDS:
+            job.update({
+                "status": "failed",
+                "stage": "timeout",
+                "completedAt": _now_iso(),
+                "error": {"message": f"臉部分析逾時，已超過 {FACE_JOB_TIMEOUT_SECONDS} 秒"},
+            })
+
+
+def _cleanup_jobs():
+    now = datetime.now(timezone.utc)
+    _mark_timed_out_jobs(now)
+
+    expired = []
+    for job_id, job in _jobs.items():
+        if job.get("status") not in {"completed", "failed"}:
+            continue
+        age = _seconds_since(job.get("completedAt"), now)
+        if age is not None and age > FACE_JOB_RETENTION_SECONDS:
+            expired.append(job_id)
+
+    for job_id in expired:
+        _jobs.pop(job_id, None)
+
+    if len(_jobs) > FACE_JOB_MAX_COUNT:
+        ordered = sorted(_jobs.items(), key=lambda item: item[1].get("createdAt") or "")
+        for job_id, _ in ordered[: max(0, len(_jobs) - FACE_JOB_MAX_COUNT)]:
+            _jobs.pop(job_id, None)
+
+
+def _job_stats():
+    stats = {"total": len(_jobs), "queued": 0, "processing": 0, "completed": 0, "failed": 0}
+    for job in _jobs.values():
+        status = job.get("status")
+        if status in stats:
+            stats[status] += 1
+    return stats
 
 
 def _job_view(job):
@@ -129,6 +203,7 @@ def _run_basic_job(job_id, contents):
 
 @app.post("/v1/face/jobs/basic")
 async def create_basic_job(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    _cleanup_jobs()
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=400, detail={"error": {"message": "上傳檔案是空的"}})
@@ -151,6 +226,7 @@ async def create_basic_job(background_tasks: BackgroundTasks, file: UploadFile =
 
 @app.get("/v1/face/jobs/{job_id}")
 async def get_basic_job(job_id: str):
+    _cleanup_jobs()
     job = _jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
@@ -159,6 +235,7 @@ async def get_basic_job(job_id: str):
 
 @app.get("/v1/face/jobs/{job_id}/result")
 async def get_basic_job_result(job_id: str):
+    _cleanup_jobs()
     job = _jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})

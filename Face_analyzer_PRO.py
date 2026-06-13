@@ -1,4 +1,5 @@
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -10,6 +11,10 @@ from Face_analyzer_BASIC import FaceAnalyzer
 
 app = FastAPI(title="Face Analyzer PRO")
 _jobs = {}
+
+FACE_JOB_TIMEOUT_SECONDS = int(os.getenv("FACE_JOB_TIMEOUT_SECONDS", "180"))
+FACE_JOB_RETENTION_SECONDS = int(os.getenv("FACE_JOB_RETENTION_SECONDS", "3600"))
+FACE_JOB_MAX_COUNT = int(os.getenv("FACE_JOB_MAX_COUNT", "200"))
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,6 +50,67 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_iso(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _seconds_since(value, now):
+    dt = _parse_iso(value)
+    if not dt:
+        return None
+    return (now - dt).total_seconds()
+
+
+def _mark_timed_out_jobs(now):
+    for job in _jobs.values():
+        if job.get("status") not in {"queued", "processing"}:
+            continue
+        anchor = job.get("startedAt") or job.get("createdAt")
+        age = _seconds_since(anchor, now)
+        if age is not None and age > FACE_JOB_TIMEOUT_SECONDS:
+            job.update({
+                "status": "failed",
+                "stage": "timeout",
+                "completedAt": _now_iso(),
+                "error": {"message": f"臉部分析逾時，已超過 {FACE_JOB_TIMEOUT_SECONDS} 秒"},
+            })
+
+
+def _cleanup_jobs():
+    now = datetime.now(timezone.utc)
+    _mark_timed_out_jobs(now)
+
+    expired = []
+    for job_id, job in _jobs.items():
+        if job.get("status") not in {"completed", "failed"}:
+            continue
+        age = _seconds_since(job.get("completedAt"), now)
+        if age is not None and age > FACE_JOB_RETENTION_SECONDS:
+            expired.append(job_id)
+
+    for job_id in expired:
+        _jobs.pop(job_id, None)
+
+    if len(_jobs) > FACE_JOB_MAX_COUNT:
+        ordered = sorted(_jobs.items(), key=lambda item: item[1].get("createdAt") or "")
+        for job_id, _ in ordered[: max(0, len(_jobs) - FACE_JOB_MAX_COUNT)]:
+            _jobs.pop(job_id, None)
+
+
+def _job_stats():
+    stats = {"total": len(_jobs), "queued": 0, "processing": 0, "completed": 0, "failed": 0}
+    for job in _jobs.values():
+        status = job.get("status")
+        if status in stats:
+            stats[status] += 1
+    return stats
+
+
 def _job_view(job):
     return {k: v for k, v in job.items() if k != "result"}
 
@@ -75,7 +141,17 @@ def _run_pro_job(job_id, front_bytes, angle_bytes):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "face-analyzer-pro"}
+    _cleanup_jobs()
+    return {
+        "status": "ok",
+        "service": "face-analyzer-pro",
+        "jobs": _job_stats(),
+        "limits": {
+            "timeoutSeconds": FACE_JOB_TIMEOUT_SECONDS,
+            "retentionSeconds": FACE_JOB_RETENTION_SECONDS,
+            "maxCount": FACE_JOB_MAX_COUNT,
+        },
+    }
 
 
 @app.post("/analyze-pro")
@@ -126,6 +202,7 @@ async def create_pro_job(
     right45: UploadFile | None = File(default=None),
     side: UploadFile | None = File(default=None),
 ):
+    _cleanup_jobs()
     try:
         front_bytes = await _read_image(front, "正面")
         angle_bytes = {}
@@ -153,6 +230,7 @@ async def create_pro_job(
 
 @app.get("/v1/face/jobs/{job_id}")
 async def get_pro_job(job_id: str):
+    _cleanup_jobs()
     job = _jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
@@ -161,6 +239,7 @@ async def get_pro_job(job_id: str):
 
 @app.get("/v1/face/jobs/{job_id}/result")
 async def get_pro_job_result(job_id: str):
+    _cleanup_jobs()
     job = _jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
