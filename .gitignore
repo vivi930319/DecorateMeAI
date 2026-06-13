@@ -6,11 +6,13 @@
 !Face_analyzer.py
 !Face_analyzer_BASIC.py
 !Face_analyzer_PRO.py
+!Ollama_suggestion.py
 !index.html
 !Dockerfile
 !docker-compose.yml
 !requirements.txt
 !backend_smoke_test.py
+!ollama_suggestion_smoke_test.py
 !select_basic_usable_images.py
 !auto_label_basic_dataset.py
 !make_review_sheets.py

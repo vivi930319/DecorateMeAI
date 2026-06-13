@@ -24,3 +24,15 @@ services:
       - ./eyelid_model.onnx.data:/app/eyelid_model.onnx.data:ro
     command: ["uvicorn", "Face_analyzer_PRO:app", "--host", "0.0.0.0", "--port", "8002"]
     restart: always
+
+  ollama_suggestion:
+    build: .
+    container_name: ollama_suggestion
+    ports:
+      - "8010:8010"  # Ollama text suggestion API
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=gemma3
+      - OLLAMA_ALLOW_FALLBACK=true
+    command: ["uvicorn", "Ollama_suggestion:app", "--host", "0.0.0.0", "--port", "8010"]
+    restart: always
