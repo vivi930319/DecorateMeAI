@@ -17,3 +17,6 @@
 !auto_label_basic_dataset.py
 !make_review_sheets.py
 !apply_review_decisions.py
+
+# 本機新手教學文件，不上傳 Git
+local_only_notes/
