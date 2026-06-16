@@ -1,14 +1,69 @@
+// ═══ API 設定：所有外部服務都走這裡，不直接連 PostgreSQL 或 Ollama 11434 ═══
+const ApiConfig = {
+    services: {
+        faceBasic: {
+            baseUrl: 'http://127.0.0.1:8001',
+            analyzePath: '/v1/face/analyze/basic',
+            jobPath: '/v1/face/jobs/basic',
+            jobStatusPath: '/v1/face/jobs/{jobId}',
+            jobResultPath: '/v1/face/jobs/{jobId}/result',
+            healthPath: '/health'
+        },
+        facePro: {
+            baseUrl: 'http://127.0.0.1:8002',
+            analyzePath: '/v1/face/analyze/pro',
+            jobPath: '/v1/face/jobs/pro',
+            jobStatusPath: '/v1/face/jobs/{jobId}',
+            jobResultPath: '/v1/face/jobs/{jobId}/result',
+            healthPath: '/health'
+        },
+        textSuggestion: {
+            baseUrl: 'http://127.0.0.1:8010',
+            suggestPath: '/suggest',
+            healthPath: '/health'
+        },
+        render: {
+            baseUrl: '',
+            renderPath: '/render',
+            healthPath: '/health'
+        },
+        product: {
+            baseUrl: '',
+            recommendPath: '/recommend-products',
+            healthPath: '/health'
+        },
+        memberDatabase: {
+            baseUrl: 'https://vegetation-arguments-final-inspiration.trycloudflare.com',
+            loginPath: '/api/login',
+            registerPath: '/api/register',
+            sendOtpPaths: ['/api/send-otp', '/api/register'],
+            verifyOtpPath: '/api/verify-otp',
+            healthPath: '/health'
+        }
+    },
+
+    url(serviceName, pathKey) {
+        const service = this.services[serviceName];
+        if (!service) throw new Error(`Unknown API service: ${serviceName}`);
+        const path = service[pathKey];
+        if (!service.baseUrl || !path) return '';
+        return `${service.baseUrl}${path}`;
+    },
+
+    jobUrl(serviceName, pathKey, jobId) {
+        return this.url(serviceName, pathKey).replace('{jobId}', encodeURIComponent(jobId));
+    }
+};
+
 // ═══ API 串接層 ═══
 const Api = {
-    BASIC_ENDPOINT: 'http://127.0.0.1:8001/analyze',
-    PRO_ENDPOINT: 'http://127.0.0.1:8002/analyze-pro',
-    AUTH_BASE: 'https://vegetation-arguments-final-inspiration.trycloudflare.com',
+    config: ApiConfig,
 
     // 臉部分析
     async analyzeFace(file) {
         const fd = new FormData();
         fd.append('file', file);
-        const res = await fetch(this.BASIC_ENDPOINT, { method: 'POST', body: fd });
+        const res = await fetch(this.config.url('faceBasic', 'analyzePath'), { method: 'POST', body: fd });
         if (!res.ok) {
             const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
             throw new Error(err.detail || '分析失敗');
@@ -31,7 +86,7 @@ const Api = {
         // PRO 掃描版預留：
         // 未來 webcam 掃描擷取出的 front / left45 / right45 / side Blob，
         // 也包成 File 後送到同一個 API，避免掃描版和檔案上傳版分裂。
-        const res = await fetch(this.PRO_ENDPOINT, { method: 'POST', body: fd });
+        const res = await fetch(this.config.url('facePro', 'analyzePath'), { method: 'POST', body: fd });
         if (!res.ok) {
             const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
             throw new Error(err.detail || '分析失敗');
@@ -40,8 +95,87 @@ const Api = {
         return { data, imageMeta };
     },
 
+    async createFaceJob(file) {
+        const fd = new FormData();
+        fd.append('file', file);
+        const res = await fetch(this.config.url('faceBasic', 'jobPath'), { method: 'POST', body: fd });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
+            throw new Error(err.detail?.error?.message || err.detail || '建立 BASIC job 失敗');
+        }
+        return res.json();
+    },
+
+    async createFaceProJob(files) {
+        const fd = new FormData();
+        fd.append('front', files.front);
+        for (const role of ['left45', 'right45', 'side']) {
+            if (files[role]) fd.append(role, files[role]);
+        }
+        const res = await fetch(this.config.url('facePro', 'jobPath'), { method: 'POST', body: fd });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
+            throw new Error(err.detail?.error?.message || err.detail || '建立 PRO job 失敗');
+        }
+        return res.json();
+    },
+
+    async getFaceJob(mode, jobId) {
+        const service = mode === 'pro' ? 'facePro' : 'faceBasic';
+        const res = await fetch(this.config.jobUrl(service, 'jobStatusPath', jobId), { cache: 'no-store' });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
+            throw new Error(err.detail?.error?.message || err.detail || '查詢 job 失敗');
+        }
+        return res.json();
+    },
+
+    async getFaceJobResult(mode, jobId) {
+        const service = mode === 'pro' ? 'facePro' : 'faceBasic';
+        const res = await fetch(this.config.jobUrl(service, 'jobResultPath', jobId), { cache: 'no-store' });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
+            throw new Error(err.detail?.error?.message || err.detail || '取得 job 結果失敗');
+        }
+        return res.json();
+    },
+
+    async waitForFaceJob(mode, jobId, onProgress) {
+        for (let attempt = 0; attempt < 120; attempt++) {
+            const job = await this.getFaceJob(mode, jobId);
+            if (typeof onProgress === 'function') onProgress(job);
+            if (job.status === 'completed') {
+                return this.getFaceJobResult(mode, jobId);
+            }
+            if (job.status === 'failed') {
+                throw new Error(job.error?.message || '臉部分析 job 失敗');
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        throw new Error('臉部分析 job 逾時');
+    },
+
+    async suggestMakeup({ analysisPackage, faceAnalysis, style, userNote }) {
+        const res = await fetch(this.config.url('textSuggestion', 'suggestPath'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                analysisPackage,
+                faceAnalysis,
+                style,
+                language: 'zh-TW',
+                userNote
+            })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: '文字建議 API 連線失敗' }));
+            throw new Error(err.detail?.error?.message || err.detail || '文字建議 API 連線失敗');
+        }
+        return res.json();
+    },
+
     async login(email, password) {
-        const res = await fetch(`${this.AUTH_BASE}/api/login`, {
+        const res = await fetch(this.config.url('memberDatabase', 'loginPath'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password })
@@ -58,7 +192,7 @@ const Api = {
             password: payload.password,
             age: Number(payload.age)
         };
-        const res = await fetch(`${this.AUTH_BASE}/api/register`, {
+        const res = await fetch(this.config.url('memberDatabase', 'registerPath'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
@@ -68,9 +202,10 @@ const Api = {
     },
 
     async sendOTP(email) {
-        for (const endpoint of ['/api/send-otp', '/api/register']) {
+        const memberApi = this.config.services.memberDatabase;
+        for (const endpoint of memberApi.sendOtpPaths) {
             try {
-                const res = await fetch(`${this.AUTH_BASE}${endpoint}`, {
+                const res = await fetch(`${memberApi.baseUrl}${endpoint}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ email })
@@ -84,7 +219,7 @@ const Api = {
     },
 
     async verifyOTP(email, otp) {
-        const res = await fetch(`${this.AUTH_BASE}/api/verify-otp`, {
+        const res = await fetch(this.config.url('memberDatabase', 'verifyOtpPath'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, otp })
@@ -110,6 +245,8 @@ const Api = {
 const ImagePipeline = {
     storageMaxEdge: 1024,
     storageJpegQuality: 0.78,
+    workerPath: 'js/image-worker.js',
+    workerTimeoutMs: 30000,
 
     async compressForPackage(file, opts = {}) {
         const role = opts.role || 'front';
@@ -117,6 +254,77 @@ const ImagePipeline = {
             return { file, meta: this.metaFromFile(file, role), dataUrl: null };
         }
 
+        if (this.canUseWorker()) {
+            try {
+                return await this.compressInWorker(file, opts);
+            } catch (err) {
+                console.warn('Image worker failed, falling back to main thread compression.', err);
+            }
+        }
+
+        return this.compressOnMainThread(file, opts);
+    },
+
+    canUseWorker() {
+        return typeof Worker !== 'undefined'
+            && typeof OffscreenCanvas !== 'undefined'
+            && typeof createImageBitmap !== 'undefined';
+    },
+
+    compressInWorker(file, opts = {}) {
+        const role = opts.role || 'front';
+        const maxEdge = opts.maxEdge || this.storageMaxEdge;
+        const quality = opts.quality || this.storageJpegQuality;
+        const outputName = this.outputName(file.name, role);
+        const requestId = `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+        return new Promise((resolve, reject) => {
+            const worker = new Worker(this.workerPath);
+            const timer = setTimeout(() => {
+                worker.terminate();
+                reject(new Error('圖片 Worker 壓縮逾時'));
+            }, this.workerTimeoutMs);
+
+            worker.onmessage = (event) => {
+                const data = event.data || {};
+                if (data.id !== requestId) return;
+                clearTimeout(timer);
+                worker.terminate();
+
+                if (!data.ok) {
+                    reject(new Error(data.error || '圖片 Worker 壓縮失敗'));
+                    return;
+                }
+
+                const processed = new File([data.blob], outputName, { type: 'image/jpeg' });
+                resolve({
+                    file: processed,
+                    dataUrl: data.dataUrl,
+                    meta: {
+                        ...this.metaFromFile(file, role, { width: data.originalWidth, height: data.originalHeight }),
+                        compressedName: processed.name,
+                        compressedType: processed.type,
+                        compressedSize: processed.size,
+                        compressedWidth: data.compressedWidth,
+                        compressedHeight: data.compressedHeight,
+                        compressionRatio: file.size ? Number((processed.size / file.size).toFixed(3)) : null,
+                        processedBy: 'worker'
+                    }
+                });
+            };
+
+            worker.onerror = (err) => {
+                clearTimeout(timer);
+                worker.terminate();
+                reject(new Error(err.message || '圖片 Worker 發生錯誤'));
+            };
+
+            worker.postMessage({ id: requestId, file, role, maxEdge, quality, outputName });
+        });
+    },
+
+    async compressOnMainThread(file, opts = {}) {
+        const role = opts.role || 'front';
         const bitmap = await this.loadImage(file);
         const maxEdge = opts.maxEdge || this.storageMaxEdge;
         const quality = opts.quality || this.storageJpegQuality;
@@ -144,7 +352,8 @@ const ImagePipeline = {
                 compressedSize: processed.size,
                 compressedWidth: width,
                 compressedHeight: height,
-                compressionRatio: file.size ? Number((processed.size / file.size).toFixed(3)) : null
+                compressionRatio: file.size ? Number((processed.size / file.size).toFixed(3)) : null,
+                processedBy: 'main-thread'
             }
         };
     },
@@ -186,7 +395,8 @@ const ImagePipeline = {
             compressedSize: null,
             compressedWidth: null,
             compressedHeight: null,
-            compressionRatio: null
+            compressionRatio: null,
+            processedBy: null
         };
     }
 };
@@ -196,13 +406,25 @@ const AnalysisPackage = {
     create({ mode, images = {}, status = 'draft' }) {
         const now = new Date().toISOString();
         return {
-            schemaVersion: '2026-06-basic-pro',
+            schemaVersion: '2026-06-v1',
             id: `AN-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             mode,
+            client: 'web',
+            userId: null,
             status,
             createdAt: now,
             updatedAt: now,
             images,
+            faceAnalysis: {
+                version: mode === 'pro' ? 'PRO' : 'BASIC',
+                faceShape: null,
+                browShape: null,
+                eyeShape: null,
+                noseFront: null,
+                lipShape: null,
+                skinTone: null,
+                raw: null
+            },
             analysis: {
                 basic: null,
                 pro: null,
@@ -210,12 +432,21 @@ const AnalysisPackage = {
                 warnings: []
             },
             generativeText: {
+                provider: 'pending',
                 prompt: null,
                 suggestion: null,
                 model: null,
-                status: 'pending'
+                status: 'pending',
+                error: null
             },
             render: {
+                status: 'pending',
+                provider: 'pending',
+                replicateTempUrl: null,
+                afterImageUrl: null,
+                afterImageDataUrl: null,
+                savedImageId: null,
+                error: null,
                 beforeImageId: null,
                 afterImageId: null,
                 styleId: null,
@@ -239,6 +470,9 @@ const AnalysisPackage = {
                 maxDraftCount: 20
             },
             async: {
+                jobId: null,
+                progress: 0,
+                stage: null,
                 startedAt: null,
                 completedAt: null,
                 durationMs: null,
@@ -249,6 +483,25 @@ const AnalysisPackage = {
 
     update(pkg, patch) {
         return { ...(pkg || this.create({ mode: 'basic' })), ...patch, updatedAt: new Date().toISOString() };
+    },
+
+    fromRawFaceAnalysis(raw, mode) {
+        const skin = raw?.['膚色'] || {};
+        return {
+            version: mode === 'pro' ? 'PRO' : 'BASIC',
+            faceShape: raw?.['臉型'] || null,
+            browShape: raw?.['眉型'] || null,
+            eyeShape: raw?.['眼型'] || null,
+            noseFront: raw?.['鼻型'] || null,
+            lipShape: raw?.['嘴型'] || null,
+            skinTone: {
+                season: skin['四季型'] || null,
+                level: skin['膚色分級'] || null,
+                lab: skin['LAB'] || null
+            },
+            lipLab: raw?.['嘴唇_LAB'] || null,
+            raw: raw || null
+        };
     }
 };
 

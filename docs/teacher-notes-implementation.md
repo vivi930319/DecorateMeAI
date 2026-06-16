@@ -15,21 +15,36 @@
 
 ```js
 {
-  schemaVersion: '2026-06-basic-pro',
+  schemaVersion: '2026-06-v1',
   id: 'AN-...',
   mode: 'basic | pro',
-  status: 'draft | image-selected | preparing-image | analyzing | completed | failed',
+  client: 'web',
+  userId: null,
+  status: 'draft | image-selected | queued | analyzing | completed | failed',
   images: {
     front: {
       role: 'front',
       serial: 'front-...',
       originalName: '',
+      originalType: '',
       originalSize: 0,
+      compressedName: '',
+      compressedType: 'image/jpeg',
       compressedSize: 0,
       compressedWidth: 0,
       compressedHeight: 0,
       compressionRatio: 0
     }
+  },
+  faceAnalysis: {
+    version: 'BASIC | PRO',
+    faceShape: null,
+    browShape: null,
+    eyeShape: null,
+    noseFront: null,
+    lipShape: null,
+    skinTone: null,
+    raw: null
   },
   analysis: {
     basic: null,
@@ -38,17 +53,25 @@
     warnings: []
   },
   generativeText: {
+    provider: 'pending | ollama',
     prompt: null,
     suggestion: null,
     model: null,
-    status: 'pending | ready-for-text-ai | completed'
+    status: 'pending | completed | failed',
+    error: null
   },
   render: {
+    status: 'pending | completed | failed',
+    provider: 'pending | replicate',
+    replicateTempUrl: null,
+    afterImageUrl: null,
+    afterImageDataUrl: null,
     beforeImageId: null,
     afterImageId: null,
     styleId: null,
     ollamaPrompt: null,
-    makeupOutput: null
+    makeupOutput: null,
+    error: null
   },
   recommendations: {
     style: null,
@@ -56,17 +79,10 @@
     tips: [],
     ads: []
   },
-  model: {
-    faceAnalyzerVersion: 'BASIC | PRO',
-    faceModelConnected: true,
-    makeupModelConnected: false
-  },
-  limits: {
-    maxImageEdge: 1280,
-    jpegQuality: 0.86,
-    maxDraftCount: 20
-  },
   async: {
+    jobId: null,
+    progress: 0,
+    stage: null,
     startedAt: null,
     completedAt: null,
     durationMs: null,
@@ -92,7 +108,7 @@ flowchart LR
 ## 已預留但尚未正式串接
 
 - 資料庫容量與上限：目前只用 localStorage 草稿與 20 筆歷史紀錄，正式版需要後端 DB quota。
-- 非同步任務：目前仍是前端等待 API 回傳，後續可改 job queue + polling。
+- 非同步任務：前端已改成 `POST /v1/face/jobs/basic|pro` 後輪詢 `GET /v1/face/jobs/{jobId}`，目前只是第一版記憶體 job 狀態；正式上線仍需升級成 Redis/Celery/RQ 或其他共享 queue。
 - 臉部模型版本：物件已有 `faceAnalyzerVersion`，未來可記錄模型名稱、參數版本、置信度。
 - 生成式 AI 文字建議：已預留 `generativeText.prompt`、`generativeText.suggestion`、`generativeText.model`。
 - 生成圖與妝容輸出：已預留 `render.ollamaPrompt`、`render.makeupOutput`、`beforeImageId`、`afterImageId`。

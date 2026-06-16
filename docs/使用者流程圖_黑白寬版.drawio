@@ -1,0 +1,223 @@
+<mxfile host="app.diagrams.net" modified="2026-06-15T00:00:00.000Z" agent="Codex" version="24.7.17" type="device">
+  <diagram id="decorate-me-clean-flow" name="使用者流程圖_黑白寬版">
+    <mxGraphModel dx="2400" dy="1600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2600" pageHeight="1850" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="title" value="裝識你的美 使用者流程圖" style="text;html=1;strokeColor=none;fillColor=none;fontSize=28;fontStyle=1;fontColor=#111111;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="90" y="50" width="520" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="note" value="黑白寬版：圓角為頁面或開始結束，菱形為判斷，矩形為動作，虛線框為例外或限制。" style="text;html=1;strokeColor=none;fillColor=none;fontSize=15;fontColor=#444444;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="90" y="95" width="900" height="30" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="sec1" value="A. 進入系統與登入流程" style="text;html=1;strokeColor=none;fillColor=none;fontSize=18;fontStyle=1;fontColor=#111111;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="90" y="165" width="300" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="s1line" value="" style="line;strokeWidth=1;fillColor=none;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="90" y="205" width="2300" height="10" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="start" value="使用者進入系統" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=16;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="120" y="260" width="180" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="newUser" value="是否為新用戶？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="430" y="242" width="150" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="register" value="註冊" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="710" y="242" width="120" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="basicInfo" value="填寫基本資料&#xa;姓名 / 電話 / 信箱 / 密碼" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="960" y="255" width="220" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="verify" value="信箱或簡訊驗證" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="255" width="190" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="homeA" value="首頁 / Dashboard" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=16;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1660" y="255" width="210" height="74" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="login" value="登入？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="430" y="455" width="150" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="memberLogin" value="會員登入&#xa;輸入帳號密碼" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="710" y="468" width="190" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="valid" value="帳密正確？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="455" width="150" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="guest" value="訪客登入" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="468" width="190" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="forgot" value="忘記密碼&#xa;寄送驗證碼&#xa;更改密碼" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;dashed=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="650" width="190" height="84" as="geometry"/>
+        </mxCell>
+        <mxCell id="homeNote" value="登入或註冊完成後&#xa;一律進入首頁" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1980" y="245" width="230" height="100" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="sec2" value="B. 臉部分析到妝容建議流程" style="text;html=1;strokeColor=none;fillColor=none;fontSize=18;fontStyle=1;fontColor=#111111;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="90" y="805" width="360" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="s2line" value="" style="line;strokeWidth=1;fillColor=none;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="90" y="845" width="2300" height="10" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="analysisEntry" value="點擊「臉部分析」&#xa;或首頁開始按鈕" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="120" y="920" width="210" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="resetDraft" value="進入分析頁&#xa;清空本次暫存" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="450" y="920" width="190" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="noOldPhoto" value="沒有新照片時&#xa;不得沿用上一張結果" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;dashed=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="450" y="1045" width="210" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="mode" value="選擇分析模式" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="780" y="905" width="150" height="104" as="geometry"/>
+        </mxCell>
+        <mxCell id="basic" value="BASIC&#xa;上傳 1 張正面照" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1070" y="875" width="210" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="pro" value="PRO&#xa;上傳正面 / 45° / 側面照" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1070" y="1000" width="240" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="photoOk" value="照片是否完整？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1460" y="925" width="150" height="104" as="geometry"/>
+        </mxCell>
+        <mxCell id="emptyPhoto" value="顯示空狀態&#xa;提醒重新選照片" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;dashed=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1450" y="1125" width="180" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="pkg" value="建立 analysisPackage&#xa;壓縮照片 / 帶入模式" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1760" y="940" width="230" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="faceApi" value="呼叫後端 Face API&#xa;BASIC: 8001 / PRO: 8002" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="2140" y="922" width="220" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="analysisSuccess" value="分析成功？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="2145" y="1120" width="150" height="104" as="geometry"/>
+        </mxCell>
+        <mxCell id="analysisFail" value="分析失敗&#xa;顯示原因並可重試" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;dashed=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1780" y="1135" width="210" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="result" value="顯示分析結果&#xa;臉型 / 眉型 / 眼型 / 鼻型 / 膚色" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="2140" y="1310" width="250" height="84" as="geometry"/>
+        </mxCell>
+        <mxCell id="history" value="寫入分析紀錄" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1785" y="1320" width="190" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="styleGate" value="若無分析紀錄&#xa;風格試妝 / 妝容對比圖 / 妝容建議&#xa;皆引導回臉部分析" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;dashed=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="120" y="1315" width="300" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="style" value="風格試妝&#xa;選擇妝容風格" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="570" y="1320" width="210" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="suggestApi" value="呼叫妝容建議 API&#xa;依分析結果與風格生成文字" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="930" y="1305" width="240" height="104" as="geometry"/>
+        </mxCell>
+        <mxCell id="suggestion" value="妝容建議頁&#xa;顯示文字建議 / 渲染後照片" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1320" y="1320" width="260" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="compare" value="妝容對比圖&#xa;按住對比前後照片" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1320" y="1450" width="260" height="74" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="sec3" value="C. 商品推薦、收藏與會員中心" style="text;html=1;strokeColor=none;fillColor=none;fontSize=18;fontStyle=1;fontColor=#111111;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="90" y="1590" width="360" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="s3line" value="" style="line;strokeWidth=1;fillColor=none;strokeColor=#999999;" vertex="1" parent="1">
+          <mxGeometry x="90" y="1630" width="2300" height="10" as="geometry"/>
+        </mxCell>
+        <mxCell id="shopEntry" value="首頁熱門商品&#xa;或導覽列商品推薦" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="120" y="1695" width="220" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="products" value="商品推薦列表&#xa;分類篩選 / 48 件商品" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="480" y="1695" width="240" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="detail" value="商品詳情&#xa;色號 / 加入購物袋 / 收藏" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="860" y="1695" width="260" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="favQ" value="是否收藏？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="1680" width="150" height="104" as="geometry"/>
+        </mxCell>
+        <mxCell id="memberQ" value="是否為會員？" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="1570" y="1680" width="150" height="104" as="geometry"/>
+        </mxCell>
+        <mxCell id="saveFav" value="加入收藏" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1880" y="1695" width="190" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="favorites" value="收藏頁&#xa;查看 / 移除收藏商品" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="2200" y="1695" width="230" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="guestLimit" value="訪客限制&#xa;提示登入或註冊" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;dashed=1;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1560" y="1820" width="180" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="saveLook" value="收藏妝容建議&#xa;寫入會員中心 Saved Look" style="shape=cylinder;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="930" y="1820" width="250" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="profile" value="會員中心" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=16;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1880" y="1820" width="190" height="74" as="geometry"/>
+        </mxCell>
+        <mxCell id="profileNote" value="顯示收藏商品數、分析次數、已收藏妝容建議&#xa;可刪除建議、查看詳情、更改密碼、登出" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0;fillColor=#ffffff;strokeColor=#111111;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="2200" y="1810" width="260" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="historyPage" value="分析紀錄頁&#xa;查看歷次臉部分析" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#111111;fontSize=15;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="480" y="1820" width="240" height="74" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e1" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="start" target="newUser"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" value="是" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="newUser" target="register"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" value="是" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="register" target="basicInfo"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="basicInfo" target="verify"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e5" value="完成" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="verify" target="homeA"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e6" value="否" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="newUser" target="login"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e7" value="會員" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="login" target="memberLogin"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e8" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="memberLogin" target="valid"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e9" value="是" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="valid" target="homeA"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e10" value="否" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="valid" target="forgot"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e11" value="回登入" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="forgot" target="memberLogin"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e12" value="訪客" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="login" target="guest"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e13" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="guest" target="homeA"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e14" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="homeA" target="homeNote"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="e15" value="開始分析" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="homeA" target="analysisEntry"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e16" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="analysisEntry" target="resetDraft"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e17" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="resetDraft" target="noOldPhoto"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e18" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="resetDraft" target="mode"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e19" value="BASIC" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="mode" target="basic"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e20" value="PRO" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="mode" target="pro"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e21" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="basic" target="photoOk"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e22" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="pro" target="photoOk"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e23" value="否" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="photoOk" target="emptyPhoto"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e24" value="重新選擇" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="emptyPhoto" target="mode"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e25" value="是" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="photoOk" target="pkg"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e26" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="pkg" target="faceApi"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e27" value="回傳 job/result" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="faceApi" target="analysisSuccess"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e28" value="否" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="analysisSuccess" target="analysisFail"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e29" value="重試" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="analysisFail" target="pkg"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e30" value="是" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="analysisSuccess" target="result"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e31" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="result" target="history"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e32" value="選擇風格" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="result" target="style"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e33" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="style" target="suggestApi"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e34" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="suggestApi" target="suggestion"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e35" value="查看前後差異" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="suggestion" target="compare"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e36" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="styleGate" target="analysisEntry"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e37" value="查看紀錄" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="history" target="historyPage"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="e38" value="看商品" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="homeA" target="shopEntry"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e39" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="shopEntry" target="products"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e40" value="點選商品" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="products" target="detail"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e41" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="detail" target="favQ"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e42" value="是" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="favQ" target="memberQ"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e43" value="是" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="memberQ" target="saveFav"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e44" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="saveFav" target="favorites"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e45" value="否" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="memberQ" target="guestLimit"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e46" value="登入或註冊" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="guestLimit" target="login"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e47" value="收藏建議" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="suggestion" target="saveLook"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e48" value="" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="saveLook" target="profile"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e49" value="會員資料" style="endArrow=block;html=1;rounded=0;strokeColor=#333333;" edge="1" parent="1" source="homeA" target="profile"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e50" value="" style="endArrow=none;html=1;rounded=0;strokeColor=#333333;dashed=1;" edge="1" parent="1" source="profile" target="profileNote"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

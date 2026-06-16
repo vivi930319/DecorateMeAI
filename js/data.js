@@ -106,3 +106,96 @@ const ALL_PRODUCTS = [
     {id:47,cat:'打亮',name:'珠光打亮 E',price:'NT$570'},
     {id:48,cat:'打亮',name:'提亮棒 F',price:'NT$510'},
 ];
+
+// ═══ 測試版假圖片資料：接後端後可用商品 img / imageUrl 覆蓋 ═══
+function svgDataUrl(svg) {
+    return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+function demoProductImage(product, index) {
+    const palettes = {
+        '底妝': ['#EBD4BF', '#C99A73', '#8C5B3A'],
+        '眼影': ['#F0B7A8', '#D97375', '#A94F4D'],
+        '眼線/睫毛': ['#3A241C', '#6B4430', '#B98545'],
+        '唇彩': ['#F0C0C2', '#D88B8A', '#B85B4D'],
+        '腮紅': ['#F2B8B2', '#D97375', '#A94F4D'],
+        '眉毛彩妝': ['#D4A982', '#8C5B3A', '#3A241C'],
+        '修容': ['#D6B6A4', '#A9774F', '#6B4430'],
+        '打亮': ['#F5DFC0', '#D9B77A', '#A78544'],
+    };
+    const [light, main, deep] = palettes[product.cat] || ['#EBD4BF', '#C99A73', '#8C5B3A'];
+    const kind = product.cat;
+    const productShape = (kind === '腮紅' || kind === '眼影')
+        ? `<circle cx="300" cy="325" r="124" fill="${deep}" opacity=".9"/>
+           <circle cx="300" cy="305" r="112" fill="${main}"/>
+           <circle cx="300" cy="292" r="68" fill="${light}"/>
+           <path d="M215 250 C250 205 350 205 385 250" fill="none" stroke="#fff" stroke-width="14" opacity=".22"/>`
+        : (kind === '眼線/睫毛' || kind === '眉毛彩妝')
+            ? `<rect x="270" y="130" width="60" height="330" rx="30" fill="${deep}"/>
+               <rect x="282" y="82" width="36" height="62" rx="18" fill="#E8D0A3"/>
+               <rect x="292" y="48" width="16" height="46" rx="8" fill="${deep}"/>
+               <text x="302" y="300" text-anchor="middle" transform="rotate(90 302 300)" fill="#fff" font-size="20" font-family="Jost, Arial" opacity=".82">Decorate Me</text>`
+            : `<rect x="250" y="142" width="100" height="300" rx="48" fill="url(#bottle)"/>
+               <rect x="266" y="92" width="68" height="74" rx="34" fill="url(#cap)"/>
+               <text x="302" y="300" text-anchor="middle" transform="rotate(90 302 300)" fill="#fff" font-size="20" font-family="Jost, Arial" opacity=".82">Decorate Me</text>`;
+    return svgDataUrl(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="600" height="760" viewBox="0 0 600 760">
+            <defs>
+                <linearGradient id="bg" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0" stop-color="#EFE7DD"/>
+                    <stop offset=".72" stop-color="#F8F1E8"/>
+                    <stop offset="1" stop-color="#FFFDF8"/>
+                </linearGradient>
+                <linearGradient id="bottle" x1="0" x2="1">
+                    <stop offset="0" stop-color="${light}"/>
+                    <stop offset=".58" stop-color="${main}"/>
+                    <stop offset="1" stop-color="${deep}"/>
+                </linearGradient>
+                <linearGradient id="cap" x1="0" x2="1">
+                    <stop offset="0" stop-color="#AE7E37"/>
+                    <stop offset=".48" stop-color="#F7E4B8"/>
+                    <stop offset="1" stop-color="#8F5F2E"/>
+                </linearGradient>
+                <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+                    <feDropShadow dx="0" dy="24" stdDeviation="18" flood-color="#6B4430" flood-opacity=".22"/>
+                </filter>
+            </defs>
+            <rect width="600" height="760" rx="28" fill="url(#bg)"/>
+            <rect y="540" width="600" height="220" fill="#E8DACB" opacity=".38"/>
+            <g filter="url(#shadow)">${productShape}</g>
+            <text x="300" y="690" text-anchor="middle" fill="#8B442B" font-size="24" font-family="Noto Serif TC, serif">${product.name}</text>
+            <text x="300" y="722" text-anchor="middle" fill="#B08A5D" font-size="13" letter-spacing="6" font-family="Jost, Arial">DEMO PRODUCT ${String(index + 1).padStart(2, '0')}</text>
+        </svg>
+    `);
+}
+
+ALL_PRODUCTS.forEach((product, index) => {
+    product.reviews = product.reviews || (420 + ((index * 37) % 360));
+    product.popularity = product.popularity || (1000 - index * 9);
+});
+
+const DEMO_RENDER_IMAGES = {
+    before: svgDataUrl(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="720" height="900" viewBox="0 0 720 900">
+            <defs><linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#F7E7DF"/><stop offset="1" stop-color="#E9D3C9"/></linearGradient></defs>
+            <rect width="720" height="900" fill="url(#bg)"/>
+            <circle cx="360" cy="315" r="145" fill="#E7B79E"/>
+            <path d="M225 300 C270 255 450 255 495 300" stroke="#5A382B" stroke-width="14" fill="none" opacity=".35"/>
+            <circle cx="305" cy="330" r="16" fill="#3A241C"/><circle cx="415" cy="330" r="16" fill="#3A241C"/>
+            <path d="M326 392 C352 410 383 410 410 392" stroke="#8B442B" stroke-width="10" fill="none"/>
+            <text x="360" y="705" text-anchor="middle" fill="#8B442B" font-size="38" font-family="Noto Serif TC, serif">渲染前照片 DEMO</text>
+        </svg>
+    `),
+    after: svgDataUrl(`
+        <svg xmlns="http://www.w3.org/2000/svg" width="720" height="900" viewBox="0 0 720 900">
+            <defs><linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#F8D8D9"/><stop offset="1" stop-color="#E6B7B1"/></linearGradient></defs>
+            <rect width="720" height="900" fill="url(#bg)"/>
+            <circle cx="360" cy="315" r="145" fill="#E7B79E"/>
+            <path d="M225 300 C270 248 450 248 495 300" stroke="#5A382B" stroke-width="18" fill="none" opacity=".55"/>
+            <ellipse cx="305" cy="330" rx="26" ry="18" fill="#6B4430"/><ellipse cx="415" cy="330" rx="26" ry="18" fill="#6B4430"/>
+            <circle cx="278" cy="388" r="36" fill="#D97375" opacity=".38"/><circle cx="442" cy="388" r="36" fill="#D97375" opacity=".38"/>
+            <path d="M322 398 C350 430 384 430 414 398" stroke="#B85B4D" stroke-width="16" fill="none"/>
+            <text x="360" y="705" text-anchor="middle" fill="#8B442B" font-size="38" font-family="Noto Serif TC, serif">渲染後妝容 DEMO</text>
+        </svg>
+    `)
+};

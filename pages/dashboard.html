@@ -1,36 +1,67 @@
-<div class="page-header">
-    <h1>功能總覽</h1>
-    <div class="divider"></div>
-</div>
-<div class="dash-grid">
-    <div class="dash-card" data-nav="analysis">
-        <div class="dc-icon">✨</div>
-        <div class="dc-title">風格試妝</div>
-        <div class="dc-sub">發現專屬於你的迷人妝容</div>
+<div class="arch-hero" data-nav="analysis">
+    <div class="arch-corner">Maison Decorate Me</div>
+    <span class="arch-eyebrow">A Platform Created for the Love of Beauty</span>
+    <div class="arch-stage">
+        <div class="arch-word-base">裝識你的美</div>
     </div>
-    <div class="dash-card dark" data-nav="products">
-        <div class="dc-icon">🛍</div>
-        <div class="dc-title">商　品</div>
-        <div class="dc-sub">探索精選美妝好物</div>
-    </div>
-    <div class="dash-card" data-nav="favorites">
-        <div class="dc-icon">❤️</div>
-        <div class="dc-title">收　藏</div>
-        <div class="dc-sub">收藏你喜愛的妝容與商品</div>
-    </div>
-    <div class="dash-card" data-nav="compare">
-        <div class="dc-icon">🖼</div>
-        <div class="dc-title">妝容對比圖</div>
-        <div class="dc-sub">按住切換渲染前後效果</div>
-    </div>
-    <div class="dash-card" data-nav="suggestion">
-        <div class="dc-icon">💡</div>
-        <div class="dc-title">妝容建議</div>
-        <div class="dc-sub">保存專屬妝容方向</div>
-    </div>
-    <div class="dash-card" data-nav="profile">
-        <div class="dc-icon">👤</div>
-        <div class="dc-title">基本資料</div>
-        <div class="dc-sub">查看頭像、年齡與會員等級</div>
+    <div class="arch-tagline">
+        <div class="at-text">為你打造的<em>美學旅程</em> · 從臉部分析開始</div>
+        <span class="at-cta">開始臉部分析　→</span>
     </div>
 </div>
+
+<div class="dash-greet">
+    <div class="greet-l">
+        <span class="eyebrow">Welcome</span>
+        <h1 id="dashGreet">歡迎回來，<span class="accent">訪客</span></h1>
+        <div class="greet-actions">
+            <span class="btn-outline" data-nav="analysis">開始臉部分析　→</span>
+            <div class="tone-scale" title="膚色比對">
+                <div class="swatches">
+                    <span style="background:#F1D9C4"></span>
+                    <span style="background:#E4BE9E"></span>
+                    <span style="background:#CFA079"></span>
+                    <span style="background:#A9774F"></span>
+                    <span style="background:#7C5334"></span>
+                </div>
+                <em>找到你的專屬色號</em>
+            </div>
+        </div>
+    </div>
+    <div class="greet-r">
+        <div class="greet-date" id="dashDate">—</div>
+        <div class="greet-meta">Your Beauty Atelier</div>
+    </div>
+</div>
+
+<div class="dash-sec-head">
+    <div class="sh-l"><span class="sh-no">01</span><h2>風格靈感</h2></div>
+    <span class="sh-link" data-nav="style">瀏覽全部風格</span>
+</div>
+<div class="insp-row" id="dashInsp"></div>
+
+<!-- 為你精選 · Rare Beauty 上下錯落雙欄 -->
+<div class="dash-sec-head">
+    <div class="sh-l"><span class="sh-no">02</span><h2>為你精選</h2></div>
+    <span class="sh-link" data-nav="products">查看全部商品</span>
+</div>
+<div class="glow-row" id="dashGlow"></div>
+
+<!-- 關於我們的美妝系統 · Rare Beauty 雙欄編輯式簡介 -->
+<section class="about-sys">
+    <div class="as-head">
+        <div class="about-headrow">
+            <span class="as-eyebrow-it">About the Atelier</span>
+            <h2 class="about-title">OUR BEAUTY<span class="l2">SYSTEM</span></h2>
+        </div>
+        <span class="bs-link" data-nav="analysis">開始你的美學旅程　→</span>
+        <p class="bs-desc">「裝識你的美」是一套以科技與美學打造的個人美妝系統。從 AI 臉部分析解讀你的五官與膚色，到為你量身推薦的妝容風格與美妝逸品 —— 我們相信，最美的樣子，是更認識自己的你。</p>
+    </div>
+    <div class="as-photo">
+        <img class="as-photo-img" alt="" onload="this.classList.add('loaded')">
+        <div class="as-photo-ph">
+            <div class="demo-mark">❧</div>
+            <div class="demo-cap">商品形象照 · Demo</div>
+        </div>
+    </div>
+</section>
