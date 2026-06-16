@@ -77,13 +77,15 @@ function openLookModal(item){
   var r=item.analysis||{}; var skin=r['膚色']||{};
   var rows=Object.keys(advice).map(function(k){ return '<div class="lm-advice"><b>'+(titles[k]||k)+'</b><p>'+advice[k]+'</p></div>'; }).join('');
   var tags=(item.tags||[]).map(function(t){ return '<span class="analysis-tag">'+t+'</span>'; }).join('');
-  var photo = item.renderedImage ? '<img src="'+item.renderedImage+'" alt="">' : '<span>'+(item.style||'Saved Look')+'</span>';
+  var photo = (item.beforeImage && item.renderedImage)
+    ? '<div class="lm-compare-photo"><figure><img src="'+item.beforeImage+'" alt="渲染前照片"><figcaption>Before</figcaption></figure><figure><img src="'+item.renderedImage+'" alt="渲染後照片"><figcaption>After</figcaption></figure></div>'
+    : (item.renderedImage ? '<img src="'+item.renderedImage+'" alt="">' : '<span>'+(item.style||'Saved Look')+'</span>');
   var ts = item.timestamp ? new Date(item.timestamp).toLocaleString('zh-TW') : '';
   var ov=document.createElement('div'); ov.id='lookModal'; ov.className='look-modal';
   ov.innerHTML='<div class="lm-card" role="dialog" aria-modal="true">'
     +'<button class="lm-close" aria-label="關閉">×</button>'
     +'<div class="lm-photo">'+photo+'</div>'
-    +'<div class="lm-body"><div class="lm-kicker">Saved Look</div>'
+    +'<div class="lm-body"><div class="lm-kicker">'+(item.title||'Saved Look')+'</div>'
     +'<h2>'+(item.style||'妝容建議')+'</h2><time>'+ts+'</time>'
     +(tags?'<div class="analysis-tags" style="margin-top:14px;">'+tags+'</div>':'')
     +'<div class="lm-summary"><span><em>臉型</em>'+(r['臉型']||'—')+'</span><span><em>眼型</em>'+(r['眼型']||'—')+'</span><span><em>鼻型</em>'+(r['鼻型']||'—')+'</span><span><em>膚色</em>'+(skin['四季型']||skin['膚色分級']||'—')+'</span></div>'
@@ -144,18 +146,60 @@ function promptGuestAuth(featureName){
 // ═══ 是否已開始美學旅程（做過臉部分析） ═══
 function hasStartedJourney(){
     try {
-        if (Router.analysisResult) return true;
-        if (Router.analysisPackage && Router.analysisPackage.status === "completed" && Router.analysisPackage.faceAnalysis) return true;
-        return !!(History.list && History.list().length > 0);
+        return !!(Router.analysisResult && Router.analysisPackage && Router.analysisPackage.status === "completed" && Router.analysisPackage.faceAnalysis);
     } catch (_) { return false; }
 }
 
 function getLatestAnalysisResult(){
     try {
-        if (Router.analysisResult) return Router.analysisResult;
-        var records = (History.list && History.list()) || [];
-        return records[0] || null;
+        return Router.analysisResult || null;
     } catch (_) { return null; }
+}
+
+function resetCurrentBeautySession(){
+    Router.selectedFile = null;
+    Router.proFiles = { front: null, left45: null, right45: null, side: null };
+    Router.packageImageFiles = {};
+    Router.analysisPackage = null;
+    Router.analysisResult = null;
+    Router.selectedStyleId = null;
+    Router.pendingLook = null;
+    Router.pendingLookSaved = false;
+    if (typeof AnalysisDraft !== "undefined" && AnalysisDraft.clear) AnalysisDraft.clear();
+}
+
+function buildCurrentLookRecord(){
+    const style = STYLES.find(s => s.id === Router.selectedStyleId) || STYLES[0];
+    const pkg = Router.analysisPackage || {};
+    const render = pkg.render || {};
+    const makeupOutput = render.makeupOutput || {};
+    const beforeImage = render.beforeImageUrl || render.beforeImageDataUrl || '';
+    const renderedImage = render.afterImageUrl || render.afterImageDataUrl || makeupOutput.imageUrl || makeupOutput.imageDataUrl || '';
+    return {
+        kind: 'compare',
+        title: '妝容對比圖',
+        style: style?.name || '妝容建議',
+        advice: style?.advice || {},
+        analysis: Router.analysisResult || {},
+        beforeImage,
+        renderedImage,
+        analysisPackageId: pkg.id || null,
+        timestamp: new Date().toISOString()
+    };
+}
+
+function saveCurrentLook(){
+    if (isGuest()) {
+        promptGuestAuth('收藏妝容對比圖');
+        return null;
+    }
+    const record = Router.pendingLook || buildCurrentLookRecord();
+    const records = JSON.parse(localStorage.getItem('beautySuggestions') || '[]');
+    records.unshift({ ...record, timestamp: new Date().toISOString() });
+    localStorage.setItem('beautySuggestions', JSON.stringify(records.slice(0, 20)));
+    Router.pendingLook = null;
+    Router.pendingLookSaved = true;
+    return record;
 }
 
 // ═══ 更改密碼（玻璃彈窗） ═══
@@ -206,10 +250,142 @@ function renderAnalysisGate(featureName){
         '<button class="btn-gold ag-btn">前往臉部分析　→</button>',
         '</div>'
     ].join("");
-    var b = mc.querySelector(".ag-btn"); if (b) b.onclick = function(){
-        if (location.hash !== "#analysis") history.pushState(null, "", "#analysis");
-        Router.go("analysis");
+    var b = mc.querySelector(".ag-btn"); if (b) b.onclick = function(){ Router.go("analysis"); };
+}
+
+function getPageFallback(page){
+    const fallbacks = {
+dashboard: `
+<div class="arch-hero" data-nav="analysis">
+    <div class="arch-corner">Maison Decorate Me</div>
+    <span class="arch-eyebrow">A Platform Created for the Love of Beauty</span>
+    <div class="arch-stage"><div class="arch-word-base">裝識你的美</div></div>
+    <div class="arch-tagline"><div class="at-text">為你打造的<em>美學旅程</em> · 從臉部分析開始</div><span class="at-cta">開始臉部分析　→</span></div>
+</div>
+<div class="dash-greet">
+    <div class="greet-l">
+        <span class="eyebrow">Welcome</span>
+        <h1 id="dashGreet">歡迎回來，<span class="accent">訪客</span></h1>
+        <div class="greet-actions">
+            <span class="btn-outline" data-nav="analysis">開始臉部分析　→</span>
+            <div class="tone-scale" title="膚色比對"><div class="swatches"><span style="background:#F1D9C4"></span><span style="background:#E4BE9E"></span><span style="background:#CFA079"></span><span style="background:#A9774F"></span><span style="background:#7C5334"></span></div><em>找到你的專屬色號</em></div>
+        </div>
+    </div>
+    <div class="greet-r"><div class="greet-date" id="dashDate">—</div><div class="greet-meta">Your Beauty Atelier</div></div>
+</div>
+<div class="dash-sec-head"><div class="sh-l"><span class="sh-no">01</span><h2>風格靈感</h2></div><span class="sh-link" data-nav="style">瀏覽全部風格</span></div>
+<div class="insp-row" id="dashInsp"></div>
+<div class="dash-sec-head"><div class="sh-l"><span class="sh-no">02</span><h2>為你精選</h2></div><span class="sh-link" data-nav="products">查看全部商品</span></div>
+<div class="glow-row" id="dashGlow"></div>
+<section class="about-sys">
+    <div class="as-head">
+        <div class="about-headrow"><span class="as-eyebrow-it">About the Atelier</span><h2 class="about-title">OUR BEAUTY<span class="l2">SYSTEM</span></h2></div>
+        <span class="bs-link" data-nav="analysis">開始你的美學旅程　→</span>
+        <p class="bs-desc">「裝識你的美」是一套以科技與美學打造的個人美妝系統。從 AI 臉部分析解讀你的五官與膚色，到為你量身推薦的妝容風格與美妝逸品 —— 我們相信，最美的樣子，是更認識自己的你。</p>
+    </div>
+    <div class="as-photo"><img class="as-photo-img" alt="" onload="this.classList.add('loaded')"><div class="as-photo-ph"><div class="demo-mark">❧</div><div class="demo-cap">商品形象照 · Demo</div></div></div>
+</section>`,
+analysis: `
+<div class="page-header"><h1>臉部分析</h1><div class="divider"></div><p>上傳正面照片，AI 為你分析五官特徵</p></div>
+<div class="analyze-grid">
+    <div>
+        <div class="section-label"><span>NO.01</span>上 傳 照 片</div>
+        <div class="mode-tabs">
+            <button class="mode-tab active" id="basicModeBtn" data-mode="basic">BASIC</button>
+            <button class="mode-tab" id="proModeBtn" data-mode="pro">PRO</button>
+        </div>
+        <div class="mode-panel active" id="basicPanel">
+            <div class="upload-box" id="uploadBox">
+                <div class="upload-icon"><span>＋</span></div>
+                <div class="upload-label">選擇照片</div>
+                <div class="upload-hint">正面，光線均勻，效果最佳</div>
+                <input type="file" id="fileInput" accept="image/*" style="display:none;">
+            </div>
+            <div class="camera-actions">
+                <button class="btn-outline btn-sm" id="startCameraBtn">開啟鏡頭</button>
+                <button class="btn-outline btn-sm" id="capturePhotoBtn">拍照使用</button>
+            </div>
+            <div class="camera-box" id="cameraBox">
+                <video id="cameraVideo" autoplay playsinline></video>
+                <canvas id="cameraCanvas" style="display:none;"></canvas>
+            </div>
+        </div>
+        <div class="mode-panel" id="proPanel">
+            <div class="pro-upload-grid">
+                <div class="pro-slot" data-pro-slot="front"><div class="slot-title">正面照</div><div class="slot-file" id="frontFileName">必填</div><input type="file" id="frontInput" accept="image/*" style="display:none;"></div>
+                <div class="pro-slot" data-pro-slot="left45"><div class="slot-title">左側 45 度</div><div class="slot-file" id="left45FileName">選填</div><input type="file" id="left45Input" accept="image/*" style="display:none;"></div>
+                <div class="pro-slot" data-pro-slot="right45"><div class="slot-title">右側 45 度</div><div class="slot-file" id="right45FileName">選填</div><input type="file" id="right45Input" accept="image/*" style="display:none;"></div>
+                <div class="pro-slot" data-pro-slot="side"><div class="slot-title">側面照</div><div class="slot-file" id="sideFileName">選填</div><input type="file" id="sideInput" accept="image/*" style="display:none;"></div>
+            </div>
+            <div class="mode-note">PRO 掃描版預留：之後會用鏡頭偵測 yaw，自動擷取正面、左右 45 度與側面照；目前先提供檔案上傳版。</div>
+        </div>
+        <img id="preview" alt="preview" style="max-width:100%;margin-top:12px;border:1px solid var(--border);display:none;">
+        <div class="loading-bar" id="loadingBar"><div class="fill" id="loadingFill"></div></div>
+        <div class="loading-status" id="loadingStatus">等待圖片</div>
+        <div class="package-status" id="packageStatus"><b>資料包狀態</b><span>尚未建立</span></div>
+        <button class="btn-gold btn-full" id="analyzeBtn" style="margin-top:14px;">開 始 分 析</button>
+    </div>
+    <div>
+        <div class="section-label"><span>NO.02</span>分 析 結 果</div>
+        <div class="result-grid">
+            <div class="result-cell"><div class="rlabel">臉型</div><div class="rvalue" id="r-face">—</div></div>
+            <div class="result-cell"><div class="rlabel">眉型</div><div class="rvalue" id="r-brow">—</div></div>
+            <div class="result-cell"><div class="rlabel">眼型</div><div class="rvalue" id="r-eye">—</div></div>
+            <div class="result-cell"><div class="rlabel">鼻型</div><div class="rvalue" id="r-nose">—</div></div>
+            <div class="result-cell"><div class="rlabel">嘴型</div><div class="rvalue" id="r-lip">—</div></div>
+            <div class="result-cell"><div class="rlabel">色彩季型</div><div class="rvalue" id="r-season">—</div></div>
+        </div>
+        <div class="skin-box"><div class="skin-title">膚 色 基 準 · M A C</div><div class="skin-row"><div class="skin-swatch" id="skinSwatch"></div><div><div class="skin-name" id="skinName">—</div><div class="skin-lab" id="skinLab"></div></div></div></div>
+        <div class="skin-box"><div class="skin-title">唇 色 原 始 值</div><div class="skin-row"><div class="skin-swatch" id="lipSwatch"></div><div><div class="skin-lab" id="lipLab"></div></div></div></div>
+        <div style="text-align:center;margin-top:20px;"><button class="btn-gold" id="goStyleBtn" style="display:none;">選擇風格 →</button></div>
+    </div>
+</div>`,
+style: `
+<div class="page-header"><span class="eyebrow">Style Atelier</span><h1>風格試妝</h1><div class="divider"></div><p>選擇一種妝容風格，為你量身打造</p></div>
+<div class="style-grid" id="styleGrid"></div>
+<div style="text-align:center;margin-top:20px;"><button class="btn-gold" id="confirmStyleBtn">確認風格 →</button></div>
+<div id="styleResultArea"></div>`,
+products: `<div id="productsArea"></div>`,
+favorites: `<div class="page-header"><span class="eyebrow">Wishlist</span><h1>我的收藏</h1><div class="divider"></div></div><div id="favArea"></div>`,
+history: `<div class="page-header"><span class="eyebrow">Archive</span><h1>分析紀錄</h1><div class="divider"></div></div><div id="historyArea"></div>`,
+compare: `
+<div class="page-header"><h1>妝容對比圖</h1><div class="divider"></div><p>保留 iOS 端的前後對比流程：選擇風格後可按住切換渲染前 / 渲染後效果。</p></div>
+<div class="compare-layout">
+    <div class="compare-preview" id="comparePreview">
+        <div class="ph compare-stage before" id="compareStage"><div class="compare-photo-label" id="comparePhotoLabel">渲染前照片</div></div>
+        <button class="compare-hold-btn" id="compareHoldBtn">按住對比</button>
+    </div>
+    <div class="analysis-section">
+        <h3>目前風格</h3>
+        <p id="compareStyleName">尚未選擇風格</p>
+        <div class="analysis-tags" id="compareStyleTags"></div>
+        <button class="btn-outline" id="compareGoStyleBtn">選擇風格</button>
+        <button class="btn-gold" id="compareSaveLookBtn" style="margin-top:12px;">收藏妝容對比圖</button>
+    </div>
+</div>`,
+suggestion: `<div class="page-header"><h1>妝容建議</h1><div class="divider"></div><p>依照臉部分析結果與選擇風格，產生妝容建議與可收藏的妝容對比圖。</p></div><div id="suggestionArea"></div>`,
+profile: `
+<div class="page-header"><span class="eyebrow">Member</span><h1>會員中心</h1><div class="divider"></div></div>
+<div class="member-wrap">
+    <div class="member-id">
+        <div class="member-avatar" id="profileAvatar">✦</div>
+        <div class="member-name" id="profileName">訪客</div>
+        <div class="member-role">Decorate Me Member</div>
+        <div class="member-actions">
+            <button class="btn-outline" id="changePwdBtn" style="display:none;">更改密碼</button>
+            <button class="btn-outline member-logout" onclick="Auth.logout()">登出帳號</button>
+        </div>
+    </div>
+    <div class="member-stats">
+        <div class="stat-cell"><div class="stat-en">Wishlist</div><div class="stat-num" id="profileFavCount">0</div><div class="stat-label">收藏商品</div></div>
+        <div class="stat-cell"><div class="stat-en">Analysis</div><div class="stat-num" id="profileAnalyzeCount">0</div><div class="stat-label">分析次數</div></div>
+            <div class="stat-cell"><div class="stat-en">Looks</div><div class="stat-num" id="profileSuggestionCount">0</div><div class="stat-label">收藏妝容</div></div>
+        <div class="stat-cell stat-link" data-nav="analysis"><div class="stat-en">Start</div><div class="stat-mark">＋</div><div class="stat-label">開始新分析</div></div>
+    </div>
+</div>
+<section class="member-suggestions"><div class="member-section-head"><span>Saved Looks</span><h2>已收藏的妝容對比圖</h2></div><div id="profileSuggestionArea"></div></section>`
     };
+    return fallbacks[page] || null;
 }
 
 // ═══ SPA Router ═══
@@ -224,20 +400,31 @@ const Router = {
     proFiles: { front: null, left45: null, right45: null, side: null },
     cameraStream: null,
     selectedStyleId: null,
+    pendingLook: null,
+    pendingLookSaved: false,
+    leaveGuardOpen: false,
     pendingRegister: null,
     latestRenderedAfter: false,
     currentCategory: null,
 
     async go(page, opts) {
+        opts = opts || {};
+        if (!opts.skipLeaveGuard && this.needsLookLeaveGuard(page)) {
+            this.promptLookLeave(page, opts);
+            return;
+        }
         // 訪客攔截：收藏 / 分析紀錄 需登入
         if ((page === "favorites" || page === "history") && isGuest()) {
             promptGuestAuth(page === "favorites" ? "收藏" : "分析紀錄");
             return;
         }
         try {
+            if (!opts.fromHash && location.hash !== `#${page}`) {
+                history.pushState(null, '', `#${page}`);
+            }
             const back = (NAV_ORDER.indexOf(page) > -1 && NAV_ORDER.indexOf(this.currentPage) > -1
                           && NAV_ORDER.indexOf(page) < NAV_ORDER.indexOf(this.currentPage));
-            const res = await fetch(`pages/${page}.html?v=20260615-glass-buttons`, { cache: 'no-store' });
+            const res = await fetch(`pages/${page}.html?v=20260616-look-save-rule`, { cache: 'no-store' });
             if (!res.ok) throw new Error('Page not found');
             const html = await res.text();
             const mc = document.getElementById('mainContent');
@@ -260,8 +447,68 @@ const Router = {
             // 頁面初始化
             if (typeof PageInit[page] === 'function') PageInit[page](opts);
         } catch (e) {
+            const fallback = getPageFallback(page);
+            if (fallback) {
+                const mc = document.getElementById('mainContent');
+                mc.innerHTML = fallback;
+                mc.classList.remove('page-enter','page-back');
+                void mc.offsetWidth;
+                mc.classList.add('page-enter');
+                this.currentPage = page;
+                document.querySelectorAll('.topbar-nav a').forEach(a => {
+                    a.classList.toggle('active', a.dataset.page === page);
+                });
+                if (typeof PageInit[page] === 'function') PageInit[page](opts);
+                return;
+            }
             document.getElementById('mainContent').innerHTML = `<div class="empty-state">頁面載入失敗</div>`;
         }
+    },
+
+    needsLookLeaveGuard(nextPage) {
+        if (this.leaveGuardOpen) return false;
+        if (this.pendingLookSaved) return false;
+        if (nextPage === this.currentPage) return false;
+        if (this.currentPage !== 'suggestion' && this.currentPage !== 'compare') return false;
+        return !!(this.pendingLook || hasStartedJourney());
+    },
+
+    promptLookLeave(nextPage, opts) {
+        this.leaveGuardOpen = true;
+        if (isGuest()) {
+            showConfirm('訪客不能收藏妝容對比圖與妝容建議。離開後會清空目前這次妝容暫存。', {
+                title: '需要會員身分',
+                okText: '登入',
+                cancelText: '直接離開',
+                onOk: () => {
+                    this.leaveGuardOpen = false;
+                    showLogin();
+                },
+                onCancel: () => {
+                    resetCurrentBeautySession();
+                    this.leaveGuardOpen = false;
+                    this.go(nextPage, { ...opts, skipLeaveGuard: true });
+                },
+                onDismiss: () => { this.leaveGuardOpen = false; }
+            });
+            return;
+        }
+        showConfirm('離開前要收藏這張妝容對比圖嗎？不收藏會清空目前這次妝容暫存。', {
+            title: '收藏妝容對比圖',
+            okText: '收藏',
+            cancelText: '不要收藏',
+            onOk: () => {
+                if (saveCurrentLook()) showToast('已收藏妝容對比圖');
+                this.leaveGuardOpen = false;
+                this.go(nextPage, { ...opts, skipLeaveGuard: true });
+            },
+            onCancel: () => {
+                resetCurrentBeautySession();
+                this.leaveGuardOpen = false;
+                this.go(nextPage, { ...opts, skipLeaveGuard: true });
+            },
+            onDismiss: () => { this.leaveGuardOpen = false; }
+        });
     }
 };
 
@@ -661,7 +908,29 @@ const PageInit = {
                 </div>
             `).join('');
             grid.querySelectorAll('.style-card').forEach(card => {
-                card.onclick = () => { Router.selectedStyleId = card.dataset.sid; renderGrid(); };
+                card.onclick = () => {
+                    const nextStyleId = card.dataset.sid;
+                    if (Router.selectedStyleId && Router.selectedStyleId !== nextStyleId && hasStartedJourney()) {
+                        showConfirm('要沿用目前這張臉部分析照片套用到新的妝容風格嗎？', {
+                            title: '沿用目前照片',
+                            okText: '沿用',
+                            cancelText: '不要',
+                            onOk: () => {
+                                Router.selectedStyleId = nextStyleId;
+                                Router.pendingLook = null;
+                                Router.pendingLookSaved = false;
+                                renderGrid();
+                            },
+                            onCancel: () => {
+                                resetCurrentBeautySession();
+                                renderAnalysisGate('風格試妝');
+                            }
+                        });
+                        return;
+                    }
+                    Router.selectedStyleId = nextStyleId;
+                    renderGrid();
+                };
             });
         };
         renderGrid();
@@ -681,7 +950,12 @@ const PageInit = {
             btn.textContent = '產生建議中...';
             try {
                 const style = STYLES.find(s => s.id === Router.selectedStyleId);
-                const pkg = Router.analysisPackage || AnalysisDraft.load();
+                const pkg = Router.analysisPackage;
+                if (!pkg || !Router.analysisResult) {
+                    showAlert('目前沒有可用的臉部分析結果，請重新完成臉部分析。', { type:'error' });
+                    Router.go('analysis');
+                    return;
+                }
                 const latestAnalysis = getLatestAnalysisResult() || {};
                 const response = await Api.suggestMakeup({
                     analysisPackage: pkg,
@@ -705,9 +979,11 @@ const PageInit = {
                     }
                 });
                 AnalysisDraft.save(Router.analysisPackage);
+                Router.pendingLook = buildCurrentLookRecord();
+                Router.pendingLookSaved = false;
                 renderAnalysisResult(response);
             } catch (err) {
-                const pkg = Router.analysisPackage || AnalysisDraft.load();
+                const pkg = Router.analysisPackage;
                 if (pkg) {
                     Router.analysisPackage = AnalysisPackage.update(pkg, {
                         generativeText: {
@@ -774,7 +1050,7 @@ const PageInit = {
                 </div>
                 <div style="text-align:center;margin-top:20px;">
                     <button class="btn-outline" onclick="Router.go('compare')" style="margin-right:8px;">查看前後對比</button>
-                    <button class="btn-outline" onclick="Router.go('suggestion')" style="margin-right:8px;">收藏妝容建議</button>
+                    <button class="btn-outline" onclick="Router.go('suggestion')" style="margin-right:8px;">查看妝容建議</button>
                     <button class="btn-gold" onclick="Router.go('products')">查看推薦商品 →</button>
                 </div>
             `;
@@ -948,6 +1224,8 @@ const PageInit = {
         const stage = document.getElementById('compareStage');
         const label = document.getElementById('comparePhotoLabel');
         const holdBtn = document.getElementById('compareHoldBtn');
+        Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
+        Router.pendingLookSaved = false;
 
         nameEl.textContent = style ? style.name : '尚未選擇風格';
         tagsEl.innerHTML = style ? style.tags.map(t => `<span class="analysis-tag">${t}</span>`).join('') : '';
@@ -970,9 +1248,16 @@ const PageInit = {
         holdBtn.onfocus = showAfter;
         holdBtn.onblur = showBefore;
         document.getElementById('compareGoStyleBtn').onclick = () => Router.go('style');
+        const saveBtn = document.getElementById('compareSaveLookBtn');
+        if (saveBtn) {
+            saveBtn.onclick = () => {
+                Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
+                if (saveCurrentLook()) showToast('已收藏妝容對比圖');
+            };
+        }
 
         function setCompareImage(kind) {
-            const pkg = Router.analysisPackage || AnalysisDraft.load() || {};
+            const pkg = Router.analysisPackage || {};
             const render = pkg.render || {};
             const beforeImage = render.beforeImageUrl || render.beforeImageDataUrl || '';
             const afterImage = render.afterImageUrl || render.afterImageDataUrl || render.makeupOutput?.imageUrl || render.makeupOutput?.imageDataUrl || '';
@@ -989,7 +1274,7 @@ const PageInit = {
         const advice = style.advice || { base:'清透柔霧底妝', brow:'自然平眉', eye:'柔霧大地色', blush:'甜感腮紅', lip:'紅色系' };
         const r = getLatestAnalysisResult() || {};
         const skin = r['膚色'] || {};
-        const pkg = Router.analysisPackage || AnalysisDraft.load() || {};
+        const pkg = Router.analysisPackage || {};
         const aiSuggestion = pkg.generativeText?.suggestion || '';
         const render = pkg.render || {};
         const makeupOutput = render.makeupOutput || {};
@@ -1029,14 +1314,13 @@ const PageInit = {
                 <div class="advice-grid">
                     ${Object.entries(advice).map(([key, text]) => `<div><b>${adviceTitle(key)}</b><p>${text}</p></div>`).join('')}
                 </div>
-                <button class="btn-gold" id="saveSuggestionBtn" style="margin-top:14px;">收藏這組建議</button>
+                <button class="btn-gold" id="saveSuggestionBtn" style="margin-top:14px;">收藏妝容對比圖</button>
             </div>
         `;
+        Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
+        Router.pendingLookSaved = false;
         document.getElementById('saveSuggestionBtn').onclick = () => {
-            const records = JSON.parse(localStorage.getItem('beautySuggestions') || '[]');
-            records.unshift({ style: style.name, advice, analysis: r, renderedImage, analysisPackageId: pkg.id || null, timestamp: new Date().toISOString() });
-            localStorage.setItem('beautySuggestions', JSON.stringify(records.slice(0, 20)));
-            showToast('已收藏妝容建議');
+            if (saveCurrentLook()) showToast('已收藏妝容對比圖');
         };
 
         function adviceTitle(key) {
@@ -1095,20 +1379,20 @@ const PageInit = {
         const suggestionArea = document.getElementById('profileSuggestionArea');
         if (suggestionArea) {
             if (!suggestions.length) {
-                suggestionArea.innerHTML = '<div class="empty-state compact">尚未收藏妝容建議</div>';
+                suggestionArea.innerHTML = '<div class="empty-state compact">尚未收藏妝容對比圖</div>';
             } else {
                 suggestionArea.innerHTML = `<div class="saved-look-grid">${suggestions.slice(0, 6).map((item, index) => `
                     <article class="saved-look-card reveal-in" data-look="${index}" style="animation-delay:${Math.min(index * 0.04, 0.24)}s">
                         <button class="look-del" data-del="${index}" aria-label="刪除此妝容">×</button>
                         <div class="saved-look-photo">
                             ${item.renderedImage
-                                ? `<img src="${item.renderedImage}" alt="${item.style || '妝容建議'}" onload="this.classList.add('loaded')">`
+                                ? `<img src="${item.renderedImage}" alt="${item.style || '妝容對比圖'}" onload="this.classList.add('loaded')">`
                                 : `<span>${item.style || 'Saved Look'}</span>`
                             }
                         </div>
                         <div class="saved-look-body">
                             <div class="saved-look-kicker">Saved Look</div>
-                            <h3>${item.style || '妝容建議'}</h3>
+                            <h3>${item.style || '妝容對比圖'}</h3>
                             <p>${formatSavedAdvice(item)}</p>
                             <time>${item.timestamp ? new Date(item.timestamp).toLocaleString('zh-TW') : ''}</time>
                         </div>
@@ -1124,7 +1408,7 @@ const PageInit = {
                 e.stopPropagation();
                 var idx = +btn.dataset.del;
                 showConfirm("確定要刪除這個收藏的妝容嗎？此動作無法復原。", {
-                    title: "刪除妝容建議", type: "error", okText: "刪除", cancelText: "保留",
+                    title: "刪除妝容對比圖", type: "error", okText: "刪除", cancelText: "保留",
                     onOk: function(){
                         var recs = []; try { recs = JSON.parse(localStorage.getItem("beautySuggestions") || "[]"); } catch(_){}
                         recs.splice(idx, 1);
@@ -1145,7 +1429,7 @@ const PageInit = {
         function formatSavedAdvice(item) {
             const advice = item.advice || {};
             const text = advice.lip || advice.eye || advice.base || item.suggestion || '';
-            return String(text || '已收藏此妝容方向，之後可回到妝容建議頁查看完整搭配。').slice(0, 72);
+            return String(text || '已收藏此妝容對比圖，之後可回到會員中心查看完整搭配。').slice(0, 72);
         }
     }
 };
@@ -1154,7 +1438,7 @@ const PageInit = {
 (function init() {
     const routeFromHash = () => {
         const page = location.hash.replace(/^#/, '');
-        if (ROUTE_PAGES.has(page) && Router.currentPage !== page) Router.go(page);
+        if (ROUTE_PAGES.has(page) && Router.currentPage !== page) Router.go(page, { fromHash: true });
     };
 
     document.addEventListener('click', (e) => {
@@ -1163,7 +1447,6 @@ const PageInit = {
         const page = pageLink.dataset.page;
         if (!page) return;
         e.preventDefault();
-        if (location.hash !== `#${page}`) history.pushState(null, '', `#${page}`);
         Router.go(page);
     });
     window.addEventListener('hashchange', routeFromHash);
@@ -1179,7 +1462,7 @@ const PageInit = {
     } else {
         showLogin();
     }
-    routeFromHash();
+    if (Auth.isLoggedIn()) routeFromHash();
 })();
 
 function showApp() {
@@ -1432,3 +1715,4 @@ function maskEmail(email) {
     if (!name || !domain || name.length <= 3) return email;
     return `${name.slice(0, 3)}******@${domain}`;
 }
+
