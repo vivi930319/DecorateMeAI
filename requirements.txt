@@ -8,3 +8,6 @@ mediapipe==0.10.21
 onnxruntime
 insightface
 requests
+Pillow
+tqdm
+pandas

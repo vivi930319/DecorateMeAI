@@ -7,7 +7,7 @@
 !Face_analyzer_BASIC.py
 !Face_analyzer_PRO.py
 !Ollama_suggestion.py
-!index.html
+!dev_server_utils.py
 !Dockerfile
 !docker-compose.yml
 !requirements.txt
@@ -15,8 +15,13 @@
 !ollama_suggestion_smoke_test.py
 !select_basic_usable_images.py
 !auto_label_basic_dataset.py
+!batch_basic_classify.py
+!organize_basic_results.py
 !make_review_sheets.py
 !apply_review_decisions.py
+!setup.bat
+!start_backend_local.bat
+!start_full_stack_local.bat
 
 # 本機新手教學文件，不上傳 Git
 local_only_notes/
