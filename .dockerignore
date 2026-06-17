@@ -1,8 +1,7 @@
 *
-!Face_analyzer.py
 !Face_analyzer_BASIC.py
 !Face_analyzer_PRO.py
 !Ollama_suggestion.py
-!index.html
+!dev_server_utils.py
 !Dockerfile
 !requirements.txt

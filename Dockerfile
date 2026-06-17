@@ -14,11 +14,10 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY Face_analyzer.py .
 COPY Face_analyzer_BASIC.py .
 COPY Face_analyzer_PRO.py .
 COPY Ollama_suggestion.py .
-COPY index.html .
+COPY dev_server_utils.py .
 
 EXPOSE 8001 8002 8010
 

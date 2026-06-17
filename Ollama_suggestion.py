@@ -6,6 +6,7 @@ import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from dev_server_utils import run_dev_server
 
 
 app = FastAPI(title="Ollama Suggestion API")
@@ -180,6 +181,4 @@ async def suggest(payload: SuggestRequest):
 
 
 if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="127.0.0.1", port=8010)
+    run_dev_server(app, service_name="Ollama Suggestion API", env_prefix="OLLAMA_SUGGESTION", default_port=8010)

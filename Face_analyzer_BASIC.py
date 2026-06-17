@@ -6,14 +6,26 @@ import onnxruntime as ort
 import os
 import uuid
 from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import BackgroundTasks, FastAPI, UploadFile, HTTPException, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import RedirectResponse
 import insightface
 from insightface.app import FaceAnalysis as InsightFaceApp
+from dev_server_utils import run_dev_server
 
-app = FastAPI(title="Face Analyzer BASIC")
+
+@asynccontextmanager
+async def _lifespan(_app):
+    yield
+    global _face_mesh
+    if _face_mesh is not None:
+        _face_mesh.close()
+        _face_mesh = None
+
+
+app = FastAPI(title="Face Analyzer BASIC", lifespan=_lifespan)
 
 # 啟用 CORS 允許前端跨來源存取
 app.add_middleware(
@@ -32,6 +44,7 @@ MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "2048"))
 FACE_JOB_TIMEOUT_SECONDS = int(os.getenv("FACE_JOB_TIMEOUT_SECONDS", "180"))
 FACE_JOB_RETENTION_SECONDS = int(os.getenv("FACE_JOB_RETENTION_SECONDS", "3600"))
 FACE_JOB_MAX_COUNT = int(os.getenv("FACE_JOB_MAX_COUNT", "200"))
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://127.0.0.1:5500")
 
 def _get_insight():
     global _insight_app
@@ -61,18 +74,9 @@ def _get_face_mesh():
         )
     return _face_mesh
 
-
-@app.on_event("shutdown")
-def shutdown_event():
-    global _face_mesh
-    if _face_mesh is not None:
-        _face_mesh.close()
-        _face_mesh = None
-
-
-@app.get("/")
-async def read_index():
-    return FileResponse("index.html")
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    return RedirectResponse(url=FRONTEND_URL, status_code=307)
 
 
 @app.get("/health")
@@ -437,7 +441,7 @@ class FaceAnalyzer:
             # 菱形臉也容易被下顎取樣高度影響，改成顴骨與上下寬度差距都很明顯才判。
             if fw_n < 0.78 and jw_n < 0.78 and cheek_to_jaw >= 1.20: return "菱形臉"
             if hw < 1.16: return "圓形臉"
-            if hw >= 1.45: return "長形臉"
+            if hw >= 1.35: return "長形臉"
             if 1.16 <= hw <= 1.45 and jw_n >= 0.76: return "鵝蛋臉"
 
         if hw >= 1.35: return "長形臉"
@@ -462,9 +466,9 @@ class FaceAnalyzer:
         arch_ratio = (left_arch + right_arch) / 2.0
         tail_ratio = (left_tail + right_tail) / 2.0
 
-        if abs(tail_ratio) < 0.045 and arch_ratio < 0.080: return "一字眉"
-        if tail_ratio > 0.105:                             return "落尾眉"
-        if arch_ratio > 0.120 and abs(tail_ratio) < 0.110:  return "彎月眉"
+        if abs(tail_ratio) < 0.060 and arch_ratio < 0.095: return "一字眉"
+        if tail_ratio > 0.100:                            return "落尾眉"
+        if arch_ratio > 0.175 and abs(tail_ratio) < 0.115: return "彎月眉"
         return "標準眉"
 
     def _eye_side_metrics(self, inner_idx, outer_idx, upper_ids, lower_idx, brow_ids):
@@ -672,5 +676,4 @@ class FaceAnalyzer:
 
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8001)
+    run_dev_server(app, service_name="Face Analyzer BASIC", env_prefix="FACE_BASIC", default_port=8001)

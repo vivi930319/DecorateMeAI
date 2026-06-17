@@ -7,6 +7,7 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from Face_analyzer_BASIC import FaceAnalyzer
+from dev_server_utils import run_dev_server
 
 
 app = FastAPI(title="Face Analyzer PRO")
@@ -254,6 +255,4 @@ async def get_pro_job_result(job_id: str):
 
 
 if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="127.0.0.1", port=8002)
+    run_dev_server(app, service_name="Face Analyzer PRO", env_prefix="FACE_PRO", default_port=8002)
