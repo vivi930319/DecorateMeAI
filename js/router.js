@@ -311,13 +311,21 @@ analysis: `
             </div>
         </div>
         <div class="mode-panel" id="proPanel">
-            <div class="pro-upload-grid">
+            <div class="pro-upload-grid pro-two-shot">
                 <div class="pro-slot" data-pro-slot="front"><div class="slot-title">正面照</div><div class="slot-file" id="frontFileName">必填</div><input type="file" id="frontInput" accept="image/*" style="display:none;"></div>
-                <div class="pro-slot" data-pro-slot="left45"><div class="slot-title">左側 45 度</div><div class="slot-file" id="left45FileName">選填</div><input type="file" id="left45Input" accept="image/*" style="display:none;"></div>
-                <div class="pro-slot" data-pro-slot="right45"><div class="slot-title">右側 45 度</div><div class="slot-file" id="right45FileName">選填</div><input type="file" id="right45Input" accept="image/*" style="display:none;"></div>
-                <div class="pro-slot" data-pro-slot="side"><div class="slot-title">側面照</div><div class="slot-file" id="sideFileName">選填</div><input type="file" id="sideInput" accept="image/*" style="display:none;"></div>
+                <div class="pro-slot" data-pro-slot="side"><div class="slot-title">側面照</div><div class="slot-file" id="sideFileName">必填</div><input type="file" id="sideInput" accept="image/*" style="display:none;"></div>
             </div>
-            <div class="mode-note">PRO 掃描版預留：之後會用鏡頭偵測 yaw，自動擷取正面、左右 45 度與側面照；目前先提供檔案上傳版。</div>
+            <div class="pro-scan-panel">
+                <div class="pro-scan-copy"><b>自動掃描拍攝</b><span>看著鏡頭取得正面照，再慢慢轉向側面；系統會依臉部 yaw 角度自動擷取。</span></div>
+                <div class="camera-actions"><button class="btn-outline btn-sm" id="startProScanBtn">開始掃描</button><button class="btn-outline btn-sm" id="stopProScanBtn">停止掃描</button></div>
+                <div class="camera-box" id="proCameraBox">
+                    <video id="proCameraVideo" autoplay playsinline muted></video>
+                    <canvas id="proCameraCanvas" style="display:none;"></canvas>
+                    <div class="scan-progress" id="proScanProgress"><span data-scan-role="front">正面：待擷取</span><span data-scan-role="side">側面：待擷取</span></div>
+                    <div class="scan-hint" id="proScanHint">等待鏡頭啟動</div>
+                </div>
+            </div>
+            <div class="mode-note">45 度多角度採集保留為未來展望；目前 PRO 正式流程採用正面照與單側側面照，降低樣本採集難度。</div>
         </div>
         <img id="preview" alt="preview" style="max-width:100%;margin-top:12px;border:1px solid var(--border);display:none;">
         <div class="loading-bar" id="loadingBar"><div class="fill" id="loadingFill"></div></div>
@@ -399,6 +407,8 @@ const Router = {
     packageImageFiles: {},
     proFiles: { front: null, left45: null, right45: null, side: null },
     cameraStream: null,
+    proCameraStream: null,
+    proScanTimer: null,
     selectedStyleId: null,
     pendingLook: null,
     pendingLookSaved: false,
@@ -424,7 +434,7 @@ const Router = {
             }
             const back = (NAV_ORDER.indexOf(page) > -1 && NAV_ORDER.indexOf(this.currentPage) > -1
                           && NAV_ORDER.indexOf(page) < NAV_ORDER.indexOf(this.currentPage));
-            const res = await fetch(`pages/${page}.html?v=20260616-look-save-rule`, { cache: 'no-store' });
+            const res = await fetch(`pages/${page}.html?v=20260618-pro-side-scan`, { cache: 'no-store' });
             if (!res.ok) throw new Error('Page not found');
             const html = await res.text();
             const mc = document.getElementById('mainContent');
@@ -765,13 +775,120 @@ const PageInit = {
             }, 'image/jpeg', 0.92);
         };
 
+        const setProScanStatus = (role, text, done = false) => {
+            const el = document.querySelector(`[data-scan-role="${role}"]`);
+            if (!el) return;
+            el.textContent = text;
+            el.classList.toggle('done', done);
+        };
+
+        const setProScanHint = (text) => {
+            const hint = document.getElementById('proScanHint');
+            if (hint) hint.textContent = text;
+        };
+
+        const stopProScan = () => {
+            if (Router.proScanTimer) {
+                clearInterval(Router.proScanTimer);
+                Router.proScanTimer = null;
+            }
+            if (Router.proCameraStream) {
+                Router.proCameraStream.getTracks().forEach(track => track.stop());
+                Router.proCameraStream = null;
+            }
+            const box = document.getElementById('proCameraBox');
+            if (box) box.classList.remove('active');
+        };
+
+        const captureProFrameBlob = () => new Promise((resolve, reject) => {
+            const video = document.getElementById('proCameraVideo');
+            if (!Router.proCameraStream || !video || !video.videoWidth) {
+                reject(new Error('鏡頭尚未就緒'));
+                return;
+            }
+            const canvas = document.getElementById('proCameraCanvas');
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('影格擷取失敗')), 'image/jpeg', 0.9);
+        });
+
+        const storeProScanPhoto = (role, blob, pose) => {
+            const file = new File([blob], `pro-${role}-${Date.now()}.jpg`, { type: 'image/jpeg' });
+            Router.proFiles[role] = file;
+            const nameEl = document.getElementById(`${role}FileName`);
+            if (nameEl) nameEl.textContent = role === 'front' ? '已自動擷取正面照' : '已自動擷取側面照';
+            if (role === 'front') {
+                Router.selectedFile = file;
+                showPreview(file);
+            }
+            setProScanStatus(role, `${role === 'front' ? '正面' : '側面'}：已擷取 yaw ${Math.round(pose.yaw || 0)}°`, true);
+            saveDraft('camera-captured');
+        };
+
+        const scanProFrame = async () => {
+            if (Router.proScanBusy) return;
+            if (Router.proFiles.front && Router.proFiles.side) {
+                setProScanHint('正面與側面已完成，可開始 PRO 分析');
+                stopProScan();
+                return;
+            }
+            Router.proScanBusy = true;
+            try {
+                const blob = await captureProFrameBlob();
+                const pose = await Api.detectFacePose(new File([blob], 'pose-frame.jpg', { type: 'image/jpeg' }));
+                const yaw = Number(pose.yaw || 0);
+                const pitch = Number(pose.pitch || 0);
+                setProScanHint(`目前 yaw ${Math.round(yaw)}° / pitch ${Math.round(pitch)}°，請依提示慢慢轉頭`);
+                if (!Router.proFiles.front && Math.abs(yaw) <= 15 && Math.abs(pitch) <= 18) {
+                    storeProScanPhoto('front', blob, pose);
+                    setProScanHint('正面已完成，請慢慢轉向單側側面');
+                } else if (Router.proFiles.front && !Router.proFiles.side && Math.abs(yaw) >= 50) {
+                    storeProScanPhoto('side', blob, pose);
+                    setProScanHint('側面已完成，可開始 PRO 分析');
+                    stopProScan();
+                }
+            } catch (err) {
+                setProScanHint('偵測中：' + err.message);
+            } finally {
+                Router.proScanBusy = false;
+            }
+        };
+
+        const startProScanBtn = document.getElementById('startProScanBtn');
+        if (startProScanBtn) startProScanBtn.onclick = async () => {
+            try {
+                if (Router.analyzeMode !== 'pro') setMode('pro');
+                if (!Router.proCameraStream) {
+                    Router.proCameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+                    const video = document.getElementById('proCameraVideo');
+                    video.srcObject = Router.proCameraStream;
+                    document.getElementById('proCameraBox').classList.add('active');
+                }
+                setProScanStatus('front', Router.proFiles.front ? '正面：已擷取' : '正面：請看鏡頭');
+                setProScanStatus('side', Router.proFiles.side ? '側面：已擷取' : '側面：待擷取');
+                setProScanHint('請先看著鏡頭，系統會自動擷取正面照');
+                if (Router.proScanTimer) clearInterval(Router.proScanTimer);
+                Router.proScanTimer = setInterval(scanProFrame, 900);
+                setTimeout(scanProFrame, 500);
+            } catch (err) {
+                showAlert('無法開啟 PRO 掃描：' + err.message, { type:'error' });
+            }
+        };
+
+        const stopProScanBtn = document.getElementById('stopProScanBtn');
+        if (stopProScanBtn) stopProScanBtn.onclick = () => {
+            stopProScan();
+            setProScanHint('掃描已停止');
+        };
+
         analyzeBtn.onclick = async () => {
             if (Router.analyzeMode === 'basic' && !Router.selectedFile) {
                 showAlert('請先選擇照片或拍照');
                 return;
             }
-            if (Router.analyzeMode === 'pro' && !Router.proFiles.front) {
-                showAlert('PRO 分析至少需要正面照');
+            if (Router.analyzeMode === 'pro' && (!Router.proFiles.front || !Router.proFiles.side)) {
+                showAlert('PRO 分析需要正面照與側面照');
                 return;
             }
             const startedAt = Date.now();

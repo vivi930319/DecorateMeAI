@@ -4,6 +4,7 @@ const ApiConfig = {
         faceBasic: {
             baseUrl: 'http://127.0.0.1:8001',
             analyzePath: '/v1/face/analyze/basic',
+            posePath: '/v1/face/pose',
             jobPath: '/v1/face/jobs/basic',
             jobStatusPath: '/v1/face/jobs/{jobId}',
             jobResultPath: '/v1/face/jobs/{jobId}/result',
@@ -70,6 +71,17 @@ const Api = {
         }
         const data = await res.json();
         return { data, imageMeta: { front: ImagePipeline.metaFromFile(file, 'front') } };
+    },
+
+    async detectFacePose(file) {
+        const fd = new FormData();
+        fd.append('file', file);
+        const res = await fetch(this.config.url('faceBasic', 'posePath'), { method: 'POST', body: fd });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: '角度偵測失敗' }));
+            throw new Error(err.detail?.error?.message || err.detail || '角度偵測失敗');
+        }
+        return res.json();
     },
 
     async analyzeFacePro(files) {

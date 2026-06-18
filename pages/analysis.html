@@ -25,30 +25,39 @@
         </div>
 
         <div class="mode-panel" id="proPanel">
-            <div class="pro-upload-grid">
+            <div class="pro-upload-grid pro-two-shot">
                 <div class="pro-slot" data-pro-slot="front">
                     <div class="slot-title">正面照</div>
                     <div class="slot-file" id="frontFileName">必填</div>
                     <input type="file" id="frontInput" accept="image/*" style="display:none;">
                 </div>
-                <div class="pro-slot" data-pro-slot="left45">
-                    <div class="slot-title">左側 45 度</div>
-                    <div class="slot-file" id="left45FileName">選填</div>
-                    <input type="file" id="left45Input" accept="image/*" style="display:none;">
-                </div>
-                <div class="pro-slot" data-pro-slot="right45">
-                    <div class="slot-title">右側 45 度</div>
-                    <div class="slot-file" id="right45FileName">選填</div>
-                    <input type="file" id="right45Input" accept="image/*" style="display:none;">
-                </div>
                 <div class="pro-slot" data-pro-slot="side">
                     <div class="slot-title">側面照</div>
-                    <div class="slot-file" id="sideFileName">選填</div>
+                    <div class="slot-file" id="sideFileName">必填</div>
                     <input type="file" id="sideInput" accept="image/*" style="display:none;">
                 </div>
             </div>
+            <div class="pro-scan-panel">
+                <div class="pro-scan-copy">
+                    <b>自動掃描拍攝</b>
+                    <span>看著鏡頭取得正面照，再慢慢轉向側面；系統會依臉部 yaw 角度自動擷取。</span>
+                </div>
+                <div class="camera-actions">
+                    <button class="btn-outline btn-sm" id="startProScanBtn">開始掃描</button>
+                    <button class="btn-outline btn-sm" id="stopProScanBtn">停止掃描</button>
+                </div>
+                <div class="camera-box" id="proCameraBox">
+                    <video id="proCameraVideo" autoplay playsinline muted></video>
+                    <canvas id="proCameraCanvas" style="display:none;"></canvas>
+                    <div class="scan-progress" id="proScanProgress">
+                        <span data-scan-role="front">正面：待擷取</span>
+                        <span data-scan-role="side">側面：待擷取</span>
+                    </div>
+                    <div class="scan-hint" id="proScanHint">等待鏡頭啟動</div>
+                </div>
+            </div>
             <div class="mode-note">
-                PRO 掃描版預留：之後會用鏡頭偵測 yaw，自動擷取正面、左右 45 度與側面照；目前先提供檔案上傳版。
+                45 度多角度採集保留為未來展望；目前 PRO 正式流程採用正面照與單側側面照，降低樣本採集難度。
             </div>
         </div>
         <img id="preview" alt="preview" style="max-width:100%;margin-top:12px;border:1px solid var(--border);display:none;">
