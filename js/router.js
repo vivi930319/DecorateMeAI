@@ -312,8 +312,8 @@ analysis: `
         </div>
         <div class="mode-panel" id="proPanel">
             <div class="pro-upload-grid pro-two-shot">
-                <div class="pro-slot" data-pro-slot="front"><div class="slot-title">正面照</div><div class="slot-file" id="frontFileName">必填</div><input type="file" id="frontInput" accept="image/*" style="display:none;"></div>
-                <div class="pro-slot" data-pro-slot="side"><div class="slot-title">側面照</div><div class="slot-file" id="sideFileName">必填</div><input type="file" id="sideInput" accept="image/*" style="display:none;"></div>
+                <div class="pro-slot" data-pro-slot="front"><div class="slot-title">正面照</div><div class="slot-file" id="frontFileName">必填</div><img class="pro-shot-preview" id="frontPreview" alt="正面照預覽"><button class="pro-retake-btn" data-pro-retake="front" type="button">重拍正面</button><input type="file" id="frontInput" accept="image/*" style="display:none;"></div>
+                <div class="pro-slot" data-pro-slot="side"><div class="slot-title">側面照</div><div class="slot-file" id="sideFileName">必填</div><img class="pro-shot-preview" id="sidePreview" alt="側面照預覽"><button class="pro-retake-btn" data-pro-retake="side" type="button">重拍側面</button><input type="file" id="sideInput" accept="image/*" style="display:none;"></div>
             </div>
             <div class="pro-scan-panel">
                 <div class="pro-scan-copy"><b>自動掃描拍攝</b><span>看著鏡頭取得正面照，再慢慢轉向側面；系統會依臉部 yaw 角度自動擷取。</span></div>
@@ -435,7 +435,7 @@ const Router = {
             }
             const back = (NAV_ORDER.indexOf(page) > -1 && NAV_ORDER.indexOf(this.currentPage) > -1
                           && NAV_ORDER.indexOf(page) < NAV_ORDER.indexOf(this.currentPage));
-            const res = await fetch(`pages/${page}.html?v=20260619-pro-scan-fallback`, { cache: 'no-store' });
+            const res = await fetch(`pages/${page}.html?v=20260619-pro-shot-preview`, { cache: 'no-store' });
             if (!res.ok) throw new Error('Page not found');
             const html = await res.text();
             const mc = document.getElementById('mainContent');
@@ -701,6 +701,35 @@ const PageInit = {
             reader.readAsDataURL(file);
         };
 
+        const updateProShotPreview = (role) => {
+            const file = Router.proFiles[role];
+            const slot = document.querySelector(`[data-pro-slot="${role}"]`);
+            const img = document.getElementById(`${role}Preview`);
+            const nameEl = document.getElementById(`${role}FileName`);
+            if (!slot || !img || !nameEl) return;
+            if (img.dataset.objectUrl) {
+                URL.revokeObjectURL(img.dataset.objectUrl);
+                img.dataset.objectUrl = '';
+            }
+            slot.classList.toggle('has-photo', !!file);
+            if (!file) {
+                img.removeAttribute('src');
+                nameEl.textContent = '必填';
+                return;
+            }
+            const url = URL.createObjectURL(file);
+            img.dataset.objectUrl = url;
+            img.src = url;
+        };
+
+        const clearProShot = (role) => {
+            Router.proFiles[role] = null;
+            if (role === 'front') Router.selectedFile = null;
+            updateProShotPreview(role);
+            setProScanStatus(role, role === 'front' ? '正面：待擷取' : '側面：待擷取', false);
+            saveDraft('image-selected');
+        };
+
         const setMode = (mode) => {
             Router.analyzeMode = mode;
             basicModeBtn.classList.toggle('active', mode === 'basic');
@@ -739,7 +768,17 @@ const PageInit = {
                     Router.selectedFile = file;
                     showPreview(file);
                 }
+                updateProShotPreview(key);
                 saveDraft('image-selected');
+            };
+        });
+
+        document.querySelectorAll('[data-pro-retake]').forEach(btn => {
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                const role = btn.dataset.proRetake;
+                clearProShot(role);
+                setProScanHint(role === 'front' ? '已清除正面照，請重新拍正面' : '已清除側面照，請重新拍側面');
             };
         });
 
@@ -826,6 +865,7 @@ const PageInit = {
                 Router.selectedFile = file;
                 showPreview(file);
             }
+            updateProShotPreview(role);
             setProScanStatus(role, auto
                 ? `${role === 'front' ? '正面' : '側面'}：已擷取 yaw ${Math.round(pose.yaw || 0)}°`
                 : `${role === 'front' ? '正面' : '側面'}：已手動擷取`, true);
@@ -878,7 +918,9 @@ const PageInit = {
                 }
                 setProScanStatus('front', Router.proFiles.front ? '正面：已擷取' : '正面：請看鏡頭');
                 setProScanStatus('side', Router.proFiles.side ? '側面：已擷取' : '側面：待擷取');
-                setProScanHint('請先看著鏡頭，系統會自動擷取正面照');
+                setProScanHint(Router.proFiles.front
+                    ? '已保留正面照，請慢慢轉向側面，系統會自動擷取側面照'
+                    : '請先看著鏡頭，系統會自動擷取正面照');
                 if (Router.proScanTimer) clearInterval(Router.proScanTimer);
                 Router.proScanTimer = setInterval(scanProFrame, 900);
                 setTimeout(scanProFrame, 500);
