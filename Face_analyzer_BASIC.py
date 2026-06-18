@@ -137,11 +137,11 @@ def _detect_pose(contents: bytes):
     pitch = float(face.pose[1])
     roll = float(face.pose[2]) if len(face.pose) > 2 else 0.0
     abs_yaw = abs(yaw)
-    if abs_yaw <= 15 and abs(pitch) <= 18:
+    if abs_yaw <= 8 and abs(pitch) <= 12:
         capture_role = "front"
-    elif abs_yaw >= 50:
+    elif abs_yaw >= 10:
         capture_role = "side"
-    elif abs_yaw >= 32:
+    elif abs_yaw >= 6:
         capture_role = "angle45"
     else:
         capture_role = "turning"
@@ -314,7 +314,7 @@ class FaceAnalyzer:
     YAW_LIMIT   = 18.0
     PITCH_LIMIT = 15.0
 
-    def __init__(self, image_input):
+    def __init__(self, image_input, strict_angle=True):
         if isinstance(image_input, str):
             self.frame = cv2.imdecode(np.fromfile(image_input, dtype=np.uint8), cv2.IMREAD_COLOR)
         elif isinstance(image_input, bytes):
@@ -347,7 +347,7 @@ class FaceAnalyzer:
 
         face = max(faces, key=lambda f: f.det_score)
 
-        if hasattr(face, "pose") and face.pose is not None:
+        if strict_angle and hasattr(face, "pose") and face.pose is not None:
             yaw, pitch = float(face.pose[0]), float(face.pose[1])
             if abs(yaw) > self.YAW_LIMIT or abs(pitch) > self.PITCH_LIMIT:
                 raise ValueError(f"請上傳正面照片（偏角：yaw={yaw:.1f}°, pitch={pitch:.1f}°）")
@@ -710,6 +710,42 @@ class FaceAnalyzer:
         shade_label, L, a, b = self._classify_shade_12grid(lab, combined_mask)
         return lip_L, lip_a, lip_b, season, shade_label, L, a, b
 
+    def get_face_symmetry(self):
+        """
+        用 MediaPipe landmarks 計算臉部左右對稱分數（0-100，100 = 完全對稱）。
+        測量三項指標：雙眼開合比、鼻尖偏移、嘴角對稱。
+        """
+        try:
+            fl = self._pt(234)   # 左臉邊緣
+            fr = self._pt(454)   # 右臉邊緣
+            fw = float(fr[0] - fl[0])
+            if fw <= 0:
+                return None
+            mid_x = (float(fl[0]) + float(fr[0])) / 2.0
+
+            # 鼻尖偏移（相對臉寬）
+            nose_dev = min(1.0, abs(float(self._pt(4)[0]) - mid_x) / fw * 4)
+
+            # 雙眼開合高度比
+            lh = abs(float(self._pt(159)[1]) - float(self._pt(145)[1]))  # 左眼
+            rh = abs(float(self._pt(386)[1]) - float(self._pt(374)[1]))  # 右眼
+            eye_ratio = min(lh, rh) / max(lh, rh) if max(lh, rh) > 0 else 1.0
+
+            # 嘴角對稱性
+            ml_dist = abs(float(self._pt(61)[0]) - mid_x)
+            mr_dist = abs(float(self._pt(291)[0]) - mid_x)
+            mouth_sym = min(ml_dist, mr_dist) / max(ml_dist, mr_dist) if max(ml_dist, mr_dist) > 0 else 1.0
+
+            score = int(round(eye_ratio * 50 + (1.0 - nose_dev) * 30 + mouth_sym * 20))
+            return {
+                "score": max(0, min(100, score)),
+                "eyeOpenRatio": round(eye_ratio, 3),
+                "noseDeviation": round(abs(float(self._pt(4)[0]) - mid_x) / fw, 3),
+                "mouthSymmetry": round(mouth_sym, 3),
+            }
+        except Exception:
+            return None
+
     def export_json(self, save_path=None):
         lip_L, lip_a, lip_b, season, shade_label, L, a, b = self.get_skin_color()
         result = {
@@ -725,6 +761,7 @@ class FaceAnalyzer:
                 "LAB": {"L": float(round(L,2)), "a": float(round(a,2)), "b": float(round(b,2))},
             },
             "嘴唇_LAB": {"L": float(lip_L), "a": float(lip_a), "b": float(lip_b)},
+            "臉部對稱性": self.get_face_symmetry(),
         }
         if save_path:
             with open(save_path, "w", encoding="utf-8") as f:

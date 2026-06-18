@@ -32,17 +32,63 @@ async def _read_image(file: UploadFile, label: str) -> bytes:
     return contents
 
 
-def _merge_basic_and_pro(front_result, side_available=False):
+def _analyze_side_supplementary(side_bytes: bytes) -> dict | None:
+    """
+    對側面照（約 10° yaw）做輔助分析：膚色、對稱性確認。
+    使用 strict_angle=False 跳過正面角度驗證。
+    失敗時靜默回傳 None，不中斷主流程。
+    """
+    try:
+        analyzer = FaceAnalyzer(side_bytes, strict_angle=False)
+        lip_L, lip_a, lip_b, season, shade_label, L, a, b = analyzer.get_skin_color()
+        return {
+            "膚色": {
+                "四季型": season,
+                "膚色分級": shade_label,
+                "LAB": {
+                    "L": float(round(L, 2)),
+                    "a": float(round(a, 2)),
+                    "b": float(round(b, 2)),
+                },
+            },
+        }
+    except Exception:
+        return None
+
+
+def _merge_basic_and_pro(front_result: dict, side_result: dict | None = None) -> dict:
     result = dict(front_result)
     result["分析版本"] = "PRO"
+
+    side_available = side_result is not None
+
+    # 側面照膚色成功分析時，與正面取平均以減少光線誤差
+    if side_available:
+        fs = front_result.get("膚色", {})
+        ss = side_result.get("膚色", {})
+        fl = fs.get("LAB", {})
+        sl = ss.get("LAB", {})
+        if fl and sl and all(k in fl and k in sl for k in ("L", "a", "b")):
+            avg_lab = {
+                "L": round((fl["L"] + sl["L"]) / 2, 2),
+                "a": round((fl["a"] + sl["a"]) / 2, 2),
+                "b": round((fl["b"] + sl["b"]) / 2, 2),
+            }
+            result["膚色"] = {**fs, "LAB": avg_lab, "LAB來源": "正面+側面平均"}
+
+    has_symmetry = bool(front_result.get("臉部對稱性"))
     result["精細分析狀態"] = {
-        "多角度照片": "已接收" if side_available else "未提供完整側面角度",
-        "鼻型精細分類": "待實作",
-        "臉型精細分類": "待實作",
+        "多角度照片": "已接收，膚色已雙角度平均" if side_available else "未提供側面照",
+        "臉部對稱性": "已計算" if has_symmetry else "無法計算",
+        "鼻型精細分類": (
+            "需 70-90° 側面輪廓照才能分類翹鼻／鷹鉤鼻／塌鼻，"
+            "目前側面角度（約 10°）不足，保留為未來展望"
+        ),
     }
     result["精細分析備註"] = (
-        "PRO 正式流程採正面照 + 單側側面照，降低資料採集成本；"
-        "45度多角度採集保留為未來展望。鷹勾鼻、塌鼻、朝天鼻、翹鼻等側面特徵需等側面特徵演算法完成後再啟用。"
+        "PRO 流程採正面照 + 單側側面照。"
+        "側面照目前約 10° yaw，用於膚色雙角度平均與對稱性輔助；"
+        "側面鼻型等深度特徵需 70-90° 輪廓照，保留為未來展望。"
     )
     return result
 
@@ -118,11 +164,15 @@ def _job_view(job):
 
 def _run_pro_job(job_id, front_bytes, angle_bytes):
     job = _jobs[job_id]
-    job.update({"status": "processing", "stage": "face_analysis", "progress": 35, "startedAt": _now_iso()})
+    job.update({"status": "processing", "stage": "front_analysis", "progress": 30, "startedAt": _now_iso()})
     try:
         front_result = FaceAnalyzer(front_bytes).export_json()
-        side_available = any(angle_bytes.values())
-        result = _merge_basic_and_pro(front_result, side_available=side_available)
+
+        job.update({"stage": "side_analysis", "progress": 65})
+        side_bytes = angle_bytes.get("side")
+        side_result = _analyze_side_supplementary(side_bytes) if side_bytes else None
+
+        result = _merge_basic_and_pro(front_result, side_result=side_result)
         job.update({
             "status": "completed",
             "stage": "done",
@@ -180,14 +230,20 @@ async def analyze_pro(
         front_bytes = await _read_image(front, "正面")
         front_result = FaceAnalyzer(front_bytes).export_json()
 
-        side_available = False
-        for label, upload in (("左45度", left45), ("右45度", right45), ("側面", side)):
+        side_bytes = None
+        for label, role, upload in (
+            ("左45度", "left45", left45),
+            ("右45度", "right45", right45),
+            ("側面", "side", side),
+        ):
             if upload is None:
                 continue
-            await _read_image(upload, label)
-            side_available = True
+            b = await _read_image(upload, label)
+            if role == "side" and side_bytes is None:
+                side_bytes = b
 
-        return _merge_basic_and_pro(front_result, side_available=side_available)
+        side_result = _analyze_side_supplementary(side_bytes) if side_bytes else None
+        return _merge_basic_and_pro(front_result, side_result=side_result)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
