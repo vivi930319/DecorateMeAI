@@ -114,6 +114,63 @@ async def analyze(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _detect_pose(contents: bytes):
+    frame = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        raise FileNotFoundError("圖片讀取失敗")
+
+    h0, w0 = frame.shape[:2]
+    scale = MAX_IMAGE_SIZE / max(h0, w0)
+    if scale < 1:
+        frame = cv2.resize(frame, (int(w0 * scale), int(h0 * scale)), interpolation=cv2.INTER_AREA)
+
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    faces = _get_insight().get(rgb)
+    if not faces:
+        raise ValueError("沒偵測到人臉")
+
+    face = max(faces, key=lambda f: f.det_score)
+    if not hasattr(face, "pose") or face.pose is None:
+        raise ValueError("無法取得臉部角度")
+
+    yaw = float(face.pose[0])
+    pitch = float(face.pose[1])
+    roll = float(face.pose[2]) if len(face.pose) > 2 else 0.0
+    abs_yaw = abs(yaw)
+    if abs_yaw <= 15 and abs(pitch) <= 18:
+        capture_role = "front"
+    elif abs_yaw >= 50:
+        capture_role = "side"
+    elif abs_yaw >= 32:
+        capture_role = "angle45"
+    else:
+        capture_role = "turning"
+
+    return {
+        "yaw": round(yaw, 2),
+        "pitch": round(pitch, 2),
+        "roll": round(roll, 2),
+        "captureRole": capture_role,
+        "side": "left" if yaw < 0 else "right",
+        "confidence": round(float(face.det_score), 4),
+    }
+
+
+@app.post("/v1/face/pose")
+async def detect_pose(file: UploadFile = File(...)):
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="上傳檔案是空的")
+    try:
+        return _detect_pose(contents)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 

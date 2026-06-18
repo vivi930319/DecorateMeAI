@@ -41,8 +41,8 @@ def _merge_basic_and_pro(front_result, side_available=False):
         "臉型精細分類": "待實作",
     }
     result["精細分析備註"] = (
-        "PRO 目前先保留多角度檔案上傳入口；"
-        "鷹勾鼻、塌鼻、朝天鼻、翹鼻等側面特徵需等側面/45度特徵演算法完成後再啟用。"
+        "PRO 正式流程採正面照 + 單側側面照，降低資料採集成本；"
+        "45度多角度採集保留為未來展望。鷹勾鼻、塌鼻、朝天鼻、翹鼻等側面特徵需等側面特徵演算法完成後再啟用。"
     )
     return result
 
@@ -168,11 +168,12 @@ async def analyze_pro(
 
     目前可用流程：
     - front：必填正面照，先沿用 BASIC 的穩定分析。
-    - left45/right45/side：先預留欄位，讓前端可以上傳多角度照片。
+    - side：正式 PRO 流程的必填側面照，用於未來側臉輪廓與鼻型精細分類。
+    - left45/right45：保留欄位，作為未來 45 度多角度採集展望。
 
     掃描版預留：
     - 未來前端使用 getUserMedia 開鏡頭。
-    - 依 yaw 自動擷取 front / left45 / right45 / side。
+    - 依 yaw 自動擷取 front / side。
     - 擷取完成後仍送到這個 API，避免掃描版和檔案上傳版後端邏輯分裂。
     """
     try:
