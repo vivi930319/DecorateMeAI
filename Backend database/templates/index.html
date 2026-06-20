@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}首頁 | Empower Beauty{% endblock %}
+
+{% block content %}
+<div class="container py-5 text-center d-flex flex-column justify-content-center" style="min-height: 60vh;">
+    <div class="row justify-content-center">
+        <div class="col-md-8 col-lg-6">
+            <div class="card shadow-sm border-0" style="border-radius: 15px;">
+                <div class="card-body p-5">
+                    <h1 class="display-5 mb-3" style="color: var(--primary-pink); font-family: 'Cormorant Garamond', serif; font-weight: 600;">
+                        Empower Beauty
+                    </h1>
+                    <p class="fs-5 text-muted mb-5">妝識你的美，發現最自信的自己。</p>
+
+                    {% if current_user.is_authenticated %}
+                        <h4 class="mb-4">歡迎回來，<strong style="color: var(--text-dark);">{{ current_user.name }}</strong>！</h4>
+                        <div class="d-grid gap-3 d-sm-flex justify-content-sm-center">
+                            <a href="{{ url_for('products_page') }}" class="btn btn-primary px-4 rounded-pill">
+                                開始逛逛商品
+                            </a>
+                            <a href="{{ url_for('profile') }}" class="btn btn-outline-primary px-4 rounded-pill" style="border-color: var(--primary-pink); color: var(--primary-pink);">
+                                進入會員中心
+                            </a>
+                        </div>
+                    {% else %}
+                        <p class="mb-4" style="color: var(--text-dark);">請登入或註冊以開始您的專屬美妝體驗。</p>
+                        <div class="d-grid gap-3 d-sm-flex justify-content-sm-center">
+                            <a href="{{ url_for('login') }}" class="btn btn-primary px-5 rounded-pill">
+                                登入
+                            </a>
+                            <a href="{{ url_for('register') }}" class="btn btn-outline-primary px-5 rounded-pill" style="border-color: var(--primary-pink); color: var(--primary-pink);">
+                                註冊帳號
+                            </a>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,5 +1,6 @@
 from extensions import db, bcrypt
 from flask_login import UserMixin
+from sqlalchemy.dialects.postgresql import JSONB
 
 
 # 會員資料，主要目的是儲存和管理所有使用者或會員的身份信息、認證憑證以及其在系統中的等級屬性，裡面包括了提供每位會員的唯一識別碼（透過 phone_number 欄位）、安全加密後的密
@@ -45,7 +46,7 @@ class Products(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
     price = db.Column(db.Numeric(10, 2), nullable=False)
-    image_url = db.Column(db.String(255), nullable=False)
+    image_url = db.Column(db.String(500), nullable=False)
     description = db.Column(db.Text)
     favorite_count = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
@@ -95,18 +96,22 @@ class ColorPalettes(db.Model):
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
 
-# 爬蟲資料新增的 8 個彩妝分類資料表
+# ========================================================
+# 爬蟲資料新增的 8 個彩妝分類資料表 (完全對齊同學的資料庫格式)
+# ========================================================
 
 class Blushes(db.Model):
     __tablename__ = 'blushes'
     id = db.Column(db.Integer, primary_key=True)
     brand = db.Column(db.String(100))
     sale_page_id = db.Column(db.String(50))
-    name = db.Column(db.String(255))
-    price = db.Column(db.Numeric(10, 2))
+    name = db.Column(db.Text)
+    price = db.Column(db.Integer)
     description = db.Column(db.Text)
-    image_data = db.Column(db.Text)
-    lab = db.Column(db.Text)
+    image_webp_url = db.Column(db.String(500))
+    lab = db.Column(JSONB)
+    color_vector = db.Column(JSONB)
+    hex_primary = db.Column(db.String(10))
     created_at = db.Column(db.DateTime)
 
 class Contouring(db.Model):
@@ -114,24 +119,26 @@ class Contouring(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     brand = db.Column(db.String(100))
     sale_page_id = db.Column(db.String(50))
-    name = db.Column(db.String(255))
-    price = db.Column(db.Numeric(10, 2))
+    name = db.Column(db.Text)
+    price = db.Column(db.Integer)
     description = db.Column(db.Text)
-    image_data = db.Column(db.Text)
-    lab = db.Column(db.Text)
-    #created_at = db.Column(db.DateTime)
+    image_webp_url = db.Column(db.String(500))
+    lab = db.Column(JSONB)
+    color_vector = db.Column(JSONB)
+    hex_primary = db.Column(db.String(10))
 
 class Eyebrows(db.Model):
     __tablename__ = 'eyebrows'
     id = db.Column(db.Integer, primary_key=True)
     brand = db.Column(db.String(100))
     sale_page_id = db.Column(db.String(50))
-    category_name = db.Column(db.String(100))
-    name = db.Column(db.String(255))
-    price = db.Column(db.Numeric(10, 2))
+    name = db.Column(db.Text)
+    price = db.Column(db.Integer)
     description = db.Column(db.Text)
-    image_data = db.Column(db.Text)
-    lab = db.Column(db.Text)
+    image_webp_url = db.Column(db.String(500))
+    lab = db.Column(JSONB)
+    color_vector = db.Column(JSONB)
+    hex_primary = db.Column(db.String(10))
     created_at = db.Column(db.DateTime)
 
 class EyelinerMascara(db.Model):
@@ -139,12 +146,13 @@ class EyelinerMascara(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     brand = db.Column(db.String(100))
     sale_page_id = db.Column(db.String(50))
-    category_name = db.Column(db.String(100))
-    name = db.Column(db.String(255))
-    price = db.Column(db.Numeric(10, 2))
+    name = db.Column(db.Text)
+    price = db.Column(db.Integer)
     description = db.Column(db.Text)
-    image_data = db.Column(db.Text)
-    lab = db.Column(db.Text)
+    image_webp_url = db.Column(db.String(500))
+    lab = db.Column(JSONB)
+    color_vector = db.Column(JSONB)
+    hex_primary = db.Column(db.String(10))
     created_at = db.Column(db.DateTime)
 
 class Eyeshadows(db.Model):
@@ -152,23 +160,26 @@ class Eyeshadows(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     brand = db.Column(db.String(100))
     sale_page_id = db.Column(db.String(50))
-    name = db.Column(db.String(255))
-    price = db.Column(db.Numeric(10, 2))
+    name = db.Column(db.Text)
+    price = db.Column(db.Integer)
     description = db.Column(db.Text)
-    image_data = db.Column(db.Text)
-    lab = db.Column(db.Text)
+    image_webp_url = db.Column(db.String(500))
+    lab = db.Column(JSONB)
+    color_vector = db.Column(JSONB)
+    hex_primary = db.Column(db.String(10))
     created_at = db.Column(db.DateTime)
+
 
 class Foundations(db.Model):
     __tablename__ = 'foundations'
     id = db.Column(db.Integer, primary_key=True)
     brand = db.Column(db.String(100))
-    name = db.Column(db.String(255))
+    name = db.Column(db.Text)
     shade_name = db.Column(db.String(100))
-    price = db.Column(db.Numeric(10, 2))
+    price = db.Column(db.Integer)
     description = db.Column(db.Text)
-    image_data = db.Column(db.Text)
-    lab = db.Column(db.Text)
+    image_url = db.Column(db.String(500))
+    lab = db.Column(JSONB)
     created_at = db.Column(db.DateTime)
 
 class Highlighters(db.Model):
@@ -176,11 +187,13 @@ class Highlighters(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     brand = db.Column(db.String(100))
     sale_page_id = db.Column(db.String(50))
-    name = db.Column(db.String(255))
-    price = db.Column(db.Numeric(10, 2))
+    name = db.Column(db.Text)
+    price = db.Column(db.Integer)
     description = db.Column(db.Text)
-    image_data = db.Column(db.Text)
-    lab = db.Column(db.Text)
+    image_webp_url = db.Column(db.String(500))
+    lab = db.Column(JSONB)
+    color_vector = db.Column(JSONB)
+    hex_primary = db.Column(db.String(10))
     created_at = db.Column(db.DateTime)
 
 class Lipsticks(db.Model):
@@ -190,7 +203,20 @@ class Lipsticks(db.Model):
     product_name = db.Column(db.String(255))
     price = db.Column(db.Numeric(10, 2))
     description = db.Column(db.Text)
-    image_data = db.Column(db.Text)
+    image_url = db.Column(db.String(500))
     lab_json = db.Column(db.Text)
-    created_at = db.Column(db.DateTime)
     shade_name = db.Column(db.String(100))
+    created_at = db.Column(db.DateTime)
+
+class TryonRecords(db.Model):
+    __tablename__ = 'tryon_records'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    member_id = db.Column(db.String(20), db.ForeignKey('members.phone_number'), nullable=False)
+
+    item_id = db.Column(db.Integer, nullable=False)
+    item_type = db.Column(db.String(50), nullable=False)
+
+    original_image_url = db.Column(db.String(500), nullable=False)
+    generated_image_url = db.Column(db.String(500), nullable=False)
+    created_at = db.Column(db.DateTime, server_default=db.func.now())

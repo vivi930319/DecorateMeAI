@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block title %}上傳試妝測試 | Empower Beauty{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-8 col-lg-6">
+            <div class="card shadow-sm border-0" style="border-radius: 15px;">
+                <div class="card-body p-5">
+                    <h3 class="mb-4 text-center" style="color: var(--primary-pink); font-family: 'Cormorant Garamond', serif; font-weight: 600;">
+                        上傳試妝照片 (測試)
+                    </h3>
+
+                    <form method="POST" action="{{ url_for('test_upload') }}" enctype="multipart/form-data">
+
+                        <div class="mb-4">
+                            <label for="original_image" class="form-label">上傳 Before (妝前) 照片</label>
+                            <input class="form-control" type="file" id="original_image" name="original_image" accept="image/*" required>
+                        </div>
+
+                        <div class="mb-4">
+                            <label for="generated_image" class="form-label">上傳 After (妝後) 照片</label>
+                            <input class="form-control" type="file" id="generated_image" name="generated_image" accept="image/*" required>
+                        </div>
+
+                        <div class="d-grid mt-5">
+                            <button type="submit" class="btn btn-primary rounded-pill py-2">確認上傳並查看紀錄</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

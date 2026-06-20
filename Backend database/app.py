@@ -3,6 +3,7 @@ from flask import Flask, url_for, flash, redirect, request, render_template, jso
 from flask_cors import CORS
 from flask_login import login_user, current_user, logout_user, login_required
 from sqlalchemy.exc import IntegrityError
+from werkzeug.utils import secure_filename
 import config
 import os
 from dotenv import load_dotenv
@@ -14,7 +15,7 @@ from extensions import db, bcrypt, login_manager
 from models import (
     Members, Products, Favorites, ColorPalettes, Checkin,
     Blushes, Contouring, Eyebrows, EyelinerMascara,
-    Eyeshadows, Foundations, Highlighters, Lipsticks
+    Eyeshadows, Foundations, Highlighters, Lipsticks, TryonRecords
 )
 from forms import (
     RegistrationForm, LoginForm, ChangePasswordForm,
@@ -24,18 +25,20 @@ from otp_utils import generate_otp, redis_key, send_otp_email, attempt_key
 
 load_dotenv()
 
-
-#app.py 是整個 Flask 應用程式的主程式和入口點，負責設定環境、連接資料庫、定義網頁路徑（路由），以及處理所有的使用者互動邏輯（註冊、登入）
+# app.py 是整個 Flask 應用程式的主程式和入口點，負責設定環境、連接資料庫、定義網頁路徑（路由），以及處理所有的使用者互動邏輯（註冊、登入）
 app = Flask(__name__)
 CORS(app)
-#從config.py 檔案中載入所有設定，和資料庫的連線資訊 (SQLALCHEMY_DATABASE_URI)
+# 從config.py 檔案中載入所有設定，和資料庫的連線資訊 (SQLALCHEMY_DATABASE_URI)
 app.config.from_object(config)
-#設定一個秘密金鑰，這是 Flask 用於保護網站安全
+# 設定一個秘密金鑰，這是 Flask 用於保護網站安全
 app.config['SECRET_KEY'] = config.SECRET_KEY
 db.init_app(app)
 bcrypt.init_app(app)
 login_manager.init_app(app)
 redis_url = os.getenv("REDIS_URL")
+UPLOAD_FOLDER = os.path.join('static', 'uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 if redis_url:
     r = redis.from_url(redis_url, decode_responses=True)
 else:
@@ -47,8 +50,7 @@ else:
     )
 OTP_EXPIRE = int(os.getenv("OTP_EXPIRE_SECONDS", 300))
 
-
-#2. Flask-Login 會員管理，這部分是應用程式實現誰已登入的狀態
+# 2. Flask-Login 會員管理，這部分是應用程式實現誰已登入的狀態
 login_manager.login_view = 'login'
 login_manager.login_message_category = 'info'
 
@@ -61,10 +63,7 @@ def load_user(user_id):
 
 @app.route('/')
 def index():
-    # 為了測試方便，顯示當前登入狀態
-    if current_user.is_authenticated:
-        return f"歡迎回來，{current_user.name}！<p><a href='{url_for('logout')}'>登出</a> | <a href='{url_for('profile')}'>會員中心</a></p>"
-    return f"Flask MySQL 應用程式已啟動。<p><a href='{url_for('register')}'>註冊</a> | <a href='{url_for('login')}'>登入</a></p>"
+    return render_template('index.html')
 
 
 @app.route('/healthz')
@@ -241,6 +240,7 @@ def change_password():
     # 需要 change_password.html 模板
     return render_template('change_password.html', title='更改密碼', form=form)
 
+
 # ── OTP 路由 ──
 @app.route("/api/send-otp", methods=["POST"])
 def send_otp():
@@ -265,6 +265,7 @@ def send_otp():
         except RedisError:
             pass
         return jsonify({"error": str(e)}), 500
+
 
 @app.route("/api/verify-otp", methods=["POST"])
 def verify_otp():
@@ -293,7 +294,8 @@ def verify_otp():
     except RedisError:
         return jsonify({"success": False, "error": "OTP 服務暫時不可用"}), 503
 
-#我的最愛清單-點擊收藏 (新增/刪除）
+
+# 我的最愛清單-點擊收藏 (新增/刪除）
 @app.route('/api/favorites/toggle', methods=['POST'])
 @login_required
 def toggle_favorite():
@@ -345,18 +347,19 @@ def get_user_favorites(phone):
             if item:
                 name = getattr(item, 'name', getattr(item, 'product_name', '未知商品'))
                 price = float(item.price) if getattr(item, 'price', None) else 0.0
-                image = getattr(item, 'image_data', getattr(item, 'image_url', ''))
+                image = getattr(item, 'image_url', '')
 
                 product_list.append({
                     "id": f.item_id,
                     "type": f.item_type,
                     "name": name,
                     "price": price,
-                    "image_data": image,
+                    "image_url": image,
                     "description": getattr(item, 'description', '暫無描述')
                 })
 
     return jsonify({"favorites": product_list})
+
 
 # 會員簽到，對應資料庫 sp_member_checkin
 @app.route('/api/checkins', methods=['POST'])
@@ -383,6 +386,43 @@ def add_checkin():
     })
 
 
+# 試妝紀錄存檔
+@app.route('/api/tryon/save', methods=['POST'])
+@login_required
+def save_tryon_record():
+    data = request.get_json(silent=True) or {}
+
+    i_id = data.get('item_id')
+    i_type = data.get('item_type')
+    orig_img = data.get('original_image_url')
+    gen_img = data.get('generated_image_url')
+
+    if not all([i_id, i_type, orig_img, gen_img]):
+        return jsonify({"status": "error", "message": "缺少必要參數（商品ID、分類、或圖片網址）"}), 400
+
+    try:
+        new_record = TryonRecords(
+            member_id=current_user.phone_number,
+            item_id=i_id,
+            item_type=i_type,
+            original_image_url=orig_img,
+            generated_image_url=gen_img
+        )
+        db.session.add(new_record)
+        db.session.commit()
+        return jsonify({"status": "success", "message": "試妝紀錄保存成功！"}), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"status": "error", "message": f"存檔失敗：{str(e)}"}), 500
+
+
+@app.route('/tryon-history')
+@login_required
+def tryon_history():
+    records = TryonRecords.query.filter_by(member_id=current_user.phone_number).order_by(TryonRecords.created_at.desc()).all()
+    return render_template('history.html', title='我的試妝紀錄', records=records)
+
+
 # 登出功能
 @app.route("/logout")
 def logout():
@@ -395,7 +435,7 @@ def logout():
 @app.route("/profile")
 @login_required
 def profile():
-    return f"歡迎來到會員中心，{current_user.name}！您的電話號碼是 {current_user.phone_number}，等級是 {current_user.level}。"
+    return render_template('profile.html', title='會員中心')
 
 
 # 新增 API 路由給 Swift 使用
@@ -414,6 +454,7 @@ def get_members_api():
             "email": m.email
         })
     return jsonify({"members": member_list})
+
 
 @app.route('/api/members/<phone>/stats', methods=['GET'])
 def get_member_stats(phone):
@@ -440,6 +481,7 @@ def get_member_stats(phone):
         }
     })
 
+
 @app.route('/api/products', methods=['GET'])
 def get_products_api():
     products = Products.query.all()
@@ -455,6 +497,7 @@ def get_products_api():
             } for p in products
         ]
     })
+
 
 @app.route('/api/login', methods=['POST'])
 def api_login():
@@ -481,14 +524,15 @@ def api_login():
         }
     })
 
+
 @app.route('/api/register', methods=['POST'])
 def api_register():
     data = request.get_json(silent=True) or {}
-    phone    = data.get('phone_number', '').strip()
-    name     = data.get('name', '').strip()
-    email    = data.get('email', '').strip().lower()
+    phone = data.get('phone_number', '').strip()
+    name = data.get('name', '').strip()
+    email = data.get('email', '').strip().lower()
     password = data.get('password', '')
-    age      = data.get('age')
+    age = data.get('age')
 
     if not all([phone, name, email, password, age]):
         return jsonify({"message": "所有欄位皆為必填"}), 400
@@ -521,7 +565,6 @@ def api_register():
     except Exception as e:
         db.session.rollback()
         return jsonify({"message": f"註冊失敗：{e}"}), 500
-
 
 
 @app.route('/api/colors', methods=['GET'])
@@ -565,52 +608,6 @@ def find_makeup_category(category_type):
     return None
 
 
-def guess_image_mime_from_base64(data):
-    if data.startswith("/9j/"):
-        return "image/jpeg"
-    if data.startswith("iVBOR"):
-        return "image/png"
-    if data.startswith("R0lG"):
-        return "image/gif"
-    if data.startswith("UklGR"):
-        return "image/webp"
-    return "image/jpeg"
-
-
-def guess_image_mime_from_bytes(data):
-    if data.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if data.startswith(b"\x89PNG"):
-        return "image/png"
-    if data.startswith(b"GIF"):
-        return "image/gif"
-    if data.startswith(b"RIFF"):
-        return "image/webp"
-    return "image/jpeg"
-
-
-def image_src(data):
-    if not data:
-        return ""
-
-    if isinstance(data, bytes):
-        mime = guess_image_mime_from_bytes(data)
-        encoded = base64.b64encode(data).decode("utf-8")
-        return f"data:{mime};base64,{encoded}"
-
-    value = str(data).strip()
-    if not value:
-        return ""
-    if value.startswith(("http://", "https://", "data:", "/")):
-        return value
-    if value.startswith("//"):
-        return f"https:{value}"
-
-    compact_value = "".join(value.split())
-    mime = guess_image_mime_from_base64(compact_value)
-    return f"data:{mime};base64,{compact_value}"
-
-
 def display_price(value):
     if value is None:
         return "NT$0"
@@ -628,9 +625,9 @@ def product_card_payload(item, category_type):
         "name": getattr(item, "product_name", None) or getattr(item, "name", "未命名商品"),
         "price": display_price(getattr(item, "price", None)),
         "description": getattr(item, "description", "") or "暫無描述",
-        "image_src": image_src(getattr(item, "image_data", "")),
+        "image_src": getattr(item, "image_url",
+                             getattr(item, "image_webp_url", "https://via.placeholder.com/300x300.png?text=No+Image")),
         "shade_name": getattr(item, "shade_name", "") or "",
-        "category_name": getattr(item, "category_name", "") or "",
         "sale_page_id": getattr(item, "sale_page_id", "") or "",
     }
 
@@ -661,14 +658,8 @@ def products_page(category_type='lipsticks'):
     )
 
 
-def decode_image(data):
-    #將資料庫的 BLOB 圖片轉為前端可用的 Base64 字串
-    if isinstance(data, bytes):
-        return base64.b64encode(data).decode('utf-8')
-    return data
-
 def decode_text(data):
-    #將資料庫的二進位文字解碼為一般字串
+    # 將資料庫的二進位文字解碼為一般字串
     if isinstance(data, bytes):
         try:
             return data.decode('utf-8')
@@ -676,11 +667,13 @@ def decode_text(data):
             return ""
     return data
 
+
 @app.route('/api/products/all', methods=['GET'])
 def get_all_makeup_categories():
     return jsonify({
         "categories": [category_payload(category) for category in MAKEUP_CATEGORIES]
     })
+
 
 @app.route('/api/lipsticks', methods=['GET'])
 def get_lipsticks():
@@ -689,10 +682,11 @@ def get_lipsticks():
         "id": i.id, "type": "lipsticks", "brand": getattr(i, 'brand', ''),
         "name": getattr(i, 'product_name', ''),
         "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
-        "image_data": decode_image(i.image_data),
+        "image_url": getattr(i, 'image_url', ''),  # 👈 改回 image_url
         "lab_json": decode_text(getattr(i, 'lab_json', '')),
         "shade_name": getattr(i, 'shade_name', '')
     } for i in items]})
+
 
 @app.route('/api/foundations', methods=['GET'])
 def get_foundations():
@@ -701,10 +695,11 @@ def get_foundations():
         "id": i.id, "type": "foundations", "brand": getattr(i, 'brand', ''),
         "name": i.name,
         "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
-        "image_data": decode_image(i.image_data),
+        "image_url": getattr(i, 'image_url', ''),
         "lab_json": decode_text(getattr(i, 'lab', '')),
         "shade_name": getattr(i, 'shade_name', '')
     } for i in items]})
+
 
 @app.route('/api/blushes', methods=['GET'])
 def get_blushes():
@@ -713,10 +708,11 @@ def get_blushes():
         "id": i.id, "type": "blushes", "brand": getattr(i, 'brand', ''),
         "name": i.name,
         "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
-        "image_data": decode_image(i.image_data),
+        "image_url": getattr(i, 'image_webp_url', ''),
         "lab_json": decode_text(getattr(i, 'lab', '')),
         "sale_page_id": getattr(i, 'sale_page_id', '')
     } for i in items]})
+
 
 @app.route('/api/eyeshadows', methods=['GET'])
 def get_eyeshadows():
@@ -725,10 +721,11 @@ def get_eyeshadows():
         "id": i.id, "type": "eyeshadows", "brand": getattr(i, 'brand', ''),
         "name": i.name,
         "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
-        "image_data": decode_image(i.image_data),
+        "image_url": getattr(i, 'image_webp_url', ''),
         "lab_json": decode_text(getattr(i, 'lab', '')),
         "sale_page_id": getattr(i, 'sale_page_id', '')
     } for i in items]})
+
 
 @app.route('/api/eyeliner_mascara', methods=['GET'])
 def get_eyeliner_mascara():
@@ -738,10 +735,11 @@ def get_eyeliner_mascara():
         "name": i.name,
         "category_name": getattr(i, 'category_name', ''),
         "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
-        "image_data": decode_image(i.image_data),
+        "image_url": getattr(i, 'image_webp_url', ''),
         "lab_json": decode_text(getattr(i, 'lab', '')),
         "sale_page_id": getattr(i, 'sale_page_id', '')
     } for i in items]})
+
 
 @app.route('/api/contouring', methods=['GET'])
 def get_contouring():
@@ -750,10 +748,11 @@ def get_contouring():
         "id": i.id, "type": "contouring", "brand": getattr(i, 'brand', ''),
         "name": i.name,
         "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
-        "image_data": decode_image(i.image_data),
+        "image_url": getattr(i, 'image_webp_url', ''),
         "lab_json": decode_text(getattr(i, 'lab', '')),
         "sale_page_id": getattr(i, 'sale_page_id', '')
     } for i in items]})
+
 
 @app.route('/api/highlighters', methods=['GET'])
 def get_highlighters():
@@ -762,10 +761,11 @@ def get_highlighters():
         "id": i.id, "type": "highlighters", "brand": getattr(i, 'brand', ''),
         "name": i.name,
         "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
-        "image_data": decode_image(i.image_data),
+        "image_url": getattr(i, 'image_webp_url', ''),
         "lab_json": decode_text(getattr(i, 'lab', '')),
         "sale_page_id": getattr(i, 'sale_page_id', '')
     } for i in items]})
+
 
 @app.route('/api/eyebrows', methods=['GET'])
 def get_eyebrows():
@@ -775,10 +775,54 @@ def get_eyebrows():
         "name": i.name,
         "category_name": getattr(i, 'category_name', ''),
         "price": f"NT${i.price:.0f}" if i.price else "NT$0", "description": i.description,
-        "image_data": decode_image(i.image_data),
+        "image_url": getattr(i, 'image_webp_url', ''),
         "lab_json": decode_text(getattr(i, 'lab', '')),
         "sale_page_id": getattr(i, 'sale_page_id', '')
     } for i in items]})
+
+
+# 測試用的試妝照片上傳頁面
+@app.route('/test-upload', methods=['GET', 'POST'])
+@login_required
+def test_upload():
+    if request.method == 'POST':
+        orig_file = request.files.get('original_image')
+        gen_file = request.files.get('generated_image')
+
+        if orig_file and gen_file:
+            orig_filename = secure_filename(orig_file.filename)
+            gen_filename = secure_filename(gen_file.filename)
+
+            orig_path = os.path.join(app.config['UPLOAD_FOLDER'], orig_filename)
+            gen_path = os.path.join(app.config['UPLOAD_FOLDER'], gen_filename)
+
+            orig_file.save(orig_path)
+            gen_file.save(gen_path)
+
+            orig_url = url_for('static', filename=f'uploads/{orig_filename}')
+            gen_url = url_for('static', filename=f'uploads/{gen_filename}')
+
+            try:
+                # 這裡由系統自動代入「自訂測試」的標籤，前端就不需要輸入了
+                new_record = TryonRecords(
+                    member_id=current_user.phone_number,
+                    item_id=0,                   # 測試用的預設 ID
+                    item_type='自訂測試上傳',      # 測試用的預設分類
+                    original_image_url=orig_url,
+                    generated_image_url=gen_url
+                )
+                db.session.add(new_record)
+                db.session.commit()
+                flash('試妝照片上傳成功！', 'success')
+                return redirect(url_for('tryon_history'))
+            except Exception as e:
+                db.session.rollback()
+                flash(f'資料庫存檔失敗：{str(e)}', 'danger')
+        else:
+            flash('請務必同時上傳「妝前」與「妝後」兩張照片。', 'warning')
+
+    return render_template('test_upload.html')
+
 
 if __name__ == "__main__":
     with app.app_context():

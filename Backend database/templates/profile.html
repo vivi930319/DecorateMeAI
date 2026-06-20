@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}會員中心 | Empower Beauty{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-8 col-lg-6">
+            <div class="card shadow-sm border-0" style="border-radius: 15px;">
+                <div class="card-body p-5 text-center">
+
+                    <h2 class="mb-4" style="color: var(--primary-pink); font-family: 'Cormorant Garamond', serif; font-weight: 600;">
+                        會員中心
+                    </h2>
+
+                    <p class="fs-5 mb-4">
+                        歡迎回來，<strong style="color: var(--text-dark);">{{ current_user.name }}</strong>！
+                    </p>
+
+                    <ul class="list-group list-group-flush text-start my-4 mb-5" style="border-radius: 8px; border: 1px solid var(--border);">
+                        <li class="list-group-item py-3">
+                            <span class="text-muted d-inline-block" style="width: 100px;">電話號碼</span>
+                            <strong>{{ current_user.phone_number }}</strong>
+                        </li>
+                        <li class="list-group-item py-3">
+                            <span class="text-muted d-inline-block" style="width: 100px;">電子郵件</span>
+                            <strong>{{ current_user.email }}</strong>
+                        </li>
+                        <li class="list-group-item py-3">
+                            <span class="text-muted d-inline-block" style="width: 100px;">會員等級</span>
+                            <span class="badge px-3 py-2" style="background-color: var(--text-dark); color: white; border-radius: 999px;">
+                                {{ current_user.level | upper }}
+                            </span>
+                        </li>
+                    </ul>
+
+                    <div class="d-grid gap-3 d-sm-flex justify-content-sm-center">
+                        <a href="{{ url_for('tryon_history') }}" class="btn btn-outline-primary px-4 rounded-pill" style="border-color: var(--primary-pink); color: var(--primary-pink);">
+                            我的試妝紀錄
+                        </a>
+                        <a href="{{ url_for('logout') }}" class="btn btn-primary px-4 rounded-pill">
+                            登出帳號
+                        </a>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
