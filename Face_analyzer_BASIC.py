@@ -506,26 +506,32 @@ class FaceAnalyzer:
         else: return "鵝蛋臉"
 
     def get_eyebrow_shape(self):
-        def brow_metrics(head_idx, peak_idx, tail_idx):
-            head = self._pt(head_idx).astype(np.float32)
-            peak = self._pt(peak_idx).astype(np.float32)
-            tail = self._pt(tail_idx).astype(np.float32)
+        # 用眉毛輪廓 5 點的最高點（min-y）作為弓頂，而非固定骨架點 105/334（眉骨脊）。
+        # 骨架點測量骨骼結構，輪廓點測量實際可見眉形，閾值以 CelebA 100 張分位數校正。
+        _L_BROW = (46, 53, 52, 65, 55)   # 左眉輪廓，外→內
+        _R_BROW = (276, 283, 282, 295, 285)  # 右眉輪廓，外→內
+
+        def brow_metrics(outer_idx, inner_idx, outline):
+            head = self._pt(outer_idx).astype(np.float32)
+            tail = self._pt(inner_idx).astype(np.float32)
             width = float(np.linalg.norm(tail - head))
             if width < 1e-6:
                 return 0.0, 0.0
-            base_y = (head[1] + tail[1]) / 2.0
-            arch_ratio = float((base_y - peak[1]) / width)
-            tail_ratio = float((head[1] - tail[1]) / width)
+            pts = np.array([self._pt(i) for i in outline], dtype=np.float32)
+            peak_y   = float(np.min(pts[:, 1]))          # 輪廓最高點
+            base_y   = (float(head[1]) + float(tail[1])) / 2.0
+            arch_ratio = (base_y - peak_y) / width
+            tail_ratio = (float(head[1]) - float(tail[1])) / width
             return arch_ratio, tail_ratio
 
-        left_arch, left_tail   = brow_metrics(46, 105, 55)
-        right_arch, right_tail = brow_metrics(276, 334, 285)
+        left_arch, left_tail   = brow_metrics(46, 55, _L_BROW)
+        right_arch, right_tail = brow_metrics(276, 285, _R_BROW)
         arch_ratio = (left_arch + right_arch) / 2.0
         tail_ratio = (left_tail + right_tail) / 2.0
 
-        if abs(tail_ratio) < 0.060 and arch_ratio < 0.095: return "一字眉"
-        if tail_ratio > 0.100:                            return "落尾眉"
-        if arch_ratio > 0.175 and abs(tail_ratio) < 0.115: return "彎月眉"
+        if tail_ratio > 0.100:                               return "落尾眉"
+        if arch_ratio < 0.115 and abs(tail_ratio) < 0.080: return "一字眉"
+        if arch_ratio > 0.155 and abs(tail_ratio) < 0.115: return "彎月眉"
         return "標準眉"
 
     def _eye_side_metrics(self, inner_idx, outer_idx, upper_ids, lower_idx, brow_ids):
