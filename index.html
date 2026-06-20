@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Noto+Serif+TC:wght@300;400;500;700&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/main.css?v=20260619-pro-shot-preview">
+<link rel="stylesheet" href="css/main.css?v=20260620-camera-cart">
 </head>
 <body>
 
@@ -47,6 +47,10 @@
                 <a href="#profile" data-page="profile">會員中心</a>
             </nav>
             <div class="topbar-right">
+                <button type="button" class="topbar-cart" onclick="showCartPanel()" aria-label="購物車">
+                    <span class="cart-symbol" aria-hidden="true">🛒</span>
+                    <span class="cart-count" id="cartCount">0</span>
+                </button>
                 <button type="button" class="topbar-user" data-page="profile" onclick="Router.go('profile');">
                     <span class="tu-icon">✦</span>
                     <span id="sidebarUsername">訪客</span>
@@ -91,9 +95,9 @@
     document.addEventListener('mouseleave', function(){ if(glow) glow.style.opacity = '0'; });
 })();
 </script>
-<script src="js/data.js?v=20260619-pro-shot-preview"></script>
-<script src="js/api.js?v=20260619-pro-shot-preview"></script>
-<script src="js/router.js?v=20260619-pro-shot-preview"></script>
+<script src="js/data.js?v=20260620-camera-cart"></script>
+<script src="js/api.js?v=20260620-camera-cart"></script>
+<script src="js/router.js?v=20260620-camera-cart"></script>
 </body>
 </html>
 

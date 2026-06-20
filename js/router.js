@@ -104,6 +104,47 @@ function isGuest(){
     catch (_) { return false; }
 }
 
+function getMemberDisplayName(){
+    var profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
+    return String(profile.name || (Auth.getUser && Auth.getUser()) || '訪客').trim() || '訪客';
+}
+
+function updateCartBadge(){
+    const badge = document.getElementById('cartCount');
+    if (!badge || typeof Cart === 'undefined') return;
+    const count = Cart.count();
+    badge.textContent = String(count);
+    badge.classList.toggle('has-items', count > 0);
+}
+
+function showCartPanel(){
+    const old = document.getElementById('cartOverlay');
+    if (old) old.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'cartOverlay';
+    overlay.className = 'cart-overlay';
+    const render = () => {
+        const rows = Cart.list().map(item => ({ ...item, product: ALL_PRODUCTS.find(p => p.id === item.id) })).filter(item => item.product);
+        overlay.innerHTML = `<section class="cart-panel" role="dialog" aria-modal="true" aria-label="購物車">
+            <header><div><span>Shopping Bag</span><h2>購物車</h2></div><button class="cart-close" aria-label="關閉購物車">×</button></header>
+            <div class="cart-items">${rows.length ? rows.map(item => `<article class="cart-item">
+                <div class="cart-thumb">${phBox('', item.product.name, item.product.img)}</div>
+                <div class="cart-item-info"><span>${CAT_EN[item.product.cat] || item.product.cat}</span><h3>${item.product.name}</h3><p>${item.product.price}</p></div>
+                <div class="cart-qty"><button data-cart-minus="${item.id}" aria-label="減少 ${item.product.name}">−</button><b>${item.qty}</b><button data-cart-plus="${item.id}" aria-label="增加 ${item.product.name}">＋</button></div>
+            </article>`).join('') : '<div class="cart-empty">購物車目前是空的</div>'}</div>
+            <footer><span>共 ${Cart.count()} 件商品</span><button class="cart-checkout" ${rows.length ? '' : 'disabled'}>前往結帳</button></footer>
+        </section>`;
+        overlay.querySelector('.cart-close').onclick = () => overlay.remove();
+        overlay.querySelectorAll('[data-cart-minus]').forEach(btn => btn.onclick = () => { Cart.change(+btn.dataset.cartMinus, -1); updateCartBadge(); render(); });
+        overlay.querySelectorAll('[data-cart-plus]').forEach(btn => btn.onclick = () => { Cart.change(+btn.dataset.cartPlus, 1); updateCartBadge(); render(); });
+        const checkout = overlay.querySelector('.cart-checkout');
+        if (checkout && !checkout.disabled) checkout.onclick = () => showToast('結帳功能將由後端購物流程接續');
+    };
+    render();
+    overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+    document.body.appendChild(overlay);
+}
+
 // ═══ 玻璃雙鈕對話框（取代原生 confirm） ═══
 function showConfirm(msg, opts){
     opts = opts || {};
@@ -307,6 +348,7 @@ analysis: `
             </div>
             <div class="camera-box" id="cameraBox">
                 <video id="cameraVideo" autoplay playsinline></video>
+                <div class="camera-face-guide"></div>
                 <canvas id="cameraCanvas" style="display:none;"></canvas>
             </div>
         </div>
@@ -321,10 +363,12 @@ analysis: `
                 <div class="camera-actions"><button class="btn-outline btn-sm" id="manualFrontCaptureBtn">手動存正面</button><button class="btn-outline btn-sm" id="manualSideCaptureBtn">手動存側面</button></div>
                 <div class="camera-box" id="proCameraBox">
                     <video id="proCameraVideo" autoplay playsinline muted></video>
+                    <div class="camera-face-guide" id="proFaceGuide"></div>
                     <canvas id="proCameraCanvas" style="display:none;"></canvas>
-                    <div class="scan-progress" id="proScanProgress"><span data-scan-role="front">正面：待擷取</span><span data-scan-role="side">側面：待擷取</span></div>
-                    <div class="scan-hint" id="proScanHint">等待鏡頭啟動</div>
                 </div>
+                <div class="scan-progress" id="proScanProgress"><span data-scan-role="front">正面：待擷取</span><span data-scan-role="side">側面：待擷取</span></div>
+                <div class="scan-hint" id="proScanHint">等待鏡頭啟動</div>
+                <div class="pro-yaw-display" id="proYawDisplay"></div>
             </div>
             <div class="mode-note">45 度多角度採集保留為未來展望；目前 PRO 正式流程採用正面照與單側側面照，降低樣本採集難度。</div>
         </div>
@@ -418,6 +462,17 @@ const Router = {
     latestRenderedAfter: false,
     currentCategory: null,
 
+    stopAnalysisCameras() {
+        if (this.proScanTimer) clearInterval(this.proScanTimer);
+        this.proScanTimer = null;
+        this.proScanBusy = false;
+        [this.cameraStream, this.proCameraStream].forEach(stream => {
+            if (stream) stream.getTracks().forEach(track => track.stop());
+        });
+        this.cameraStream = null;
+        this.proCameraStream = null;
+    },
+
     async go(page, opts) {
         opts = opts || {};
         if (!opts.skipLeaveGuard && this.needsLookLeaveGuard(page)) {
@@ -429,13 +484,14 @@ const Router = {
             promptGuestAuth(page === "favorites" ? "收藏" : "分析紀錄");
             return;
         }
+        if (this.currentPage === 'analysis' && page !== 'analysis') this.stopAnalysisCameras();
         try {
             if (!opts.fromHash && location.hash !== `#${page}`) {
                 history.pushState(null, '', `#${page}`);
             }
             const back = (NAV_ORDER.indexOf(page) > -1 && NAV_ORDER.indexOf(this.currentPage) > -1
                           && NAV_ORDER.indexOf(page) < NAV_ORDER.indexOf(this.currentPage));
-            const res = await fetch(`pages/${page}.html?v=20260619-pro-shot-preview`, { cache: 'no-store' });
+            const res = await fetch(`pages/${page}.html?v=20260620-camera-cart`, { cache: 'no-store' });
             if (!res.ok) throw new Error('Page not found');
             const html = await res.text();
             const mc = document.getElementById('mainContent');
@@ -527,7 +583,7 @@ const Router = {
 const PageInit = {
     dashboard() {
         // 問候語 + 日期
-        const user = (Auth.getUser && Auth.getUser()) || '訪客';
+        const user = getMemberDisplayName();
         const hr = new Date().getHours();
         const hello = hr < 5 ? '夜深了' : hr < 11 ? '早安' : hr < 14 ? '午安' : hr < 18 ? '下午好' : '晚安';
         const greetEl = document.getElementById('dashGreet');
@@ -697,7 +753,13 @@ const PageInit = {
 
         const showPreview = (file) => {
             const reader = new FileReader();
-            reader.onload = ev => { preview.src = ev.target.result; preview.style.display = 'block'; };
+            reader.onload = ev => {
+                preview.src = ev.target.result;
+                preview.style.display = 'block';
+                uploadBox.classList.add('has-preview');
+                preview.title = '點擊更換照片';
+                preview.onclick = () => fileInput.click();
+            };
             reader.readAsDataURL(file);
         };
 
@@ -736,6 +798,10 @@ const PageInit = {
             proModeBtn.classList.toggle('active', mode === 'pro');
             basicPanel.classList.toggle('active', mode === 'basic');
             proPanel.classList.toggle('active', mode === 'pro');
+            uploadBox.classList.remove('has-preview');
+            preview.style.display = 'none';
+            preview.removeAttribute('src');
+            preview.onclick = null;
             analyzeBtn.textContent = mode === 'basic' ? '開 始 分 析' : '開 始 PRO 分 析';
             setLoadingStatus('等待圖片');
             updatePackageStatus();
@@ -803,7 +869,10 @@ const PageInit = {
             const canvas = document.getElementById('cameraCanvas');
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
-            canvas.getContext('2d').drawImage(video, 0, 0);
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(video, 0, 0);
             canvas.toBlob(blob => {
                 if (!blob) {
                     showAlert('拍照失敗', { type:'error' });
@@ -812,6 +881,9 @@ const PageInit = {
                 Router.selectedFile = new File([blob], 'basic-camera.jpg', { type: 'image/jpeg' });
                 showPreview(Router.selectedFile);
                 saveDraft('camera-captured');
+                Router.cameraStream.getTracks().forEach(track => track.stop());
+                Router.cameraStream = null;
+                document.getElementById('cameraBox').classList.remove('active');
             }, 'image/jpeg', 0.92);
         };
 
@@ -838,6 +910,8 @@ const PageInit = {
             }
             const box = document.getElementById('proCameraBox');
             if (box) box.classList.remove('active');
+            const yawEl = document.getElementById('proYawDisplay');
+            if (yawEl) yawEl.textContent = '';
         };
 
         const captureProFrameBlob = () => new Promise((resolve, reject) => {
@@ -849,7 +923,10 @@ const PageInit = {
             const canvas = document.getElementById('proCameraCanvas');
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
-            canvas.getContext('2d').drawImage(video, 0, 0);
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(video, 0, 0);
             canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('影格擷取失敗')), 'image/jpeg', 0.9);
         });
 
@@ -872,6 +949,17 @@ const PageInit = {
             saveDraft('camera-captured');
         };
 
+        const SCAN_HOLD_FRAMES = 2;
+        let proScanValidCount = 0;
+        let proScanCurrentTarget = '';
+
+        const SIDE_YAW_MIN = 35;
+
+        const setYawDisplay = (text) => {
+            const el = document.getElementById('proYawDisplay');
+            if (el) el.textContent = text;
+        };
+
         const scanProFrame = async () => {
             if (Router.proScanBusy) return;
             if (Router.proFiles.front && Router.proFiles.side) {
@@ -886,16 +974,61 @@ const PageInit = {
                 const yaw = Number(pose.yaw || 0);
                 const pitch = Number(pose.pitch || 0);
                 const role = pose.captureRole || '';
-                setProScanHint(`目前 yaw ${Math.round(yaw)}° / pitch ${Math.round(pitch)}°，請依提示慢慢轉頭`);
-                if (!Router.proFiles.front && (role === 'front' || (Math.abs(yaw) <= 18 && Math.abs(pitch) <= 20))) {
-                    storeProScanPhoto('front', blob, pose);
-                    setProScanHint('正面已完成，請慢慢轉向單側側面');
-                } else if (Router.proFiles.front && !Router.proFiles.side && (role === 'side' || Math.abs(yaw) >= 42)) {
-                    storeProScanPhoto('side', blob, pose);
-                    setProScanHint('側面已完成，可開始 PRO 分析');
-                    stopProScan();
+                // pose.side: "left"（yaw<0，左臉朝鏡頭）或 "right"（yaw>0，右臉朝鏡頭）
+                const faceSide = pose.side === 'left' ? '左臉' : '右臉';
+                const absY = Math.abs(yaw);
+
+                // ── yaw 數字顯示（不用箭頭，避免鏡像相機方向混亂） ──
+                if (!Router.proFiles.front) {
+                    const frontGuide = absY <= 3 ? '✓ 正面對準' : `偏移 ${Math.round(absY)}°`;
+                    setYawDisplay(`yaw ${Math.round(yaw)}°  pitch ${Math.round(pitch)}°  ${frontGuide}`);
+                } else {
+                    const sideGuide = absY >= SIDE_YAW_MIN
+                        ? `✓ ${faceSide}對準`
+                        : (absY > 3 ? `${faceSide} 差 ${Math.round(SIDE_YAW_MIN - absY)}°` : '請轉向任一側面');
+                    setYawDisplay(`yaw ${Math.round(yaw)}°  pitch ${Math.round(pitch)}°  ${sideGuide}`);
+                }
+
+                const wantFront = !Router.proFiles.front && (absY <= 8 && Math.abs(pitch) <= 12);
+                const wantSide  = Router.proFiles.front && !Router.proFiles.side && absY >= SIDE_YAW_MIN;
+                const target = wantFront ? 'front' : wantSide ? 'side' : '';
+
+                if (target !== proScanCurrentTarget) {
+                    proScanValidCount = 0;
+                    proScanCurrentTarget = target;
+                }
+
+                if (target) {
+                    proScanValidCount++;
+                    const label = target === 'front' ? '正面' : faceSide + '側面';
+                    if (proScanValidCount < SCAN_HOLD_FRAMES) {
+                        setProScanHint(`${label}角度正確，請保持不動… ${proScanValidCount}/${SCAN_HOLD_FRAMES}`);
+                    } else {
+                        proScanValidCount = 0;
+                        proScanCurrentTarget = '';
+                        storeProScanPhoto(target, blob, pose);
+                        if (target === 'front') {
+                            setProScanHint('正面完成。請轉向任一側面，轉好後保持不動，系統會自動擷取，不用再看螢幕');
+                        } else {
+                            setProScanHint(`${faceSide}側面已完成，可開始 PRO 分析`);
+                            stopProScan();
+                        }
+                    }
+                } else {
+                    proScanValidCount = 0;
+                    proScanCurrentTarget = '';
+                    if (!Router.proFiles.front) {
+                        setProScanHint('請直視鏡頭，讓臉部置中於橢圓框內');
+                    } else {
+                        const need = SIDE_YAW_MIN - absY;
+                        setProScanHint(need > 0
+                            ? `偵測中，再轉約 ${Math.round(need)}° 就到側面，轉好後保持不動即可`
+                            : '偵測中，請稍候');
+                    }
                 }
             } catch (err) {
+                proScanValidCount = 0;
+                proScanCurrentTarget = '';
                 const msg = String(err.message || err);
                 setProScanHint(msg.includes('404')
                     ? '角度偵測 API 尚未啟用，請重啟 BASIC 後端或使用手動擷取。'
@@ -922,8 +1055,8 @@ const PageInit = {
                     ? '已保留正面照，請慢慢轉向側面，系統會自動擷取側面照'
                     : '請先看著鏡頭，系統會自動擷取正面照');
                 if (Router.proScanTimer) clearInterval(Router.proScanTimer);
-                Router.proScanTimer = setInterval(scanProFrame, 900);
-                setTimeout(scanProFrame, 500);
+                Router.proScanTimer = setInterval(scanProFrame, 400);
+                setTimeout(scanProFrame, 250);
             } catch (err) {
                 showAlert('無法開啟 PRO 掃描：' + err.message, { type:'error' });
             }
@@ -1367,7 +1500,11 @@ const PageInit = {
                 s.classList.add('active');
             });
             const bag = area.querySelector('[data-bag]');
-            if (bag) bag.onclick = () => showToast('已加入購物袋');
+            if (bag) bag.onclick = () => {
+                Cart.add(p.id);
+                updateCartBadge();
+                showToast('已加入購物車');
+            };
             const dBtn = area.querySelector('[data-fav-detail]');
             if (dBtn) dBtn.onclick = () => {
                 const wasFav = Fav.has(p.id);
@@ -1551,7 +1688,7 @@ const PageInit = {
     },
 
     profile() {
-        const user = Auth.getUser();
+        const user = getMemberDisplayName();
         document.getElementById('profileName').textContent = user || '訪客';
         // 大頭貼：有上傳照片就顯示，否則用名字首字（訪客用 ✦）
         var __av = document.getElementById('profileAvatar');
@@ -1661,7 +1798,8 @@ const PageInit = {
 function showApp() {
     document.getElementById('auth-layer').innerHTML = '';
     document.getElementById('app').style.display = 'block';
-    document.getElementById('sidebarUsername').textContent = Auth.getUser();
+    document.getElementById('sidebarUsername').textContent = getMemberDisplayName();
+    updateCartBadge();
     const homeUrl = `${location.pathname}${location.search}#dashboard`;
     if (location.hash !== '#dashboard') history.replaceState(null, '', homeUrl);
     Router.go('dashboard');
@@ -1744,18 +1882,23 @@ async function doLoginAction() {
     const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPwd').value;
     if (!email || !password) { showAlert('請輸入帳號密碼'); return; }
+    const registered = Auth.getRegisteredMember(email) || {};
     try {
         const data = await Api.login(email, password);
         const member = data.member || {};
         Auth.setProfile({
-            name: member.name || email.split('@')[0],
+            ...registered,
+            name: registered.name || member.name || email.split('@')[0],
             email: member.email || email,
-            phone: member.phone_number || '',
-            age: member.age || '',
-            level: member.level || '一般會員',
+            phone: member.phone_number || registered.phone || '',
+            age: member.age || registered.age || '',
+            level: member.level || registered.level || '一般會員',
         });
     } catch (_) {
-        Auth.setProfile({ name: email.split('@')[0], email, level: '本地原型會員' });
+        const existing = Auth.getProfile() || {};
+        const sameProfile = String(existing.email || '').toLowerCase() === email.toLowerCase() ? existing : {};
+        const source = Object.keys(registered).length ? registered : sameProfile;
+        Auth.setProfile({ ...source, name: source.name || email.split('@')[0], email, level: source.level || '本地原型會員' });
     }
     showApp();
 }
@@ -1812,7 +1955,8 @@ async function doVerifyOTP() {
         email: pending.email,
         age: pending.age,
         level: pending.level,
-        avatar: pending.avatar
+        avatar: pending.avatar,
+        password: pending.password
     });
     Router.pendingRegister = null;
     showAlert('帳號已成功建立', { type:'success', onOk: showApp });
@@ -1883,9 +2027,8 @@ function doResetPassword(){
     if (p1.length < 6) { showAlert('新密碼至少 6 碼'); return; }
     if (p1 !== p2) { showAlert('兩次輸入的新密碼不一致', { type:"error" }); return; }
     var profile = Auth.getProfile() || {};
-    if (profile.email && Router.forgotEmail && profile.email === Router.forgotEmail) {
-        Auth.setProfile(Object.assign({}, profile, { password: p1 }));
-    }
+    var base = (profile.email === Router.forgotEmail) ? profile : { email: Router.forgotEmail };
+    Auth.setProfile(Object.assign({}, base, { password: p1 }));
     Router.forgotEmail = null;
     showAlert('密碼已更新，請使用新密碼登入', { type:"success", onOk: showLogin });
 }

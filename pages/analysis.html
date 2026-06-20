@@ -20,6 +20,7 @@
             </div>
             <div class="camera-box" id="cameraBox">
                 <video id="cameraVideo" autoplay playsinline></video>
+                <div class="camera-face-guide"></div>
                 <canvas id="cameraCanvas" style="display:none;"></canvas>
             </div>
         </div>
@@ -56,13 +57,15 @@
                 </div>
                 <div class="camera-box" id="proCameraBox">
                     <video id="proCameraVideo" autoplay playsinline muted></video>
+                    <div class="camera-face-guide" id="proFaceGuide"></div>
                     <canvas id="proCameraCanvas" style="display:none;"></canvas>
-                    <div class="scan-progress" id="proScanProgress">
-                        <span data-scan-role="front">正面：待擷取</span>
-                        <span data-scan-role="side">側面：待擷取</span>
-                    </div>
-                    <div class="scan-hint" id="proScanHint">等待鏡頭啟動</div>
                 </div>
+                <div class="scan-progress" id="proScanProgress">
+                    <span data-scan-role="front">正面：待擷取</span>
+                    <span data-scan-role="side">側面：待擷取</span>
+                </div>
+                <div class="scan-hint" id="proScanHint">等待鏡頭啟動</div>
+                <div class="pro-yaw-display" id="proYawDisplay"></div>
             </div>
             <div class="mode-note">
                 45 度多角度採集保留為未來展望；目前 PRO 正式流程採用正面照與單側側面照，降低樣本採集難度。

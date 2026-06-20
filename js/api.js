@@ -433,8 +433,13 @@ const AnalysisPackage = {
                 browShape: null,
                 eyeShape: null,
                 noseFront: null,
+                noseSide: null,
                 lipShape: null,
                 skinTone: null,
+                lipLab: null,
+                symmetry: null,
+                sidePhotoUsed: null,
+                proStatus: null,
                 raw: null
             },
             analysis: {
@@ -499,19 +504,33 @@ const AnalysisPackage = {
 
     fromRawFaceAnalysis(raw, mode) {
         const skin = raw?.['膚色'] || {};
+        const proStatusRaw = raw?.['精細分析狀態'] || null;
+        const sym = raw?.['臉部對稱性'] || null;
         return {
             version: mode === 'pro' ? 'PRO' : 'BASIC',
             faceShape: raw?.['臉型'] || null,
             browShape: raw?.['眉型'] || null,
             eyeShape: raw?.['眼型'] || null,
             noseFront: raw?.['鼻型'] || null,
+            noseSide: raw?.['鼻型_側面'] || null,
             lipShape: raw?.['嘴型'] || null,
             skinTone: {
                 season: skin['四季型'] || null,
                 level: skin['膚色分級'] || null,
-                lab: skin['LAB'] || null
+                lab: skin['LAB'] || null,
+                labSource: skin['LAB來源'] || null
             },
             lipLab: raw?.['嘴唇_LAB'] || null,
+            symmetry: sym ? {
+                score: sym.score ?? null,
+                eyeOpenRatio: sym.eyeOpenRatio ?? null,
+                noseDeviation: sym.noseDeviation ?? null,
+                mouthSymmetry: sym.mouthSymmetry ?? null
+            } : null,
+            sidePhotoUsed: proStatusRaw
+                ? proStatusRaw['多角度照片']?.startsWith('已接收')
+                : null,
+            proStatus: proStatusRaw,
             raw: raw || null
         };
     }
@@ -532,11 +551,27 @@ const AnalysisDraft = {
 
 // ═══ Auth 模組 ═══
 const Auth = {
+    _membersKey: 'beautyRegisteredMembers',
+    _email(email) { return String(email || '').trim().toLowerCase(); },
+    getRegisteredMember(email) {
+        try {
+            const members = JSON.parse(localStorage.getItem(this._membersKey) || '{}');
+            return members[this._email(email)] || null;
+        } catch (_) { return null; }
+    },
+    saveRegisteredMember(profile) {
+        if (!profile?.email || !profile?.name || profile.name === '訪客') return;
+        let members = {};
+        try { members = JSON.parse(localStorage.getItem(this._membersKey) || '{}'); } catch (_) {}
+        members[this._email(profile.email)] = { ...(members[this._email(profile.email)] || {}), ...profile };
+        localStorage.setItem(this._membersKey, JSON.stringify(members));
+    },
     getUser()  { return localStorage.getItem('beautyUser') || ''; },
     getProfile() { return JSON.parse(localStorage.getItem('beautyProfile') || '{}'); },
     setProfile(profile) {
         localStorage.setItem('beautyProfile', JSON.stringify(profile || {}));
         if (profile?.name) localStorage.setItem('beautyUser', profile.name);
+        this.saveRegisteredMember(profile);
     },
     setUser(n) {
         localStorage.setItem('beautyUser', n);
@@ -562,6 +597,31 @@ const Fav = {
         if (idx >= 0) arr.splice(idx, 1); else arr.push(id);
         localStorage.setItem(this._key, JSON.stringify(arr));
     }
+};
+
+// ═══ 購物車模組 ═══
+const Cart = {
+    _key: 'beautyCart',
+    list() {
+        try { return JSON.parse(localStorage.getItem(this._key) || '[]'); }
+        catch (_) { return []; }
+    },
+    save(items) { localStorage.setItem(this._key, JSON.stringify(items)); },
+    add(id) {
+        const items = this.list();
+        const row = items.find(item => item.id === Number(id));
+        if (row) row.qty += 1;
+        else items.push({ id: Number(id), qty: 1 });
+        this.save(items);
+        return items;
+    },
+    change(id, delta) {
+        const items = this.list();
+        const row = items.find(item => item.id === Number(id));
+        if (row) row.qty = Math.max(0, row.qty + delta);
+        this.save(items.filter(item => item.qty > 0));
+    },
+    count() { return this.list().reduce((sum, item) => sum + item.qty, 0); }
 };
 
 // ═══ 分析紀錄模組 ═══
