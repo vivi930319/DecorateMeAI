@@ -491,7 +491,7 @@ const Router = {
             }
             const back = (NAV_ORDER.indexOf(page) > -1 && NAV_ORDER.indexOf(this.currentPage) > -1
                           && NAV_ORDER.indexOf(page) < NAV_ORDER.indexOf(this.currentPage));
-            const res = await fetch(`pages/${page}.html?v=20260620-camera-cart`, { cache: 'no-store' });
+            const res = await fetch(`pages/${page}.html?v=20260621-mens-plain`, { cache: 'no-store' });
             if (!res.ok) throw new Error('Page not found');
             const html = await res.text();
             const mc = document.getElementById('mainContent');
@@ -1232,6 +1232,7 @@ const PageInit = {
         const renderGrid = () => {
             grid.innerHTML = STYLES.map(s => `
                 <div class="style-card ${Router.selectedStyleId===s.id?'selected':''}" data-sid="${s.id}">
+                    <div class="sc-visual">${phBox('', s.name, s.img)}</div>
                     <div class="sc-name">${s.name}</div>
                     <div class="sc-tags">${s.tags.map(t=>`<span class="sc-tag">${t}</span>`).join('')}</div>
                 </div>
