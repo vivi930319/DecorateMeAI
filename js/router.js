@@ -1215,7 +1215,10 @@ const PageInit = {
                 AnalysisDraft.save(Router.analysisPackage);
                 updatePackageStatus();
                 setLoadingStatus('分析失敗，已保留草稿狀態', false);
-                showAlert('分析失敗：' + err.message, { type:'error' });
+                const offline = /Failed to fetch|NetworkError|Load failed/i.test(String(err.message || err));
+                showAlert(offline
+                    ? '無法連接分析服務。請先執行後端資料夾的 start_full_stack_local.bat，並從 http://127.0.0.1:5500 開啟網站。'
+                    : '分析失敗：' + err.message, { type:'error' });
             }
         };
 
