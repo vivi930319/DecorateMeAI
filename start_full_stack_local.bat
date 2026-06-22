@@ -20,9 +20,9 @@ if not exist "%FRONTEND_DIR%\index.html" (
 echo Starting frontend and backend services...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$py='%PY%'; $root='%~dp0'; $front='%FRONTEND_DIR%';" ^
-  "function Start-LocalService($port,$args,$dir){" ^
+  "function Start-LocalService($port,$arguments,$dir){" ^
   "  if(-not (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)){" ^
-  "    Start-Process -FilePath $py -ArgumentList $args -WorkingDirectory $dir -WindowStyle Hidden" ^
+  "    Start-Process -FilePath $py -ArgumentList $arguments -WorkingDirectory $dir -WindowStyle Hidden" ^
   "  }" ^
   "};" ^
   "Start-LocalService 5500 @('-m','http.server','5500','--bind','127.0.0.1') $front;" ^
