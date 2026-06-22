@@ -7,7 +7,7 @@ from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from Face_analyzer_BASIC import FaceAnalyzer
-from dev_server_utils import run_dev_server
+from dev_server_utils import get_cors_origins, run_dev_server
 
 
 app = FastAPI(title="Face Analyzer PRO")
@@ -19,7 +19,7 @@ FACE_JOB_MAX_COUNT = int(os.getenv("FACE_JOB_MAX_COUNT", "200"))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )

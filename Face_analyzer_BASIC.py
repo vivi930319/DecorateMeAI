@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 import insightface
 from insightface.app import FaceAnalysis as InsightFaceApp
-from dev_server_utils import run_dev_server
+from dev_server_utils import get_cors_origins, run_dev_server
 
 
 @asynccontextmanager
@@ -30,7 +30,7 @@ app = FastAPI(title="Face Analyzer BASIC", lifespan=_lifespan)
 # 啟用 CORS 允許前端跨來源存取
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )

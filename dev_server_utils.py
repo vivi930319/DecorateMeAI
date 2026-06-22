@@ -6,6 +6,13 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 
+def get_cors_origins():
+    value = os.getenv("CORS_ORIGINS", "*").strip()
+    if not value or value == "*":
+        return ["*"]
+    return [origin.strip().rstrip("/") for origin in value.split(",") if origin.strip()]
+
+
 def _can_bind(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

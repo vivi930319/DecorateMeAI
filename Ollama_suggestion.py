@@ -6,14 +6,14 @@ import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from dev_server_utils import run_dev_server
+from dev_server_utils import get_cors_origins, run_dev_server
 
 
 app = FastAPI(title="Ollama Suggestion API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_cors_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )

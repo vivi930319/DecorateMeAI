@@ -7,8 +7,10 @@ ENV PYTHONUNBUFFERED=1
 
 # OpenCV 需要這些系統套件
 RUN apt-get update && apt-get install -y \
+    build-essential \
     libgl1 \
     libglib2.0-0 \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -18,7 +20,11 @@ COPY Face_analyzer_BASIC.py .
 COPY Face_analyzer_PRO.py .
 COPY Ollama_suggestion.py .
 COPY dev_server_utils.py .
+COPY cloud_start.py .
 
-EXPOSE 8001 8002 8010
+EXPOSE 8080
 
-CMD ["uvicorn", "Face_analyzer_BASIC:app", "--host", "0.0.0.0", "--port", "8001"]
+ENV SERVICE_NAME=basic
+ENV PORT=8080
+
+CMD ["python", "cloud_start.py"]
