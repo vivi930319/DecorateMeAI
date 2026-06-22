@@ -1,8 +1,10 @@
 // ═══ API 設定：所有外部服務都走這裡，不直接連 PostgreSQL 或 Ollama 11434 ═══
+const RuntimeApiConfig = typeof window !== 'undefined' ? (window.DECORATE_ME_CONFIG || {}) : {};
+
 const ApiConfig = {
     services: {
         faceBasic: {
-            baseUrl: 'http://127.0.0.1:8001',
+            baseUrl: RuntimeApiConfig.faceBasicUrl || 'http://127.0.0.1:8001',
             analyzePath: '/v1/face/analyze/basic',
             posePath: '/v1/face/pose',
             jobPath: '/v1/face/jobs/basic',
@@ -11,7 +13,7 @@ const ApiConfig = {
             healthPath: '/health'
         },
         facePro: {
-            baseUrl: 'http://127.0.0.1:8002',
+            baseUrl: RuntimeApiConfig.faceProUrl || 'http://127.0.0.1:8002',
             analyzePath: '/v1/face/analyze/pro',
             jobPath: '/v1/face/jobs/pro',
             jobStatusPath: '/v1/face/jobs/{jobId}',
@@ -19,22 +21,22 @@ const ApiConfig = {
             healthPath: '/health'
         },
         textSuggestion: {
-            baseUrl: 'http://127.0.0.1:8010',
+            baseUrl: RuntimeApiConfig.textSuggestionUrl || 'http://127.0.0.1:8010',
             suggestPath: '/suggest',
             healthPath: '/health'
         },
         render: {
-            baseUrl: '',
+            baseUrl: RuntimeApiConfig.renderUrl || '',
             renderPath: '/render',
             healthPath: '/health'
         },
         product: {
-            baseUrl: '',
+            baseUrl: RuntimeApiConfig.productUrl || '',
             recommendPath: '/recommend-products',
             healthPath: '/health'
         },
         memberDatabase: {
-            baseUrl: 'https://vegetation-arguments-final-inspiration.trycloudflare.com',
+            baseUrl: RuntimeApiConfig.memberDatabaseUrl || 'https://vegetation-arguments-final-inspiration.trycloudflare.com',
             loginPath: '/api/login',
             registerPath: '/api/register',
             sendOtpPaths: ['/api/send-otp', '/api/register'],
