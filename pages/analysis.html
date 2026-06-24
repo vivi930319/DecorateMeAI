@@ -72,6 +72,21 @@
             </div>
         </div>
         <img id="preview" alt="preview" style="max-width:100%;margin-top:12px;border:1px solid var(--border);display:none;">
+        <div class="brightness-panel" id="brightnessPanel" style="display:none;">
+            <div class="bp-header">
+                <span class="bp-title">照片提亮</span>
+                <div class="bp-actions">
+                    <button class="btn-outline btn-sm" id="bpAutoBtn">自動提亮</button>
+                    <button class="btn-outline btn-sm" id="bpResetBtn">還原原圖</button>
+                </div>
+            </div>
+            <div class="bp-slider-row">
+                <span class="bp-label">亮度</span>
+                <input type="range" id="bpSlider" min="80" max="220" value="100" step="5">
+                <span class="bp-value" id="bpValue">100%</span>
+            </div>
+            <div class="bp-warn" id="bpWarn" style="display:none;">⚠ 偵測到照片偏暗，建議使用自動提亮</div>
+        </div>
         <div class="loading-bar" id="loadingBar"><div class="fill" id="loadingFill"></div></div>
         <div class="loading-status" id="loadingStatus">等待圖片</div>
         <div class="package-status" id="packageStatus">

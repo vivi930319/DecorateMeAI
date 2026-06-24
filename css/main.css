@@ -744,6 +744,22 @@ body {
 .loading-bar { height:1px; background:var(--line); overflow:hidden; margin-top:14px; display:none; }
 .loading-bar .fill { height:100%; width:0; background:var(--gold-grad); transition:width .4s var(--ease); }
 
+.brightness-panel { margin-top:12px; padding:14px 16px; border:1px solid var(--line-gold); background:var(--paper); }
+.bp-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.bp-title { font-family:var(--cjk); font-size:11px; letter-spacing:.22em; color:var(--gold-deep); }
+.bp-summary { font-family:var(--sans); font-size:10px; letter-spacing:.08em; color:var(--lt); }
+.bp-mode-tabs { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-bottom:12px; }
+.bp-mode { border:1px solid var(--line-gold); border-radius:999px; background:rgba(255,255,255,.62); color:var(--mid); padding:8px 10px; font-family:var(--cjk); font-size:11px; letter-spacing:.12em; cursor:pointer; transition:all .25s var(--ease); }
+.bp-mode:hover { border-color:var(--gold); }
+.bp-mode.active { color:#5B3A38; border-color:rgba(188,146,100,.5); background:linear-gradient(100deg,#F5D9DD,#F3DED4 55%,#EDDBBE); box-shadow:inset 0 1px 3px rgba(255,255,255,.9); }
+.bp-slider-row { display:flex; align-items:center; gap:10px; }
+.bp-label { font-family:var(--sans); font-size:10px; letter-spacing:.14em; color:var(--lt); white-space:nowrap; }
+.bp-slider-row input[type=range] { flex:1; accent-color:var(--gold); height:2px; }
+.bp-value { font-family:var(--sans); font-size:10px; letter-spacing:.1em; color:var(--gold-deep); min-width:34px; text-align:right; }
+.bp-status { margin-top:10px; font-family:var(--cjk); font-size:11px; line-height:1.7; color:var(--mid); }
+.bp-warn { margin-top:10px; font-family:var(--cjk); font-size:11px; letter-spacing:.1em; color:var(--blush-deep); }
+.bp-note { margin-top:8px; font-family:var(--cjk); font-size:10px; line-height:1.7; color:var(--lt); }
+
 .result-grid { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line-gold); border:1px solid var(--line-gold); }
 .result-cell { padding:18px 20px; background:var(--paper); }
 .result-cell .rlabel { font-family:var(--sans); font-size:9.5px; letter-spacing:.24em; text-transform:uppercase; color:var(--lt); margin-bottom:7px; }

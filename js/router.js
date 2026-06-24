@@ -373,6 +373,24 @@ analysis: `
             <div class="mode-note">45 度多角度採集保留為未來展望；目前 PRO 正式流程採用正面照與單側側面照，降低樣本採集難度。</div>
         </div>
         <img id="preview" alt="preview" style="max-width:100%;margin-top:12px;border:1px solid var(--border);display:none;">
+        <div class="brightness-panel" id="brightnessPanel" style="display:none;">
+            <div class="bp-header">
+                <span class="bp-title">照片提亮</span><span class="bp-summary" id="bpSummary">尚未選擇照片</span>
+            </div>
+            <div class="bp-mode-tabs" role="group" aria-label="照片提亮模式">
+                <button class="bp-mode active" type="button" data-bp-mode="off">原圖</button>
+                <button class="bp-mode" type="button" data-bp-mode="auto">自動</button>
+                <button class="bp-mode" type="button" data-bp-mode="manual">手動</button>
+            </div>
+            <div class="bp-slider-row" id="bpSliderRow" style="display:none;">
+                <span class="bp-label">亮度</span>
+                <input type="range" id="bpSlider" min="100" max="200" value="130" step="5" aria-label="手動提亮強度">
+                <span class="bp-value" id="bpValue">100%</span>
+            </div>
+            <div class="bp-status" id="bpStatus">目前使用原圖，不調整亮度。</div>
+            <div class="bp-warn" id="bpWarn" style="display:none;">偵測到照片偏暗，建議選擇「自動」。</div>
+            <div class="bp-note">提亮後的照片會送往分析；原圖保留在本頁，可隨時切回。</div>
+        </div>
         <div class="loading-bar" id="loadingBar"><div class="fill" id="loadingFill"></div></div>
         <div class="loading-status" id="loadingStatus">等待圖片</div>
         <div class="package-status" id="packageStatus"><b>資料包狀態</b><span>尚未建立</span></div>
@@ -491,7 +509,7 @@ const Router = {
             }
             const back = (NAV_ORDER.indexOf(page) > -1 && NAV_ORDER.indexOf(this.currentPage) > -1
                           && NAV_ORDER.indexOf(page) < NAV_ORDER.indexOf(this.currentPage));
-            const res = await fetch(`pages/${page}.html?v=20260622-cloud-api`, { cache: 'no-store' });
+            const res = await fetch(`pages/${page}.html?v=20260624-brightness`, { cache: 'no-store' });
             if (!res.ok) throw new Error('Page not found');
             const html = await res.text();
             const mc = document.getElementById('mainContent');
@@ -763,6 +781,161 @@ const PageInit = {
             reader.readAsDataURL(file);
         };
 
+        // ─── 提亮控制 ───
+        const bpPanel    = document.getElementById('brightnessPanel');
+        const bpSlider   = document.getElementById('bpSlider');
+        const bpSliderRow = document.getElementById('bpSliderRow');
+        const bpValue    = document.getElementById('bpValue');
+        const bpSummary  = document.getElementById('bpSummary');
+        const bpStatus   = document.getElementById('bpStatus');
+        const bpWarn     = document.getElementById('bpWarn');
+        const bpModeButtons = Array.from(document.querySelectorAll('[data-bp-mode]'));
+        const bpOriginals = { basic: null, front: null, side: null };
+        const bpLuminance = { basic: null, front: null, side: null };
+        let bpMode = 'off';
+        let bpApplyVersion = 0;
+        let bpSliderTimer = null;
+
+        async function bpDetectLuminance(file) {
+            return new Promise(resolve => {
+                const img = new Image();
+                const url = URL.createObjectURL(file);
+                img.onload = () => {
+                    const s = Math.min(1, 80 / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+                    const w = Math.max(1, Math.round(img.naturalWidth * s));
+                    const h = Math.max(1, Math.round(img.naturalHeight * s));
+                    const cv = document.createElement('canvas');
+                    cv.width = w; cv.height = h;
+                    cv.getContext('2d').drawImage(img, 0, 0, w, h);
+                    URL.revokeObjectURL(url);
+                    const d = cv.getContext('2d').getImageData(0, 0, w, h).data;
+                    let sum = 0;
+                    for (let i = 0; i < d.length; i += 4)
+                        sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+                    resolve(sum / (d.length / 4));
+                };
+                img.onerror = () => { URL.revokeObjectURL(url); resolve(128); };
+                img.src = url;
+            });
+        }
+
+        function bpTransform(file, brightness) {
+            if (!file || brightness <= 1.001) return Promise.resolve(file);
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                const url = URL.createObjectURL(file);
+                img.onload = () => {
+                    const scale = Math.min(1, 2400 / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+                    const cv = document.createElement('canvas');
+                    cv.width = Math.max(1, Math.round(img.naturalWidth * scale));
+                    cv.height = Math.max(1, Math.round(img.naturalHeight * scale));
+                    const ctx = cv.getContext('2d');
+                    ctx.filter = `brightness(${brightness})`;
+                    ctx.drawImage(img, 0, 0, cv.width, cv.height);
+                    URL.revokeObjectURL(url);
+                    cv.toBlob(blob => {
+                        if (!blob) {
+                            reject(new Error('照片提亮失敗'));
+                            return;
+                        }
+                        const base = file.name.replace(/\.[^.]+$/, '') || 'photo';
+                        resolve(new File([blob], `${base}-brightened.jpg`, { type: 'image/jpeg' }));
+                    }, 'image/jpeg', 0.94);
+                };
+                img.onerror = () => {
+                    URL.revokeObjectURL(url);
+                    reject(new Error('無法讀取照片'));
+                };
+                img.src = url;
+            });
+        }
+
+        const bpActiveRoles = () => Router.analyzeMode === 'basic'
+            ? (bpOriginals.basic ? ['basic'] : [])
+            : ['front', 'side'].filter(role => bpOriginals[role]);
+
+        const bpFactorFor = (role) => {
+            if (bpMode === 'off') return 1;
+            if (bpMode === 'manual') return Number(bpSlider.value) / 100;
+            const luminance = Number(bpLuminance[role] || 128);
+            return luminance < 115 ? Math.min(1.8, Math.max(1, 145 / Math.max(luminance, 1))) : 1;
+        };
+
+        function bpRefreshPanel() {
+            const roles = bpActiveRoles();
+            bpPanel.style.display = roles.length ? 'block' : 'none';
+            if (!roles.length) return;
+            bpModeButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.bpMode === bpMode));
+            bpSliderRow.style.display = bpMode === 'manual' ? 'flex' : 'none';
+            bpValue.textContent = `${bpSlider.value}%`;
+            const names = Router.analyzeMode === 'basic' ? 'BASIC 正面照' : `PRO ${roles.length} 張照片`;
+            bpSummary.textContent = names;
+            const darkRoles = roles.filter(role => Number(bpLuminance[role]) < 100);
+            bpWarn.style.display = darkRoles.length ? 'block' : 'none';
+            if (bpMode === 'off') {
+                bpStatus.textContent = '目前使用原圖，不調整亮度。';
+            } else if (bpMode === 'manual') {
+                bpStatus.textContent = `手動提亮 ${bpSlider.value}%，預覽與分析會使用處理後照片。`;
+            } else {
+                const adjusted = roles.filter(role => bpFactorFor(role) > 1.001).length;
+                bpStatus.textContent = adjusted
+                    ? `自動模式已依照片亮度調整 ${adjusted} 張照片。`
+                    : '自動檢測完成：亮度充足，保留原圖。';
+            }
+        }
+
+        async function bpApplyMode() {
+            const version = ++bpApplyVersion;
+            const roles = bpActiveRoles();
+            if (!roles.length) return;
+            bpStatus.textContent = '正在處理照片…';
+            try {
+                const processed = await Promise.all(roles.map(async role => [
+                    role,
+                    await bpTransform(bpOriginals[role], bpFactorFor(role))
+                ]));
+                if (version !== bpApplyVersion) return;
+                processed.forEach(([role, file]) => {
+                    if (Router.analyzeMode === 'basic' && role === 'basic') {
+                        Router.selectedFile = file;
+                    } else {
+                        Router.proFiles[role] = file;
+                        if (role === 'front') Router.selectedFile = file;
+                        updateProShotPreview(role);
+                    }
+                });
+                if (Router.selectedFile) showPreview(Router.selectedFile);
+                saveDraft('image-selected');
+                bpRefreshPanel();
+            } catch (err) {
+                if (version !== bpApplyVersion) return;
+                bpStatus.textContent = '提亮失敗，已保留原圖。';
+                showAlert('照片提亮失敗：' + err.message, { type:'error' });
+            }
+        }
+
+        async function bpRegisterFile(role, file) {
+            bpOriginals[role] = file;
+            bpLuminance[role] = await bpDetectLuminance(file);
+            bpRefreshPanel();
+            await bpApplyMode();
+        }
+
+        bpModeButtons.forEach(btn => {
+            btn.onclick = async () => {
+                bpMode = btn.dataset.bpMode;
+                bpRefreshPanel();
+                await bpApplyMode();
+            };
+        });
+
+        bpSlider.oninput = () => {
+            bpValue.textContent = `${bpSlider.value}%`;
+            bpRefreshPanel();
+            clearTimeout(bpSliderTimer);
+            bpSliderTimer = setTimeout(bpApplyMode, 120);
+        };
+
         const updateProShotPreview = (role) => {
             const file = Router.proFiles[role];
             const slot = document.querySelector(`[data-pro-slot="${role}"]`);
@@ -786,10 +959,13 @@ const PageInit = {
 
         const clearProShot = (role) => {
             Router.proFiles[role] = null;
+            bpOriginals[role] = null;
+            bpLuminance[role] = null;
             if (role === 'front') Router.selectedFile = null;
             updateProShotPreview(role);
             setProScanStatus(role, role === 'front' ? '正面：待擷取' : '側面：待擷取', false);
             saveDraft('image-selected');
+            bpRefreshPanel();
         };
 
         const setMode = (mode) => {
@@ -802,6 +978,7 @@ const PageInit = {
             preview.style.display = 'none';
             preview.removeAttribute('src');
             preview.onclick = null;
+            bpRefreshPanel();
             analyzeBtn.textContent = mode === 'basic' ? '開 始 分 析' : '開 始 PRO 分 析';
             setLoadingStatus('等待圖片');
             updatePackageStatus();
@@ -812,12 +989,13 @@ const PageInit = {
         setMode(Router.analyzeMode);
 
         uploadBox.onclick = () => fileInput.click();
-        fileInput.onchange = (e) => {
+        fileInput.onchange = async (e) => {
             const file = e.target.files[0];
             if (!file) return;
             Router.selectedFile = file;
             showPreview(file);
             saveDraft('image-selected');
+            await bpRegisterFile('basic', file);
         };
 
         document.querySelectorAll('[data-pro-slot]').forEach(slot => {
@@ -825,7 +1003,7 @@ const PageInit = {
             const input = document.getElementById(`${key}Input`);
             const nameEl = document.getElementById(`${key}FileName`);
             slot.onclick = () => input.click();
-            input.onchange = (e) => {
+            input.onchange = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
                 Router.proFiles[key] = file;
@@ -836,6 +1014,7 @@ const PageInit = {
                 }
                 updateProShotPreview(key);
                 saveDraft('image-selected');
+                await bpRegisterFile(key, file);
             };
         });
 
@@ -873,7 +1052,7 @@ const PageInit = {
             ctx.fillStyle = '#fff';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(video, 0, 0);
-            canvas.toBlob(blob => {
+            canvas.toBlob(async blob => {
                 if (!blob) {
                     showAlert('拍照失敗', { type:'error' });
                     return;
@@ -881,6 +1060,7 @@ const PageInit = {
                 Router.selectedFile = new File([blob], 'basic-camera.jpg', { type: 'image/jpeg' });
                 showPreview(Router.selectedFile);
                 saveDraft('camera-captured');
+                await bpRegisterFile('basic', Router.selectedFile);
                 Router.cameraStream.getTracks().forEach(track => track.stop());
                 Router.cameraStream = null;
                 document.getElementById('cameraBox').classList.remove('active');
@@ -930,7 +1110,7 @@ const PageInit = {
             canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('影格擷取失敗')), 'image/jpeg', 0.9);
         });
 
-        const storeProScanPhoto = (role, blob, pose = {}) => {
+        const storeProScanPhoto = async (role, blob, pose = {}) => {
             const file = new File([blob], `pro-${role}-${Date.now()}.jpg`, { type: 'image/jpeg' });
             Router.proFiles[role] = file;
             const nameEl = document.getElementById(`${role}FileName`);
@@ -947,6 +1127,7 @@ const PageInit = {
                 ? `${role === 'front' ? '正面' : '側面'}：已擷取 yaw ${Math.round(pose.yaw || 0)}°`
                 : `${role === 'front' ? '正面' : '側面'}：已手動擷取`, true);
             saveDraft('camera-captured');
+            await bpRegisterFile(role, file);
         };
 
         const SCAN_HOLD_FRAMES = 2;
