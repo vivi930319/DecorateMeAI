@@ -187,8 +187,13 @@ const Api = {
             clearTimeout(timer);
         }
         if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: '文字建議 API 連線失敗' }));
-            throw new Error(err.detail?.error?.message || err.detail || '文字建議 API 連線失敗');
+            const err = await res.json().catch(() => ({}));
+            const msg = err.detail?.error?.message
+                || err.error?.message
+                || err.detail
+                || err.message
+                || `建議服務回傳 HTTP ${res.status}`;
+            throw new Error(msg);
         }
         return res.json();
     },
