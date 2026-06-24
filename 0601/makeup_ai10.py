@@ -1,7 +1,10 @@
+
+
 import requests
 import json
+import base64
+import re
 import os
-
 
 makeup_database = {
     "Soft baddie": {
@@ -60,7 +63,6 @@ makeup_database = {
     }
 }
 
-
 face_logic = {"鵝蛋臉": "比例完美流暢", "菱形臉": "顴骨突出有神", "圓形臉": "雙頰圓潤飽滿", "長形臉": "比例顯得成熟", "正三角臉": "下顎線條分明", "方形臉": "輪廓英氣硬朗", "心形臉": "下巴精緻纖細", "梯形臉": "下顎厚實穩重"}
 eyebrow_logic = {"標準眉": "眉頭眼頭垂直", "一字眉": "眉型平直無邪", "彎月眉": "弧度圓潤溫柔", "落尾眉": "眉尾優雅下落"}
 eye_logic = {"圓眼": "眼神圓潤清澈", "長眼": "眼神嫵媚狹長", "雙眼皮": "褶皺層次分明", "單眼皮": "眼皮厚實有神"}
@@ -71,55 +73,107 @@ skin_logic = {"春季型": "適合亮暖黃系", "夏季型": "適合冷粉灰�
 face_method = {"鵝蛋臉": "輕掃下顎線；腮紅斜上暈染；打亮額頭鼻尖。", "菱形臉": "修容顴骨最高點；太陽穴打亮；腮紅銜接修容。", "圓形臉": "從耳際斜下刷修容；腮紅調高拉提；打亮下巴。", "長形臉": "修容額頭頂與下巴底；腮紅橫平刷；打亮眼下。", "正三角臉": "加強下顎陰影；太陽穴打亮擴張；腮紅斜向延伸。", "方形臉": "下頷稜角圓潤修容；蘋果肌打圈腮紅；打亮中心。", "心形臉": "顴骨下方向內收縮；下巴尖端打亮；腮紅斜掃顴骨。", "梯形臉": "下顎兩側收縮；額頭太陽穴打亮；腮紅向斜上延伸。"}
 eyebrow_method = {"標準眉": "順原生毛流填補空隙。", "一字眉": "縮短中庭，眉尾拉平。", "彎月眉": "圓潤轉折，修飾硬朗。", "落尾眉": "眉峰後移，輕輕下撇。"}
 
+OLLAMA_API_URL = "http://localhost:11434/api/chat"
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://host.docker.internal:11434/api/generate")
 
-def get_makeup_suggestion(skin, face, eye, nose, lip, eyebrow, style_name):
+def encode_image(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+def get_makeup_advice_by_vision(image_path, style_name):
     style = makeup_database.get(style_name)
     if not style: return "找不到這個風格唷！"
+    
+    try:
+  
+        img_base64 = encode_image(image_path)
+    except Exception as e:
+        return f"找不到圖片或讀取失敗：{e}"
 
-    system_instruction = (
-        "你是一位專業彩妝總監。語氣專業、乾淨，絕對禁止使用星號「*」或任何 Markdown 符號。\n"
-        "【格式規範】：\n"
-        "1. 全程繁體中文，禁止英文、贅字與符號。\n"
-        "2. 第一部分標題為：五官與膚色分析回饋\n"
-        "3. 第二部分標題為：專屬妝容建議\n"
-        "底妝：(內容)\n"
-        "眉毛：(內容)\n"
-        "眼妝：(內容)\n"
-        "腮紅/修容：(內容)\n"
-        "唇妝：(內容)"
+    analysis_prompt = (
+        "你是一位專業美容總監。請精準分析照片中人物的特徵，並嚴格從以下清單選擇標籤回傳：\n"
+        f"臉型清單：{list(face_logic.keys())}\n"
+        f"鼻型清單：{list(nose_logic.keys())}\n"
+        f"眼型清單：{list(eye_logic.keys())}\n"
+        f"眉型清單：{list(eyebrow_logic.keys())}\n"
+        f"唇型清單：{list(lip_logic.keys())}\n"
+        f"膚色類型清單：{list(skin_logic.keys())}\n"
+        "回答格式必須是 JSON 且無廢話：{\"臉型\": \"...\", \"眉型\": \"...\", \"眼型\": \"...\", \"鼻型\": \"...\", \"唇型\": \"...\", \"膚色\": \"...\"}"
     )
 
-    prompt_content = f"""
-    請為這位女孩提供「{style_name}」報告。
-    
-    【分析回饋內容】：
-    臉型：{face}，{face_logic.get(face, "")}
-    眉型：{eyebrow}，{eyebrow_logic.get(eyebrow, "")}
-    眼型：{eye}，{eye_logic.get(eye, "")}
-    鼻型：{nose}，{nose_logic.get(nose, "")}
-    唇型：{lip}，{lip_logic.get(lip, "")}
-    膚色：{skin}，{skin_logic.get(skin, "")}
-
-    【妝容建議內容】：
-    底妝：針對{skin}屬性，打造{style['base_detail']}。
-    眉毛：執行{eyebrow_method.get(eyebrow, "順原生毛流填補空隙")}。
-    眼妝：步驟為{style['eye_layers']}。
-    腮紅/修容：執行{face_method.get(face, "適度修飾輪廓")}。腮紅手法{style['blush_detail']}。鼻部修飾執行{nose_logic.get(nose, "依照鼻型自然修飾")}。
-    唇妝：手法為{style['lip_detail']}。
-    """
-
-    payload = {
-        "model": "llama3",
-        "prompt": f"{system_instruction}\n\n{prompt_content}",
-        "stream": False,
-        "options": {"temperature": 0.1}
-    }
-
     try:
-        response = requests.post(OLLAMA_URL, json=payload, timeout=40)
-        response.raise_for_status()
-        return response.json().get("response", "請再試一次。")
+        print("正在進行五官分析 ")
+        res_vision = requests.post(
+            OLLAMA_API_URL,
+            json={
+                "model": "llava",
+                "messages": [{"role": "user", "content": analysis_prompt, "images": [img_base64]}],
+                "stream": False
+            }
+        )
+        
+        full_text = res_vision.json().get('message', {}).get('content', '')
+        match = re.search(r'\{.*\}', full_text, re.DOTALL)
+        
+       
+        features = json.loads(match.group()) if match else {"臉型": "鵝蛋臉", "眉型": "標準眉", "眼型": "雙眼皮", "鼻型": "直鼻", "唇型": "微笑唇", "膚色": "春季型"}
+        print(f" 辨識成功特徵：{features}")
+
+       
+        system_instruction = (
+            "你是一位精密的人工智慧彩妝報告整合器。妳的工作是將使用者給予的文字，完美整理成指定的純文字格式輸出。\n"
+            "【嚴格格式規範】：\n"
+            "1. 全程繁體中文，絕對禁止說任何像是「根據女孩的特徵、請注意、以上、祝妳」等客套廢話或提醒。\n"
+            "2. 嚴禁使用任何 Markdown 粗體符號（**）或列表符號（*）。\n"
+            "3. 冒號一律使用全形「：」，且前後不得包裹引號「」。\n"
+            "4. 格式必須嚴格與範本一致，完全不加任何修飾字與多餘的換行。"
+        )
+
+        prompt_content = f"""
+        請嚴格按照以下格式，將資料填入並直接輸出。絕對不要多加任何一行廢話、客套開頭或結尾：
+
+        五官與膚色分析回饋
+        臉型：{features['臉型']}
+        眉型：{features['眉型']}
+        鼻型：{features['鼻型']}
+        唇型：{features['唇型']}
+        膚色：{features['膚色']}
+
+        專屬妝容建議
+        底妝：針對{features['膚色']}，選用低飽和粉棕系色調。打造{style['base_detail']}
+        眉毛：執行{eyebrow_method.get(features['眉型'], "")}
+        眼妝：步驟為{style['eye_layers']}
+        腮紅/修容：執行{face_method.get(features['臉型'], "")}搭配腮紅手法{style['blush_detail']}。鼻部修飾執行{nose_logic.get(features['鼻型'], "")}。
+        唇妝：手法為{style['lip_detail']}
+        """
+
+        print(f"【{style_name}】")
+        res_text = requests.post(
+            OLLAMA_API_URL,
+            json={
+                "model": "llama3",
+                "messages": [
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": prompt_content}
+                ],
+                "stream": False,
+                "options": {"temperature": 0.0} 
+            }
+        )
+        return res_text.json().get('message', {}).get('content', '請再試一次。')
+
     except Exception as e:
         return f"發生錯誤：{e}"
+
+#
+if __name__ == "__main__":
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    
+
+    image_file = os.path.join(current_dir, "face10.jpg") 
+    target_style = "千金妝" 
+    
+    report = get_makeup_advice_by_vision(image_file, target_style)
+    
+    print("\n--------------------------------------------------")
+    print(report)
