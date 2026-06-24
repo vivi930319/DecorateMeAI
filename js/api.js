@@ -170,17 +170,22 @@ const Api = {
     },
 
     async suggestMakeup({ analysisPackage, faceAnalysis, style, userNote }) {
-        const res = await fetch(this.config.url('textSuggestion', 'suggestPath'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                analysisPackage,
-                faceAnalysis,
-                style,
-                language: 'zh-TW',
-                userNote
-            })
-        });
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 30000);
+        let res;
+        try {
+            res = await fetch(this.config.url('textSuggestion', 'suggestPath'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ analysisPackage, faceAnalysis, style, language: 'zh-TW', userNote }),
+                signal: controller.signal
+            });
+        } catch (err) {
+            if (err.name === 'AbortError') throw new Error('Ollama 逾時（30 秒）：請確認 Ollama 是否已啟動');
+            throw new Error('無法連線到建議服務：' + err.message);
+        } finally {
+            clearTimeout(timer);
+        }
         if (!res.ok) {
             const err = await res.json().catch(() => ({ detail: '文字建議 API 連線失敗' }));
             throw new Error(err.detail?.error?.message || err.detail || '文字建議 API 連線失敗');
