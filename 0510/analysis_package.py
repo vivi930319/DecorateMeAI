@@ -2,8 +2,11 @@ from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 
+# ==========================================
+# 1. 完整保留並整合你原本的彩妝知識庫數據
+# ==========================================
 MAKEUP_DATABASE = {
-    "日常自然妝": { # 規格書預設風格
+    "日常自然妝": {
         "description": "充滿呼吸感的自然好氣色，強調透明感與溫潤的鄰家氛圍。",
         "tone": "暖杏蜜桃色系",
         "eye_layers": "先用霧面淺杏色在全眼皮輕盈打底，取帶有微細珠光的蜜桃色在眼窩中央點綴，最後用棕色眼影代替眼線，在眼尾淡淡拉出一道柔和的陰影。",
@@ -46,7 +49,7 @@ MAKEUP_DATABASE = {
         "base_detail": "強調無瑕的陶瓷光澤，在額頭、鼻樑與顴骨處疊加珍珠白色的細緻高光。",
         "lip_detail": "先用潤唇膏打底，疊加粉嫩感的水潤唇釉，營造溫柔優雅的水光嘟嘟唇質感。",
         "blush_detail": "選用膨脹色系櫻花粉，斜掃在笑肌上方提升靈動感。",
-        "custom_tip": "着重在下睫毛的根根分明，增加眼神的精緻度。"
+        "custom_tip": "著重在下睫毛的根根分明，增加眼神的精緻度。"
     },
     "港風妝": {
         "description": "復古90年代明豔對比，成熟大氣。",
@@ -68,7 +71,7 @@ MAKEUP_DATABASE = {
     }
 }
 
-# 規格合約與舊代碼對照表
+# 規格定義的英文 Code 與你原本邏輯的中文對照表
 MAP_FACE = {"oval": "鵝蛋臉", "round": "圓形臉", "square": "方形臉", "oblong": "長形臉", "heart": "心形臉", "diamond": "菱形臉", "trapezoid": "正三角臉", "unknown": "未知臉型"}
 MAP_BROW = {"straight": "一字眉", "curved": "彎月眉", "drooping_tail": "落尾眉", "standard": "標準眉", "unknown": "未知眉型"}
 MAP_EYE = {"narrow": "長眼", "downturned": "長眼", "round": "圓眼", "slender_phoenix": "長眼", "phoenix": "長眼", "slender": "長眼", "peach_blossom": "雙眼皮", "almond": "雙眼皮", "round_almond": "雙眼皮", "unknown": "未知眼型"}
@@ -83,10 +86,12 @@ NOSE_LOGIC = {"直鼻": "鼻樑高挺筆直", "朝天鼻": "鼻尖微翹俏皮",
 LIP_LOGIC = {"M型唇": "唇峰稜角立體", "花瓣唇": "唇形飽滿豐盈", "微笑唇": "嘴角天然上揚", "厚唇": "唇部感性飽滿", "薄唇": "唇線俐落清秀"}
 SKIN_LOGIC = {"春季型": "適合亮暖黃系", "夏季型": "適合冷粉灰系", "秋季型": "適合深邃暖米", "冬季型": "適合對比冷青"}
 
-FACE_METHOD = {"鵝蛋臉": "輕掃下顎線；腮紅斜上暈染；打亮額頭鼻尖。", "菱形臉": "修容顴骨最高點；太陽穴打亮；腮紅銜接修容。", "圓形臉": "從耳際斜下刷修容；腮紅調高拉提；打亮下巴。", "長形臉": "修容額頭頂與下巴底；腮紅橫平刷；打亮眼下。", "正三角臉": "加強下顎陰影；太陽穴打亮擴張；腮紅斜向延伸。", "方形臉": "下頷稜角圓潤修容；蘋果肌打圈腮紅；打亮中心。", "心形臉": "顴骨下方向內收縮；下巴尖端打亮；腮紅斜掃顴骨。", "梯形臉": "下顎兩側收縮；額頭太陽穴打亮；腮紅向斜上延伸。"}
+FACE_METHOD = {"鵝蛋臉": "輕掃下顎線；腮紅斜上暈染；打亮額頭鼻尖。", "菱形臉": "修容顴骨最高點；太陽穴打亮；腮紅銜接修容。", "圓形臉": "從耳際斜下刷修容；腮紅調高拉提；打亮下巴。", "長形臉": "修容額頭頂與下巴底；腮紅橫平刷；打亮眼下。", "正三角臉": "加強下顎陰影；太陽穴打亮擴張；腮紅斜向延伸。", "方形臉": "下頷稜角圓潤修容；蘋果肌打圈腮紅；打亮中心。", "心形臉": "顴骨下方向向內收縮；下巴尖端打亮；腮紅斜掃顴骨。", "梯形臉": "下顎兩側收縮；額頭太陽穴打亮；腮紅向斜上延伸。"}
 EYEBROW_METHOD = {"標準眉": "順原生毛流填補空隙。", "一字眉": "縮短中庭，眉尾拉平。", "彎月眉": "圓潤轉折，修飾硬朗。", "落尾眉": "眉峰後移，輕輕下撇。"}
 
-
+# ==========================================
+# 2. Pydantic 規格宣告（符合 2026-06-v1 契約）
+# ==========================================
 class ImageInfo(BaseModel):
     originalName: str
     originalType: str
@@ -152,7 +157,7 @@ class AnalysisPackage(BaseModel):
     recommendations: Optional[Dict[str, Any]] = Field(default_factory=dict)
 
 class SuggestRequest(BaseModel):
-    model_config = ConfigDict(protected_namespaces=()) # 預防 Pydantic 誤判 model 欄位保護區
+    model_config = ConfigDict(protected_namespaces=())  # 防止 Pydantic 錯誤攔截 model 關鍵字
     analysisPackage: Optional[AnalysisPackage] = None
     faceAnalysis: Optional[FaceAnalysis] = None
     style: str = "日常自然妝"
