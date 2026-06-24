@@ -1456,9 +1456,29 @@ const PageInit = {
         document.getElementById('confirmStyleBtn').onclick = async () => {
             if (!Router.selectedStyleId) { showAlert('請先選擇風格'); return; }
             const btn = document.getElementById('confirmStyleBtn');
+            const bar = document.getElementById('suggestionBar');
+            const fill = document.getElementById('suggestionFill');
+            const status = document.getElementById('suggestionStatus');
+
             const originalText = btn.textContent;
             btn.disabled = true;
             btn.textContent = '產生建議中...';
+
+            // 進度條啟動
+            bar.style.display = 'block';
+            fill.style.width = '8%';
+            status.textContent = '連線 Ollama 中...';
+            status.classList.add('active');
+            let progress = 8;
+            const interval = setInterval(() => {
+                if (progress < 82) {
+                    progress += Math.random() * 2.5 + 0.5;
+                    fill.style.width = Math.min(progress, 82) + '%';
+                    if (progress > 25) status.textContent = 'AI 分析中...';
+                    if (progress > 60) status.textContent = '整理建議文字中...';
+                }
+            }, 900);
+
             try {
                 const style = STYLES.find(s => s.id === Router.selectedStyleId);
                 const pkg = Router.analysisPackage;
@@ -1474,6 +1494,11 @@ const PageInit = {
                     style: style?.name || '日常自然妝',
                     userNote: style?.tags?.join('、') || ''
                 });
+                clearInterval(interval);
+                fill.style.width = '100%';
+                status.textContent = '建議已產生';
+                setTimeout(() => { bar.style.display = 'none'; fill.style.width = '0'; status.classList.remove('active'); }, 600);
+
                 Router.analysisPackage = AnalysisPackage.update(pkg || Router.analysisPackage, {
                     generativeText: {
                         provider: response.provider || 'ollama',
@@ -1494,6 +1519,11 @@ const PageInit = {
                 Router.pendingLookSaved = false;
                 renderAnalysisResult(response);
             } catch (err) {
+                clearInterval(interval);
+                bar.style.display = 'none';
+                fill.style.width = '0';
+                status.textContent = '建議產生失敗';
+                status.classList.remove('active');
                 const pkg = Router.analysisPackage;
                 if (pkg) {
                     Router.analysisPackage = AnalysisPackage.update(pkg, {
@@ -1505,6 +1535,7 @@ const PageInit = {
                     });
                     AnalysisDraft.save(Router.analysisPackage);
                 }
+                showAlert('Ollama 建議失敗：' + err.message, { type: 'error' });
                 renderAnalysisResult(null);
             } finally {
                 btn.disabled = false;
@@ -1545,19 +1576,10 @@ const PageInit = {
                 </div>
                 <div class="analysis-section">
                     <h3>專屬妝容建議</h3>
-                    ${aiSuggestion ? `
-                        <div class="style-intro-card">
-                            <h3>AI 文字建議</h3>
-                            <p style="white-space:pre-line;">${escapeHtml(aiSuggestion)}</p>
-                        </div>
-                    ` : ''}
-                    <div class="advice-grid">
-                        <div><b>底妝建議</b><p>${advice.base}</p></div>
-                        <div><b>眉型建議</b><p>${advice.brow}</p></div>
-                        <div><b>眼妝建議</b><p>${advice.eye}</p></div>
-                        <div><b>腮紅 & 修容</b><p>${advice.blush}</p></div>
-                        <div><b>唇妝建議</b><p>${advice.lip}</p></div>
-                    </div>
+                    ${aiSuggestion
+                        ? `<div class="style-intro-card"><p style="white-space:pre-line;">${escapeHtml(aiSuggestion)}</p></div>`
+                        : `<div class="empty-state compact">尚未取得 AI 建議，請按上方「確認風格」讓 Ollama 產生個人化建議。</div>`
+                    }
                 </div>
                 <div style="text-align:center;margin-top:20px;">
                     <button class="btn-outline" onclick="Router.go('compare')" style="margin-right:8px;">查看前後對比</button>
@@ -1786,7 +1808,6 @@ const PageInit = {
     suggestion() {
         if (!hasStartedJourney()) { renderAnalysisGate("妝容建議"); return; }
         const style = STYLES.find(s => s.id === Router.selectedStyleId) || STYLES[0];
-        const advice = style.advice || { base:'清透柔霧底妝', brow:'自然平眉', eye:'柔霧大地色', blush:'甜感腮紅', lip:'紅色系' };
         const r = getLatestAnalysisResult() || {};
         const skin = r['膚色'] || {};
         const pkg = Router.analysisPackage || {};
@@ -1814,7 +1835,6 @@ const PageInit = {
             </div>
             <div class="style-intro-card">
                 <h3>${style.name} 專屬妝容建議</h3>
-                <p style="white-space:pre-line;">${escapeSuggestionText(aiSuggestion || style.intro || '此風格介紹尚待補充。')}</p>
                 <div class="analysis-tags">${style.tags.map(t => `<span class="analysis-tag">${t}</span>`).join('')}</div>
             </div>
             <div class="analysis-section">
@@ -1825,10 +1845,11 @@ const PageInit = {
                 <div class="analysis-item"><span class="ai-label">膚色</span><span class="ai-value">${skin['膚色分級']||'—'} / ${skin['四季型']||'—'}</span></div>
             </div>
             <div class="analysis-section">
-                <h3>建議收藏</h3>
-                <div class="advice-grid">
-                    ${Object.entries(advice).map(([key, text]) => `<div><b>${adviceTitle(key)}</b><p>${text}</p></div>`).join('')}
-                </div>
+                <h3>AI 妝容建議</h3>
+                ${aiSuggestion
+                    ? `<div class="style-intro-card"><p style="white-space:pre-line;">${escapeSuggestionText(aiSuggestion)}</p></div>`
+                    : `<div class="empty-state compact">尚未取得 AI 建議，請返回風格頁按「確認風格」。</div>`
+                }
                 <button class="btn-gold" id="saveSuggestionBtn" style="margin-top:14px;">收藏妝容對比圖</button>
             </div>
         `;
@@ -1837,10 +1858,6 @@ const PageInit = {
         document.getElementById('saveSuggestionBtn').onclick = () => {
             if (saveCurrentLook()) showToast('已收藏妝容對比圖');
         };
-
-        function adviceTitle(key) {
-            return ({ base:'底妝建議', brow:'眉型建議', eye:'眼妝建議', blush:'腮紅 & 修容', lip:'唇妝建議' })[key] || key;
-        }
 
         function escapeSuggestionText(value) {
             return String(value)
