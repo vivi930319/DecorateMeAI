@@ -1545,7 +1545,6 @@ const PageInit = {
 
         function renderAnalysisResult(aiSuggestionResponse) {
             const style = STYLES.find(s => s.id === Router.selectedStyleId);
-            const advice = style.advice || defaultAdvice();
             const palette = style.palette || ['#D8B69E', '#B97970', '#7C544A'];
             const r = Router.analysisResult || {};
             const skin = r['膚色'] || {};
@@ -1557,14 +1556,7 @@ const PageInit = {
                 <div class="analysis-tags" style="justify-content:center;">
                     ${style.tags.map(t=>`<span class="analysis-tag">${t}</span>`).join('')}
                 </div>
-                <div class="style-intro-card">
-                    <h3>${style.name} 妝容介紹</h3>
-                    <p>${style.intro || '此風格介紹尚待補充。'}</p>
-                    <div class="palette-row">${palette.map(c => `<span style="background:${c}"></span>`).join('')}</div>
-                </div>
-                <div class="makeup-category-grid">
-                    ${MAKEUP_CATEGORIES.map((c,i) => `<div><b>${String(i+1).padStart(2,'0')}</b><span>${c.title}</span></div>`).join('')}
-                </div>
+                <div class="palette-row" style="margin:12px 0;">${palette.map(c => `<span style="background:${c};display:inline-block;width:28px;height:28px;border-radius:50%;margin-right:6px;"></span>`).join('')}</div>
                 <div class="analysis-section">
                     <h3>五官與膚色分析</h3>
                     <div class="analysis-item"><span class="ai-label">臉型</span><span class="ai-value">${r['臉型']||'—'}</span></div>
@@ -1587,10 +1579,6 @@ const PageInit = {
                     <button class="btn-gold" onclick="Router.go('products')">查看推薦商品 →</button>
                 </div>
             `;
-        }
-
-        function defaultAdvice() {
-            return { base:'清透柔霧底妝', brow:'自然平眉', eye:'柔霧大地色', blush:'甜感腮紅', lip:'紅色系' };
         }
 
         function escapeHtml(value) {
