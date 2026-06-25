@@ -375,21 +375,19 @@ analysis: `
         <img id="preview" alt="preview" style="max-width:100%;margin-top:12px;border:1px solid var(--border);display:none;">
         <div class="brightness-panel" id="brightnessPanel" style="display:none;">
             <div class="bp-header">
-                <span class="bp-title">照片提亮</span><span class="bp-summary" id="bpSummary">尚未選擇照片</span>
+                <span class="bp-title">亮度</span>
+                <span class="bp-summary" id="bpSummary"></span>
+                <button class="bp-reset" id="bpReset" type="button">重置</button>
             </div>
-            <div class="bp-mode-tabs" role="group" aria-label="照片提亮模式">
-                <button class="bp-mode active" type="button" data-bp-mode="off">原圖</button>
-                <button class="bp-mode" type="button" data-bp-mode="auto">自動</button>
-                <button class="bp-mode" type="button" data-bp-mode="manual">手動</button>
+            <div class="bp-slider-row" id="bpSliderRow">
+                <input type="range" id="bpSlider" min="-100" max="100" value="0" step="1" aria-label="亮度調整">
             </div>
-            <div class="bp-slider-row" id="bpSliderRow" style="display:none;">
-                <span class="bp-label">亮度</span>
-                <input type="range" id="bpSlider" min="100" max="200" value="130" step="5" aria-label="手動提亮強度">
-                <span class="bp-value" id="bpValue">100%</span>
+            <div class="bp-slider-meta">
+                <span class="bp-bound">−100</span>
+                <span class="bp-value" id="bpValue">0</span>
+                <span class="bp-bound">+100</span>
             </div>
-            <div class="bp-status" id="bpStatus">目前使用原圖，不調整亮度。</div>
-            <div class="bp-warn" id="bpWarn" style="display:none;">偵測到照片偏暗，建議選擇「自動」。</div>
-            <div class="bp-note">提亮後的照片會送往分析；原圖保留在本頁，可隨時切回。</div>
+            <div class="bp-status" id="bpStatus"></div>
         </div>
         <div class="loading-bar" id="loadingBar"><div class="fill" id="loadingFill"></div></div>
         <div class="loading-status" id="loadingStatus">等待圖片</div>
@@ -784,15 +782,11 @@ const PageInit = {
         // ─── 提亮控制 ───
         const bpPanel    = document.getElementById('brightnessPanel');
         const bpSlider   = document.getElementById('bpSlider');
-        const bpSliderRow = document.getElementById('bpSliderRow');
         const bpValue    = document.getElementById('bpValue');
         const bpSummary  = document.getElementById('bpSummary');
         const bpStatus   = document.getElementById('bpStatus');
-        const bpWarn     = document.getElementById('bpWarn');
-        const bpModeButtons = Array.from(document.querySelectorAll('[data-bp-mode]'));
         const bpOriginals = { basic: null, front: null, side: null };
         const bpLuminance = { basic: null, front: null, side: null };
-        let bpMode = 'off';
         let bpApplyVersion = 0;
         let bpSliderTimer = null;
 
@@ -819,33 +813,43 @@ const PageInit = {
             });
         }
 
-        function bpTransform(file, brightness) {
-            if (!file || brightness <= 1.001) return Promise.resolve(file);
+        function bpTransform(file, sliderValue) {
+            if (!file || Math.abs(sliderValue) < 1) return Promise.resolve(file);
             return new Promise((resolve, reject) => {
                 const img = new Image();
                 const url = URL.createObjectURL(file);
                 img.onload = () => {
                     const scale = Math.min(1, 2400 / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
                     const cv = document.createElement('canvas');
-                    cv.width = Math.max(1, Math.round(img.naturalWidth * scale));
+                    cv.width  = Math.max(1, Math.round(img.naturalWidth  * scale));
                     cv.height = Math.max(1, Math.round(img.naturalHeight * scale));
                     const ctx = cv.getContext('2d');
-                    ctx.filter = `brightness(${brightness})`;
                     ctx.drawImage(img, 0, 0, cv.width, cv.height);
                     URL.revokeObjectURL(url);
+
+                    // Gamma 校正：暗部提亮多、亮部（皮膚高光）幾乎不動，不會過曝
+                    // gamma = 2^(-val/100)：val=0→1.0(原圖)，val=+100→0.5(提亮)，val=-100→2.0(調暗)
+                    const gamma = Math.pow(2, -sliderValue / 100);
+                    const lut = new Uint8Array(256);
+                    for (let i = 0; i < 256; i++) {
+                        lut[i] = Math.round(255 * Math.pow(i / 255, gamma));
+                    }
+                    const id = ctx.getImageData(0, 0, cv.width, cv.height);
+                    const d = id.data;
+                    for (let i = 0; i < d.length; i += 4) {
+                        d[i]     = lut[d[i]];
+                        d[i + 1] = lut[d[i + 1]];
+                        d[i + 2] = lut[d[i + 2]];
+                    }
+                    ctx.putImageData(id, 0, 0);
+
                     cv.toBlob(blob => {
-                        if (!blob) {
-                            reject(new Error('照片提亮失敗'));
-                            return;
-                        }
+                        if (!blob) { reject(new Error('照片提亮失敗')); return; }
                         const base = file.name.replace(/\.[^.]+$/, '') || 'photo';
                         resolve(new File([blob], `${base}-brightened.jpg`, { type: 'image/jpeg' }));
-                    }, 'image/jpeg', 0.94);
+                    }, 'image/jpeg', 0.97);
                 };
-                img.onerror = () => {
-                    URL.revokeObjectURL(url);
-                    reject(new Error('無法讀取照片'));
-                };
+                img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('無法讀取照片')); };
                 img.src = url;
             });
         }
@@ -854,34 +858,21 @@ const PageInit = {
             ? (bpOriginals.basic ? ['basic'] : [])
             : ['front', 'side'].filter(role => bpOriginals[role]);
 
-        const bpFactorFor = (role) => {
-            if (bpMode === 'off') return 1;
-            if (bpMode === 'manual') return Number(bpSlider.value) / 100;
-            const luminance = Number(bpLuminance[role] || 128);
-            return luminance < 115 ? Math.min(1.8, Math.max(1, 145 / Math.max(luminance, 1))) : 1;
-        };
+        // sliderValue：-100~+100 直接傳給 bpTransform
+        const bpFactorFor = () => Number(bpSlider.value);
 
         function bpRefreshPanel() {
             const roles = bpActiveRoles();
             bpPanel.style.display = roles.length ? 'block' : 'none';
             if (!roles.length) return;
-            bpModeButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.bpMode === bpMode));
-            bpSliderRow.style.display = bpMode === 'manual' ? 'flex' : 'none';
-            bpValue.textContent = `${bpSlider.value}%`;
-            const names = Router.analyzeMode === 'basic' ? 'BASIC 正面照' : `PRO ${roles.length} 張照片`;
+            const val = Number(bpSlider.value);
+            bpValue.textContent = val > 0 ? `+${val}` : `${val}`;
+            bpValue.className = `bp-value${val > 0 ? ' pos' : val < 0 ? ' neg' : ''}`;
+            const names = Router.analyzeMode === 'basic' ? 'BASIC' : `PRO ${roles.length} 張`;
             bpSummary.textContent = names;
-            const darkRoles = roles.filter(role => Number(bpLuminance[role]) < 100);
-            bpWarn.style.display = darkRoles.length ? 'block' : 'none';
-            if (bpMode === 'off') {
-                bpStatus.textContent = '目前使用原圖，不調整亮度。';
-            } else if (bpMode === 'manual') {
-                bpStatus.textContent = `手動提亮 ${bpSlider.value}%，預覽與分析會使用處理後照片。`;
-            } else {
-                const adjusted = roles.filter(role => bpFactorFor(role) > 1.001).length;
-                bpStatus.textContent = adjusted
-                    ? `自動模式已依照片亮度調整 ${adjusted} 張照片。`
-                    : '自動檢測完成：亮度充足，保留原圖。';
-            }
+            bpStatus.textContent = val === 0
+                ? '使用原圖'
+                : val > 0 ? `已提亮，照片分析將使用處理後圖片` : `已調暗，照片分析將使用處理後圖片`;
         }
 
         async function bpApplyMode() {
@@ -890,9 +881,10 @@ const PageInit = {
             if (!roles.length) return;
             bpStatus.textContent = '正在處理照片…';
             try {
+                const factor = bpFactorFor();
                 const processed = await Promise.all(roles.map(async role => [
                     role,
-                    await bpTransform(bpOriginals[role], bpFactorFor(role))
+                    await bpTransform(bpOriginals[role], factor)
                 ]));
                 if (version !== bpApplyVersion) return;
                 processed.forEach(([role, file]) => {
@@ -916,24 +908,26 @@ const PageInit = {
 
         async function bpRegisterFile(role, file) {
             bpOriginals[role] = file;
-            bpLuminance[role] = await bpDetectLuminance(file);
+            const lum = await bpDetectLuminance(file);
+            bpLuminance[role] = lum;
+            // 首次上傳且滑桿在 0 時，自動建議提亮值（暗部照片）
+            if (Number(bpSlider.value) === 0 && lum < 110) {
+                bpSlider.value = Math.min(50, Math.round((110 - lum) / 2));
+            }
             bpRefreshPanel();
             await bpApplyMode();
         }
 
-        bpModeButtons.forEach(btn => {
-            btn.onclick = async () => {
-                bpMode = btn.dataset.bpMode;
-                bpRefreshPanel();
-                await bpApplyMode();
-            };
-        });
+        document.getElementById('bpReset').onclick = async () => {
+            bpSlider.value = 0;
+            bpRefreshPanel();
+            await bpApplyMode();
+        };
 
         bpSlider.oninput = () => {
-            bpValue.textContent = `${bpSlider.value}%`;
             bpRefreshPanel();
             clearTimeout(bpSliderTimer);
-            bpSliderTimer = setTimeout(bpApplyMode, 120);
+            bpSliderTimer = setTimeout(bpApplyMode, 150);
         };
 
         const updateProShotPreview = (role) => {
@@ -1281,6 +1275,14 @@ const PageInit = {
                 showAlert('PRO 分析需要正面照與側面照');
                 return;
             }
+
+            // 確保任何未完成的亮度調整都已套用，再把調色後的照片送往後端
+            if (bpSliderTimer) {
+                clearTimeout(bpSliderTimer);
+                bpSliderTimer = null;
+                await bpApplyMode();
+            }
+
             const startedAt = Date.now();
             if (!Router.analysisPackage) saveDraft('queued');
             Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
@@ -1289,7 +1291,8 @@ const PageInit = {
             });
             AnalysisDraft.save(Router.analysisPackage);
             updatePackageStatus();
-            setLoadingStatus('原圖送出分析中', true);
+            const brightnessApplied = Number(bpSlider?.value || 0) !== 0;
+            setLoadingStatus(brightnessApplied ? '調色後照片送出分析中' : '照片送出分析中', true);
             bar.style.display = 'block'; fill.style.width = '30%';
             try {
                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, { status: 'analyzing' });
@@ -1507,7 +1510,11 @@ const PageInit = {
                         model: response.model || null,
                         status: response.status || 'completed',
                         error: null,
-                        fallbackUsed: !!response.fallbackUsed
+                        fallbackUsed: !!response.fallbackUsed,
+                        renderPromptEn: buildRenderPrompt(
+                            pkg?.faceAnalysis || Router.analysisPackage?.faceAnalysis,
+                            Router.selectedStyleId
+                        )
                     },
                     recommendations: {
                         ...(pkg?.recommendations || Router.analysisPackage?.recommendations || {}),
@@ -1835,7 +1842,7 @@ const PageInit = {
             <div class="analysis-section">
                 <h3>AI 妝容建議</h3>
                 ${aiSuggestion
-                    ? `<div class="style-intro-card"><p style="white-space:pre-line;">${escapeSuggestionText(aiSuggestion)}</p></div>`
+                    ? `<div class="advice-grid">${parseSuggestionSections(aiSuggestion, escapeSuggestionText)}</div>`
                     : `<div class="empty-state compact">尚未取得 AI 建議，請返回風格頁按「確認風格」。</div>`
                 }
                 <button class="btn-gold" id="saveSuggestionBtn" style="margin-top:14px;">收藏妝容對比圖</button>
@@ -1854,6 +1861,27 @@ const PageInit = {
                 .replaceAll('>', '&gt;')
                 .replaceAll('"', '&quot;')
                 .replaceAll("'", '&#039;');
+        }
+
+        function parseSuggestionSections(text, escapeFn) {
+            const KEYS = ['整體妝容方向', '底妝建議', '眉眼妝建議', '唇妝建議', '避免事項'];
+            const k = KEYS.join('|');
+            // 同時支援：【標題】、1. 標題：、標題：
+            const pattern = new RegExp(
+                `【(${k})】|\\d+[.、．]\\s*(${k})\\s*[：:]?|(${k})[：:]`,
+                'g'
+            );
+            const allMatches = [...text.matchAll(pattern)];
+            if (!allMatches.length) {
+                return `<div style="grid-column:1/-1"><b>妝容建議</b><p>${escapeFn(text.trim())}</p></div>`;
+            }
+            return allMatches.map((m, i) => {
+                const title = m[1] || m[2] || m[3];
+                const start = m.index + m[0].length;
+                const end = i + 1 < allMatches.length ? allMatches[i + 1].index : text.length;
+                const content = text.slice(start, end).replace(/^\s+/, '').trimEnd();
+                return `<div><b>${title}</b><p>${escapeFn(content)}</p></div>`;
+            }).join('');
         }
     },
 

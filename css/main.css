@@ -745,20 +745,19 @@ body {
 .loading-bar .fill { height:100%; width:0; background:var(--gold-grad); transition:width .4s var(--ease); }
 
 .brightness-panel { margin-top:12px; padding:14px 16px; border:1px solid var(--line-gold); background:var(--paper); }
-.bp-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.bp-header { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
 .bp-title { font-family:var(--cjk); font-size:11px; letter-spacing:.22em; color:var(--gold-deep); }
-.bp-summary { font-family:var(--sans); font-size:10px; letter-spacing:.08em; color:var(--lt); }
-.bp-mode-tabs { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin-bottom:12px; }
-.bp-mode { border:1px solid var(--line-gold); border-radius:999px; background:rgba(255,255,255,.62); color:var(--mid); padding:8px 10px; font-family:var(--cjk); font-size:11px; letter-spacing:.12em; cursor:pointer; transition:all .25s var(--ease); }
-.bp-mode:hover { border-color:var(--gold); }
-.bp-mode.active { color:#5B3A38; border-color:rgba(188,146,100,.5); background:linear-gradient(100deg,#F5D9DD,#F3DED4 55%,#EDDBBE); box-shadow:inset 0 1px 3px rgba(255,255,255,.9); }
-.bp-slider-row { display:flex; align-items:center; gap:10px; }
-.bp-label { font-family:var(--sans); font-size:10px; letter-spacing:.14em; color:var(--lt); white-space:nowrap; }
-.bp-slider-row input[type=range] { flex:1; accent-color:var(--gold); height:2px; }
-.bp-value { font-family:var(--sans); font-size:10px; letter-spacing:.1em; color:var(--gold-deep); min-width:34px; text-align:right; }
-.bp-status { margin-top:10px; font-family:var(--cjk); font-size:11px; line-height:1.7; color:var(--mid); }
-.bp-warn { margin-top:10px; font-family:var(--cjk); font-size:11px; letter-spacing:.1em; color:var(--blush-deep); }
-.bp-note { margin-top:8px; font-family:var(--cjk); font-size:10px; line-height:1.7; color:var(--lt); }
+.bp-summary { font-family:var(--sans); font-size:10px; letter-spacing:.08em; color:var(--lt); flex:1; }
+.bp-reset { margin-left:auto; border:1px solid var(--line-gold); background:transparent; color:var(--lt); font-family:var(--sans); font-size:10px; letter-spacing:.1em; padding:3px 10px; cursor:pointer; border-radius:2px; transition:all .2s; }
+.bp-reset:hover { border-color:var(--gold); color:var(--gold-deep); }
+.bp-slider-row { padding:0 2px; }
+.bp-slider-row input[type=range] { width:100%; accent-color:var(--gold); cursor:pointer; }
+.bp-slider-meta { display:flex; align-items:center; justify-content:space-between; margin-top:4px; }
+.bp-bound { font-family:var(--sans); font-size:9px; letter-spacing:.06em; color:var(--lt); }
+.bp-value { font-family:var(--sans); font-size:13px; font-weight:500; letter-spacing:.04em; color:var(--gold-deep); min-width:40px; text-align:center; }
+.bp-value.pos { color:#8B6A3A; }
+.bp-value.neg { color:var(--lt); }
+.bp-status { margin-top:8px; font-family:var(--cjk); font-size:10px; line-height:1.7; color:var(--lt); }
 
 .result-grid { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line-gold); border:1px solid var(--line-gold); }
 .result-cell { padding:18px 20px; background:var(--paper); }
@@ -1349,6 +1348,12 @@ body {
     border-color:rgba(255,255,255,0.45);
     box-shadow:inset 0 1px 0 rgba(255,255,255,0.55), 0 14px 38px rgba(120,70,66,0.10);
 }
+.suggestion-card { border:1px solid rgba(201,169,110,0.22); padding:20px 24px; margin-bottom:12px; }
+.suggestion-card:last-of-type { margin-bottom:0; }
+.suggestion-card-header { display:flex; align-items:center; gap:10px; margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid rgba(201,169,110,0.15); }
+.suggestion-card-icon { font-family:var(--serif); font-size:14px; color:var(--gold); width:20px; text-align:center; flex-shrink:0; }
+.suggestion-card-label { font-family:var(--cjk); font-size:11px; font-weight:500; letter-spacing:.22em; text-transform:uppercase; color:var(--gold-deep); }
+.suggestion-card-body { font-family:var(--cjk); font-size:13.5px; line-height:2; color:var(--mid); font-weight:300; white-space:pre-line; margin:0; }
 /* hover 時略提亮、更清透 */
 .dash-card:hover,
 .upload-box:hover,

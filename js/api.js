@@ -1,3 +1,12 @@
+// 無登入 session 時清除所有訪客活動資料，確保每次開新分頁都是乾淨狀態
+(function () {
+    if (!sessionStorage.getItem('beautyUser')) {
+        ['beautyAnalysisDraft', 'beautyFav', 'beautyCart', 'beautyHistory', 'beautySuggestions'].forEach(
+            k => localStorage.removeItem(k)
+        );
+    }
+})();
+
 // ═══ API 設定：所有外部服務都走這裡，不直接連 PostgreSQL 或 Ollama 11434 ═══
 const RuntimeApiConfig = typeof window !== 'undefined' ? (window.DECORATE_ME_CONFIG || {}) : {};
 
@@ -170,21 +179,15 @@ const Api = {
     },
 
     async suggestMakeup({ analysisPackage, faceAnalysis, style, userNote }) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 30000);
         let res;
         try {
             res = await fetch(this.config.url('textSuggestion', 'suggestPath'), {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ analysisPackage, faceAnalysis, style, language: 'zh-TW', userNote }),
-                signal: controller.signal
             });
         } catch (err) {
-            if (err.name === 'AbortError') throw new Error('Ollama 逾時（30 秒）：請確認 Ollama 是否已啟動');
             throw new Error('無法連線到建議服務：' + err.message);
-        } finally {
-            clearTimeout(timer);
         }
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
@@ -548,6 +551,33 @@ const AnalysisPackage = {
     }
 };
 
+function buildRenderPrompt(faceAnalysis, styleId) {
+    const styleMap = {
+        softBaddie:     'soft baddie makeup, matte blurred skin, smudged earthy smoky eye, rosy mauve lips',
+        richGirl:       'luxury rich girl makeup, glass skin, muted taupe eyeshadow, nude rosy lip',
+        hongKong:       'Hong Kong retro vintage makeup, defined brows, warm brown smoky eye, brick red lip',
+        koreanClean:    'Korean glass skin no-makeup makeup, dewy sheer base, soft pink blush, MLBB lip',
+        yandere:        'yandere aesthetic makeup, pale ethereal skin, rosy under-eye blush, blood red bitten lip',
+        japaneseClear:  'Japanese magazine fresh makeup, airy veil skin, soft peach eyeshadow, coral lip',
+        mensPlain:      'minimal men grooming look, clean even skin tone, neat natural brows, no-makeup feel',
+    };
+    const eyeMap = {
+        almond:'almond-shaped eyes', round_almond:'round almond eyes', round:'round eyes',
+        peach_blossom:'peach blossom eyes', phoenix:'phoenix eyes', slender_phoenix:'slender phoenix eyes',
+        downturned:'downturned eyes', narrow:'narrow eyes', slender:'slender eyes',
+    };
+    const faceMap = {
+        oval:'oval face', round:'round face', heart:'heart-shaped face', square:'square jawline',
+        oblong:'long face', diamond:'diamond face', trapezoid:'trapezoid face',
+    };
+    const skinMap = {
+        spring:'warm ivory skin', summer:'cool beige skin', autumn:'warm golden brown skin', winter:'cool porcelain skin',
+    };
+    const style = styleMap[styleId] || 'natural everyday makeup';
+    const parts = [faceMap[faceAnalysis?.faceShape], eyeMap[faceAnalysis?.eyeShape], skinMap[faceAnalysis?.skinTone?.season]].filter(Boolean);
+    return `${style}, Asian woman${parts.length ? ' with ' + parts.join(', ') : ''}, photorealistic, soft studio lighting, beauty portrait, high quality`;
+}
+
 const AnalysisDraft = {
     _key: 'beautyAnalysisDraft',
     save(pkg) {
@@ -578,22 +608,22 @@ const Auth = {
         members[this._email(profile.email)] = { ...(members[this._email(profile.email)] || {}), ...profile };
         localStorage.setItem(this._membersKey, JSON.stringify(members));
     },
-    getUser()  { return localStorage.getItem('beautyUser') || ''; },
-    getProfile() { return JSON.parse(localStorage.getItem('beautyProfile') || '{}'); },
+    getUser()  { return sessionStorage.getItem('beautyUser') || ''; },
+    getProfile() { return JSON.parse(sessionStorage.getItem('beautyProfile') || '{}'); },
     setProfile(profile) {
-        localStorage.setItem('beautyProfile', JSON.stringify(profile || {}));
-        if (profile?.name) localStorage.setItem('beautyUser', profile.name);
+        sessionStorage.setItem('beautyProfile', JSON.stringify(profile || {}));
+        if (profile?.name) sessionStorage.setItem('beautyUser', profile.name);
         this.saveRegisteredMember(profile);
     },
     setUser(n) {
-        localStorage.setItem('beautyUser', n);
+        sessionStorage.setItem('beautyUser', n);
         const profile = this.getProfile();
         this.setProfile({ ...profile, name: n });
     },
     isLoggedIn() { return !!this.getUser(); },
     logout() {
-        localStorage.removeItem('beautyUser');
-        localStorage.removeItem('beautyProfile');
+        sessionStorage.removeItem('beautyUser');
+        sessionStorage.removeItem('beautyProfile');
         location.reload();
     },
 };
