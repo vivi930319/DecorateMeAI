@@ -14,6 +14,8 @@
 !requirements.txt
 !backend_smoke_test.py
 !ollama_suggestion_smoke_test.py
+!analysis_package.py
+!後端功能與BASIC臉部分析說明.md
 !select_basic_usable_images.py
 !auto_label_basic_dataset.py
 !batch_basic_classify.py
@@ -23,6 +25,7 @@
 !setup.bat
 !start_backend_local.bat
 !start_full_stack_local.bat
+!README.md
 
 # 本機新手教學文件，不上傳 Git
 local_only_notes/

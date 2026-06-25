@@ -6,3 +6,6 @@
 !cloud_start.py
 !Dockerfile
 !requirements.txt
+!eyelid_model.onnx
+!eyelid_model.onnx.data
+!analysis_package.py

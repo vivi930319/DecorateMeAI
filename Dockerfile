@@ -21,6 +21,10 @@ COPY Face_analyzer_PRO.py .
 COPY Ollama_suggestion.py .
 COPY dev_server_utils.py .
 COPY cloud_start.py .
+COPY eyelid_model.onnx .
+COPY eyelid_model.onnx.data .
+# replicate_render.py 由組員交付後加入
+COPY replicate_render.py* ./
 
 EXPOSE 8080
 

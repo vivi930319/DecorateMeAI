@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import BackgroundTasks, FastAPI, UploadFile, HTTPException, File
+from fastapi import BackgroundTasks, FastAPI, UploadFile, HTTPException, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 import insightface
@@ -42,6 +42,30 @@ _jobs = {}
 
 MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "2048"))
 FACE_JOB_TIMEOUT_SECONDS = int(os.getenv("FACE_JOB_TIMEOUT_SECONDS", "180"))
+
+# ─── 亮度增強 ───────────────────────────────────────────────────────────────
+BRIGHTNESS_LOW_THRESHOLD = float(os.getenv("BRIGHTNESS_LOW_THRESHOLD", "70"))
+BRIGHTNESS_GAMMA         = float(os.getenv("BRIGHTNESS_GAMMA", "0.65"))
+
+
+def _measure_brightness(frame_bgr: np.ndarray) -> float:
+    """回傳影像 HSV V 通道的平均值（0–255）作為亮度指標。"""
+    return float(np.mean(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)[:, :, 2]))
+
+
+def _enhance_brightness_auto(frame_bgr: np.ndarray, gamma: float = 0.65) -> np.ndarray:
+    """Gamma 校正提亮中間調（皮膚色調），自然不過曝；gamma < 1 越小越亮。"""
+    lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    lut = np.array([int(255 * (i / 255.0) ** gamma) for i in range(256)], dtype=np.uint8)
+    return cv2.cvtColor(cv2.merge([lut[l], a, b]), cv2.COLOR_LAB2BGR)
+
+
+def _enhance_brightness_manual(frame_bgr: np.ndarray, level: float) -> np.ndarray:
+    """將 HSV V 通道乘以 level（>1 提亮，<1 調暗），結果限制在 0–255。"""
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hsv[:, :, 2] = np.clip(hsv[:, :, 2] * level, 0, 255)
+    return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 FACE_JOB_RETENTION_SECONDS = int(os.getenv("FACE_JOB_RETENTION_SECONDS", "3600"))
 FACE_JOB_MAX_COUNT = int(os.getenv("FACE_JOB_MAX_COUNT", "200"))
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://127.0.0.1:5500")
@@ -96,14 +120,22 @@ async def health():
 
 @app.post("/analyze")
 @app.post("/v1/face/analyze/basic")
-async def analyze(file: UploadFile = File(...)):
+async def analyze(
+    file: UploadFile = File(...),
+    brightness_mode: str  = Form("none"),
+    brightness_level: float = Form(1.0),
+):
     # BASIC 同時支援「檔案上傳」與「拍照上傳」：
     # 前端檔案 input 直接送 File；相機拍照則把 canvas/blob 包成 File 後送到同一個欄位。
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=400, detail="上傳檔案是空的")
+    if brightness_mode not in {"none", "auto", "manual"}:
+        raise HTTPException(status_code=400, detail="brightness_mode 必須為 none / auto / manual")
+    if not (0.1 <= brightness_level <= 5.0):
+        raise HTTPException(status_code=400, detail="brightness_level 必須在 0.1 ~ 5.0 之間")
     try:
-        analyzer = FaceAnalyzer(contents)
+        analyzer = FaceAnalyzer(contents, brightness_mode=brightness_mode, brightness_level=brightness_level)
         result = analyzer.export_json()
         return result
     except ValueError as e:
@@ -240,11 +272,11 @@ def _job_view(job):
     return {k: v for k, v in job.items() if k != "result"}
 
 
-def _run_basic_job(job_id, contents):
+def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.0):
     job = _jobs[job_id]
     job.update({"status": "processing", "stage": "face_analysis", "progress": 35, "startedAt": _now_iso()})
     try:
-        result = FaceAnalyzer(contents).export_json()
+        result = FaceAnalyzer(contents, brightness_mode=brightness_mode, brightness_level=brightness_level).export_json()
         job.update({
             "status": "completed",
             "stage": "done",
@@ -263,11 +295,20 @@ def _run_basic_job(job_id, contents):
 
 
 @app.post("/v1/face/jobs/basic")
-async def create_basic_job(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def create_basic_job(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    brightness_mode: str   = Form("none"),
+    brightness_level: float = Form(1.0),
+):
     _cleanup_jobs()
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=400, detail={"error": {"message": "上傳檔案是空的"}})
+    if brightness_mode not in {"none", "auto", "manual"}:
+        raise HTTPException(status_code=400, detail={"error": {"message": "brightness_mode 必須為 none / auto / manual"}})
+    if not (0.1 <= brightness_level <= 5.0):
+        raise HTTPException(status_code=400, detail={"error": {"message": "brightness_level 必須在 0.1 ~ 5.0 之間"}})
     job_id = f"JOB-{uuid.uuid4().hex[:12]}"
     _jobs[job_id] = {
         "jobId": job_id,
@@ -281,7 +322,7 @@ async def create_basic_job(background_tasks: BackgroundTasks, file: UploadFile =
         "error": None,
         "result": None,
     }
-    background_tasks.add_task(_run_basic_job, job_id, contents)
+    background_tasks.add_task(_run_basic_job, job_id, contents, brightness_mode, brightness_level)
     return _job_view(_jobs[job_id])
 
 
@@ -314,7 +355,7 @@ class FaceAnalyzer:
     YAW_LIMIT   = 18.0
     PITCH_LIMIT = 15.0
 
-    def __init__(self, image_input, strict_angle=True):
+    def __init__(self, image_input, strict_angle=True, brightness_mode="none", brightness_level=1.0):
         if isinstance(image_input, str):
             self.frame = cv2.imdecode(np.fromfile(image_input, dtype=np.uint8), cv2.IMREAD_COLOR)
         elif isinstance(image_input, bytes):
@@ -334,6 +375,23 @@ class FaceAnalyzer:
                 (int(w0 * scale), int(h0 * scale)),
                 interpolation=cv2.INTER_AREA
             )
+
+        # ── 亮度增強（在特徵分析前處理）──────────────────────────────────
+        original_brightness = _measure_brightness(self.frame)
+        self.brightness_info: dict = {
+            "mode": brightness_mode,
+            "originalBrightness": round(original_brightness, 1),
+            "enhanced": False,
+            "enhancedBrightness": None,
+        }
+        if brightness_mode == "auto" and original_brightness < BRIGHTNESS_LOW_THRESHOLD:
+            self.frame = _enhance_brightness_auto(self.frame, BRIGHTNESS_GAMMA)
+            self.brightness_info["enhanced"] = True
+            self.brightness_info["enhancedBrightness"] = round(_measure_brightness(self.frame), 1)
+        elif brightness_mode == "manual" and abs(brightness_level - 1.0) > 0.01:
+            self.frame = _enhance_brightness_manual(self.frame, brightness_level)
+            self.brightness_info["enhanced"] = True
+            self.brightness_info["enhancedBrightness"] = round(_measure_brightness(self.frame), 1)
 
         self.h, self.w, _ = self.frame.shape
         rgb = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
@@ -768,6 +826,7 @@ class FaceAnalyzer:
             },
             "嘴唇_LAB": {"L": float(lip_L), "a": float(lip_a), "b": float(lip_b)},
             "臉部對稱性": self.get_face_symmetry(),
+            "brightnessEnhancement": self.brightness_info,
         }
         if save_path:
             with open(save_path, "w", encoding="utf-8") as f:

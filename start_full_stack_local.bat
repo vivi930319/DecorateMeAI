@@ -25,7 +25,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "    Start-Process -FilePath $py -ArgumentList $arguments -WorkingDirectory $dir -WindowStyle Hidden" ^
   "  }" ^
   "};" ^
-  "Start-LocalService 5500 @('-m','http.server','5500','--bind','127.0.0.1') $front;" ^
+  "Start-LocalService 5500 @('dev_server.py') $front;" ^
   "Start-LocalService 8001 @('Face_analyzer_BASIC.py') $root;" ^
   "Start-LocalService 8002 @('Face_analyzer_PRO.py') $root;" ^
   "Start-LocalService 8010 @('Ollama_suggestion.py') $root;" ^

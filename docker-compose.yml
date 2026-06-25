@@ -3,7 +3,7 @@ services:
     build: .
     container_name: face_analysis_basic
     ports:
-      - "8001:8001"  # BASIC API
+      - "8001:8001"
     environment:
       - MAX_IMAGE_SIZE=2048
       - FACE_JOB_TIMEOUT_SECONDS=180
@@ -19,7 +19,7 @@ services:
     build: .
     container_name: face_analysis_pro
     ports:
-      - "8002:8002"  # PRO API
+      - "8002:8002"
     environment:
       - MAX_IMAGE_SIZE=2048
       - FACE_JOB_TIMEOUT_SECONDS=180
@@ -35,10 +35,21 @@ services:
     build: .
     container_name: ollama_suggestion
     ports:
-      - "8010:8010"  # Ollama text suggestion API
+      - "8010:8010"
     environment:
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      - OLLAMA_MODEL=gemma3
-      - OLLAMA_ALLOW_FALLBACK=true
+      # 連接黃姵錚的 Mac Ollama（透過 Cloudflare Tunnel）
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-gemma3}
     command: ["uvicorn", "Ollama_suggestion:app", "--host", "0.0.0.0", "--port", "8010"]
     restart: always
+
+  replicate_render:
+    build: .
+    container_name: replicate_render
+    ports:
+      - "8020:8020"
+    environment:
+      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+    command: ["uvicorn", "replicate_render:app", "--host", "0.0.0.0", "--port", "8020"]
+    restart: always
+    # 組員尚未交付 replicate_render.py 前，先把這個 service 註解掉
