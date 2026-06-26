@@ -699,6 +699,17 @@ class FaceAnalyzer:
         cv2.fillConvexPoly(mask, cv2.convexHull(pts), fill)
         return mask
 
+    def _landmark_poly_mask(self, indices, fill=255):
+        mask = np.zeros((self.h, self.w), dtype=np.uint8)
+        pts = []
+        for idx in indices:
+            if 0 <= idx < len(self.lm):
+                pts.append(self._pt(idx))
+        if len(pts) < 3:
+            return mask
+        cv2.fillConvexPoly(mask, cv2.convexHull(np.array(pts, dtype=np.int32)), fill)
+        return mask
+
     def _bgr_mean_to_lab(self, mean_bgr):
         bgr_img = np.array([[[int(mean_bgr[0]), int(mean_bgr[1]), int(mean_bgr[2])]]], dtype=np.uint8)
         lab_px  = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2Lab)[0, 0]
@@ -708,8 +719,32 @@ class FaceAnalyzer:
         l_mean, a_mean_cv, b_mean_cv, _ = cv2.mean(lab_img, mask=mask_u8)
         return (float(l_mean) / 2.55, float(a_mean_cv - 128.0), float(b_mean_cv - 128.0))
 
+    def _lab_robust_from_mask(self, lab_img, mask_u8):
+        pixels = lab_img[mask_u8 > 0]
+        if pixels.size == 0:
+            return self._lab_mean_from_mask(lab_img, mask_u8)
+
+        l_vals = pixels[:, 0].astype(np.float32) / 2.55
+        a_vals = pixels[:, 1].astype(np.float32) - 128.0
+        b_vals = pixels[:, 2].astype(np.float32) - 128.0
+
+        # Remove hard shadows and glossy highlights before averaging skin tone.
+        l_low, l_high = np.percentile(l_vals, [18, 82])
+        keep = (l_vals >= l_low) & (l_vals <= l_high)
+        if int(np.count_nonzero(keep)) >= 80:
+            l_vals, a_vals, b_vals = l_vals[keep], a_vals[keep], b_vals[keep]
+
+        med = np.array([np.median(l_vals), np.median(a_vals), np.median(b_vals)], dtype=np.float32)
+        dist = np.sqrt((l_vals - med[0]) ** 2 + (a_vals - med[1]) ** 2 + (b_vals - med[2]) ** 2)
+        cutoff = np.percentile(dist, 85)
+        keep = dist <= cutoff
+        if int(np.count_nonzero(keep)) >= 80:
+            l_vals, a_vals, b_vals = l_vals[keep], a_vals[keep], b_vals[keep]
+
+        return (float(np.median(l_vals)), float(np.median(a_vals)), float(np.median(b_vals)))
+
     def _classify_shade_12grid(self, lab_img, mask_u8):
-        l_mean, a_axis, b_axis = self._lab_mean_from_mask(lab_img, mask_u8)
+        l_mean, a_axis, b_axis = self._lab_robust_from_mask(lab_img, mask_u8)
         matched = None
         for name, r in self._MAC_SHADE_RANGES.items():
             if (r["L_MIN"] <= l_mean <= r["L_MAX"] and r["A_MIN"] <= a_axis <= r["A_MAX"] and r["B_MIN"] <= b_axis <= r["B_MAX"]):
@@ -727,11 +762,11 @@ class FaceAnalyzer:
     def _classify_season(self, lab, hsv, combined_mask):
         _, s_mean, v_mean, _ = cv2.mean(hsv, mask=combined_mask)
         s_mean = float(s_mean); v_mean = float(v_mean)
-        l_mean_cv, a_axis, b_axis = self._lab_mean_from_mask(lab, combined_mask)
-        l_mean = l_mean_cv * 2.55
+        l_mean, a_axis, b_axis = self._lab_robust_from_mask(lab, combined_mask)
+        l_mean_cv = l_mean * 2.55
 
         undertone = "warm" if b_axis >= 12.0 else "cool" if b_axis <= 8.5 else "neutral"
-        bright    = (l_mean >= 158.0) or (v_mean >= 168.0)
+        bright    = (l_mean_cv >= 158.0) or (v_mean >= 168.0)
         soft      = s_mean <= 110.0
         mask_bool = combined_mask.astype(bool)
         v_std     = float(np.std(hsv[:,:,2][mask_bool].astype(np.float32))) if np.any(mask_bool) else 0.0
@@ -749,6 +784,14 @@ class FaceAnalyzer:
         face_mask   = np.zeros((self.h, self.w), dtype=np.uint8)
         cv2.fillConvexPoly(face_mask, cv2.convexHull(face_points), 255)
 
+        # Cheek-side sampling is more stable than averaging the whole face:
+        # it avoids forehead shine, jaw shadows, hairline, brows, lips, and background bleed.
+        cheek_mask = cv2.bitwise_or(
+            self._landmark_poly_mask([50, 101, 118, 117, 123, 205, 187, 147, 177, 137]),
+            self._landmark_poly_mask([280, 330, 347, 346, 352, 425, 411, 376, 401, 366]),
+        )
+        sample_mask = cheek_mask if cv2.countNonZero(cheek_mask) >= 180 else face_mask.copy()
+
         lip_mask = self._landmark_region_mask(self.mp_face_mesh.FACEMESH_LIPS)
         lip_L, lip_a, lip_b = self._bgr_mean_to_lab(cv2.mean(self.frame, mask=lip_mask)[:3])
 
@@ -757,18 +800,25 @@ class FaceAnalyzer:
             if not indices: continue
             pts = np.array([self._pt(i) for i in indices], dtype=np.int32)
             cv2.fillConvexPoly(face_mask, cv2.convexHull(pts), 0)
+            cv2.fillConvexPoly(sample_mask, cv2.convexHull(pts), 0)
 
         lab        = cv2.cvtColor(self.frame, cv2.COLOR_BGR2Lab)
-        color_mask = cv2.inRange(lab, np.array([20, 135, 130]), np.array([230, 175, 175]))
+        hsv        = cv2.cvtColor(self.frame, cv2.COLOR_BGR2HSV)
+        ycrcb      = cv2.cvtColor(self.frame, cv2.COLOR_BGR2YCrCb)
+
+        lab_skin   = cv2.inRange(lab,   np.array([35, 130, 124]), np.array([235, 178, 184]))
+        hsv_skin   = cv2.inRange(hsv,   np.array([0,  12,  35]),  np.array([35, 175, 245]))
+        ycc_skin   = cv2.inRange(ycrcb, np.array([35, 128,  72]), np.array([245, 185, 142]))
+        color_mask = cv2.bitwise_and(lab_skin, cv2.bitwise_or(hsv_skin, ycc_skin))
         kernel     = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN,  kernel)
         color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
 
-        combined_mask = cv2.bitwise_and(face_mask, color_mask)
+        combined_mask = cv2.bitwise_and(sample_mask, color_mask)
+        if cv2.countNonZero(combined_mask) < 100 and sample_mask is not face_mask:
+            combined_mask = cv2.bitwise_and(face_mask, color_mask)
         if cv2.countNonZero(combined_mask) < 100:
             raise ValueError("膚色區域不足，請使用光線均勻、臉部清楚的正面照片")
-
-        hsv           = cv2.cvtColor(self.frame, cv2.COLOR_BGR2HSV)
 
         season               = self._classify_season(lab, hsv, combined_mask)
         shade_label, L, a, b = self._classify_shade_12grid(lab, combined_mask)
