@@ -7,6 +7,70 @@ function phBox(cls, label, src){
     return `<div class="ph ${cls}">${cap}${img}</div>`;
 }
 
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+}
+
+function normalizeAdviceTitle(title) {
+    const raw = String(title || '').replace(/[：:]/g, '').replace(/\s+/g, '');
+    if (/整體|方向|總覽/.test(raw)) return '整體妝容方向';
+    if (/底妝|粉底|遮瑕|定妝/.test(raw)) return '底妝建議';
+    if (/眉眼|眼妝|眉型|眉毛|眼影|眼線|睫毛/.test(raw)) return '眉眼妝建議';
+    if (/腮紅|修容|打亮|輪廓/.test(raw)) return '腮紅修容';
+    if (/唇|口紅|唇彩|唇釉/.test(raw)) return '唇妝建議';
+    if (/避免|注意|禁忌|不要/.test(raw)) return '避免事項';
+    return title || '妝容建議';
+}
+
+function parseMakeupAdviceSections(text) {
+    const clean = String(text || '').replace(/\r/g, '').trim();
+    if (!clean) return [];
+    const titles = [
+        '整體妝容方向', '整體方向', '妝容方向',
+        '底妝建議', '底妝',
+        '眉眼妝建議', '眉眼建議', '眼妝建議', '眉型建議', '眉毛建議',
+        '腮紅修容', '腮紅 & 修容', '腮紅建議', '修容建議', '打亮建議',
+        '唇妝建議', '唇妝', '唇彩建議',
+        '避免事項', '注意事項'
+    ];
+    const escaped = titles
+        .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*'))
+        .join('|');
+    const pattern = new RegExp(
+        String.raw`(?:^|\n)\s*(?:#{1,4}\s*)?(?:[【\[]\s*)?(?:\d+\s*[.、．)]\s*)?(${escaped})(?:\s*[】\]])?\s*[：:]?\s*`,
+        'gi'
+    );
+    const matches = [...clean.matchAll(pattern)];
+    if (!matches.length) {
+        const chunks = clean.split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
+        if (chunks.length >= 3) {
+            return chunks.slice(0, 6).map((body, i) => ({
+                title: ['整體妝容方向', '底妝建議', '眉眼妝建議', '唇妝建議', '避免事項', '補充建議'][i] || '妝容建議',
+                body
+            }));
+        }
+        return [{ title: '妝容建議', body: clean }];
+    }
+    return matches.map((m, i) => {
+        const start = m.index + m[0].length;
+        const end = i + 1 < matches.length ? matches[i + 1].index : clean.length;
+        const body = clean.slice(start, end).replace(/^\s*[-•]\s*/, '').trim();
+        return { title: normalizeAdviceTitle(m[1]), body };
+    }).filter(section => section.body);
+}
+
+function renderMakeupAdviceGrid(text) {
+    const sections = parseMakeupAdviceSections(text);
+    return sections.map(section =>
+        `<div><b>${escapeHtml(section.title)}</b><p>${escapeHtml(section.body)}</p></div>`
+    ).join('');
+}
+
 function getFeaturedProducts(limit = 6) {
     const external = Array.isArray(window.HOT_PRODUCTS) ? window.HOT_PRODUCTS : null;
     const stored = (() => {
@@ -813,6 +877,11 @@ const PageInit = {
             });
         }
 
+        function bpSmoothstep(edge0, edge1, x) {
+            const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+            return t * t * (3 - 2 * t);
+        }
+
         function bpTransform(file, sliderValue) {
             if (!file || Math.abs(sliderValue) < 1) return Promise.resolve(file);
             return new Promise((resolve, reject) => {
@@ -827,19 +896,33 @@ const PageInit = {
                     ctx.drawImage(img, 0, 0, cv.width, cv.height);
                     URL.revokeObjectURL(url);
 
-                    // Gamma 校正：暗部提亮多、亮部（皮膚高光）幾乎不動，不會過曝
-                    // gamma = 2^(-val/100)：val=0→1.0(原圖)，val=+100→0.5(提亮)，val=-100→2.0(調暗)
-                    const gamma = Math.pow(2, -sliderValue / 100);
-                    const lut = new Uint8Array(256);
-                    for (let i = 0; i < 256; i++) {
-                        lut[i] = Math.round(255 * Math.pow(i / 255, gamma));
-                    }
                     const id = ctx.getImageData(0, 0, cv.width, cv.height);
                     const d = id.data;
+                    const val = Math.max(-100, Math.min(100, sliderValue)) / 100;
                     for (let i = 0; i < d.length; i += 4) {
-                        d[i]     = lut[d[i]];
-                        d[i + 1] = lut[d[i + 1]];
-                        d[i + 2] = lut[d[i + 2]];
+                        const r = d[i], g = d[i + 1], b = d[i + 2];
+                        const y = 0.299 * r + 0.587 * g + 0.114 * b;
+                        const yn = y / 255;
+                        let targetY;
+
+                        if (val > 0) {
+                            const shadowWeight = 1 - bpSmoothstep(0.32, 0.86, yn);
+                            const midWeight = Math.sin(Math.PI * Math.min(1, Math.max(0, yn)));
+                            const highlightProtect = bpSmoothstep(0.64, 0.96, yn);
+                            const sat = (Math.max(r, g, b) - Math.min(r, g, b)) / 255;
+                            const whiteProtect = (1 - sat) * bpSmoothstep(0.72, 0.98, yn);
+                            const lift = val * (58 * shadowWeight + 24 * midWeight) * (1 - 0.88 * highlightProtect) * (1 - 0.70 * whiteProtect);
+                            targetY = Math.min(246, y + lift);
+                        } else {
+                            const darken = -val;
+                            const shadowProtect = 1 - bpSmoothstep(0.05, 0.30, yn);
+                            targetY = Math.max(5, y - darken * (42 + 28 * yn) * (1 - 0.45 * shadowProtect));
+                        }
+
+                        const ratio = y > 1 ? targetY / y : 1;
+                        d[i]     = Math.max(0, Math.min(255, Math.round(r * ratio)));
+                        d[i + 1] = Math.max(0, Math.min(255, Math.round(g * ratio)));
+                        d[i + 2] = Math.max(0, Math.min(255, Math.round(b * ratio)));
                     }
                     ctx.putImageData(id, 0, 0);
 
@@ -1511,7 +1594,7 @@ const PageInit = {
                         status: response.status || 'completed',
                         error: null,
                         fallbackUsed: !!response.fallbackUsed,
-                        renderPromptEn: buildRenderPrompt(
+                        renderPromptEn: response.renderPromptEn || buildRenderPrompt(
                             pkg?.faceAnalysis || Router.analysisPackage?.faceAnalysis,
                             Router.selectedStyleId
                         )
@@ -1592,7 +1675,7 @@ const PageInit = {
                 <div class="analysis-section">
                     <h3>專屬妝容建議</h3>
                     ${aiSuggestion
-                        ? `<div class="style-intro-card"><p style="white-space:pre-line;">${escapeHtml(aiSuggestion)}</p></div>`
+                        ? `<div class="advice-grid">${renderMakeupAdviceGrid(aiSuggestion)}</div>`
                         : `<div class="empty-state compact">尚未取得 AI 建議，請按上方「確認風格」讓 Ollama 產生個人化建議。</div>`
                     }
                 </div>
@@ -1604,14 +1687,6 @@ const PageInit = {
             `;
         }
 
-        function escapeHtml(value) {
-            return String(value)
-                .replaceAll('&', '&amp;')
-                .replaceAll('<', '&lt;')
-                .replaceAll('>', '&gt;')
-                .replaceAll('"', '&quot;')
-                .replaceAll("'", '&#039;');
-        }
     },
 
     products(opts) {
@@ -1858,7 +1933,7 @@ const PageInit = {
             <div class="analysis-section">
                 <h3>AI 妝容建議</h3>
                 ${aiSuggestion
-                    ? `<div class="advice-grid">${parseSuggestionSections(aiSuggestion, escapeSuggestionText)}</div>`
+                    ? `<div class="advice-grid">${renderMakeupAdviceGrid(aiSuggestion)}</div>`
                     : `<div class="empty-state compact">尚未取得 AI 建議，請返回風格頁按「確認風格」。</div>`
                 }
                 <button class="btn-gold" id="saveSuggestionBtn" style="margin-top:14px;">收藏妝容對比圖</button>
@@ -1870,35 +1945,6 @@ const PageInit = {
             if (saveCurrentLook()) showToast('已收藏妝容對比圖');
         };
 
-        function escapeSuggestionText(value) {
-            return String(value)
-                .replaceAll('&', '&amp;')
-                .replaceAll('<', '&lt;')
-                .replaceAll('>', '&gt;')
-                .replaceAll('"', '&quot;')
-                .replaceAll("'", '&#039;');
-        }
-
-        function parseSuggestionSections(text, escapeFn) {
-            const KEYS = ['整體妝容方向', '底妝建議', '眉眼妝建議', '唇妝建議', '避免事項'];
-            const k = KEYS.join('|');
-            // 同時支援：【標題】、1. 標題：、標題：
-            const pattern = new RegExp(
-                `【(${k})】|\\d+[.、．]\\s*(${k})\\s*[：:]?|(${k})[：:]`,
-                'g'
-            );
-            const allMatches = [...text.matchAll(pattern)];
-            if (!allMatches.length) {
-                return `<div style="grid-column:1/-1"><b>妝容建議</b><p>${escapeFn(text.trim())}</p></div>`;
-            }
-            return allMatches.map((m, i) => {
-                const title = m[1] || m[2] || m[3];
-                const start = m.index + m[0].length;
-                const end = i + 1 < allMatches.length ? allMatches[i + 1].index : text.length;
-                const content = text.slice(start, end).replace(/^\s+/, '').trimEnd();
-                return `<div><b>${title}</b><p>${escapeFn(content)}</p></div>`;
-            }).join('');
-        }
     },
 
     history() {

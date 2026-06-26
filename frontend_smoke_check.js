@@ -5,9 +5,20 @@ const vm = require('vm');
 const rootDir = __dirname;
 const apiSource = fs.readFileSync(path.join(rootDir, 'js', 'api.js'), 'utf8');
 const storage = new Map();
+const session = new Map();
+
+function makeStorage(map) {
+  return {
+    setItem(key, value) { map.set(key, String(value)); },
+    getItem(key) { return map.has(key) ? map.get(key) : null; },
+    removeItem(key) { map.delete(key); }
+  };
+}
 
 const sandbox = {
   console,
+  window: {},
+  location: { reload() {} },
   FormData: class FormData {
     append() {}
   },
@@ -21,11 +32,8 @@ const sandbox = {
   Image: class Image {},
   FileReader: class FileReader {},
   File: class File {},
-  localStorage: {
-    setItem(key, value) { storage.set(key, String(value)); },
-    getItem(key) { return storage.has(key) ? storage.get(key) : null; },
-    removeItem(key) { storage.delete(key); }
-  }
+  localStorage: makeStorage(storage),
+  sessionStorage: makeStorage(session)
 };
 
 vm.createContext(sandbox);
