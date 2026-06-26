@@ -75,7 +75,11 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://127.0.0.1:5500")
 def _get_insight():
     global _insight_app
     if _insight_app is None:
-        _insight_app = InsightFaceApp(name="buffalo_l", providers=["CPUExecutionProvider"])
+        _insight_app = InsightFaceApp(
+            name="buffalo_l",
+            root="/app/.insightface",
+            providers=["CPUExecutionProvider"]
+        )
         _insight_app.prepare(ctx_id=-1, det_size=(640, 640))
     return _insight_app
 

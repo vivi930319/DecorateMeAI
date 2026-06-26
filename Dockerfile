@@ -16,6 +16,16 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 預先下載 InsightFace buffalo_l 模型到 /app/.insightface（WORKDIR 內，路徑確定存在）
+RUN python -c "\
+import os; os.environ['INSIGHTFACE_HOME']='/app';\
+from insightface.app import FaceAnalysis;\
+app = FaceAnalysis(name='buffalo_l', root='/app/.insightface', providers=['CPUExecutionProvider']);\
+app.prepare(ctx_id=-1, det_size=(640,640));\
+print('InsightFace models ready at /app/.insightface')"
+
+ENV INSIGHTFACE_HOME=/app
+
 COPY Face_analyzer_BASIC.py .
 COPY Face_analyzer_PRO.py .
 COPY Ollama_suggestion.py .
