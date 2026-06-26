@@ -201,6 +201,28 @@ const Api = {
         return res.json();
     },
 
+    async recommendProducts(faceAnalysis, styleId) {
+        const url = this.config.url('product', 'recommendPath');
+        if (!url) return null;
+        const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                faceShape:  faceAnalysis?.faceShape  || null,
+                eyeShape:   faceAnalysis?.eyeShape   || null,
+                skinTone: {
+                    season:  faceAnalysis?.skinTone?.season || null,
+                    level:   faceAnalysis?.skinTone?.level  || null,
+                    lab:     faceAnalysis?.skinTone?.lab    || null,
+                },
+                lipLab:     faceAnalysis?.lipLab     || null,
+                style:      styleId || null,
+            })
+        });
+        if (!res.ok) return null;
+        return res.json();
+    },
+
     async login(email, password) {
         const res = await fetch(this.config.url('memberDatabase', 'loginPath'), {
             method: 'POST',

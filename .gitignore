@@ -9,6 +9,9 @@ frontend_server*.log
 .DS_Store
 Thumbs.db
 
+# Firebase 本機快取
+.firebase/
+
 # 組員規格書（內部文件，不公開）
 *接入規格書.md
 *實作說明.md

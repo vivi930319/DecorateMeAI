@@ -1522,6 +1522,22 @@ const PageInit = {
                     }
                 });
                 AnalysisDraft.save(Router.analysisPackage);
+
+                // 有膚色 LAB + 唇色 LAB 就非同步打商品推薦，不擋 UI
+                Api.recommendProducts(
+                    Router.analysisPackage?.faceAnalysis,
+                    Router.selectedStyleId
+                ).then(rec => {
+                    if (!rec?.products?.length) return;
+                    Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
+                        recommendations: {
+                            ...Router.analysisPackage.recommendations,
+                            products: rec.products
+                        }
+                    });
+                    AnalysisDraft.save(Router.analysisPackage);
+                }).catch(() => {});
+
                 Router.pendingLook = buildCurrentLookRecord();
                 Router.pendingLookSaved = false;
                 renderAnalysisResult(response);
