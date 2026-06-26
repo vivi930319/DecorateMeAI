@@ -11,3 +11,4 @@ requests
 Pillow
 tqdm
 pandas
+google-cloud-firestore

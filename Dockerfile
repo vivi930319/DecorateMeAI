@@ -23,6 +23,7 @@ COPY dev_server_utils.py .
 COPY cloud_start.py .
 COPY eyelid_model.onnx .
 COPY eyelid_model.onnx.data .
+COPY job_store.py .
 # replicate_render.py 由組員交付後加入
 COPY replicate_render.py* ./
 

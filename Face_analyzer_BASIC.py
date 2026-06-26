@@ -35,10 +35,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import job_store
+
 _insight_app = None
 _eyelid_sess = None
 _face_mesh = None
-_jobs = {}
+_COL = "face_jobs_basic"
 
 MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "2048"))
 FACE_JOB_TIMEOUT_SECONDS = int(os.getenv("FACE_JOB_TIMEOUT_SECONDS", "180"))
@@ -223,45 +225,39 @@ def _seconds_since(value, now):
     return (now - dt).total_seconds()
 
 
-def _mark_timed_out_jobs(now):
-    for job in _jobs.values():
-        if job.get("status") not in {"queued", "processing"}:
-            continue
-        anchor = job.get("startedAt") or job.get("createdAt")
-        age = _seconds_since(anchor, now)
-        if age is not None and age > FACE_JOB_TIMEOUT_SECONDS:
-            job.update({
-                "status": "failed",
-                "stage": "timeout",
-                "completedAt": _now_iso(),
-                "error": {"message": f"臉部分析逾時，已超過 {FACE_JOB_TIMEOUT_SECONDS} 秒"},
-            })
-
-
 def _cleanup_jobs():
     now = datetime.now(timezone.utc)
-    _mark_timed_out_jobs(now)
-
-    expired = []
-    for job_id, job in _jobs.items():
-        if job.get("status") not in {"completed", "failed"}:
-            continue
-        age = _seconds_since(job.get("completedAt"), now)
-        if age is not None and age > FACE_JOB_RETENTION_SECONDS:
-            expired.append(job_id)
-
-    for job_id in expired:
-        _jobs.pop(job_id, None)
-
-    if len(_jobs) > FACE_JOB_MAX_COUNT:
-        ordered = sorted(_jobs.items(), key=lambda item: item[1].get("createdAt") or "")
-        for job_id, _ in ordered[: max(0, len(_jobs) - FACE_JOB_MAX_COUNT)]:
-            _jobs.pop(job_id, None)
+    jobs = job_store.all_jobs(_COL)
+    to_delete = []
+    for job in jobs:
+        job_id = job.get("jobId")
+        status = job.get("status")
+        if status in {"queued", "processing"}:
+            anchor = job.get("startedAt") or job.get("createdAt")
+            age = _seconds_since(anchor, now)
+            if age is not None and age > FACE_JOB_TIMEOUT_SECONDS:
+                job_store.patch(_COL, job_id, {
+                    "status": "failed", "stage": "timeout",
+                    "completedAt": _now_iso(),
+                    "error": {"message": f"臉部分析逾時，已超過 {FACE_JOB_TIMEOUT_SECONDS} 秒"},
+                })
+        elif status in {"completed", "failed"}:
+            age = _seconds_since(job.get("completedAt"), now)
+            if age is not None and age > FACE_JOB_RETENTION_SECONDS:
+                to_delete.append(job_id)
+    for job_id in to_delete:
+        job_store.delete(_COL, job_id)
+    remaining = job_store.all_jobs(_COL)
+    if len(remaining) > FACE_JOB_MAX_COUNT:
+        ordered = sorted(remaining, key=lambda j: j.get("createdAt") or "")
+        for job in ordered[: len(remaining) - FACE_JOB_MAX_COUNT]:
+            job_store.delete(_COL, job.get("jobId"))
 
 
 def _job_stats():
-    stats = {"total": len(_jobs), "queued": 0, "processing": 0, "completed": 0, "failed": 0}
-    for job in _jobs.values():
+    jobs = job_store.all_jobs(_COL)
+    stats = {"total": len(jobs), "queued": 0, "processing": 0, "completed": 0, "failed": 0}
+    for job in jobs:
         status = job.get("status")
         if status in stats:
             stats[status] += 1
@@ -273,24 +269,17 @@ def _job_view(job):
 
 
 def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.0):
-    job = _jobs[job_id]
-    job.update({"status": "processing", "stage": "face_analysis", "progress": 35, "startedAt": _now_iso()})
+    job_store.patch(_COL, job_id, {"status": "processing", "stage": "face_analysis", "progress": 35, "startedAt": _now_iso()})
     try:
         result = FaceAnalyzer(contents, brightness_mode=brightness_mode, brightness_level=brightness_level).export_json()
-        job.update({
-            "status": "completed",
-            "stage": "done",
-            "progress": 100,
-            "completedAt": _now_iso(),
-            "result": result,
-            "error": None,
+        job_store.patch(_COL, job_id, {
+            "status": "completed", "stage": "done", "progress": 100,
+            "completedAt": _now_iso(), "result": result, "error": None,
         })
     except Exception as e:
-        job.update({
-            "status": "failed",
-            "stage": "failed",
-            "completedAt": _now_iso(),
-            "error": {"message": str(e)},
+        job_store.patch(_COL, job_id, {
+            "status": "failed", "stage": "failed",
+            "completedAt": _now_iso(), "error": {"message": str(e)},
         })
 
 
@@ -310,26 +299,19 @@ async def create_basic_job(
     if not (0.1 <= brightness_level <= 5.0):
         raise HTTPException(status_code=400, detail={"error": {"message": "brightness_level 必須在 0.1 ~ 5.0 之間"}})
     job_id = f"JOB-{uuid.uuid4().hex[:12]}"
-    _jobs[job_id] = {
-        "jobId": job_id,
-        "analysisPackageId": None,
-        "status": "queued",
-        "progress": 0,
-        "stage": "upload",
-        "createdAt": _now_iso(),
-        "startedAt": None,
-        "completedAt": None,
-        "error": None,
-        "result": None,
+    job_data = {
+        "jobId": job_id, "analysisPackageId": None, "status": "queued",
+        "progress": 0, "stage": "upload", "createdAt": _now_iso(),
+        "startedAt": None, "completedAt": None, "error": None, "result": None,
     }
+    job_store.create(_COL, job_id, job_data)
     background_tasks.add_task(_run_basic_job, job_id, contents, brightness_mode, brightness_level)
-    return _job_view(_jobs[job_id])
+    return _job_view(job_data)
 
 
 @app.get("/v1/face/jobs/{job_id}")
 async def get_basic_job(job_id: str):
-    _cleanup_jobs()
-    job = _jobs.get(job_id)
+    job = job_store.get(_COL, job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
     return _job_view(job)
@@ -337,8 +319,7 @@ async def get_basic_job(job_id: str):
 
 @app.get("/v1/face/jobs/{job_id}/result")
 async def get_basic_job_result(job_id: str):
-    _cleanup_jobs()
-    job = _jobs.get(job_id)
+    job = job_store.get(_COL, job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
     if job["status"] != "completed":
