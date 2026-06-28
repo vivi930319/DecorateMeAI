@@ -725,7 +725,9 @@ function buildRenderPrompt(faceAnalysis, styleId, suggestion = '') {
     const faceParts = [faceMap[faceAnalysis?.faceShape], eyeMap[faceAnalysis?.eyeShape], skinMap[faceAnalysis?.skinTone?.season]].filter(Boolean);
 
     const makeupDetail = [...found, style].filter(Boolean).join(', ');
-    return `Apply makeup to this exact person. Only add ${makeupDetail || 'natural everyday makeup'}. Do not change anything else. Keep this person's face shape, eye shape, nose shape, lips, skin tone, skin texture, wrinkles, pores, hair, body, clothing, background, lighting, camera angle, and expression completely identical to the original photo. This must look like the same person wearing makeup, not a different person.`;
+    const faceParts = [faceMap[faceAnalysis?.faceShape], eyeMap[faceAnalysis?.eyeShape], skinMap[faceAnalysis?.skinTone?.season]].filter(Boolean);
+    const faceContext = faceParts.length ? ` This person has ${faceParts.join(', ')}.` : '';
+    return `Apply makeup to this exact person.${faceContext} Only add ${makeupDetail || 'natural everyday makeup'}. Do not change anything else. Keep this person's face shape, eye shape, nose shape, lips, skin tone, skin texture, wrinkles, pores, hair, body, clothing, background, lighting, camera angle, and expression completely identical to the original photo. This must look like the same person wearing makeup, not a different person.`;
 }
 
 const AnalysisDraft = {
