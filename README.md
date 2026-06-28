@@ -2,6 +2,99 @@
 
 本分支負責 **臉部分析模組**。此模組需要獨立成 API，讓網頁版前端與未來 iOS App 都能共用同一套臉部分析能力。
 
+---
+
+## 專題剩餘工作與時程估算
+
+### 目前完成狀態
+
+| 模組 | 狀態 |
+|------|------|
+| 臉部分析 BASIC API（Cloud Run） | ✅ 完成並部署 |
+| 臉部分析 PRO API（Cloud Run） | ✅ 完成並部署 |
+| Ollama 文字建議服務（組員 Mac + Cloudflare） | ✅ 運作中（依賴組員電腦開著） |
+| AI 渲染服務 replicate-render（Cloud Run, flux-kontext-pro） | ✅ 完成並部署 |
+| 前端 Web App（Firebase Hosting） | ✅ 完成並部署 |
+| 妝容對比頁渲染流程（AI 渲染妝容按鈕） | ✅ 完成 |
+| 會員資料庫串接 | ⏳ 等組員提供 URL |
+| 商品推薦串接 | ⏳ 等組員提供 URL |
+
+### 剩餘工作清單
+
+**我自己要做：**
+
+1. **Replicate 加付款方式**（0.5 hr）
+   - 前往 replicate.com/account/billing 新增信用卡
+   - 解除 429 rate limit 後才能實測 AI 渲染效果
+
+2. **實測 AI 渲染品質並調整**（0.5 天）
+   - 測試 flux-kontext-pro 渲染是否正確保留人物特徵
+   - 視結果調整 prompt 參數（guidance、關鍵詞字典）
+
+3. **Backend BASIC / PRO 分析邏輯調整**（1–3 天，視範圍）
+   - 臉部特徵分類閾值微調（眉型、臉型、眼型等）
+   - 若需重跑資料集驗證另加時間
+
+4. **串接會員資料庫 + 商品推薦**（1 天，組員提供 URL 後）
+   - 前端 `config.local.js` 填入組員 URL
+   - 串接登入 / 收藏 / 歷史紀錄 API
+   - 串接商品推薦 API
+
+5. **端對端完整測試與 bug 修正**（1–2 天）
+   - 完整跑過使用者流程：上傳 → 分析 → 文字建議 → 渲染 → 商品推薦 → 收藏
+   - 修正串接後出現的問題
+
+**等組員：**
+
+6. **黃姵錚**：git pull 後重啟 Ollama 服務（streaming 端點）
+7. **會員資料庫組員**：提供 Cloud Run / 伺服器 URL + API 規格
+8. **商品推薦組員**：提供 Cloud Run / 伺服器 URL + API 規格
+
+### 時程估算
+
+| 工作 | 預估時間 | 依賴 |
+|------|---------|------|
+| Replicate 加信用卡 + 渲染測試 | 0.5 天 | 無 |
+| Backend BASIC / PRO 調整 | 1–3 天 | 無 |
+| 串接會員 + 商品資料庫 | 1 天 | 組員提供 URL |
+| 端對端測試 + bug 修正 | 1–2 天 | 上述完成後 |
+| **總計** | **3.5–6.5 天** | |
+
+樂觀（BASIC/PRO 只是小改）：約 **4 天**。
+保守（分析邏輯需重新校正）：約 **1 週**。
+
+### 使用者完整流程（目標）
+
+```
+使用者開啟 https://decorate-me.web.app
+→ 登入 / 訪客模式
+→ 上傳照片（亮度調整）
+→ 選 BASIC 或 PRO
+→ 臉部分析（Cloud Run）→ 顯示臉型、眼型、膚色等
+→ 選擇妝容風格
+→ Ollama 文字建議（組員 Mac）
+→ AI 渲染妝容（Replicate flux-kontext-pro）
+→ 妝容前後對比
+→ 商品推薦（組員 API）
+→ 收藏 / 歷史紀錄（會員資料庫）
+```
+
+### 服務架構（現況）
+
+| 服務 | URL / 位置 | 狀態 |
+|------|-----------|------|
+| 前端 | https://decorate-me.web.app | ✅ 雲端 |
+| face-basic | https://face-basic-258021445391.asia-east1.run.app | ✅ 雲端 |
+| face-pro | https://face-pro-258021445391.asia-east1.run.app | ✅ 雲端 |
+| ollama_suggestion | Cloudflare Tunnel（黃姵錚 Mac） | ✅ 依賴組員電腦 |
+| replicate-render | Cloud Run asia-east1 | ✅ 雲端 |
+| member_database | 待定 | ⏳ 等組員 |
+| product_recommend | 待定 | ⏳ 等組員 |
+
+**Google Cloud 費用**：目前花費 $0（全部在免費額度內），預計試用期結束後每月 ~$0.21 USD。
+
+---
+
 ## 2026-06-25 渲染服務完成（flux-kontext-pro）
 
 ### 新增服務：replicate-render（Cloud Run）
