@@ -1947,7 +1947,17 @@ const PageInit = {
             const afterImage = render.afterImageUrl || render.afterImageDataUrl || render.makeupOutput?.imageUrl || render.makeupOutput?.imageDataUrl || '';
             const image = kind === 'after' ? afterImage : beforeImage;
             stage.classList.toggle('has-render', !!image);
-            stage.style.backgroundImage = image ? `url("${image}")` : '';
+            if (image) {
+                stage.style.backgroundImage    = `url("${image}")`;
+                stage.style.backgroundSize     = 'contain';
+                stage.style.backgroundPosition = 'center';
+                stage.style.backgroundRepeat   = 'no-repeat';
+            } else {
+                stage.style.backgroundImage    = '';
+                stage.style.backgroundSize     = '';
+                stage.style.backgroundPosition = '';
+                stage.style.backgroundRepeat   = '';
+            }
         }
         setCompareImage('before');
     },
