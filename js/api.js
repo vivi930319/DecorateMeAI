@@ -660,25 +660,38 @@ const AnalysisPackage = {
 
 function buildRenderPrompt(faceAnalysis, styleId, suggestion = '') {
     const styleMap = {
-        softBaddie:     'soft baddie makeup, matte blurred skin, smudged earthy smoky eye, rosy mauve lips',
-        richGirl:       'luxury rich girl makeup, glass skin, muted taupe eyeshadow, nude rosy lip',
-        hongKong:       'Hong Kong retro vintage makeup, defined brows, warm brown smoky eye, brick red lip',
-        koreanClean:    'Korean glass skin no-makeup makeup, dewy sheer base, soft pink blush, MLBB lip',
-        yandere:        'yandere aesthetic makeup, pale ethereal skin, rosy under-eye blush, blood red bitten lip',
-        japaneseClear:  'Japanese magazine fresh makeup, airy veil skin, soft peach eyeshadow, coral lip',
-        mensPlain:      'minimal men grooming look, clean even skin tone, neat natural brows, no-makeup feel',
+        softBaddie:     'soft baddie makeup: matte blurred skin, smudged earthy smoky eye, rosy mauve lips',
+        richGirl:       'luxury rich girl makeup: glass skin, muted taupe eyeshadow, nude rosy lip',
+        hongKong:       'Hong Kong retro vintage makeup: defined brows, warm brown smoky eye, brick red lip',
+        koreanClean:    'Korean glass skin no-makeup look: dewy sheer base, soft pink blush, MLBB lip',
+        yandere:        'yandere aesthetic makeup: pale ethereal skin, rosy under-eye blush, blood red bitten lip',
+        japaneseClear:  'Japanese magazine fresh makeup: airy veil skin, soft peach eyeshadow, coral lip',
+        mensPlain:      'minimal men grooming: clean even skin tone, neat natural brows, no-makeup feel',
     };
-    const eyeMap = {
-        almond:'almond-shaped eyes', round_almond:'round almond eyes', round:'round eyes',
-        peach_blossom:'peach blossom eyes', phoenix:'phoenix eyes', slender_phoenix:'slender phoenix eyes',
-        downturned:'downturned eyes', narrow:'narrow eyes', slender:'slender eyes',
+    const faceShapeMap = {
+        '橢圓形臉': 'oval face', '圓形臉': 'round face', '心形臉': 'heart-shaped face',
+        '方形臉': 'square jawline face', '長形臉': 'oblong face', '菱形臉': 'diamond-shaped face',
+        '梯形臉': 'trapezoidal face',
     };
-    const faceMap = {
-        oval:'oval face', round:'round face', heart:'heart-shaped face', square:'square jawline',
-        oblong:'long face', diamond:'diamond face', trapezoid:'trapezoid face',
+    const eyeShapeMap = {
+        '杏仁眼': 'almond-shaped eyes', '圓杏眼': 'round almond eyes', '圓眼': 'round eyes',
+        '桃花眼': 'peach blossom eyes', '丹鳳眼': 'phoenix eyes', '瑞鳳眼': 'upturned phoenix eyes',
+        '細長眼': 'elongated narrow eyes',
     };
-    const skinMap = {
-        spring:'warm ivory skin', summer:'cool beige skin', autumn:'warm golden brown skin', winter:'cool porcelain skin',
+    const browShapeMap = {
+        '一字眉': 'straight flat brows', '彎月眉': 'arched crescent brows',
+        '落尾眉': 'drooping tail brows', '標準眉': 'natural standard brows',
+    };
+    const noseMap = {
+        '寬鼻': 'wide nose bridge', '窄鼻': 'narrow nose bridge', '標準鼻': 'standard nose',
+    };
+    const lipMap = {
+        '厚唇': 'full thick lips', '薄唇': 'thin lips', 'M型唇': 'M-shaped cupid bow lips',
+        '微笑唇': 'naturally upturned smile lips', '花瓣唇': 'petal-shaped lips',
+    };
+    const skinSeasonMap = {
+        '春季': 'warm ivory spring skin tone', '夏季': 'cool soft summer skin tone',
+        '秋季': 'warm golden autumn skin tone', '冬季': 'cool porcelain winter skin tone',
     };
 
     // 從 Ollama 中文建議提取關鍵妝容詞彙翻成英文
@@ -721,11 +734,32 @@ function buildRenderPrompt(faceAnalysis, styleId, suggestion = '') {
         .map(([, en]) => en)
         .slice(0, 5);
 
+    const fa = faceAnalysis || {};
+    const faceParts = [
+        faceShapeMap[fa.faceShape],
+        eyeShapeMap[fa.eyeShape],
+        browShapeMap[fa.browShape],
+        noseMap[fa.noseFront],
+        lipMap[fa.lipShape],
+        skinSeasonMap[fa.skinTone?.season],
+        fa.skinTone?.level ? `${fa.skinTone.level} skin brightness` : null,
+    ].filter(Boolean);
+
     const style = styleMap[styleId] || 'natural everyday makeup';
-    const faceParts = [faceMap[faceAnalysis?.faceShape], eyeMap[faceAnalysis?.eyeShape], skinMap[faceAnalysis?.skinTone?.season]].filter(Boolean);
-    const makeupDetail = [...found, style].filter(Boolean).join(', ');
-    const faceContext = faceParts.length ? ` This person has ${faceParts.join(', ')}.` : '';
-    return `Apply makeup to this exact person.${faceContext} Only add ${makeupDetail || 'natural everyday makeup'}. Do not change anything else. Keep this person's face shape, eye shape, nose shape, lips, skin tone, skin texture, wrinkles, pores, hair, body, clothing, background, lighting, camera angle, and expression completely identical to the original photo. This must look like the same person wearing makeup, not a different person.`;
+    const makeupDetail = [...found.slice(0, 4), style].filter(Boolean).join('; ');
+    const suggestionClean = suggestion.slice(0, 300).trim();
+    const faceDesc = faceParts.length ? `This person has ${faceParts.join(', ')}.` : '';
+    const ollamaLine = suggestionClean ? `Makeup reference (translated from advisor): ${suggestionClean}.` : '';
+
+    return [
+        `Apply makeup to this exact person.`,
+        faceDesc,
+        `Only add the following makeup: ${makeupDetail}.`,
+        ollamaLine,
+        `Do not change anything else.`,
+        `Keep this person's face shape, eye shape, nose, lips, skin tone, skin texture, pores, wrinkles, hair, body, clothing, background, lighting, camera angle, and expression completely identical to the original photo.`,
+        `This must look like the same person wearing makeup, not a different person.`,
+    ].filter(Boolean).join(' ');
 }
 
 const AnalysisDraft = {
