@@ -1584,7 +1584,6 @@ const PageInit = {
                     userNote: style?.tags?.join('、') || ''
                 });
                 const fullText = response.suggestion || '';
-                const renderPromptEn = response.renderPromptEn || '';
 
                 fill.style.width = '100%';
                 status.textContent = '建議已產生';
@@ -1599,9 +1598,10 @@ const PageInit = {
                         status: 'completed',
                         error: null,
                         fallbackUsed: false,
-                        renderPromptEn: renderPromptEn || buildRenderPrompt(
+                        renderPromptEn: buildRenderPrompt(
                             pkg?.faceAnalysis || Router.analysisPackage?.faceAnalysis,
-                            Router.selectedStyleId
+                            Router.selectedStyleId,
+                            fullText
                         )
                     },
                     recommendations: {
@@ -1881,7 +1881,7 @@ const PageInit = {
                 const pkg = Router.analysisPackage;
                 const imageDataUrl = pkg?.images?.front?.compressedDataUrl || pkg?.images?.front?.dataUrl || '';
                 if (!imageDataUrl) { showAlert('尚未上傳照片，請先完成臉部分析。', { type: 'error' }); return; }
-                const prompt = pkg?.generativeText?.renderPromptEn || buildRenderPrompt(pkg?.faceAnalysis, Router.selectedStyleId);
+                const prompt = buildRenderPrompt(pkg?.faceAnalysis, Router.selectedStyleId, pkg?.generativeText?.suggestion || '');
                 if (!prompt) { showAlert('尚未產生妝容建議，請先在風格頁按「確認風格」。', { type: 'error' }); return; }
 
                 renderBtn.disabled = true;

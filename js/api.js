@@ -658,7 +658,7 @@ const AnalysisPackage = {
     }
 };
 
-function buildRenderPrompt(faceAnalysis, styleId) {
+function buildRenderPrompt(faceAnalysis, styleId, suggestion = '') {
     const styleMap = {
         softBaddie:     'soft baddie makeup, matte blurred skin, smudged earthy smoky eye, rosy mauve lips',
         richGirl:       'luxury rich girl makeup, glass skin, muted taupe eyeshadow, nude rosy lip',
@@ -680,9 +680,62 @@ function buildRenderPrompt(faceAnalysis, styleId) {
     const skinMap = {
         spring:'warm ivory skin', summer:'cool beige skin', autumn:'warm golden brown skin', winter:'cool porcelain skin',
     };
+
+    // 從 Ollama 中文建議提取關鍵妝容詞彙翻成英文
+    const makeupTerms = [
+        // 底妝
+        ['水光底妝','dewy glass skin base'], ['霧面底妝','matte satin foundation'], ['輕透底妝','sheer luminous base'],
+        ['自然底妝','natural skin finish'], ['遮瑕','light coverage concealer'],
+        // 眼妝技法
+        ['煙燻眼','smoky eye'], ['貓眼','cat eye liner'], ['臥蠶妝','puppy eye aegyo-sal'],
+        ['眼線','defined eyeliner'], ['下眼線','lower lash line liner'], ['雙眼皮','double eyelid effect'],
+        ['假睫毛','voluminous lashes'], ['眼尾上揚','lifted outer eye'],
+        // 眼影顏色
+        ['大地色系眼影','earthy tone eyeshadow'], ['棕色眼影','warm brown eyeshadow'],
+        ['玫瑰色眼影','rose eyeshadow'], ['珊瑚色眼影','coral eyeshadow'],
+        ['粉色眼影','soft pink eyeshadow'], ['裸色眼影','nude eyeshadow'],
+        ['橘色眼影','orange eyeshadow'], ['金色眼影','golden shimmer eyeshadow'],
+        ['紫色眼影','purple eyeshadow'], ['酒紅眼影','burgundy eyeshadow'],
+        ['深色眼影','deep dark eyeshadow'], ['亮片眼影','glitter eyeshadow'],
+        // 唇妝
+        ['裸唇','nude lip'], ['玫瑰唇','rose lip'], ['珊瑚唇色','coral lip'],
+        ['磚紅唇','brick red lip'], ['正紅唇','classic red lip'], ['酒紅唇','burgundy lip'],
+        ['橘紅唇','orange-red lip'], ['莓果唇','berry lip'], ['豆沙唇','muted mauve lip'],
+        ['咬唇妝','bitten lip'], ['漸層唇','gradient ombre lip'], ['水光唇','glossy dewy lip'],
+        ['霧面唇','matte lip'], ['自然唇色','natural MLBB lip'],
+        // 腮紅
+        ['橘色腮紅','warm orange blush'], ['粉色腮紅','soft pink blush'],
+        ['玫瑰色腮紅','rose blush'], ['珊瑚腮紅','coral blush'],
+        ['下打腮紅','under-eye blush'], ['蘋果肌','apple cheek blush'],
+        // 眉型
+        ['平眉','straight flat brows'], ['弓形眉','arched brows'], ['自然眉','natural feathery brows'],
+        ['粗眉','bold thick brows'], ['細眉','thin delicate brows'],
+        // 修容
+        ['修容','subtle contouring'], ['打亮','highlight'],
+        // 膚感
+        ['玻璃肌','glass skin'], ['水光肌','dewy skin'], ['霧感肌','matte velvet skin'],
+    ];
+
+    const found = makeupTerms
+        .filter(([zh]) => suggestion.includes(zh))
+        .map(([, en]) => en)
+        .slice(0, 5);
+
     const style = styleMap[styleId] || 'natural everyday makeup';
-    const parts = [faceMap[faceAnalysis?.faceShape], eyeMap[faceAnalysis?.eyeShape], skinMap[faceAnalysis?.skinTone?.season]].filter(Boolean);
-    return `${style}, Asian woman${parts.length ? ' with ' + parts.join(', ') : ''}, photorealistic, soft studio lighting, beauty portrait, high quality`;
+    const faceParts = [faceMap[faceAnalysis?.faceShape], eyeMap[faceAnalysis?.eyeShape], skinMap[faceAnalysis?.skinTone?.season]].filter(Boolean);
+
+    return [
+        'photorealistic close-up beauty portrait',
+        'preserve the original face identity, facial structure, skin texture, and expression',
+        style,
+        ...found,
+        faceParts.length ? `Asian woman with ${faceParts.join(', ')}` : 'Asian woman',
+        'realistic makeup application',
+        'soft professional lighting',
+        'high quality',
+        'no face deformation',
+        'no extra people',
+    ].filter(Boolean).join(', ');
 }
 
 const AnalysisDraft = {
