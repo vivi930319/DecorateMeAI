@@ -10,3 +10,7 @@
 !eyelid_model.onnx.data
 !analysis_package.py
 !job_store.py
+!replicate_render.py
+!replicate_render_api.py
+!requirements.render.txt
+!Dockerfile.render
