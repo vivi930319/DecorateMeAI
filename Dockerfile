@@ -34,8 +34,7 @@ COPY cloud_start.py .
 COPY eyelid_model.onnx .
 COPY eyelid_model.onnx.data .
 COPY job_store.py .
-# replicate_render.py 由組員交付後加入
-COPY replicate_render.py* ./
+# replicate_render.py 尚未交付；預設 backend image 不直接複製不存在檔案
 
 EXPOSE 8080
 
