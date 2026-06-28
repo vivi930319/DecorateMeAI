@@ -20,9 +20,10 @@ function normalizeAdviceTitle(title) {
     const raw = String(title || '').replace(/[：:]/g, '').replace(/\s+/g, '');
     if (/整體|方向|總覽/.test(raw)) return '整體妝容方向';
     if (/底妝|粉底|遮瑕|定妝/.test(raw)) return '底妝建議';
-    if (/眉眼|眼妝|眉型|眉毛|眼影|眼線|睫毛/.test(raw)) return '眉眼妝建議';
+    if (/彩妝細節|眉眼|眼妝|眉型|眉毛|眼影|眼線|睫毛/.test(raw)) return '眉眼妝建議';
     if (/腮紅|修容|打亮|輪廓/.test(raw)) return '腮紅修容';
     if (/唇|口紅|唇彩|唇釉/.test(raw)) return '唇妝建議';
+    if (/推薦產品|推薦質地|產品質地|產品推薦/.test(raw)) return '推薦產品/質地';
     if (/避免|注意|禁忌|不要/.test(raw)) return '避免事項';
     return title || '妝容建議';
 }
@@ -33,9 +34,10 @@ function parseMakeupAdviceSections(text) {
     const titles = [
         '整體妝容方向', '整體方向', '妝容方向',
         '底妝建議', '底妝',
-        '眉眼妝建議', '眉眼建議', '眼妝建議', '眉型建議', '眉毛建議',
+        '眉眼妝建議', '眉眼建議', '眼妝建議', '眉型建議', '眉毛建議', '彩妝細節',
         '腮紅修容', '腮紅 & 修容', '腮紅建議', '修容建議', '打亮建議',
         '唇妝建議', '唇妝', '唇彩建議',
+        '推薦產品/質地', '推薦產品', '推薦質地', '產品推薦',
         '避免事項', '注意事項'
     ];
     const escaped = titles
