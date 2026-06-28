@@ -724,18 +724,8 @@ function buildRenderPrompt(faceAnalysis, styleId, suggestion = '') {
     const style = styleMap[styleId] || 'natural everyday makeup';
     const faceParts = [faceMap[faceAnalysis?.faceShape], eyeMap[faceAnalysis?.eyeShape], skinMap[faceAnalysis?.skinTone?.season]].filter(Boolean);
 
-    return [
-        'photorealistic close-up beauty portrait',
-        'same person same face, strictly preserve the original facial identity, bone structure, eye shape, nose shape, lip shape, skin tone, hairstyle, head angle, and background',
-        'apply makeup only, do not alter the face geometry or proportions in any way',
-        style,
-        ...found,
-        faceParts.length ? `Asian woman with ${faceParts.join(', ')}` : 'Asian woman',
-        'subtle realistic makeup application on the existing face',
-        'soft professional beauty lighting',
-        'high quality, photorealistic',
-        'no face warp, no face swap, no face deformation, no cartoon, no AI face smoothing',
-    ].filter(Boolean).join(', ');
+    const makeupDetail = [...found, style].filter(Boolean).join(', ');
+    return `Apply makeup to this exact person. Only add ${makeupDetail || 'natural everyday makeup'}. Do not change anything else. Keep this person's face shape, eye shape, nose shape, lips, skin tone, skin texture, wrinkles, pores, hair, body, clothing, background, lighting, camera angle, and expression completely identical to the original photo. This must look like the same person wearing makeup, not a different person.`;
 }
 
 const AnalysisDraft = {
