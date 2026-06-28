@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime, timezone
 from typing import Any
@@ -5,6 +6,7 @@ from typing import Any
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from dev_server_utils import get_cors_origins, run_dev_server
 
@@ -203,16 +205,17 @@ def build_prompt(payload: SuggestRequest) -> str:
 - 唇妝：手法為 {style_cfg['lip_detail']}
 
 【硬性格式限制】:
-1. 必須且只能分為以下五個段落，並明確寫出標題，全程嚴禁使用星號「*」或任何 Markdown 符號標記：
+1. 必須且只能分為以下六個段落，並明確寫出標題，全程嚴禁使用星號「*」或任何 Markdown 符號標記：
    1. 整體妝容方向
    2. 底妝建議
    3. 眉眼妝建議
    4. 唇妝建議
    5. 避免事項
+   6. 總結與建議
 2. 語氣像真的化妝師在提醒使用者，客觀自然，不宣稱分析結果 100% 精準。
 3. 絕對不可自行編造側面鼻型、特定品牌或特定商品色號。
 4. 禁止輸出任何 Markdown 程式碼區塊或內部思考鏈區塊（如 <think>）。
-5. 總字數限制在 300 ~ 900 中文字。"""
+5. 總字數限制在 350 ~ 1050 中文字。"""
 
 
 def build_render_prompt(payload: SuggestRequest) -> str:
@@ -330,6 +333,64 @@ async def suggest(payload: SuggestRequest):
         "suggestion": suggestion,
         "renderPromptEn": render_prompt_en,
     }
+
+
+@app.post("/suggest/stream")
+async def suggest_stream(payload: SuggestRequest):
+    face_analysis = _extract_face_analysis(payload)
+    if not face_analysis:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"message": "缺少 faceAnalysis 或 analysisPackage.faceAnalysis"}},
+        )
+
+    model = payload.model or OLLAMA_MODEL
+    prompt = build_prompt(payload)
+
+    def generate():
+        try:
+            resp = requests.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={"model": model, "prompt": prompt, "stream": True},
+                timeout=OLLAMA_TIMEOUT,
+                stream=True,
+            )
+        except Exception as exc:
+            yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+            return
+
+        if not resp.ok:
+            yield f"data: {json.dumps({'error': f'Ollama HTTP {resp.status_code}'})}\n\n"
+            return
+
+        full_text = ""
+        for line in resp.iter_lines():
+            if not line:
+                continue
+            try:
+                chunk = json.loads(line)
+                token = chunk.get("response", "")
+                if token:
+                    full_text += token
+                    yield f"data: {json.dumps({'token': token})}\n\n"
+                if chunk.get("done"):
+                    break
+            except Exception:
+                continue
+
+        # 取得 render prompt（不串流，結束後一次帶回）
+        try:
+            render_prompt_en = call_ollama(build_render_prompt(payload), model)
+        except Exception:
+            render_prompt_en = ""
+
+        yield f"data: {json.dumps({'done': True, 'suggestion': full_text.strip(), 'renderPromptEn': render_prompt_en, 'model': model})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 if __name__ == "__main__":
