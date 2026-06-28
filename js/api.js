@@ -726,15 +726,15 @@ function buildRenderPrompt(faceAnalysis, styleId, suggestion = '') {
 
     return [
         'photorealistic close-up beauty portrait',
-        'preserve the original face identity, facial structure, skin texture, and expression',
+        'same person same face, strictly preserve the original facial identity, bone structure, eye shape, nose shape, lip shape, skin tone, hairstyle, head angle, and background',
+        'apply makeup only, do not alter the face geometry or proportions in any way',
         style,
         ...found,
         faceParts.length ? `Asian woman with ${faceParts.join(', ')}` : 'Asian woman',
-        'realistic makeup application',
-        'soft professional lighting',
-        'high quality',
-        'no face deformation',
-        'no extra people',
+        'subtle realistic makeup application on the existing face',
+        'soft professional beauty lighting',
+        'high quality, photorealistic',
+        'no face warp, no face swap, no face deformation, no cartoon, no AI face smoothing',
     ].filter(Boolean).join(', ');
 }
 

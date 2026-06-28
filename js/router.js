@@ -1884,6 +1884,10 @@ const PageInit = {
                 const prompt = buildRenderPrompt(pkg?.faceAnalysis, Router.selectedStyleId, pkg?.generativeText?.suggestion || '');
                 if (!prompt) { showAlert('尚未產生妝容建議，請先在風格頁按「確認風格」。', { type: 'error' }); return; }
 
+                // 顯示送出的英文 prompt 讓用戶確認
+                const promptPreviewEl = document.getElementById('comparePromptPreview');
+                if (promptPreviewEl) { promptPreviewEl.style.display = 'block'; promptPreviewEl.textContent = prompt; }
+
                 renderBtn.disabled = true;
                 renderBtn.textContent = '渲染中...';
                 renderStatus.style.display = 'block';
@@ -1891,7 +1895,7 @@ const PageInit = {
 
                 try {
                     renderStatus.textContent = 'Replicate 生成中，約需 30–60 秒...';
-                    const result = await Api.renderMakeup({ imageDataUrl, prompt, strength: 0.45 });
+                    const result = await Api.renderMakeup({ imageDataUrl, prompt, strength: 0.35 });
                     Router.analysisPackage = AnalysisPackage.update(pkg, {
                         render: {
                             ...(pkg.render || {}),
