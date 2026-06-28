@@ -32,6 +32,7 @@ const ApiConfig = {
         textSuggestion: {
             baseUrl: RuntimeApiConfig.textSuggestionUrl || 'http://127.0.0.1:8010',
             suggestPath: '/suggest',
+            streamPath: '/suggest/stream',
             healthPath: '/health'
         },
         render: {
@@ -199,6 +200,90 @@ const Api = {
             throw new Error(msg);
         }
         return res.json();
+    },
+
+    async suggestMakeupStream({ analysisPackage, faceAnalysis, style, userNote }, onToken, onDone, onError) {
+        const url = this.config.url('textSuggestion', 'streamPath');
+        if (!url) { onError('未設定 Ollama URL'); return; }
+        let response;
+        try {
+            response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ analysisPackage, faceAnalysis, style, language: 'zh-TW', userNote }),
+            });
+        } catch (err) {
+            onError('無法連線到建議服務：' + err.message);
+            return;
+        }
+        if (response.status === 404) {
+            // 組員尚未更新服務，降回舊版 /suggest
+            try {
+                const fallbackRes = await fetch(this.config.url('textSuggestion', 'suggestPath'), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ analysisPackage, faceAnalysis, style, language: 'zh-TW', userNote }),
+                });
+                if (!fallbackRes.ok) {
+                    const err = await fallbackRes.json().catch(() => ({}));
+                    onError(err.detail?.error?.message || `建議服務回傳 HTTP ${fallbackRes.status}`);
+                    return;
+                }
+                const data = await fallbackRes.json();
+                onToken(data.suggestion || '');
+                onDone({ done: true, suggestion: data.suggestion || '', renderPromptEn: data.renderPromptEn || '' });
+            } catch (err) {
+                onError('無法連線到建議服務：' + err.message);
+            }
+            return;
+        }
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            onError(err.detail?.error?.message || `建議服務回傳 HTTP ${response.status}`);
+            return;
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+                if (!line.startsWith('data: ')) continue;
+                try {
+                    const evt = JSON.parse(line.slice(6));
+                    if (evt.error) { onError(evt.error); return; }
+                    if (evt.token) onToken(evt.token);
+                    if (evt.done) onDone(evt);
+                } catch (_) {}
+            }
+        }
+    },
+
+    async renderMakeup({ imageDataUrl, prompt, strength = 0.45 }) {
+        const url = this.config.url('render', 'renderPath');
+        if (!url) throw new Error('renderUrl 未設定，請聯繫渲染端組員提供 Cloud Run URL');
+        let res;
+        try {
+            res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: imageDataUrl, prompt, strength }),
+            });
+        } catch (err) {
+            throw new Error('無法連線到渲染服務：' + err.message);
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(data?.error?.message || data?.error || `Render API HTTP ${res.status}`);
+        }
+        if (data.status !== 'completed' || !data.afterImageUrl) {
+            throw new Error(data?.error?.message || data?.error || '妝容渲染失敗');
+        }
+        return data;
     },
 
     async recommendProducts(faceAnalysis, styleId) {

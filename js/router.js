@@ -25,6 +25,7 @@ function normalizeAdviceTitle(title) {
     if (/唇|口紅|唇彩|唇釉/.test(raw)) return '唇妝建議';
     if (/推薦產品|推薦質地|產品質地|產品推薦/.test(raw)) return '推薦產品/質地';
     if (/避免|注意|禁忌|不要/.test(raw)) return '避免事項';
+    if (/總結|建議總結/.test(raw)) return '總結與建議';
     return title || '妝容建議';
 }
 
@@ -38,7 +39,8 @@ function parseMakeupAdviceSections(text) {
         '腮紅修容', '腮紅 & 修容', '腮紅建議', '修容建議', '打亮建議',
         '唇妝建議', '唇妝', '唇彩建議',
         '推薦產品/質地', '推薦產品', '推薦質地', '產品推薦',
-        '避免事項', '注意事項'
+        '避免事項', '注意事項',
+        '總結與建議', '總結', '建議總結'
     ];
     const escaped = titles
         .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*'))
@@ -52,7 +54,7 @@ function parseMakeupAdviceSections(text) {
         const chunks = clean.split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
         if (chunks.length >= 3) {
             return chunks.slice(0, 6).map((body, i) => ({
-                title: ['整體妝容方向', '底妝建議', '眉眼妝建議', '唇妝建議', '避免事項', '補充建議'][i] || '妝容建議',
+                title: ['整體妝容方向', '底妝建議', '眉眼妝建議', '唇妝建議', '避免事項', '總結與建議'][i] || '妝容建議',
                 body
             }));
         }
@@ -280,7 +282,10 @@ function buildCurrentLookRecord(){
     const pkg = Router.analysisPackage || {};
     const render = pkg.render || {};
     const makeupOutput = render.makeupOutput || {};
-    const beforeImage = render.beforeImageUrl || render.beforeImageDataUrl || '';
+    const beforeImage = pkg.images?.front?.compressedDataUrl
+        || render.beforeImageUrl
+        || render.beforeImageDataUrl
+        || '';
     const renderedImage = render.afterImageUrl || render.afterImageDataUrl || makeupOutput.imageUrl || makeupOutput.imageDataUrl || '';
     return {
         kind: 'compare',
@@ -495,7 +500,9 @@ compare: `
         <p id="compareStyleName">尚未選擇風格</p>
         <div class="analysis-tags" id="compareStyleTags"></div>
         <button class="btn-outline" id="compareGoStyleBtn">選擇風格</button>
-        <button class="btn-gold" id="compareSaveLookBtn" style="margin-top:12px;">收藏妝容對比圖</button>
+        <button class="btn-gold" id="compareRenderBtn" style="margin-top:12px;">AI 渲染妝容</button>
+        <div id="compareRenderStatus" style="font-size:12px;color:#888;margin-top:6px;display:none;"></div>
+        <button class="btn-outline" id="compareSaveLookBtn" style="margin-top:8px;">收藏妝容對比圖</button>
     </div>
 </div>`,
 suggestion: `<div class="page-header"><h1>妝容建議</h1><div class="divider"></div><p>依照臉部分析結果與選擇風格，產生妝容建議與可收藏的妝容對比圖。</p></div><div id="suggestionArea"></div>`,
@@ -625,7 +632,7 @@ const Router = {
     promptLookLeave(nextPage, opts) {
         this.leaveGuardOpen = true;
         if (isGuest()) {
-            showConfirm('訪客不能收藏妝容對比圖與妝容建議。離開後會清空目前這次妝容暫存。', {
+            showConfirm('訪客不能收藏妝容建議與妝容對比圖。離開後會清空目前這次妝容暫存。', {
                 title: '需要會員身分',
                 okText: '登入',
                 cancelText: '直接離開',
@@ -1441,6 +1448,7 @@ const PageInit = {
                         ...Router.analysisPackage.render,
                         status: 'pending',
                         provider: 'replicate',
+                        beforeImageDataUrl: packagedImages.front?.compressedDataUrl || null,
                         beforeImageId: packagedImages.front?.serial || null,
                         styleId: Router.selectedStyleId
                     },
@@ -1552,51 +1560,46 @@ const PageInit = {
             btn.disabled = true;
             btn.textContent = '產生建議中...';
 
-            // 進度條啟動
             bar.style.display = 'block';
             fill.style.width = '8%';
             status.textContent = '連線 Ollama 中...';
             status.classList.add('active');
-            let progress = 8;
-            const interval = setInterval(() => {
-                if (progress < 82) {
-                    progress += Math.random() * 2.5 + 0.5;
-                    fill.style.width = Math.min(progress, 82) + '%';
-                    if (progress > 25) status.textContent = 'AI 分析中...';
-                    if (progress > 60) status.textContent = '整理建議文字中...';
-                }
-            }, 900);
+
+            const style = STYLES.find(s => s.id === Router.selectedStyleId);
+            const pkg = Router.analysisPackage;
 
             try {
-                const style = STYLES.find(s => s.id === Router.selectedStyleId);
-                const pkg = Router.analysisPackage;
                 if (!pkg || !Router.analysisResult) {
                     showAlert('目前沒有可用的臉部分析結果，請重新完成臉部分析。', { type:'error' });
                     Router.go('analysis');
                     return;
                 }
                 const latestAnalysis = getLatestAnalysisResult() || {};
+                fill.style.width = '45%';
+                status.textContent = '等待完整建議中...';
                 const response = await Api.suggestMakeup({
                     analysisPackage: pkg,
                     faceAnalysis: pkg?.faceAnalysis || AnalysisPackage.fromRawFaceAnalysis(latestAnalysis, Router.analyzeMode),
                     style: style?.name || '日常自然妝',
                     userNote: style?.tags?.join('、') || ''
                 });
-                clearInterval(interval);
+                const fullText = response.suggestion || '';
+                const renderPromptEn = response.renderPromptEn || '';
+
                 fill.style.width = '100%';
                 status.textContent = '建議已產生';
                 setTimeout(() => { bar.style.display = 'none'; fill.style.width = '0'; status.classList.remove('active'); }, 600);
 
                 Router.analysisPackage = AnalysisPackage.update(pkg || Router.analysisPackage, {
                     generativeText: {
-                        provider: response.provider || 'ollama',
+                        provider: 'ollama',
                         prompt: null,
-                        suggestion: response.suggestion || null,
-                        model: response.model || null,
-                        status: response.status || 'completed',
+                        suggestion: fullText || null,
+                        model: null,
+                        status: 'completed',
                         error: null,
-                        fallbackUsed: !!response.fallbackUsed,
-                        renderPromptEn: response.renderPromptEn || buildRenderPrompt(
+                        fallbackUsed: false,
+                        renderPromptEn: renderPromptEn || buildRenderPrompt(
                             pkg?.faceAnalysis || Router.analysisPackage?.faceAnalysis,
                             Router.selectedStyleId
                         )
@@ -1608,7 +1611,6 @@ const PageInit = {
                 });
                 AnalysisDraft.save(Router.analysisPackage);
 
-                // 有膚色 LAB + 唇色 LAB 就非同步打商品推薦，不擋 UI
                 Api.recommendProducts(
                     Router.analysisPackage?.faceAnalysis,
                     Router.selectedStyleId
@@ -1627,12 +1629,10 @@ const PageInit = {
                 Router.pendingLookSaved = false;
                 renderAnalysisResult(response);
             } catch (err) {
-                clearInterval(interval);
                 bar.style.display = 'none';
                 fill.style.width = '0';
                 status.textContent = '建議產生失敗';
                 status.classList.remove('active');
-                const pkg = Router.analysisPackage;
                 if (pkg) {
                     Router.analysisPackage = AnalysisPackage.update(pkg, {
                         generativeText: {
@@ -1873,9 +1873,65 @@ const PageInit = {
         holdBtn.onfocus = showAfter;
         holdBtn.onblur = showBefore;
         document.getElementById('compareGoStyleBtn').onclick = () => Router.go('style');
+
+        const renderBtn = document.getElementById('compareRenderBtn');
+        const renderStatus = document.getElementById('compareRenderStatus');
+        if (renderBtn) {
+            renderBtn.onclick = async () => {
+                const pkg = Router.analysisPackage;
+                const imageDataUrl = pkg?.images?.front?.compressedDataUrl || pkg?.images?.front?.dataUrl || '';
+                if (!imageDataUrl) { showAlert('尚未上傳照片，請先完成臉部分析。', { type: 'error' }); return; }
+                const prompt = pkg?.generativeText?.renderPromptEn || buildRenderPrompt(pkg?.faceAnalysis, Router.selectedStyleId);
+                if (!prompt) { showAlert('尚未產生妝容建議，請先在風格頁按「確認風格」。', { type: 'error' }); return; }
+
+                renderBtn.disabled = true;
+                renderBtn.textContent = '渲染中...';
+                renderStatus.style.display = 'block';
+                renderStatus.textContent = '傳送照片給 AI 渲染服務...';
+
+                try {
+                    renderStatus.textContent = 'Replicate 生成中，約需 30–60 秒...';
+                    const result = await Api.renderMakeup({ imageDataUrl, prompt, strength: 0.45 });
+                    Router.analysisPackage = AnalysisPackage.update(pkg, {
+                        render: {
+                            ...(pkg.render || {}),
+                            status: 'completed',
+                            provider: 'replicate',
+                            afterImageUrl: result.afterImageUrl,
+                            replicateTempUrl: result.replicateTempUrl || null,
+                            savedImageId: result.savedImageId || null,
+                            error: null
+                        }
+                    });
+                    AnalysisDraft.save(Router.analysisPackage);
+                    setCompareImage('after');
+                    renderStatus.textContent = '渲染完成！';
+                    setTimeout(() => { renderStatus.style.display = 'none'; }, 3000);
+                    showToast('妝容渲染完成');
+                } catch (err) {
+                    renderStatus.textContent = '渲染失敗：' + err.message;
+                    showAlert('AI 渲染失敗：' + err.message, { type: 'error' });
+                } finally {
+                    renderBtn.disabled = false;
+                    renderBtn.textContent = 'AI 渲染妝容';
+                }
+            };
+        }
+
         const saveBtn = document.getElementById('compareSaveLookBtn');
         if (saveBtn) {
             saveBtn.onclick = () => {
+                const afterUrl = Router.analysisPackage?.render?.afterImageUrl || '';
+                if (afterUrl.includes('replicate.delivery')) {
+                    showAlert('妝後圖片目前是臨時網址，收藏後可能日後失效。渲染端更新後將自動改用永久 URL。', {
+                        type: 'warning',
+                        onOk: () => {
+                            Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
+                            if (saveCurrentLook()) showToast('已收藏（注意：圖片為臨時網址）');
+                        }
+                    });
+                    return;
+                }
                 Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
                 if (saveCurrentLook()) showToast('已收藏妝容對比圖');
             };
@@ -1884,7 +1940,10 @@ const PageInit = {
         function setCompareImage(kind) {
             const pkg = Router.analysisPackage || {};
             const render = pkg.render || {};
-            const beforeImage = render.beforeImageUrl || render.beforeImageDataUrl || '';
+            const beforeImage = pkg.images?.front?.compressedDataUrl
+                || render.beforeImageUrl
+                || render.beforeImageDataUrl
+                || '';
             const afterImage = render.afterImageUrl || render.afterImageDataUrl || render.makeupOutput?.imageUrl || render.makeupOutput?.imageDataUrl || '';
             const image = kind === 'after' ? afterImage : beforeImage;
             stage.classList.toggle('has-render', !!image);
@@ -1902,13 +1961,18 @@ const PageInit = {
         const aiSuggestion = pkg.generativeText?.suggestion || '';
         const render = pkg.render || {};
         const makeupOutput = render.makeupOutput || {};
+        const beforeImage = pkg.images?.front?.compressedDataUrl
+            || render.beforeImageUrl
+            || render.beforeImageDataUrl
+            || '';
         const renderedImage = render.afterImageUrl || render.afterImageDataUrl || makeupOutput.imageUrl || makeupOutput.imageDataUrl || '';
+        const displayImage = renderedImage || beforeImage;
         const area = document.getElementById('suggestionArea');
         area.innerHTML = `
             <div class="rendered-suggestion-card">
                 <div class="rendered-photo-frame">
-                    ${renderedImage
-                        ? `<img src="${renderedImage}" alt="${style.name} 渲染後妝容照片">`
+                    ${displayImage
+                        ? `<img src="${displayImage}" alt="${renderedImage ? `${style.name} 渲染後妝容照片` : `${style.name} 原始照片`}">`
                         : `<div class="rendered-photo-placeholder">
                             <span>妝後照片</span>
                             <b>${style.name}</b>
@@ -1917,8 +1981,8 @@ const PageInit = {
                 </div>
                 <div class="rendered-photo-copy">
                     <div class="detail-pill">AI 渲染結果</div>
-                    <h3>${style.name} 渲染後妝容照片</h3>
-                    <p>${renderedImage ? '這張照片來自目前分析資料包的 AI 渲染結果。' : '渲染端尚未回傳圖片，這裡已先預留照片位置；之後只要把圖片 URL 或 DataURL 寫進分析資料包即可自動顯示。'}</p>
+                    <h3>${renderedImage ? `${style.name} 渲染後妝容照片` : `${style.name} 原始照片`}</h3>
+                    <p>${renderedImage ? '這張照片來自目前分析資料包的 AI 渲染結果。' : beforeImage ? '渲染端尚未回傳圖片，這裡先顯示目前分析資料包內的原始照片，之後只要把圖片 URL 或 DataURL 寫進分析資料包即可自動切換。' : '渲染端尚未回傳圖片，這裡已先預留照片位置；之後只要把圖片 URL 或 DataURL 寫進分析資料包即可自動顯示。'}</p>
                 </div>
             </div>
             <div class="style-intro-card">
@@ -1938,13 +2002,13 @@ const PageInit = {
                     ? `<div class="advice-grid">${renderMakeupAdviceGrid(aiSuggestion)}</div>`
                     : `<div class="empty-state compact">尚未取得 AI 建議，請返回風格頁按「確認風格」。</div>`
                 }
-                <button class="btn-gold" id="saveSuggestionBtn" style="margin-top:14px;">收藏妝容對比圖</button>
+                <button class="btn-gold" id="saveSuggestionBtn" style="margin-top:14px;">收藏妝容建議</button>
             </div>
         `;
         Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
         Router.pendingLookSaved = false;
         document.getElementById('saveSuggestionBtn').onclick = () => {
-            if (saveCurrentLook()) showToast('已收藏妝容對比圖');
+            if (saveCurrentLook()) showToast('已收藏妝容建議');
         };
 
     },
@@ -2333,4 +2397,3 @@ function maskEmail(email) {
     if (!name || !domain || name.length <= 3) return email;
     return `${name.slice(0, 3)}******@${domain}`;
 }
-
