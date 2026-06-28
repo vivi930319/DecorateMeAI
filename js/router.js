@@ -492,7 +492,7 @@ compare: `
 <div class="page-header"><h1>妝容對比圖</h1><div class="divider"></div><p>保留 iOS 端的前後對比流程：選擇風格後可按住切換渲染前 / 渲染後效果。</p></div>
 <div class="compare-layout">
     <div class="compare-preview" id="comparePreview">
-        <div class="ph compare-stage before" id="compareStage"><div class="compare-photo-label" id="comparePhotoLabel">渲染前照片</div></div>
+        <div class="ph compare-stage before" id="compareStage"></div>
         <button class="compare-hold-btn" id="compareHoldBtn">按住對比</button>
     </div>
     <div class="analysis-section">
@@ -1847,7 +1847,6 @@ const PageInit = {
         const nameEl = document.getElementById('compareStyleName');
         const tagsEl = document.getElementById('compareStyleTags');
         const stage = document.getElementById('compareStage');
-        const label = document.getElementById('comparePhotoLabel');
         const holdBtn = document.getElementById('compareHoldBtn');
         Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
         Router.pendingLookSaved = false;
@@ -1858,13 +1857,11 @@ const PageInit = {
         const showAfter = () => {
             stage.classList.remove('before');
             stage.classList.add('after');
-            label.textContent = style ? `${style.name} 渲染後照片` : '渲染後照片';
             setCompareImage('after');
         };
         const showBefore = () => {
             stage.classList.remove('after');
             stage.classList.add('before');
-            label.textContent = '渲染前照片';
             setCompareImage('before');
         };
         holdBtn.onpointerdown = showAfter;
