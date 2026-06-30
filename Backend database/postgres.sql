@@ -1,18 +1,6 @@
-DROP TABLE IF EXISTS favorites CASCADE;
-DROP TABLE IF EXISTS checkins CASCADE;
-DROP TABLE IF EXISTS products CASCADE;
-DROP TABLE IF EXISTS color_palettes CASCADE;
-DROP TABLE IF EXISTS member_level_history CASCADE;
-DROP TABLE IF EXISTS tryon_records CASCADE;
-DROP TABLE IF EXISTS blushes, contouring, eyebrows, eyeliner_mascara, eyeshadows, foundations, highlighters, lipsticks CASCADE;
-DROP TABLE IF EXISTS members CASCADE;
-DROP TYPE IF EXISTS member_level_enum CASCADE;
-
-CREATE TYPE member_level_enum AS ENUM ('bronze','silver','gold');
-
--- 創建 members 表格 (會員)
--- 主鍵: phone_number
--- 密碼欄位: password_hash
+-- ==========================================
+-- 1. 核心會員與產品表格
+-- ==========================================
 CREATE TABLE members (
   phone_number VARCHAR(20) PRIMARY KEY,
   name VARCHAR(50) DEFAULT NULL,
@@ -23,18 +11,119 @@ CREATE TABLE members (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 創建 products 表格 (產品)
 CREATE TABLE products (
   id SERIAL PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
   price NUMERIC(10,2) NOT NULL,
-  image_url VARCHAR(255) NOT NULL,
+  image_url VARCHAR(500) NOT NULL,
   description TEXT,
   favorite_count INT DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 創建簽到記錄表格
+-- ==========================================
+-- 2. 八大彩妝分類表格 (完全對齊你的 Python 爬蟲設定)
+-- ==========================================
+CREATE TABLE blushes (
+    id SERIAL PRIMARY KEY,
+    brand VARCHAR(100),
+    sale_page_id VARCHAR(50),
+    name VARCHAR(255),
+    price NUMERIC(10, 2),
+    description TEXT,
+    image_url VARCHAR(500),
+    lab TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE contouring (
+    id SERIAL PRIMARY KEY,
+    brand VARCHAR(100),
+    sale_page_id VARCHAR(50),
+    name VARCHAR(255),
+    price NUMERIC(10, 2),
+    description TEXT,
+    image_url VARCHAR(500),
+    lab TEXT
+);
+
+CREATE TABLE eyebrows (
+    id SERIAL PRIMARY KEY,
+    brand VARCHAR(100),
+    sale_page_id VARCHAR(50),
+    category_name VARCHAR(100),
+    name VARCHAR(255),
+    price NUMERIC(10, 2),
+    description TEXT,
+    image_url VARCHAR(500),
+    lab TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE eyeliner_mascara (
+    id SERIAL PRIMARY KEY,
+    brand VARCHAR(100),
+    sale_page_id VARCHAR(50),
+    category_name VARCHAR(100),
+    name VARCHAR(255),
+    price NUMERIC(10, 2),
+    description TEXT,
+    image_url VARCHAR(500),
+    lab TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE eyeshadows (
+    id SERIAL PRIMARY KEY,
+    brand VARCHAR(100),
+    sale_page_id VARCHAR(50),
+    name VARCHAR(255),
+    price NUMERIC(10, 2),
+    description TEXT,
+    image_url VARCHAR(500),
+    lab TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE foundations (
+    id SERIAL PRIMARY KEY,
+    brand VARCHAR(100),
+    name VARCHAR(255),
+    shade_name VARCHAR(100),
+    price NUMERIC(10, 2),
+    description TEXT,
+    image_url VARCHAR(500),
+    lab TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE highlighters (
+    id SERIAL PRIMARY KEY,
+    brand VARCHAR(100),
+    sale_page_id VARCHAR(50),
+    name VARCHAR(255),
+    price NUMERIC(10, 2),
+    description TEXT,
+    image_url VARCHAR(500),
+    lab TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE lipsticks (
+    id SERIAL PRIMARY KEY,
+    brand VARCHAR(100),
+    product_name VARCHAR(255),
+    price NUMERIC(10, 2),
+    description TEXT,
+    image_url VARCHAR(500),
+    lab_json TEXT,
+    shade_name VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ==========================================
+-- 3. 系統功能表格 (簽到、收藏、紀錄等)
+-- ==========================================
 CREATE TABLE checkins (
   id SERIAL PRIMARY KEY,
   member_id VARCHAR(20) NOT NULL REFERENCES members(phone_number) ON DELETE RESTRICT ON UPDATE CASCADE,
@@ -42,7 +131,6 @@ CREATE TABLE checkins (
   note TEXT
 );
 
--- 創建我的最愛/收藏表格
 CREATE TABLE favorites (
   id SERIAL PRIMARY KEY,
   member_id VARCHAR(20) NOT NULL REFERENCES members(phone_number) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -52,7 +140,6 @@ CREATE TABLE favorites (
   CONSTRAINT uq_member_item UNIQUE (member_id, item_id, item_type)
 );
 
--- 創建色碼資料庫表格
 CREATE TABLE color_palettes (
     id SERIAL PRIMARY KEY,
     title VARCHAR(100),
@@ -62,7 +149,6 @@ CREATE TABLE color_palettes (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 會員升級時間
 CREATE TABLE member_level_history (
     id SERIAL PRIMARY KEY,
     member_id VARCHAR(20),
@@ -71,7 +157,6 @@ CREATE TABLE member_level_history (
     changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
---試妝歷史紀錄表
 CREATE TABLE tryon_records (
     id SERIAL PRIMARY KEY,
     member_id VARCHAR(20) NOT NULL REFERENCES members(phone_number) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -79,17 +164,16 @@ CREATE TABLE tryon_records (
     item_type VARCHAR(50) NOT NULL,
     original_image_url VARCHAR(500) NOT NULL,
     generated_image_url VARCHAR(500) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    makeup_advice TEXT
 );
 
- -- view
- -- 會員活動統計視圖
- -- 收藏數量，註冊天數，活躍程度
+-- ==========================================
+-- 4. 視圖 (Views)
+-- ==========================================
 CREATE OR REPLACE VIEW view_member_activity AS
 SELECT
-    m.phone_number,
-    m.name,
-    m.level,
+    m.phone_number, m.name, m.level,
     COUNT(DISTINCT c.id) AS total_checkins,
     COUNT(DISTINCT f.id) AS total_favorites,
     MAX(c.checkin_time) AS last_checkin_at,
@@ -99,12 +183,9 @@ LEFT JOIN checkins c ON m.phone_number = c.member_id
 LEFT JOIN favorites f ON m.phone_number = f.member_id
 GROUP BY m.phone_number, m.name, m.level;
 
--- 產品收藏排行榜
 CREATE OR REPLACE VIEW view_product_popularity AS
 SELECT
-    p.id,
-    p.name,
-    p.price,
+    p.id, p.name, p.price,
     COUNT(f.id) AS favorite_count,
     COUNT(f.id) * p.price AS popularity_score
 FROM products p
@@ -112,12 +193,9 @@ LEFT JOIN favorites f ON p.id = f.item_id AND f.item_type = 'products'
 GROUP BY p.id, p.name, p.price
 ORDER BY favorite_count DESC;
 
--- 會員 + 收藏 + 簽到 綜合分析
 CREATE OR REPLACE VIEW view_member_dashboard AS
 SELECT
-    m.phone_number,
-    m.name,
-    m.level,
+    m.phone_number, m.name, m.level,
     COUNT(DISTINCT c.id) AS checkins,
     COUNT(DISTINCT f.id) AS favorites,
     MAX(c.checkin_time) AS last_active
@@ -126,20 +204,18 @@ LEFT JOIN checkins c ON m.phone_number = c.member_id
 LEFT JOIN favorites f ON m.phone_number = f.member_id
 GROUP BY m.phone_number, m.name, m.level;
 
--- NT$
 CREATE OR REPLACE VIEW view_product_list AS
 SELECT
-    id,
-    name,
+    id, name,
     'NT$' || TO_CHAR(price, 'FM999,999,999') AS formatted_price,
     description
 FROM products;
 
--- Trigger
--- 自動升級會員等級
+-- ==========================================
+-- 5. 觸發器 (Triggers) 與 函數 (Functions)
+-- ==========================================
 CREATE OR REPLACE FUNCTION func_auto_upgrade_level() RETURNS TRIGGER AS $$
-DECLARE
-    total INT;
+DECLARE total INT;
 BEGIN
     SELECT COUNT(*) INTO total FROM checkins WHERE member_id = NEW.member_id;
     IF total >= 10 THEN
@@ -151,11 +227,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_auto_upgrade_level
-AFTER INSERT ON checkins
+CREATE TRIGGER trg_auto_upgrade_level AFTER INSERT ON checkins
 FOR EACH ROW EXECUTE FUNCTION func_auto_upgrade_level();
 
--- 收藏安全性檢查
 CREATE OR REPLACE FUNCTION func_before_favorite_insert() RETURNS TRIGGER AS $$
 BEGIN
     IF EXISTS (SELECT 1 FROM favorites WHERE member_id = NEW.member_id AND item_id = NEW.item_id AND item_type = NEW.item_type) THEN
@@ -165,17 +239,13 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_before_favorite_insert
-BEFORE INSERT ON favorites
+CREATE TRIGGER trg_before_favorite_insert BEFORE INSERT ON favorites
 FOR EACH ROW EXECUTE FUNCTION func_before_favorite_insert();
 
--- 防止一天重複簽到
 CREATE OR REPLACE FUNCTION func_prevent_multiple_checkin() RETURNS TRIGGER AS $$
 BEGIN
     IF EXISTS (
-        SELECT 1 FROM checkins
-        WHERE member_id = NEW.member_id
-        AND DATE(checkin_time) = CURRENT_DATE
+        SELECT 1 FROM checkins WHERE member_id = NEW.member_id AND DATE(checkin_time) = CURRENT_DATE
     ) THEN
         RAISE EXCEPTION 'You have already checked in today';
     END IF;
@@ -183,11 +253,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_prevent_multiple_checkin
-BEFORE INSERT ON checkins
+CREATE TRIGGER trg_prevent_multiple_checkin BEFORE INSERT ON checkins
 FOR EACH ROW EXECUTE FUNCTION func_prevent_multiple_checkin();
 
--- 自動記錄會員升級時間
 CREATE OR REPLACE FUNCTION func_member_level_history() RETURNS TRIGGER AS $$
 BEGIN
     IF OLD.level <> NEW.level THEN
@@ -198,67 +266,41 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_member_level_history
-AFTER UPDATE ON members
+CREATE TRIGGER trg_member_level_history AFTER UPDATE ON members
 FOR EACH ROW EXECUTE FUNCTION func_member_level_history();
 
--- stored procedures
--- 會員簽到
-CREATE OR REPLACE FUNCTION fn_member_checkin_count(p_member VARCHAR(20))
-RETURNS INT AS $$
-DECLARE
-    total INT;
+-- ==========================================
+-- 6. 預存程序 (Stored Procedures)
+-- ==========================================
+CREATE OR REPLACE FUNCTION fn_member_checkin_count(p_member VARCHAR(20)) RETURNS INT AS $$
+DECLARE total INT;
 BEGIN
     SELECT COUNT(*) INTO total FROM checkins WHERE member_id = p_member;
     RETURN total;
 END;
 $$ LANGUAGE plpgsql;
 
--- 收藏商品
-CREATE OR REPLACE PROCEDURE sp_add_favorite(
-    p_member VARCHAR(20),
-    p_item INT,
-    p_type VARCHAR(50)
-)
-LANGUAGE plpgsql AS $$
+CREATE OR REPLACE PROCEDURE sp_add_favorite(p_member VARCHAR(20), p_item INT, p_type VARCHAR(50)) LANGUAGE plpgsql AS $$
 BEGIN
-    INSERT INTO favorites(member_id, item_id, item_type)
-    VALUES(p_member, p_item, p_type);
+    INSERT INTO favorites(member_id, item_id, item_type) VALUES(p_member, p_item, p_type);
 END;
 $$;
 
--- 取消收藏
-CREATE OR REPLACE PROCEDURE sp_remove_favorite(
-    p_member VARCHAR(20),
-    p_item INT,
-    p_type VARCHAR(50)
-)
-LANGUAGE plpgsql AS $$
+CREATE OR REPLACE PROCEDURE sp_remove_favorite(p_member VARCHAR(20), p_item INT, p_type VARCHAR(50)) LANGUAGE plpgsql AS $$
 BEGIN
-    DELETE FROM favorites
-    WHERE member_id = p_member
-    AND item_id = p_item
-    AND item_type = p_type;
+    DELETE FROM favorites WHERE member_id = p_member AND item_id = p_item AND item_type = p_type;
 END;
 $$;
 
--- 查詢熱門商品
-CREATE OR REPLACE FUNCTION sp_get_top_products()
-RETURNS SETOF products AS $$
+CREATE OR REPLACE FUNCTION sp_get_top_products() RETURNS SETOF products AS $$
 BEGIN
     RETURN QUERY SELECT * FROM products ORDER BY favorite_count DESC LIMIT 10;
 END;
 $$ LANGUAGE plpgsql;
 
--- 查詢會員收藏商品
 CREATE OR REPLACE FUNCTION sp_member_favorites(p_member VARCHAR(20))
 RETURNS TABLE (
-    id INT,
-    category VARCHAR,
-    name VARCHAR,
-    price NUMERIC,
-    description TEXT,
-    image_data VARCHAR
+    id INT, category VARCHAR, name VARCHAR, price NUMERIC, description TEXT, image_url VARCHAR
 ) AS $$
 BEGIN
     RETURN QUERY
@@ -268,7 +310,7 @@ BEGIN
         COALESCE(p.name, l.product_name, b.name, c.name, e.name, em.name, es.name, fd.name, h.name)::VARCHAR AS name,
         COALESCE(p.price, l.price, b.price, c.price, e.price, em.price, es.price, fd.price, h.price)::NUMERIC AS price,
         COALESCE(p.description, l.description, b.description, c.description, e.description, em.description, es.description, fd.description, h.description)::TEXT AS description,
-        COALESCE(p.image_url, l.image_data, b.image_data, c.image_data, e.image_data, em.image_data, es.image_data, fd.image_data, h.image_data)::VARCHAR AS image_data
+        COALESCE(p.image_url, l.image_url, b.image_url, c.image_url, e.image_url, em.image_url, es.image_url, fd.image_url, h.image_url)::VARCHAR AS image_url
     FROM favorites f
     LEFT JOIN products p ON f.item_id = p.id AND f.item_type = 'products'
     LEFT JOIN lipsticks l ON f.item_id = l.id AND f.item_type = 'lipsticks'
@@ -283,23 +325,15 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Event
--- 每天自動記錄會員狀態
-CREATE OR REPLACE PROCEDURE daily_member_stats()
-LANGUAGE plpgsql AS $$
+CREATE OR REPLACE PROCEDURE daily_member_stats() LANGUAGE plpgsql AS $$
 BEGIN
     INSERT INTO member_level_history(member_id, old_level, new_level)
-    SELECT phone_number, level::VARCHAR, level::VARCHAR
-    FROM members;
+    SELECT phone_number, level::VARCHAR, level::VARCHAR FROM members;
 END;
 $$;
 
--- Function
--- 取得會員收藏數量
-CREATE OR REPLACE FUNCTION fn_member_favorite_count(p_member VARCHAR(20))
-RETURNS INT AS $$
-DECLARE
-    total INT;
+CREATE OR REPLACE FUNCTION fn_member_favorite_count(p_member VARCHAR(20)) RETURNS INT AS $$
+DECLARE total INT;
 BEGIN
     SELECT COUNT(*) INTO total FROM favorites WHERE member_id = p_member;
     RETURN total;

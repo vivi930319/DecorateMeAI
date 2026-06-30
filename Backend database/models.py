@@ -1,6 +1,7 @@
 from extensions import db, bcrypt
 from flask_login import UserMixin
 from sqlalchemy.dialects.postgresql import JSONB
+from datetime import datetime
 
 
 # 會員資料，主要目的是儲存和管理所有使用者或會員的身份信息、認證憑證以及其在系統中的等級屬性，裡面包括了提供每位會員的唯一識別碼（透過 phone_number 欄位）、安全加密後的密
@@ -213,10 +214,10 @@ class TryonRecords(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     member_id = db.Column(db.String(20), db.ForeignKey('members.phone_number'), nullable=False)
-
     item_id = db.Column(db.Integer, nullable=False)
     item_type = db.Column(db.String(50), nullable=False)
-
     original_image_url = db.Column(db.String(500), nullable=False)
     generated_image_url = db.Column(db.String(500), nullable=False)
     created_at = db.Column(db.DateTime, server_default=db.func.now())
+    makeup_advice = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)

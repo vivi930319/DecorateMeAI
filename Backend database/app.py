@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 import redis
 import base64
 from redis.exceptions import RedisError
+from datetime import datetime
 
 from extensions import db, bcrypt, login_manager
 from models import (
