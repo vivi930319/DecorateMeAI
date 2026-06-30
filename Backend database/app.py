@@ -105,25 +105,47 @@ def register():
 
 
 # 登入功能
-@app.route("/login", methods=['GET', 'POST'])
+@app.route("/api/login", methods=['POST'])
 def login():
     if current_user.is_authenticated:
-        return redirect(url_for('index'))
+        return jsonify({
+            "success": True,
+            "message": "已經是登入狀態",
+            "member": {
+                "name": current_user.name,
+                "email": current_user.email,
+                "phone_number": current_user.phone_number,
+                "age": current_user.age,
+                "level": "一般會員"
+            }
+        }), 200
 
-    form = LoginForm()
-    if form.validate_on_submit():
-        member = Members.query.filter_by(email=form.email.data.strip().lower()).first()
-        if member and member.verify_password(form.password.data):
-            login_user(member)
-            next_page = request.args.get('next')
-            flash('登入成功！', 'success')
-            # 使用 flask 的 redirect
-            return redirect(next_page) if next_page else redirect(url_for('index'))
-        else:
-            flash('登入失敗，請檢查電子郵件或密碼', 'danger')
+    data = request.get_json(silent=True) or {}
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
 
-    # 需要 login.html 模板
-    return render_template('login.html', title='登入', form=form)
+    if not email or not password:
+        return jsonify({"success": False, "message": "請輸入電子郵件與密碼"}), 400
+
+    member = Members.query.filter_by(email=email).first()
+
+    if member and member.verify_password(password):
+        login_user(member)
+
+        return jsonify({
+            "member": {
+                "name": member.name,
+                "email": member.email,
+                "phone_number": member.phone_number,
+                "age": member.age,
+                "level": "一般會員" if member.level == "bronze" else "高級會員"
+            }
+        }), 200
+    else:
+        return jsonify({
+            "success": False,
+            "message": "登入失敗，電子郵件或密碼錯誤"
+        }), 401
 
 
 # 忘記密碼 - 寄送 OTP
