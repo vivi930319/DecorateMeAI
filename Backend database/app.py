@@ -397,17 +397,18 @@ def save_tryon_record():
     i_type = data.get('item_type')
     orig_img = data.get('original_image_url')
     gen_img = data.get('generated_image_url')
+    advice = data.get('makeup_advice')
 
     if not all([i_id, i_type, orig_img, gen_img]):
         return jsonify({"status": "error", "message": "缺少必要參數（商品ID、分類、或圖片網址）"}), 400
-
     try:
         new_record = TryonRecords(
             member_id=current_user.phone_number,
             item_id=i_id,
             item_type=i_type,
             original_image_url=orig_img,
-            generated_image_url=gen_img
+            generated_image_url=gen_img,
+            makeup_advice=advice
         )
         db.session.add(new_record)
         db.session.commit()
@@ -421,6 +422,8 @@ def save_tryon_record():
 @login_required
 def tryon_history():
     records = TryonRecords.query.filter_by(member_id=current_user.phone_number).order_by(TryonRecords.created_at.desc()).all()
+    # 💡 這裡不需要改動，因為 records 抓出來後，
+    # HTML 頁面（history.html）裡就可以直接用 {{ record.makeup_advice }} 來呈現了！
     return render_template('history.html', title='我的試妝紀錄', records=records)
 
 

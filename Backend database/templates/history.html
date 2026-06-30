@@ -43,6 +43,15 @@
                                 </div>
                             </div>
                         </div>
+
+                        {% if record.makeup_advice %}
+                        <div class="advice-section mt-3 p-3" style="background-color: #fff5f8; border-radius: 12px; border: 1px solid #ffe1eb;">
+                            <h6 style="color: var(--primary-pink); font-weight: 600; font-size: 0.85rem;">💡 妝容建議</h6>
+                            <p class="small mb-0" style="line-height: 1.6;">{{ record.makeup_advice }}</p>
+                        </div>
+                        {% else %}
+                        <p class="text-muted small text-center mt-3 mb-0">暫無妝容建議</p>
+                        {% endif %}
                     </div>
                 </div>
             </div>
