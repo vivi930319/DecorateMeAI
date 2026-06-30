@@ -1,0 +1,23 @@
+# 1. 隱藏機密環境變數 (超級重要！)
+.env
+
+# 2. 忽略虛擬環境資料夾
+.venv/
+venv/
+env/
+
+# 3. 忽略 Python 自動產生的快取檔
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 4. 忽略 Mac 系統自動產生的隱藏檔 (既然你有用 Mac 開發，這個必加)
+.DS_Store
+
+# 5. 忽略編輯器 (PyCharm / VSCode) 的設定檔
+.idea/
+.vscode/
+
+# 6. 忽略資料庫檔案 (如果你之後有用到 SQLite 的話)
+*.sqlite3
+instance/

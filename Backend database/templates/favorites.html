@@ -1,0 +1,308 @@
+{% extends "base.html" %}
+
+{% block title %}我的最愛 | Empower Beauty{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2 style="color: var(--primary-pink); font-weight: 600; margin: 0;">
+            <span class="me-2">🤍</span> 我的專屬收藏庫
+        </h2>
+        <a href="{{ url_for('products_page') }}" class="btn btn-outline-secondary btn-sm rounded-pill">繼續逛逛</a>
+    </div>
+
+    {% if not favorites %}
+    <div class="text-center py-5 bg-light rounded" style="border: 1px dashed #ccc; border-radius: 16px !important;">
+        <p class="text-muted mb-3">您目前還沒有收藏任何商品喔！</p>
+        <a href="{{ url_for('products_page') }}" class="btn btn-primary rounded-pill px-4">去挑選彩妝</a>
+    </div>
+    {% else %}
+    <div class="row g-4" id="favorites-container">
+        {% for p in favorites %}
+        <div class="col-6 col-md-4 col-lg-3" id="fav-card-{{ p.type }}-{{ p.id }}">
+            <div class="card h-100 p-3 bg-white shadow-sm"
+                 style="border-radius: 16px; border: 1px solid #f0f0f0; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s;"
+                 onclick="clickFavoriteProduct({{ loop.index0 }})"
+                 onmouseover="this.style.transform='translateY(-5px)'; this.style.boxShadow='0 10px 20px rgba(0,0,0,0.05)';"
+                 onmouseout="this.style.transform='none'; this.style.boxShadow='';">
+
+                <div class="mb-3" style="aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; background-color: #fafafa; border-radius: 12px; overflow: hidden;">
+                    <img src="{{ p.image_url }}" alt="{{ p.name }}" style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                </div>
+                <div class="card-body p-0 d-flex flex-column">
+                    <h6 class="mb-1 fw-bold text-truncate" style="font-size: 0.95rem;">{{ p.name }}</h6>
+                    <p class="text-muted small mb-3">{{ p.brand }}</p>
+                    <div class="mt-auto d-flex justify-content-between align-items-center" onclick="event.stopPropagation();">
+                        <span class="fw-bold text-pink-custom">{{ p.price }}</span>
+                        <button class="btn btn-sm btn-danger rounded-pill px-3 shadow-sm" onclick="removeFavorite('{{ p.type }}', {{ p.id }})">
+                            取消收藏
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<div class="modal fade" id="productDetailModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content" style="border-radius: 20px; border: none; overflow: hidden; box-shadow: 0 25px 50px rgba(0,0,0,0.15);">
+            <button type="button" class="btn-close position-absolute top-0 end-0 m-3" data-bs-dismiss="modal" aria-label="Close" style="z-index: 10;"></button>
+            <div class="modal-body p-0">
+                <div class="row g-0">
+                    <div class="col-md-5 bg-light d-flex align-items-center justify-content-center p-4">
+                        <img id="modal-img" src="" alt="商品圖片" class="img-fluid" style="max-height: 400px; object-fit: contain;">
+                    </div>
+                    <div class="col-md-7 p-4 p-md-5 position-relative">
+                        <p id="modal-brand" class="text-muted small mb-1 fw-bold" style="letter-spacing: 1px;"></p>
+                        <h4 id="modal-name" class="fw-bold mb-2"></h4>
+                        <p id="modal-desc" class="small mb-3" style="color: #c9889b;"></p>
+
+                        <div class="d-flex align-items-center mb-4">
+                            <h3 id="modal-price" class="fw-bold text-pink-custom mb-0 me-3"></h3>
+                            <button id="modal-favorite-btn" class="btn btn-danger btn-sm rounded-pill px-3 shadow-sm" onclick="toggleFavoriteInModal()" style="transition: all 0.2s;">
+                                ❤️ 已收藏
+                            </button>
+                        </div>
+
+                        <div class="row g-3">
+                            <div class="col-6">
+                                <div class="p-3 shadow-sm" style="background-color: #fff5f8; border-radius: 12px; height: 100%;">
+                                    <div class="fw-bold mb-2" style="font-size: 0.85rem;">主色色票 (HEX)</div>
+                                    <div id="modal-swatch-box" style="height: 40px; border-radius: 8px; margin-bottom: 0.5rem;" class="shadow-sm"></div>
+                                    <div class="small">
+                                        <strong>HEX:</strong> <span id="modal-hex"></span><br>
+                                        <strong>RGB:</strong> <span id="modal-rgb"></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="p-3 shadow-sm" style="background-color: #fff5f8; border-radius: 12px; height: 100%;">
+                                    <div class="fw-bold mb-2" style="font-size: 0.85rem;">CIELAB 色彩向量</div>
+                                    <div class="small" style="line-height: 1.8;">
+                                        <strong>L:</strong> <span id="modal-lab-l">0</span><br>
+                                        <strong>a:</strong> <span id="modal-lab-a">0</span><br>
+                                        <strong>b:</strong> <span id="modal-lab-b">0</span><br>
+                                        <span class="text-muted" style="font-size: 0.7rem;">色相: <span id="modal-lab-hex"></span></span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="p-3 shadow-sm" style="background-color: #fff5f8; border-radius: 12px; height: 100%;">
+                                    <div class="fw-bold mb-2" style="font-size: 0.85rem;">HSV 色彩向量</div>
+                                    <div class="small" style="line-height: 1.8;">
+                                        <strong>H:</strong> <span id="modal-hsv-h">0</span>&deg;<br>
+                                        <strong>S:</strong> <span id="modal-hsv-s">0</span>%<br>
+                                        <strong>V:</strong> <span id="modal-hsv-v">0</span>%
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="p-3 shadow-sm" style="background-color: #fff5f8; border-radius: 12px; height: 100%;">
+                                    <div class="fw-bold mb-2" style="font-size: 0.85rem;">12維向量 (Qdrant)</div>
+                                    <div id="modal-vector" class="small text-muted" style="word-break: break-all; font-size: 0.75rem;"></div>
+                                    <div class="mt-2 text-muted" style="font-size: 0.65rem;">維度: 12D / 演算法: COSINE</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mt-4 pt-3 border-top">
+                            <h5 class="fw-bold mb-3" style="font-size: 0.85rem; color: var(--primary-pink); letter-spacing: 0.5px;">✨ AI 相似色彩推薦 (以色找色)</h5>
+                            <div id="modal-recommendations-row" class="row g-2"></div>
+                        </div>
+
+                        <div id="modal-sale-page" class="mt-4 text-muted" style="font-size: 0.65rem;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // 🌟 將後端傳過來的 Jinja2 最愛列表資料，轉化為安全、可被 JS 隨時讀取的陣列
+    const favoriteProducts = {{ favorites | tojson | safe if favorites else "[]" }};
+
+    let currentProductId = null;
+    let currentProductType = null;
+    let nestedRecommendations = []; // 視窗內部的推薦清單
+
+    function hexToRgb(hex) {
+        let result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : null;
+    }
+
+    function rgbToHsv(r, g, b) {
+        r /= 255, g /= 255, b /= 255;
+        let max = Math.max(r, g, b), min = Math.min(r, g, b);
+        let h, s, v = max;
+        let d = max - min;
+        s = max === 0 ? 0 : d / max;
+        if (max === min) h = 0;
+        else {
+            switch (max) {
+                case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                case g: h = (b - r) / d + 2; break;
+                case b: h = (r - g) / d + 4; break;
+            }
+            h /= 6;
+        }
+        return { h: (h * 360).toFixed(1), s: (s * 100).toFixed(1), v: (v * 100).toFixed(1) };
+    }
+
+    // 將資料載入到 Modal 中
+    function loadProductIntoModal(p) {
+        currentProductId = p.id;
+        currentProductType = p.type;
+
+        let desc = p.desc;
+        if (!desc || desc === 'None' || desc.trim() === '') desc = '增添好氣色，修飾雙頰輪廓';
+
+        let lab = p.lab || {};
+        let vector = p.vector || [];
+        if (typeof lab === 'string') try { lab = JSON.parse(lab); } catch(e){}
+        if (typeof vector === 'string') try { vector = JSON.parse(vector); } catch(e){}
+
+        const modalImg = document.getElementById('modal-img');
+        modalImg.style.opacity = '0';
+        setTimeout(() => {
+            modalImg.src = p.image_url;
+            modalImg.onload = () => { modalImg.style.transition = 'opacity 0.4s ease'; modalImg.style.opacity = '1'; };
+        }, 100);
+
+        document.getElementById('modal-brand').textContent = p.brand;
+        document.getElementById('modal-name').textContent = p.name;
+        document.getElementById('modal-desc').textContent = desc;
+        document.getElementById('modal-price').textContent = p.price;
+        document.getElementById('modal-sale-page').textContent = `sale_page_id: ${p.salepage || 'undefined'}`;
+
+        document.getElementById('modal-swatch-box').style.backgroundColor = p.hex;
+        document.getElementById('modal-hex').textContent = p.hex;
+        document.getElementById('modal-lab-hex').textContent = p.hex;
+
+        const rgb = hexToRgb(p.hex);
+        if (rgb) {
+            document.getElementById('modal-rgb').textContent = `${rgb.r}, ${rgb.g}, ${rgb.b}`;
+            const hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
+            document.getElementById('modal-hsv-h').textContent = `${hsv.h}`;
+            document.getElementById('modal-hsv-s').textContent = `${hsv.s}`;
+            document.getElementById('modal-hsv-v').textContent = `${hsv.v}`;
+        }
+
+        if (lab && typeof lab === 'object' && Object.keys(lab).length > 0) {
+            document.getElementById('modal-lab-l').textContent = lab.L !== undefined ? lab.L : (lab[0] || 0);
+            document.getElementById('modal-lab-a').textContent = lab.a !== undefined ? lab.a : (lab[1] || 0);
+            document.getElementById('modal-lab-b').textContent = lab.b !== undefined ? lab.b : (lab[2] || 0);
+        } else {
+            document.getElementById('modal-lab-l').textContent = '0';
+            document.getElementById('modal-lab-a').textContent = '0';
+            document.getElementById('modal-lab-b').textContent = '0';
+        }
+
+        if (Array.isArray(vector) && vector.length > 0) {
+            document.getElementById('modal-vector').textContent = `[${vector.map(v => Number(v).toFixed(2)).join(', ')}]`;
+        } else {
+            document.getElementById('modal-vector').textContent = '[資料庫中無向量資料]';
+        }
+
+        // 發送 AI 相似推薦
+        const recRow = document.getElementById('modal-recommendations-row');
+        recRow.innerHTML = '<div class="text-center w-100 py-2 text-muted small">🤖 AI 正在精確比對 12 維色彩向量...</div>';
+
+        fetch(`/api/recommend/${p.type}/${p.id}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.recommendations.length > 0) {
+                    recRow.innerHTML = '';
+                    nestedRecommendations = data.recommendations;
+
+                    data.recommendations.forEach((rec, index) => {
+                        recRow.innerHTML += `
+                            <div class="col-4">
+                                <div class="p-2 border border-light rounded bg-white text-center h-100 position-relative shadow-sm"
+                                     style="cursor: pointer; font-size: 0.75rem; border-radius: 12px !important; transition: transform 0.2s;"
+                                     onclick="clickNestedRecommendation(${index})"
+                                     onmouseover="this.style.transform='scale(1.05)';"
+                                     onmouseout="this.style.transform='scale(1)';">
+                                    <span class="position-absolute top-0 start-50 translate-middle badge rounded-pill" style="font-size: 0.6rem; background-color: var(--primary-pink) !important;">
+                                        ${rec.similarity}% 相似
+                                    </span>
+                                    <div class="d-flex align-items-center justify-content-center mb-1 bg-light rounded" style="aspect-ratio: 1/1; overflow: hidden; padding: 4px;">
+                                        <img src="${rec.image_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                                    </div>
+                                    <div class="fw-bold text-truncate text-dark mb-0" style="font-size: 0.8rem;">${rec.name}</div>
+                                    <div class="text-muted" style="font-size: 0.65rem;">${rec.brand}</div>
+                                    <div class="fw-bold mt-1" style="color: #d6336c;">${rec.price}</div>
+                                </div>
+                            </div>
+                        `;
+                    });
+                } else {
+                    recRow.innerHTML = '<div class="text-center w-100 py-2 text-muted small">暫無相似色彩商品</div>';
+                }
+            }).catch(err => console.error(err));
+    }
+
+    // 🌟 點擊最愛清單中的卡片
+    function clickFavoriteProduct(index) {
+        const product = favoriteProducts[index];
+        loadProductIntoModal(product);
+        const myModal = new bootstrap.Modal(document.getElementById('productDetailModal'));
+        myModal.show();
+    }
+
+    // 點擊彈窗內部的相似色推薦
+    function clickNestedRecommendation(index) {
+        const rec = nestedRecommendations[index];
+        const productData = {
+            id: rec.id, type: rec.type, image_url: rec.image_url, brand: rec.brand, name: rec.name,
+            desc: rec.desc, price: rec.price, hex: rec.hex, salepage: rec.salepage,
+            lab: rec.lab, vector: rec.vector
+        };
+        loadProductIntoModal(productData);
+        document.querySelector('.modal-body').parentElement.parentElement.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    // 在 Modal 視窗內按「取消收藏」
+    function toggleFavoriteInModal() {
+        if (!currentProductId || !currentProductType) return;
+        removeFavorite(currentProductType, currentProductId);
+        // 按下後直接關閉彈窗，使用者就會看到列表中的卡片優雅淡出
+        const modalEl = document.getElementById('productDetailModal');
+        const modal = bootstrap.Modal.getInstance(modalEl);
+        if (modal) modal.hide();
+    }
+
+    // 基礎功能：從頁面移除最愛（帶有動畫）
+    function removeFavorite(itemType, itemId) {
+        fetch('/api/favorites/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ item_id: itemId, item_type: itemType })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'removed') {
+                const card = document.getElementById(`fav-card-${itemType}-${itemId}`);
+                if (card) {
+                    card.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+                    card.style.opacity = '0';
+                    card.style.transform = 'scale(0.8)';
+                    setTimeout(() => {
+                        card.remove();
+                        const container = document.getElementById('favorites-container');
+                        if (container && container.children.length === 0) {
+                            location.reload();
+                        }
+                    }, 300);
+                }
+            }
+        })
+        .catch(err => console.error("移除失敗:", err));
+    }
+</script>
+{% endblock %}
