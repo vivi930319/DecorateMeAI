@@ -18,40 +18,34 @@ const ApiConfig = {
             posePath: '/v1/face/pose',
             jobPath: '/v1/face/jobs/basic',
             jobStatusPath: '/v1/face/jobs/{jobId}',
-            jobResultPath: '/v1/face/jobs/{jobId}/result',
-            healthPath: '/health'
+            jobResultPath: '/v1/face/jobs/{jobId}/result'
         },
         facePro: {
             baseUrl: RuntimeApiConfig.faceProUrl || 'http://127.0.0.1:8002',
             analyzePath: '/v1/face/analyze/pro',
             jobPath: '/v1/face/jobs/pro',
             jobStatusPath: '/v1/face/jobs/{jobId}',
-            jobResultPath: '/v1/face/jobs/{jobId}/result',
-            healthPath: '/health'
+            jobResultPath: '/v1/face/jobs/{jobId}/result'
         },
         textSuggestion: {
             baseUrl: RuntimeApiConfig.textSuggestionUrl || 'http://127.0.0.1:8010',
-            suggestPath: '/suggest',
-            streamPath: '/suggest/stream',
-            healthPath: '/health'
+            apiKey: RuntimeApiConfig.textSuggestionApiKey || '',
+            suggestPath: '/suggest'
         },
         render: {
             baseUrl: RuntimeApiConfig.renderUrl || '',
-            renderPath: '/render',
-            healthPath: '/health'
+            renderPath: '/render'
         },
         product: {
             baseUrl: RuntimeApiConfig.productUrl || '',
-            recommendPath: '/recommend-products',
-            healthPath: '/health'
+            recommendPath: '/recommend-products'
         },
         memberDatabase: {
             baseUrl: RuntimeApiConfig.memberDatabaseUrl || 'https://vegetation-arguments-final-inspiration.trycloudflare.com',
             loginPath: '/api/login',
             registerPath: '/api/register',
             sendOtpPaths: ['/api/send-otp', '/api/register'],
-            verifyOtpPath: '/api/verify-otp',
-            healthPath: '/health'
+            verifyOtpPath: '/api/verify-otp'
         }
     },
 
@@ -73,18 +67,6 @@ const Api = {
     config: ApiConfig,
 
     // 臉部分析
-    async analyzeFace(file) {
-        const fd = new FormData();
-        fd.append('file', file);
-        const res = await fetch(this.config.url('faceBasic', 'analyzePath'), { method: 'POST', body: fd });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
-            throw new Error(err.detail || '分析失敗');
-        }
-        const data = await res.json();
-        return { data, imageMeta: { front: ImagePipeline.metaFromFile(file, 'front') } };
-    },
-
     async detectFacePose(file) {
         const fd = new FormData();
         fd.append('file', file);
@@ -94,29 +76,6 @@ const Api = {
             throw new Error(err.detail?.error?.message || err.detail || '角度偵測失敗');
         }
         return res.json();
-    },
-
-    async analyzeFacePro(files) {
-        const fd = new FormData();
-        const imageMeta = {};
-        fd.append('front', files.front);
-        imageMeta.front = ImagePipeline.metaFromFile(files.front, 'front');
-        for (const role of ['left45', 'right45', 'side']) {
-            if (!files[role]) continue;
-            fd.append(role, files[role]);
-            imageMeta[role] = ImagePipeline.metaFromFile(files[role], role);
-        }
-
-        // PRO 掃描版預留：
-        // 未來 webcam 掃描擷取出的 front / left45 / right45 / side Blob，
-        // 也包成 File 後送到同一個 API，避免掃描版和檔案上傳版分裂。
-        const res = await fetch(this.config.url('facePro', 'analyzePath'), { method: 'POST', body: fd });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
-            throw new Error(err.detail || '分析失敗');
-        }
-        const data = await res.json();
-        return { data, imageMeta };
     },
 
     async createFaceJob(file) {
@@ -179,12 +138,19 @@ const Api = {
         throw new Error('臉部分析 job 逾時');
     },
 
+    _textSuggestionHeaders() {
+        const headers = { 'Content-Type': 'application/json' };
+        const apiKey = this.config.services.textSuggestion.apiKey;
+        if (apiKey) headers['X-API-Key'] = apiKey;
+        return headers;
+    },
+
     async suggestMakeup({ analysisPackage, faceAnalysis, style, userNote }) {
         let res;
         try {
             res = await fetch(this.config.url('textSuggestion', 'suggestPath'), {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this._textSuggestionHeaders(),
                 body: JSON.stringify({ analysisPackage, faceAnalysis, style, language: 'zh-TW', userNote }),
             });
         } catch (err) {
@@ -200,67 +166,6 @@ const Api = {
             throw new Error(msg);
         }
         return res.json();
-    },
-
-    async suggestMakeupStream({ analysisPackage, faceAnalysis, style, userNote }, onToken, onDone, onError) {
-        const url = this.config.url('textSuggestion', 'streamPath');
-        if (!url) { onError('未設定 Ollama URL'); return; }
-        let response;
-        try {
-            response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ analysisPackage, faceAnalysis, style, language: 'zh-TW', userNote }),
-            });
-        } catch (err) {
-            onError('無法連線到建議服務：' + err.message);
-            return;
-        }
-        if (response.status === 404) {
-            // 組員尚未更新服務，降回舊版 /suggest
-            try {
-                const fallbackRes = await fetch(this.config.url('textSuggestion', 'suggestPath'), {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ analysisPackage, faceAnalysis, style, language: 'zh-TW', userNote }),
-                });
-                if (!fallbackRes.ok) {
-                    const err = await fallbackRes.json().catch(() => ({}));
-                    onError(err.detail?.error?.message || `建議服務回傳 HTTP ${fallbackRes.status}`);
-                    return;
-                }
-                const data = await fallbackRes.json();
-                onToken(data.suggestion || '');
-                onDone({ done: true, suggestion: data.suggestion || '', renderPromptEn: data.renderPromptEn || '' });
-            } catch (err) {
-                onError('無法連線到建議服務：' + err.message);
-            }
-            return;
-        }
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            onError(err.detail?.error?.message || `建議服務回傳 HTTP ${response.status}`);
-            return;
-        }
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
-            for (const line of lines) {
-                if (!line.startsWith('data: ')) continue;
-                try {
-                    const evt = JSON.parse(line.slice(6));
-                    if (evt.error) { onError(evt.error); return; }
-                    if (evt.token) onToken(evt.token);
-                    if (evt.done) onDone(evt);
-                } catch (_) {}
-            }
-        }
     },
 
     async renderMakeup({ imageDataUrl, prompt, strength = 0.45 }) {
@@ -747,17 +652,17 @@ function buildRenderPrompt(faceAnalysis, styleId, suggestion = '') {
 
     const style = styleMap[styleId] || 'natural everyday makeup';
     const makeupDetail = [...found.slice(0, 4), style].filter(Boolean).join('; ');
-    const suggestionClean = suggestion.slice(0, 300).trim();
     const faceDesc = faceParts.length ? `This person has ${faceParts.join(', ')}.` : '';
-    const ollamaLine = suggestionClean ? `Makeup reference (translated from advisor): ${suggestionClean}.` : '';
 
     return [
         `Apply makeup to this exact person.`,
         faceDesc,
         `Only add the following makeup: ${makeupDetail}.`,
-        ollamaLine,
+        `Apply the makeup with a light, sheer hand: soft and subtle, low-intensity pigmentation, natural finish. Avoid heavy, bold, or exaggerated application.`,
         `Do not change anything else.`,
         `Keep this person's face shape, eye shape, nose, lips, skin tone, skin texture, pores, wrinkles, hair, body, clothing, background, lighting, camera angle, and expression completely identical to the original photo.`,
+        `This must be the exact same person with the exact same facial expression as the original photo — only the makeup is different, nothing else.`,
+        `Photorealistic result: real skin texture and pores, natural light and shadow, no illustration, no cartoon, no airbrushed or plastic look, no AI-generated artifacts.`,
         `This must look like the same person wearing makeup, not a different person.`,
     ].filter(Boolean).join(' ');
 }
@@ -799,11 +704,6 @@ const Auth = {
         if (profile?.name) sessionStorage.setItem('beautyUser', profile.name);
         this.saveRegisteredMember(profile);
     },
-    setUser(n) {
-        sessionStorage.setItem('beautyUser', n);
-        const profile = this.getProfile();
-        this.setProfile({ ...profile, name: n });
-    },
     isLoggedIn() { return !!this.getUser(); },
     logout() {
         sessionStorage.removeItem('beautyUser');
@@ -812,14 +712,209 @@ const Auth = {
     },
 };
 
+// ═══ Admin 權限原型：之後可改接會員資料庫 API ═══
+const AdminStore = {
+    _permissionsKey: 'beautyMemberPermissions',
+    _productsKey: 'beautyAdminProducts',
+    _overridesKey: 'beautyAdminProductOverrides',
+    // analysisPro 不放在預設清單裡：一般會員預設沒有 PRO，要 VIP 或後台手動勾選才會拿到
+    _defaultPages: ['dashboard', 'analysisBasic', 'style', 'products', 'favorites', 'history', 'compare', 'suggestion', 'profile'],
+    _adminEmails: ['admin@decorateme.local', 'admin@decorateme.test'],
+    // 寫死的管理員帳號：memberDatabase 還沒接上，OTP 也發不出去，先用固定帳密繞過註冊/驗證流程
+    _seedAdmin: { email: 'admin@decorateme.local', password: 'decorateme888' },
+    _email(email) { return String(email || '').trim().toLowerCase(); },
+    isSeedAdmin(email, password) {
+        return this._email(email) === this._email(this._seedAdmin.email) && password === this._seedAdmin.password;
+    },
+    // 暫時邏輯：member_database 串接真正後端驗證後，管理員身分判斷要移到後端，這裡的 email 規則就可以拿掉
+    isAdminProfile(profile) {
+        const email = this._email(profile?.email);
+        return profile?.role === 'admin'
+            || profile?.level === '管理員'
+            || this._adminEmails.includes(email)
+            || email.startsWith('admin@');
+    },
+    // VIP 會員（管理員視同 VIP，全功能都能用）
+    isVip(profile) {
+        return profile?.level === 'VIP會員' || this.isAdminProfile(profile);
+    },
+    // PRO 分析解鎖規則：VIP 身分「或」後台單獨勾選 analysisPro 權限，兩套機制並存、互不打架
+    canUseProAnalysis(profile) {
+        const p = profile || Auth.getProfile();
+        if (this.isVip(p)) return true;
+        const permission = this.getPermission(p?.email, p);
+        if (permission.status === 'suspended') return false;
+        return (permission.allowedPages || this._defaultPages).includes('analysisPro');
+    },
+    // AI 渲染妝容每次都是真的在打 Replicate API、有實際成本，一般會員每天限額，VIP/管理員不限
+    _renderQuotaKey: 'beautyRenderUsage',
+    _dailyRenderLimit: 3,
+    _today() { return new Date().toISOString().slice(0, 10); },
+    getRenderUsage(email) {
+        const key = this._email(email) || 'guest';
+        let usage = {};
+        try { usage = JSON.parse(localStorage.getItem(this._renderQuotaKey) || '{}'); } catch (_) {}
+        const entry = usage[key];
+        if (!entry || entry.date !== this._today()) return { date: this._today(), count: 0 };
+        return entry;
+    },
+    // 不限次數規則：VIP 身分「或」後台單獨勾選 unlimitedRender 權限，兩套機制並存、互不打架
+    hasUnlimitedRender(profile) {
+        const p = profile || Auth.getProfile();
+        if (this.isVip(p)) return true;
+        const permission = this.getPermission(p?.email, p);
+        if (permission.status === 'suspended') return false;
+        return (permission.allowedPages || this._defaultPages).includes('unlimitedRender');
+    },
+    canRender(profile) {
+        if (this.hasUnlimitedRender(profile)) return true;
+        return this.getRenderUsage(profile?.email).count < this._dailyRenderLimit;
+    },
+    getRemainingRenders(profile) {
+        if (this.hasUnlimitedRender(profile)) return Infinity;
+        return Math.max(0, this._dailyRenderLimit - this.getRenderUsage(profile?.email).count);
+    },
+    recordRenderUsage(profile) {
+        if (this.hasUnlimitedRender(profile)) return;
+        const key = this._email(profile?.email) || 'guest';
+        let usage = {};
+        try { usage = JSON.parse(localStorage.getItem(this._renderQuotaKey) || '{}'); } catch (_) {}
+        const today = this._today();
+        const entry = (usage[key] && usage[key].date === today) ? usage[key] : { date: today, count: 0 };
+        entry.count += 1;
+        usage[key] = entry;
+        localStorage.setItem(this._renderQuotaKey, JSON.stringify(usage));
+    },
+    // 自助升級申請：會員在個人頁按「申請升級」，記一筆待審旗標給後台看
+    requestVipUpgrade(email) {
+        this.setPermission(email, { vipRequested: true });
+    },
+    clearVipRequest(email) {
+        this.setPermission(email, { vipRequested: false });
+    },
+    setMemberLevel(email, level) {
+        const key = this._email(email);
+        if (!key) return;
+        let members = {};
+        try { members = JSON.parse(localStorage.getItem(Auth._membersKey) || '{}'); } catch (_) {}
+        members[key] = { ...(members[key] || {}), level };
+        localStorage.setItem(Auth._membersKey, JSON.stringify(members));
+    },
+    isAdmin() {
+        return this.isAdminProfile(Auth.getProfile());
+    },
+    defaultPermissions(role) {
+        const allowedPages = role === 'admin' ? [...this._defaultPages, 'admin'] : [...this._defaultPages];
+        return { role: role || 'member', status: 'active', allowedPages };
+    },
+    loadPermissions() {
+        try { return JSON.parse(localStorage.getItem(this._permissionsKey) || '{}'); }
+        catch (_) { return {}; }
+    },
+    savePermissions(map) {
+        localStorage.setItem(this._permissionsKey, JSON.stringify(map || {}));
+    },
+    getPermission(email, profile) {
+        const key = this._email(email || profile?.email);
+        const saved = this.loadPermissions()[key];
+        if (saved) return saved;
+        return this.defaultPermissions(this.isAdminProfile(profile || { email }) ? 'admin' : 'member');
+    },
+    setPermission(email, patch) {
+        const key = this._email(email);
+        if (!key) return;
+        const map = this.loadPermissions();
+        map[key] = { ...this.getPermission(key), ...patch };
+        this.savePermissions(map);
+    },
+    failureReason(member) {
+        const permission = member?.permission || this.getPermission(member?.email, member);
+        if (permission.status === 'suspended') return '登入失敗：帳號已停權';
+        const blocked = this._defaultPages.filter(page => !['dashboard', 'profile'].includes(page) && !(permission.allowedPages || []).includes(page));
+        if (blocked.length) return `功能受限：${blocked.length} 個功能未開啟`;
+        return '正常';
+    },
+    canAccess(page, profile) {
+        const p = profile || Auth.getProfile();
+        if (this.isAdminProfile(p)) return true;
+        const permission = this.getPermission(p?.email, p);
+        if (permission.status === 'suspended') return false;
+        const allowed = permission.allowedPages || this._defaultPages;
+        // 臉部分析頁面本身只要 BASIC 或 PRO 其中一個開放就能進去，頁面裡的 tab 才各自判斷
+        if (page === 'analysis') return allowed.includes('analysisBasic') || allowed.includes('analysisPro') || this.isVip(p);
+        return allowed.includes(page);
+    },
+    listMembers() {
+        let members = {};
+        try { members = JSON.parse(localStorage.getItem(Auth._membersKey) || '{}'); } catch (_) {}
+        const current = Auth.getProfile();
+        if (current?.email) members[this._email(current.email)] = { ...(members[this._email(current.email)] || {}), ...current };
+        for (const email of this._adminEmails) {
+            members[email] = members[email] || { name: 'Admin', email, level: '管理員', role: 'admin' };
+        }
+        const permissions = this.loadPermissions();
+        return Object.keys(members).map(email => {
+            const profile = { ...members[email], email: members[email].email || email };
+            const permission = this.getPermission(email, profile);
+            return { ...profile, email, permission };
+        }).sort((a, b) => String(a.email).localeCompare(String(b.email)));
+    },
+    listProducts() {
+        try { return JSON.parse(localStorage.getItem(this._productsKey) || '[]'); }
+        catch (_) { return []; }
+    },
+    saveProducts(products) {
+        localStorage.setItem(this._productsKey, JSON.stringify(products || []));
+    },
+    addProduct(product) {
+        const products = this.listProducts();
+        const id = product.id || `admin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const row = {
+            id,
+            cat: product.cat,
+            name: product.name,
+            price: product.price,
+            img: product.img || '',
+            desc: product.desc || '',
+            shades: product.shades || [],
+            status: product.status || 'active',
+            source: 'admin'
+        };
+        products.unshift(row);
+        this.saveProducts(products);
+        return row;
+    },
+    // 內建 demo 商品（js/data.js 的 ALL_PRODUCTS）本身不能改，編輯時把差異存在這裡，讀取時再疊加回去
+    getOverrides() {
+        try { return JSON.parse(localStorage.getItem(this._overridesKey) || '{}'); }
+        catch (_) { return {}; }
+    },
+    saveOverrides(map) {
+        localStorage.setItem(this._overridesKey, JSON.stringify(map || {}));
+    },
+    updateProduct(id, patch) {
+        const products = this.listProducts();
+        const idx = products.findIndex(p => String(p.id) === String(id));
+        if (idx > -1) {
+            products[idx] = { ...products[idx], ...patch };
+            this.saveProducts(products);
+            return products[idx];
+        }
+        const overrides = this.getOverrides();
+        overrides[id] = { ...(overrides[id] || {}), ...patch };
+        this.saveOverrides(overrides);
+        return { id, ...overrides[id] };
+    }
+};
+
 // ═══ 收藏模組 ═══
 const Fav = {
     _key: 'beautyFav',
     list()     { return JSON.parse(localStorage.getItem(this._key) || '[]'); },
-    has(id)    { return this.list().includes(id); },
+    has(id)    { return this.list().some(x => String(x) === String(id)); },
     toggle(id) {
         const arr = this.list();
-        const idx = arr.indexOf(id);
+        const idx = arr.findIndex(x => String(x) === String(id));
         if (idx >= 0) arr.splice(idx, 1); else arr.push(id);
         localStorage.setItem(this._key, JSON.stringify(arr));
     }
@@ -835,15 +930,15 @@ const Cart = {
     save(items) { localStorage.setItem(this._key, JSON.stringify(items)); },
     add(id) {
         const items = this.list();
-        const row = items.find(item => item.id === Number(id));
+        const row = items.find(item => String(item.id) === String(id));
         if (row) row.qty += 1;
-        else items.push({ id: Number(id), qty: 1 });
+        else items.push({ id, qty: 1 });
         this.save(items);
         return items;
     },
     change(id, delta) {
         const items = this.list();
-        const row = items.find(item => item.id === Number(id));
+        const row = items.find(item => String(item.id) === String(id));
         if (row) row.qty = Math.max(0, row.qty + delta);
         this.save(items.filter(item => item.qty > 0));
     },

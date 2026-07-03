@@ -1,0 +1,96 @@
+<div class="page-header admin-header">
+    <h1>管理中台</h1>
+    <div class="divider"></div>
+</div>
+
+<section class="admin-panel">
+    <div class="admin-summary">
+        <div><span>全部會員</span><b id="adminTotal">0</b></div>
+        <div><span>啟用中</span><b id="adminActive">0</b></div>
+        <div><span>已停權</span><b id="adminSuspended">0</b></div>
+        <div><span>管理員</span><b id="adminAdmins">0</b></div>
+    </div>
+
+    <div class="admin-actions-row">
+        <button class="admin-tab active" data-admin-filter="all">全部使用者</button>
+        <button class="admin-tab" data-admin-filter="active">啟用中</button>
+        <button class="admin-tab" data-admin-filter="suspended">已停權</button>
+        <button class="admin-tab" data-admin-filter="admin">管理員</button>
+    </div>
+
+    <div class="admin-main">
+        <div class="admin-toolbar">
+            <label class="admin-search">
+                <span>搜尋</span>
+                <input id="adminSearch" type="search" placeholder="姓名或 Email">
+            </label>
+            <button class="btn-gold btn-sm" id="adminSaveBtn" type="button">儲存權限</button>
+        </div>
+
+        <div class="admin-table-wrap">
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th>使用者</th>
+                        <th>角色</th>
+                        <th>會員等級</th>
+                        <th>狀態</th>
+                        <th>失敗原因</th>
+                        <th>功能權限</th>
+                    </tr>
+                </thead>
+                <tbody id="adminUserRows"></tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+<section class="admin-products">
+    <div class="member-section-head">
+        <h2>商品管理</h2>
+    </div>
+    <div class="admin-product-grid">
+        <form class="admin-product-form" id="adminProductForm">
+            <div class="admin-product-form-mode">編輯中：<span id="adminProductEditingLabel"></span></div>
+            <label>商品名稱<input id="adminProductName" type="text" placeholder="例如：柔霧粉底液"></label>
+            <label>分類
+                <select id="adminProductCategory">
+                    <option value="底妝">底妝</option>
+                    <option value="眼影">眼影</option>
+                    <option value="眼線/睫毛">眼線/睫毛</option>
+                    <option value="唇彩">唇彩</option>
+                    <option value="腮紅">腮紅</option>
+                    <option value="眉毛彩妝">眉毛彩妝</option>
+                    <option value="修容">修容</option>
+                    <option value="打亮">打亮</option>
+                </select>
+            </label>
+            <label>價格<input id="adminProductPrice" type="text" placeholder="例如：NT$980"></label>
+            <label>圖片網址<input id="adminProductImg" type="text" placeholder="留空則使用預設示意圖"></label>
+            <label>商品描述<textarea id="adminProductDesc" placeholder="顯示在前台商品詳情頁的說明文字"></textarea></label>
+            <label>色號（用逗號分隔 Hex 色碼）<input id="adminProductShades" type="text" placeholder="例如：#3A241C,#C99070,#B5654A"></label>
+            <div class="admin-product-form-actions">
+                <button class="btn-gold btn-sm" type="submit" id="adminProductSubmitBtn">新增產品</button>
+                <button class="btn-outline btn-sm" type="button" id="adminProductCancelBtn" style="display:none">取消編輯</button>
+            </div>
+        </form>
+        <div class="admin-product-manager">
+            <div class="admin-preview-grid" id="adminProductPreview"></div>
+            <div class="admin-table-wrap">
+                <table class="admin-table admin-product-table">
+                    <thead>
+                        <tr>
+                            <th>商品</th>
+                            <th>分類</th>
+                            <th>價格</th>
+                            <th>來源</th>
+                            <th>狀態</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="adminProductRows"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</section>

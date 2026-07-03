@@ -3,7 +3,7 @@
     <div class="member-id">
         <div class="member-avatar" id="profileAvatar">✦</div>
         <div class="member-name" id="profileName">訪客</div>
-        <div class="member-role">Decorate Me Member</div>
+        <div class="member-role" id="profileRole">Decorate Me Member</div>
         <div class="member-actions">
             <button class="btn-outline" id="changePwdBtn" style="display:none;">更改密碼</button>
             <button class="btn-outline member-logout" onclick="Auth.logout()">登出帳號</button>
@@ -32,6 +32,14 @@
         </div>
     </div>
 </div>
+
+<section class="member-tier">
+    <div class="member-section-head">
+        <span>Membership</span>
+        <h2>會員等級</h2>
+    </div>
+    <div id="profileTierCard"></div>
+</section>
 
 <section class="member-suggestions">
     <div class="member-section-head">

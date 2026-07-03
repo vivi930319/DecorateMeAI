@@ -37,12 +37,22 @@ const sandbox = {
 };
 
 vm.createContext(sandbox);
-vm.runInContext(`${apiSource}; this.ApiConfig = ApiConfig; this.Api = Api; this.ImagePipeline = ImagePipeline; this.AnalysisPackage = AnalysisPackage; this.Auth = Auth; this.Cart = Cart;`, sandbox);
+vm.runInContext(`${apiSource}; this.ApiConfig = ApiConfig; this.Api = Api; this.ImagePipeline = ImagePipeline; this.AnalysisPackage = AnalysisPackage; this.Auth = Auth; this.AdminStore = AdminStore; this.Cart = Cart;`, sandbox);
 
 // ── 會員姓名與購物車 ─────────────────────────────────────────
 sandbox.Auth.setProfile({ name: '測試會員', email: 'USER@example.com', level: '一般會員' });
 if (sandbox.Auth.getRegisteredMember('user@example.com')?.name !== '測試會員') {
   throw new Error('Registered member name was not stored by normalized email');
+}
+if (!sandbox.AdminStore.canAccess('analysis', sandbox.Auth.getProfile())) {
+  throw new Error('Default member should be allowed to access analysis');
+}
+sandbox.AdminStore.setPermission('user@example.com', { allowedPages: ['dashboard', 'profile'] });
+if (sandbox.AdminStore.canAccess('analysis', sandbox.Auth.getProfile())) {
+  throw new Error('Permission override should block analysis');
+}
+if (!sandbox.AdminStore.isAdminProfile({ email: 'admin@decorateme.local' })) {
+  throw new Error('Admin profile inference failed');
 }
 sandbox.Cart.add(1);
 sandbox.Cart.add(1);

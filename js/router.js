@@ -80,10 +80,35 @@ function getFeaturedProducts(limit = 6) {
     const stored = (() => {
         try { return JSON.parse(localStorage.getItem('hotProducts') || 'null'); } catch (_) { return null; }
     })();
-    const source = Array.isArray(external) ? external : (Array.isArray(stored) ? stored : ALL_PRODUCTS);
+    const source = Array.isArray(external) ? external : (Array.isArray(stored) ? stored : getProductCatalog());
     return [...source]
         .sort((a, b) => Number(b.popularity || b.sales || b.views || b.reviews || 0) - Number(a.popularity || a.sales || a.views || a.reviews || 0))
         .slice(0, limit);
+}
+
+function getProductCatalog(){
+    const base = Array.isArray(ALL_PRODUCTS) ? ALL_PRODUCTS : [];
+    const overrides = (typeof AdminStore !== 'undefined') ? AdminStore.getOverrides() : {};
+    const baseWithOverrides = base.map(p => overrides[p.id] ? { ...p, ...overrides[p.id] } : p);
+    const adminProducts = (typeof AdminStore !== 'undefined') ? AdminStore.listProducts() : [];
+    return [...adminProducts, ...baseWithOverrides].map((product, index) => {
+        if (product.img) return product;
+        const withImage = { ...product };
+        if (typeof demoProductImage === 'function') withImage.img = demoProductImage(withImage, index);
+        return withImage;
+    });
+}
+
+// 跟 getProductCatalog 不同：不套用 demoProductImage 預設圖，後台編輯表單要看到的是「真正存的值」
+function getRawProduct(id) {
+    const adminProducts = (typeof AdminStore !== 'undefined') ? AdminStore.listProducts() : [];
+    const found = adminProducts.find(p => String(p.id) === String(id));
+    if (found) return found;
+    const base = Array.isArray(ALL_PRODUCTS) ? ALL_PRODUCTS : [];
+    const baseProduct = base.find(p => String(p.id) === String(id));
+    if (!baseProduct) return null;
+    const overrides = (typeof AdminStore !== 'undefined') ? AdminStore.getOverrides() : {};
+    return overrides[id] ? { ...baseProduct, ...overrides[id] } : baseProduct;
 }
 
 // 分類線條 icon（簡潔幾何）
@@ -100,7 +125,7 @@ const SVC_ICONS = {
 const STYLE_ROLE = { softBaddie:'Soft Glam', richGirl:'Quiet Luxury', hongKong:'Retro HK', koreanClean:'Clean Girl', yandere:'Doll Core', japaneseClear:'J-Sheer', mensPlain:'Mens Bare' };
 
 // 頁面順序（判斷轉場方向）
-const NAV_ORDER = ['dashboard','analysis','style','products','favorites','history','compare','suggestion','profile'];
+const NAV_ORDER = ['dashboard','analysis','style','products','favorites','history','compare','suggestion','profile','admin'];
 const ROUTE_PAGES = new Set(NAV_ORDER);
 
 // 玻璃提示彈窗（取代瀏覽器原生 alert）
@@ -177,6 +202,20 @@ function getMemberDisplayName(){
     return String(profile.name || (Auth.getUser && Auth.getUser()) || '訪客').trim() || '訪客';
 }
 
+function getCurrentRoleLabel(profile){
+    const p = profile || (Auth.getProfile ? Auth.getProfile() : {});
+    if (typeof AdminStore !== 'undefined' && AdminStore.isAdminProfile(p)) return '管理員';
+    if ((p.level || '') === '訪客' || (p.name || '') === '訪客') return '訪客';
+    return '一般使用者';
+}
+
+function updateAdminNav(){
+    const admin = typeof AdminStore !== 'undefined' && AdminStore.isAdmin();
+    document.querySelectorAll('[data-admin-link]').forEach(el => {
+        el.style.display = admin ? '' : 'none';
+    });
+}
+
 function updateCartBadge(){
     const badge = document.getElementById('cartCount');
     if (!badge || typeof Cart === 'undefined') return;
@@ -192,7 +231,7 @@ function showCartPanel(){
     overlay.id = 'cartOverlay';
     overlay.className = 'cart-overlay';
     const render = () => {
-        const rows = Cart.list().map(item => ({ ...item, product: ALL_PRODUCTS.find(p => p.id === item.id) })).filter(item => item.product);
+        const rows = Cart.list().map(item => ({ ...item, product: getProductCatalog().find(p => String(p.id) === String(item.id)) })).filter(item => item.product);
         overlay.innerHTML = `<section class="cart-panel" role="dialog" aria-modal="true" aria-label="購物車">
             <header><div><span>Shopping Bag</span><h2>購物車</h2></div><button class="cart-close" aria-label="關閉購物車">×</button></header>
             <div class="cart-items">${rows.length ? rows.map(item => `<article class="cart-item">
@@ -203,8 +242,8 @@ function showCartPanel(){
             <footer><span>共 ${Cart.count()} 件商品</span><button class="cart-checkout" ${rows.length ? '' : 'disabled'}>前往結帳</button></footer>
         </section>`;
         overlay.querySelector('.cart-close').onclick = () => overlay.remove();
-        overlay.querySelectorAll('[data-cart-minus]').forEach(btn => btn.onclick = () => { Cart.change(+btn.dataset.cartMinus, -1); updateCartBadge(); render(); });
-        overlay.querySelectorAll('[data-cart-plus]').forEach(btn => btn.onclick = () => { Cart.change(+btn.dataset.cartPlus, 1); updateCartBadge(); render(); });
+        overlay.querySelectorAll('[data-cart-minus]').forEach(btn => btn.onclick = () => { Cart.change(btn.dataset.cartMinus, -1); updateCartBadge(); render(); });
+        overlay.querySelectorAll('[data-cart-plus]').forEach(btn => btn.onclick = () => { Cart.change(btn.dataset.cartPlus, 1); updateCartBadge(); render(); });
         const checkout = overlay.querySelector('.cart-checkout');
         if (checkout && !checkout.disabled) checkout.onclick = () => showToast('結帳功能將由後端購物流程接續');
     };
@@ -358,7 +397,7 @@ function renderAnalysisGate(featureName){
         '<span class="ag-kicker">Begin Here</span>',
         '<div class="ag-mark">\u2767</div>',
         '<h2>先完成臉部分析</h2>',
-        '<p>「' + featureName + '」需要你的臉部分析結果。完成一次 AI 臉部分析，我們才能依你的五官與膚色，為你打造專屬妝容。</p>',
+        '<p>「' + featureName + '」需要你的臉部分析結果。完成一次臉部分析後，系統才能依你的五官與膚色，為你整理適合的妝容。</p>',
         '<button class="btn-gold ag-btn">前往臉部分析　→</button>',
         '</div>'
     ].join("");
@@ -393,12 +432,12 @@ dashboard: `
     <div class="as-head">
         <div class="about-headrow"><span class="as-eyebrow-it">About the Atelier</span><h2 class="about-title">OUR BEAUTY<span class="l2">SYSTEM</span></h2></div>
         <span class="bs-link" data-nav="analysis">開始你的美學旅程　→</span>
-        <p class="bs-desc">「裝識你的美」是一套以科技與美學打造的個人美妝系統。從 AI 臉部分析解讀你的五官與膚色，到為你量身推薦的妝容風格與美妝逸品 —— 我們相信，最美的樣子，是更認識自己的你。</p>
+        <p class="bs-desc">「裝識你的美」是一套以科技與美學打造的個人美妝系統。從臉部分析解讀你的五官與膚色，到為你量身推薦的妝容風格與美妝逸品，我們相信，最美的樣子，是更認識自己的你。</p>
     </div>
     <div class="as-photo"><img class="as-photo-img" alt="" onload="this.classList.add('loaded')"><div class="as-photo-ph"><div class="demo-mark">❧</div><div class="demo-cap">商品形象照 · Demo</div></div></div>
 </section>`,
 analysis: `
-<div class="page-header"><h1>臉部分析</h1><div class="divider"></div><p>上傳正面照片，AI 為你分析五官特徵</p></div>
+<div class="page-header"><h1>臉部分析</h1><div class="divider"></div><p>上傳正面照片，分析五官特徵</p></div>
 <div class="analyze-grid">
     <div>
         <div class="section-label"><span>NO.01</span>上 傳 照 片</div>
@@ -500,7 +539,7 @@ compare: `
         <p id="compareStyleName">尚未選擇風格</p>
         <div class="analysis-tags" id="compareStyleTags"></div>
         <button class="btn-outline" id="compareGoStyleBtn">選擇風格</button>
-        <button class="btn-gold" id="compareRenderBtn" style="margin-top:12px;">AI 渲染妝容</button>
+        <button class="btn-gold" id="compareRenderBtn" style="margin-top:12px;">生成妝容</button>
         <div id="compareRenderStatus" style="font-size:12px;color:#888;margin-top:6px;display:none;"></div>
         <button class="btn-outline" id="compareSaveLookBtn" style="margin-top:8px;">收藏妝容對比圖</button>
     </div>
@@ -512,7 +551,7 @@ profile: `
     <div class="member-id">
         <div class="member-avatar" id="profileAvatar">✦</div>
         <div class="member-name" id="profileName">訪客</div>
-        <div class="member-role">Decorate Me Member</div>
+        <div class="member-role" id="profileRole">Decorate Me Member</div>
         <div class="member-actions">
             <button class="btn-outline" id="changePwdBtn" style="display:none;">更改密碼</button>
             <button class="btn-outline member-logout" onclick="Auth.logout()">登出帳號</button>
@@ -568,6 +607,14 @@ const Router = {
             this.promptLookLeave(page, opts);
             return;
         }
+        if (page === 'admin' && (typeof AdminStore === 'undefined' || !AdminStore.isAdmin())) {
+            showAlert('只有管理員可以進入管理中台', { type: 'error' });
+            return;
+        }
+        if (typeof AdminStore !== 'undefined' && Auth.isLoggedIn() && page !== 'admin' && !AdminStore.canAccess(page)) {
+            showAlert('此帳號目前沒有使用此功能的權限，請聯繫管理員', { type: 'error' });
+            return;
+        }
         // 訪客攔截：收藏 / 分析紀錄 需登入
         if ((page === "favorites" || page === "history") && isGuest()) {
             promptGuestAuth(page === "favorites" ? "收藏" : "分析紀錄");
@@ -594,6 +641,7 @@ const Router = {
             document.querySelectorAll('.topbar-nav a').forEach(a => {
                 a.classList.toggle('active', a.dataset.page === page);
             });
+            updateAdminNav();
             // 手機：把目前頁的藥丸捲到可見
             const navEl = document.querySelector('.topbar-nav');
             const activeEl = navEl && navEl.querySelector('a.active');
@@ -614,6 +662,7 @@ const Router = {
                 document.querySelectorAll('.topbar-nav a').forEach(a => {
                     a.classList.toggle('active', a.dataset.page === page);
                 });
+                updateAdminNav();
                 if (typeof PageInit[page] === 'function') PageInit[page](opts);
                 return;
             }
@@ -684,15 +733,6 @@ const PageInit = {
             dEl.textContent = `${now.getMonth()+1}月 ${now.getDate()}日 · 週${wd}`;
         }
 
-        // Hero · 本週精選風格（取第一個風格）
-        const feat = (typeof STYLES !== 'undefined' && STYLES[0]) ? STYLES[0] : null;
-        if (feat) {
-            const hn = document.getElementById('heroName');
-            if (hn) hn.innerHTML = `${feat.name.split(' ')[0]} <em>${(feat.name.split(' ')[1]||'')}</em>`;
-            const ht = document.getElementById('heroTags');
-            if (ht) ht.innerHTML = feat.tags.map(t => `<span>${t}</span>`).join('');
-        }
-
         // 風格靈感 · 人像卡橫排（真實 STYLES）
         const insp = document.getElementById('dashInsp');
         if (insp && typeof STYLES !== 'undefined') {
@@ -711,15 +751,6 @@ const PageInit = {
             insp.querySelectorAll('.insp-card').forEach(c => c.onclick = () => Router.go('style', { styleId: c.dataset.style }));
         }
 
-        // 熱銷精選 · 分類標籤（真實 CATEGORIES）
-        const cats = document.getElementById('dashCats');
-        if (cats && typeof CATEGORIES !== 'undefined') {
-            cats.innerHTML = `<span class="bs-cats-label">Categories</span>` +
-                `<button class="chip" data-filter="all">全部</button>` +
-                CATEGORIES.map(c => `<button class="chip" data-filter="${c.id}">${c.id}</button>`).join('');
-            cats.querySelectorAll('.chip').forEach(ch => ch.onclick = () => Router.go('products', { category: ch.dataset.filter }));
-        }
-
         // 首頁商品推薦：保留錯落排版，圖片沿用商品推薦頁同一套 DEMO 佔位。
         const glow = document.getElementById('dashGlow');
         if (glow && typeof ALL_PRODUCTS !== 'undefined') {
@@ -736,12 +767,12 @@ const PageInit = {
                     </div>
                 </div>`).join('');
             glow.querySelectorAll('.glow-card').forEach(card => {
-                card.onclick = (e) => { if (!e.target.closest('.heart-btn')) Router.go('products', { productId: +card.dataset.pid }); };
+                card.onclick = (e) => { if (!e.target.closest('.heart-btn')) Router.go('products', { productId: card.dataset.pid }); };
             });
             glow.querySelectorAll('.gc-heart').forEach(btn => {
                 btn.onclick = (e) => {
                     e.stopPropagation();
-                    const id = +btn.dataset.fav; const wasFav = Fav.has(id);
+                    const id = btn.dataset.fav; const wasFav = Fav.has(id);
                     Fav.toggle(id); btn.classList.toggle('fav', !wasFav);
                     btn.classList.remove('swap'); void btn.offsetWidth; btn.classList.add('swap');
                     if (!wasFav) showToast('已加入收藏');
@@ -1054,7 +1085,18 @@ const PageInit = {
             bpRefreshPanel();
         };
 
+        const isProUnlocked = AdminStore.canUseProAnalysis(Auth.getProfile());
+        proModeBtn.classList.toggle('locked', !isProUnlocked);
+        if (!isProUnlocked) {
+            proModeBtn.innerHTML = 'PRO <span class="lock-badge">🔒</span>';
+            proModeBtn.title = 'PRO 分析為 VIP 會員專屬功能';
+        }
+
         const setMode = (mode) => {
+            if (mode === 'pro' && !isProUnlocked) {
+                showAlert('PRO 臉部分析為 VIP 會員專屬功能，請聯繫管理員升級帳號', { type: 'error' });
+                return;
+            }
             Router.analyzeMode = mode;
             basicModeBtn.classList.toggle('active', mode === 'basic');
             proModeBtn.classList.toggle('active', mode === 'pro');
@@ -1072,7 +1114,7 @@ const PageInit = {
 
         basicModeBtn.onclick = () => setMode('basic');
         proModeBtn.onclick = () => setMode('pro');
-        setMode(Router.analyzeMode);
+        setMode((Router.analyzeMode === 'pro' && !isProUnlocked) ? 'basic' : Router.analyzeMode);
 
         uploadBox.onclick = () => fileInput.click();
         fileInput.onchange = async (e) => {
@@ -1562,7 +1604,7 @@ const PageInit = {
 
             bar.style.display = 'block';
             fill.style.width = '8%';
-            status.textContent = '連線 Ollama 中...';
+            status.textContent = '產生建議中...';
             status.classList.add('active');
 
             const style = STYLES.find(s => s.id === Router.selectedStyleId);
@@ -1643,7 +1685,7 @@ const PageInit = {
                     });
                     AnalysisDraft.save(Router.analysisPackage);
                 }
-                showAlert('Ollama 建議失敗：' + err.message, { type: 'error' });
+                showAlert('妝容建議失敗：' + err.message, { type: 'error' });
                 renderAnalysisResult(null);
             } finally {
                 btn.disabled = false;
@@ -1678,7 +1720,7 @@ const PageInit = {
                     <h3>專屬妝容建議</h3>
                     ${aiSuggestion
                         ? `<div class="advice-grid">${renderMakeupAdviceGrid(aiSuggestion)}</div>`
-                        : `<div class="empty-state compact">尚未取得 AI 建議，請按上方「確認風格」讓 Ollama 產生個人化建議。</div>`
+                        : `<div class="empty-state compact">尚未取得妝容建議，請按上方「確認風格」產生個人化建議。</div>`
                     }
                 </div>
                 <div style="text-align:center;margin-top:20px;">
@@ -1704,7 +1746,8 @@ const PageInit = {
             const cats = CATEGORIES.map(c => c.id);
             const chips = [`<button class="chip ${filter==='all'?'active':''}" data-filter="all">全部<span class="chip-en">All</span></button>`]
                 .concat(cats.map(id => `<button class="chip ${filter===id?'active':''}" data-filter="${id}">${id}</button>`)).join('');
-            const list = filter === 'all' ? ALL_PRODUCTS : ALL_PRODUCTS.filter(p => p.cat === filter);
+            const catalog = getProductCatalog();
+            const list = filter === 'all' ? catalog : catalog.filter(p => p.cat === filter);
             const header = `
                 <div class="page-header"><span class="eyebrow">Boutique · 選物</span><h1>商品推薦</h1><div class="divider"></div></div>
                 <div class="filter-bar">${chips}</div>
@@ -1734,12 +1777,12 @@ const PageInit = {
                     </div>`).join('') + `</div>`;
                 bindChips();
                 area.querySelectorAll('.prod-card').forEach(card => {
-                    card.onclick = (e) => { if (!e.target.closest('.heart-btn')) renderProductDetail(+card.dataset.pid); };
+                    card.onclick = (e) => { if (!e.target.closest('.heart-btn')) renderProductDetail(card.dataset.pid); };
                 });
                 area.querySelectorAll('.pc-heart').forEach(btn => {
                     btn.onclick = (e) => {
                         e.stopPropagation();
-                        const id = +btn.dataset.fav;
+                        const id = btn.dataset.fav;
                         const wasFav = Fav.has(id);
                         Fav.toggle(id);
                         btn.classList.toggle('fav', !wasFav);
@@ -1751,12 +1794,13 @@ const PageInit = {
         }
 
         function renderProductDetail(id) {
-            const p = ALL_PRODUCTS.find(x => x.id === id);
+            const catalog = getProductCatalog();
+            const p = catalog.find(x => String(x.id) === String(id));
             if (!p) return;
             const area = document.getElementById('productsArea');
             const shades = (p.shades && p.shades.length) ? p.shades : ['#3A241C','#C99070','#B5654A','#9A4E3C','#7C3F30'];
-            let related = ALL_PRODUCTS.filter(x => x.cat === p.cat && x.id !== p.id).slice(0,3);
-            if (related.length < 3) related = related.concat(ALL_PRODUCTS.filter(x => x.cat !== p.cat && x.id !== p.id).slice(0, 3 - related.length));
+            let related = catalog.filter(x => x.cat === p.cat && String(x.id) !== String(p.id)).slice(0,3);
+            if (related.length < 3) related = related.concat(catalog.filter(x => x.cat !== p.cat && String(x.id) !== String(p.id)).slice(0, 3 - related.length));
             area.innerHTML = `
                 <div class="pd-top">
                     <a href="#" class="back-link" onclick="PageInit.products({category:'${p.cat}'});return false;">← ${p.cat}</a>
@@ -1776,7 +1820,7 @@ const PageInit = {
                             <button class="add-bag" data-bag="${p.id}">加入購物袋</button>
                             <button class="heart-btn pd-heart ${Fav.has(p.id)?'fav':''}" data-fav-detail="${p.id}" aria-label="收藏">${HEART_SVG}</button>
                         </div>
-                        <div class="pd-desc">商品詳細說明區域。可放入完整描述、使用方式、成分說明等資訊。</div>
+                        <div class="pd-desc">${escapeHtml(p.desc || '商品詳細說明區域。可放入完整描述、使用方式、成分說明等資訊。')}</div>
                     </div>
                 </div>
                 <div class="pd-related">
@@ -1808,7 +1852,7 @@ const PageInit = {
                 dBtn.classList.remove('swap'); void dBtn.offsetWidth; dBtn.classList.add('swap');
                 if (!wasFav) showToast('已加入收藏');
             };
-            area.querySelectorAll('[data-rel]').forEach(c => c.onclick = () => { window.scrollTo(0,0); renderProductDetail(+c.dataset.rel); });
+            area.querySelectorAll('[data-rel]').forEach(c => c.onclick = () => { window.scrollTo(0,0); renderProductDetail(c.dataset.rel); });
         }
     },
 
@@ -1828,7 +1872,7 @@ const PageInit = {
             </div>
         `).join('') + `</div>`;
         area.querySelectorAll('.prod-card').forEach(card => {
-            card.onclick = (e) => { if (!e.target.closest('.heart-btn')) Router.go('products',{productId:+card.dataset.pid}); };
+            card.onclick = (e) => { if (!e.target.closest('.heart-btn')) Router.go('products',{productId:card.dataset.pid}); };
         });
         area.querySelectorAll('[data-unfav]').forEach(btn => {
             btn.onclick = (e) => {
@@ -1836,7 +1880,7 @@ const PageInit = {
                 btn.classList.remove('swap'); void btn.offsetWidth; btn.classList.add('swap');
                 const card = btn.closest('.prod-card');
                 if (card) { card.style.transition='opacity .35s var(--ease), transform .35s var(--ease)'; card.style.opacity='0'; card.style.transform='translateY(10px)'; }
-                setTimeout(()=>{ Fav.toggle(+btn.dataset.unfav); PageInit.favorites(); }, 320);
+                setTimeout(()=>{ Fav.toggle(btn.dataset.unfav); PageInit.favorites(); }, 320);
             };
         });
     },
@@ -1873,8 +1917,20 @@ const PageInit = {
 
         const renderBtn = document.getElementById('compareRenderBtn');
         const renderStatus = document.getElementById('compareRenderStatus');
+        const renderQuotaEl = document.getElementById('compareRenderQuota');
+        const refreshRenderQuota = () => {
+            if (!renderQuotaEl) return;
+            const remaining = AdminStore.getRemainingRenders(Auth.getProfile());
+            renderQuotaEl.textContent = remaining === Infinity ? 'VIP 會員：渲染次數不限' : `今日剩餘渲染次數：${remaining} / ${AdminStore._dailyRenderLimit}`;
+        };
+        refreshRenderQuota();
         if (renderBtn) {
             renderBtn.onclick = async () => {
+                const profile = Auth.getProfile();
+                if (!AdminStore.canRender(profile)) {
+                    showAlert(`今日免費渲染次數已用完（每日 ${AdminStore._dailyRenderLimit} 次），升級 VIP 會員可無限次使用，請至會員中心申請升級。`, { type: 'error' });
+                    return;
+                }
                 const pkg = Router.analysisPackage;
                 const imageDataUrl = pkg?.images?.front?.compressedDataUrl || pkg?.images?.front?.dataUrl || '';
                 if (!imageDataUrl) { showAlert('尚未上傳照片，請先完成臉部分析。', { type: 'error' }); return; }
@@ -1888,11 +1944,13 @@ const PageInit = {
                 renderBtn.disabled = true;
                 renderBtn.textContent = '渲染中...';
                 renderStatus.style.display = 'block';
-                renderStatus.textContent = '傳送照片給 AI 渲染服務...';
+                renderStatus.textContent = '正在生成妝容...';
 
                 try {
                     renderStatus.textContent = 'Replicate 生成中，約需 30–60 秒...';
                     const result = await Api.renderMakeup({ imageDataUrl, prompt, strength: 0.35 });
+                    AdminStore.recordRenderUsage(profile);
+                    refreshRenderQuota();
                     Router.analysisPackage = AnalysisPackage.update(pkg, {
                         render: {
                             ...(pkg.render || {}),
@@ -1911,10 +1969,10 @@ const PageInit = {
                     showToast('妝容渲染完成');
                 } catch (err) {
                     renderStatus.textContent = '渲染失敗：' + err.message;
-                    showAlert('AI 渲染失敗：' + err.message, { type: 'error' });
+                    showAlert('妝容生成失敗：' + err.message, { type: 'error' });
                 } finally {
                     renderBtn.disabled = false;
-                    renderBtn.textContent = 'AI 渲染妝容';
+                    renderBtn.textContent = '生成妝容';
                 }
             };
         }
@@ -1991,9 +2049,9 @@ const PageInit = {
                     }
                 </div>
                 <div class="rendered-photo-copy">
-                    <div class="detail-pill">AI 渲染結果</div>
+                    <div class="detail-pill">妝容結果</div>
                     <h3>${renderedImage ? `${style.name} 渲染後妝容照片` : `${style.name} 原始照片`}</h3>
-                    <p>${renderedImage ? '這張照片來自目前分析資料包的 AI 渲染結果。' : beforeImage ? '渲染端尚未回傳圖片，這裡先顯示目前分析資料包內的原始照片，之後只要把圖片 URL 或 DataURL 寫進分析資料包即可自動切換。' : '渲染端尚未回傳圖片，這裡已先預留照片位置；之後只要把圖片 URL 或 DataURL 寫進分析資料包即可自動顯示。'}</p>
+                    <p>${renderedImage ? '這張照片來自目前分析資料包的妝容結果。' : beforeImage ? '尚未取得妝容圖片，這裡先顯示目前分析資料包內的原始照片。' : '尚未取得妝容圖片。'}</p>
                 </div>
             </div>
             <div class="style-intro-card">
@@ -2008,10 +2066,10 @@ const PageInit = {
                 <div class="analysis-item"><span class="ai-label">膚色</span><span class="ai-value">${skin['膚色分級']||'—'} / ${skin['四季型']||'—'}</span></div>
             </div>
             <div class="analysis-section">
-                <h3>AI 妝容建議</h3>
+                <h3>妝容建議</h3>
                 ${aiSuggestion
                     ? `<div class="advice-grid">${renderMakeupAdviceGrid(aiSuggestion)}</div>`
-                    : `<div class="empty-state compact">尚未取得 AI 建議，請返回風格頁按「確認風格」。</div>`
+                    : `<div class="empty-state compact">尚未取得妝容建議，請返回風格頁按「確認風格」。</div>`
                 }
                 <button class="btn-gold" id="saveSuggestionBtn" style="margin-top:14px;">收藏妝容建議</button>
             </div>
@@ -2046,13 +2104,43 @@ const PageInit = {
 
     profile() {
         const user = getMemberDisplayName();
+        const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
         document.getElementById('profileName').textContent = user || '訪客';
+        const roleEl = document.getElementById('profileRole');
+        if (roleEl) roleEl.textContent = getCurrentRoleLabel(profile);
         // 大頭貼：有上傳照片就顯示，否則用名字首字（訪客用 ✦）
         var __av = document.getElementById('profileAvatar');
         if (__av) {
-            var __p = Auth.getProfile() || {};
+            var __p = profile;
             if (__p.avatar) { __av.classList.add('has-photo'); __av.innerHTML = '<img src="' + __p.avatar + '" alt="' + (user || '會員') + '">'; }
             else { __av.classList.remove('has-photo'); __av.textContent = (user && user !== '訪客') ? user.trim().charAt(0).toUpperCase() : '✦'; }
+        }
+        const tierCard = document.getElementById('profileTierCard');
+        if (tierCard) {
+            const isVip = AdminStore.isVip(profile);
+            const isAdminUser = AdminStore.isAdminProfile(profile);
+            const permission = profile?.email ? AdminStore.getPermission(profile.email, profile) : null;
+            const pending = !!permission?.vipRequested && !isVip;
+            const remaining = AdminStore.getRemainingRenders(profile);
+            tierCard.innerHTML = `
+                <div>
+                    <span class="tier-badge ${isVip ? 'vip' : 'general'}">${isAdminUser ? '管理員' : (isVip ? 'VIP 會員' : '一般會員')}</span>
+                    <ul class="tier-benefits">
+                        <li>BASIC 臉部分析</li>
+                        <li>${isVip ? 'PRO 臉部分析（進階多角度）' : 'PRO 臉部分析（VIP 專屬）'}</li>
+                        <li>AI 渲染妝容：${remaining === Infinity ? '不限次數' : `每日 ${AdminStore._dailyRenderLimit} 次（今日剩餘 ${remaining} 次）`}</li>
+                    </ul>
+                    ${pending ? `<div class="tier-pending">升級申請已送出，請等候管理員審核</div>` : ''}
+                </div>
+                ${(!isVip && !isAdminUser) ? `<button class="btn-gold btn-sm" id="profileVipUpgradeBtn" ${pending ? 'disabled' : ''}>${pending ? '審核中' : '申請升級 VIP'}</button>` : ''}
+            `;
+            const upgradeBtn = document.getElementById('profileVipUpgradeBtn');
+            if (upgradeBtn) upgradeBtn.onclick = () => {
+                if (!profile?.email) { showAlert('訪客身分無法申請升級，請先註冊會員。', { type: 'error' }); return; }
+                AdminStore.requestVipUpgrade(profile.email);
+                showToast('已送出升級申請，請等候管理員審核');
+                PageInit.profile();
+            };
         }
         const favEl = document.getElementById('profileFavCount');
         const anEl = document.getElementById('profileAnalyzeCount');
@@ -2118,6 +2206,225 @@ const PageInit = {
             const text = advice.lip || advice.eye || advice.base || item.suggestion || '';
             return String(text || '已收藏此妝容對比圖，之後可回到會員中心查看完整搭配。').slice(0, 72);
         }
+    },
+    admin() {
+        if (typeof AdminStore === 'undefined' || !AdminStore.isAdmin()) {
+            Router.go('dashboard');
+            return;
+        }
+        const rowsEl = document.getElementById('adminUserRows');
+        const searchEl = document.getElementById('adminSearch');
+        const filters = document.querySelectorAll('[data-admin-filter]');
+        const pageLabels = {
+            analysisBasic: 'BASIC 分析',
+            analysisPro: 'PRO 分析',
+            unlimitedRender: 'AI 渲染不限次數',
+            style: '風格試妝',
+            products: '商品推薦',
+            favorites: '收藏',
+            history: '紀錄',
+            compare: '對比圖',
+            suggestion: '妝容建議'
+        };
+        let filter = 'all';
+
+        const render = () => {
+            const keyword = String(searchEl?.value || '').trim().toLowerCase();
+            let members = AdminStore.listMembers();
+            const total = members.length;
+            const active = members.filter(m => m.permission.status !== 'suspended').length;
+            const suspended = members.filter(m => m.permission.status === 'suspended').length;
+            const admins = members.filter(m => m.permission.role === 'admin' || AdminStore.isAdminProfile(m)).length;
+            const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = String(value); };
+            setText('adminTotal', total);
+            setText('adminActive', active);
+            setText('adminSuspended', suspended);
+            setText('adminAdmins', admins);
+
+            members = members.filter(member => {
+                const isAdmin = member.permission.role === 'admin' || AdminStore.isAdminProfile(member);
+                if (filter === 'active' && member.permission.status === 'suspended') return false;
+                if (filter === 'suspended' && member.permission.status !== 'suspended') return false;
+                if (filter === 'admin' && !isAdmin) return false;
+                if (!keyword) return true;
+                return String(member.name || '').toLowerCase().includes(keyword) || String(member.email || '').toLowerCase().includes(keyword);
+            });
+
+            rowsEl.innerHTML = members.map(member => {
+                const perm = member.permission || AdminStore.defaultPermissions();
+                const allowed = new Set(perm.allowedPages || []);
+                return `<tr data-admin-email="${escapeHtml(member.email)}">
+                    <td>
+                        <div class="admin-user">
+                            <b>${escapeHtml(member.name || member.email.split('@')[0])}${perm.vipRequested && member.level !== 'VIP會員' ? ' <span class="admin-fail warn">申請升級中</span>' : ''}</b>
+                            <span>${escapeHtml(member.email)}</span>
+                        </div>
+                    </td>
+                    <td>
+                        <select class="admin-select" data-admin-role>
+                            <option value="member" ${perm.role !== 'admin' ? 'selected' : ''}>一般使用者</option>
+                            <option value="admin" ${perm.role === 'admin' ? 'selected' : ''}>管理員</option>
+                        </select>
+                    </td>
+                    <td>
+                        <select class="admin-select" data-admin-level ${AdminStore.isAdminProfile(member) ? 'disabled' : ''}>
+                            <option value="一般會員" ${member.level !== 'VIP會員' ? 'selected' : ''}>一般會員</option>
+                            <option value="VIP會員" ${member.level === 'VIP會員' ? 'selected' : ''}>VIP會員（可用 PRO）</option>
+                        </select>
+                    </td>
+                    <td>
+                        <button class="admin-status ${perm.status === 'suspended' ? 'off' : 'on'}" data-admin-status type="button">
+                            ${perm.status === 'suspended' ? '已停權' : '啟用中'}
+                        </button>
+                    </td>
+                    <td><span class="admin-fail ${AdminStore.failureReason(member) === '正常' ? 'ok' : 'warn'}">${escapeHtml(AdminStore.failureReason(member))}</span></td>
+                    <td>
+                        <div class="admin-perms">
+                            ${Object.keys(pageLabels).map(page => {
+                                const checked = allowed.has(page) || (['analysisPro', 'unlimitedRender'].includes(page) && member.level === 'VIP會員');
+                                return `<label><input type="checkbox" data-admin-page="${page}" ${checked ? 'checked' : ''}>${pageLabels[page]}</label>`;
+                            }).join('')}
+                        </div>
+                    </td>
+                </tr>`;
+            }).join('') || '<tr><td colspan="6"><div class="empty-state compact">沒有符合條件的使用者</div></td></tr>';
+
+            rowsEl.querySelectorAll('[data-admin-status]').forEach(btn => {
+                btn.onclick = () => {
+                    const row = btn.closest('[data-admin-email]');
+                    const email = row?.dataset.adminEmail;
+                    const current = AdminStore.getPermission(email);
+                    AdminStore.setPermission(email, { status: current.status === 'suspended' ? 'active' : 'suspended' });
+                    render();
+                };
+            });
+        };
+
+        filters.forEach(btn => {
+            btn.onclick = () => {
+                filter = btn.dataset.adminFilter || 'all';
+                filters.forEach(b => b.classList.toggle('active', b === btn));
+                render();
+            };
+        });
+        if (searchEl) searchEl.oninput = render;
+        const saveBtn = document.getElementById('adminSaveBtn');
+        if (saveBtn) saveBtn.onclick = () => {
+            rowsEl.querySelectorAll('[data-admin-email]').forEach(row => {
+                const email = row.dataset.adminEmail;
+                const role = row.querySelector('[data-admin-role]')?.value || 'member';
+                const levelSelect = row.querySelector('[data-admin-level]');
+                const allowedPages = Array.from(row.querySelectorAll('[data-admin-page]:checked')).map(input => input.dataset.adminPage);
+                if (!allowedPages.includes('dashboard')) allowedPages.unshift('dashboard');
+                if (!allowedPages.includes('profile')) allowedPages.push('profile');
+                if (role === 'admin' && !allowedPages.includes('admin')) allowedPages.push('admin');
+                // VIP 會員自動連動勾選 PRO 分析、無限渲染權限，管理員也還是能單獨手動勾給非 VIP 會員
+                if (levelSelect && !levelSelect.disabled && levelSelect.value === 'VIP會員') {
+                    ['analysisPro', 'unlimitedRender'].forEach(p => { if (!allowedPages.includes(p)) allowedPages.push(p); });
+                }
+                AdminStore.setPermission(email, { role, allowedPages });
+                if (levelSelect && !levelSelect.disabled) {
+                    AdminStore.setMemberLevel(email, levelSelect.value);
+                    if (levelSelect.value === 'VIP會員') AdminStore.clearVipRequest(email);
+                }
+            });
+            showToast('權限已更新');
+            updateAdminNav();
+            render();
+        };
+        let editingProductId = null;
+        const productForm = document.getElementById('adminProductForm');
+        const submitBtn = document.getElementById('adminProductSubmitBtn');
+        const cancelBtn = document.getElementById('adminProductCancelBtn');
+        const editingLabel = document.getElementById('adminProductEditingLabel');
+
+        const exitEditMode = () => {
+            editingProductId = null;
+            productForm.reset();
+            productForm.classList.remove('is-editing');
+            submitBtn.textContent = '新增產品';
+            cancelBtn.style.display = 'none';
+        };
+
+        const enterEditMode = (id) => {
+            const product = getRawProduct(id);
+            if (!product) return;
+            editingProductId = id;
+            document.getElementById('adminProductName').value = product.name || '';
+            document.getElementById('adminProductCategory').value = product.cat || '底妝';
+            document.getElementById('adminProductPrice').value = product.price || '';
+            document.getElementById('adminProductImg').value = product.img || '';
+            document.getElementById('adminProductDesc').value = product.desc || '';
+            document.getElementById('adminProductShades').value = (product.shades || []).join(',');
+            productForm.classList.add('is-editing');
+            editingLabel.textContent = product.name || id;
+            submitBtn.textContent = '更新產品';
+            cancelBtn.style.display = '';
+            productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        };
+
+        const renderProducts = () => {
+            const area = document.getElementById('adminProductRows');
+            const preview = document.getElementById('adminProductPreview');
+            if (!area) return;
+            const products = getProductCatalog();
+            if (preview) {
+                preview.innerHTML = products.slice(0, 8).map((product, index) => `<article class="prod-card admin-preview-card" data-preview-product="${escapeHtml(product.id)}" style="animation-delay:${Math.min(index * 0.025, 0.18)}s">
+                    <div class="pc-imgwrap">
+                        ${phBox('', product.name, product.img)}
+                        <button class="heart-btn pc-heart" type="button" aria-label="收藏預覽">${HEART_SVG}</button>
+                    </div>
+                    <div class="pc-cat">${escapeHtml(CAT_EN[product.cat] || product.cat)}</div>
+                    <div class="pc-name">${escapeHtml(product.name)}</div>
+                    <div class="pc-foot"><span class="pc-price">${escapeHtml(product.price)}</span></div>
+                </article>`).join('');
+            }
+            area.innerHTML = products.map(product => `<tr class="admin-product-row" data-edit-product="${escapeHtml(product.id)}">
+                <td><div class="admin-product-cell">${phBox('product-thumb', product.name, product.img)}<div class="admin-user"><b>${escapeHtml(product.name)}</b><span>${escapeHtml(product.id)}</span></div></div></td>
+                <td>${escapeHtml(product.cat)}</td>
+                <td>${escapeHtml(product.price)}</td>
+                <td><span class="admin-source ${product.source === 'admin' ? 'manual' : ''}">${product.source === 'admin' ? '後台新增' : '前台商品'}</span></td>
+                <td><span class="admin-fail ok">已上架</span></td>
+                <td><button class="btn-outline btn-sm" type="button" data-edit-btn="${escapeHtml(product.id)}">編輯</button></td>
+            </tr>`).join('') || '<tr><td colspan="6"><div class="empty-state compact">目前沒有商品</div></td></tr>';
+        };
+
+        const productRowsEl = document.getElementById('adminProductRows');
+        if (productRowsEl) productRowsEl.addEventListener('click', (e) => {
+            const trigger = e.target.closest('[data-edit-btn], [data-edit-product]');
+            if (!trigger) return;
+            const id = trigger.dataset.editBtn || trigger.dataset.editProduct;
+            enterEditMode(id);
+        });
+
+        if (cancelBtn) cancelBtn.onclick = () => exitEditMode();
+
+        if (productForm) productForm.onsubmit = (e) => {
+            e.preventDefault();
+            const name = document.getElementById('adminProductName')?.value.trim();
+            const cat = document.getElementById('adminProductCategory')?.value;
+            const price = document.getElementById('adminProductPrice')?.value.trim();
+            const img = document.getElementById('adminProductImg')?.value.trim();
+            const desc = document.getElementById('adminProductDesc')?.value.trim();
+            const shadesRaw = document.getElementById('adminProductShades')?.value.trim();
+            const shades = shadesRaw ? shadesRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+            if (!name || !cat || !price) {
+                showAlert('請完整填寫商品名稱、分類與價格', { type:'error' });
+                return;
+            }
+            if (editingProductId) {
+                AdminStore.updateProduct(editingProductId, { name, cat, price, img, desc, shades });
+                showToast('產品已更新');
+                exitEditMode();
+            } else {
+                AdminStore.addProduct({ name, cat, price, img, desc, shades });
+                showToast('產品已新增');
+                productForm.reset();
+            }
+            renderProducts();
+        };
+        render();
+        renderProducts();
     }
 };
 
@@ -2155,11 +2462,14 @@ const PageInit = {
 function showApp() {
     document.getElementById('auth-layer').innerHTML = '';
     document.getElementById('app').style.display = 'block';
-    document.getElementById('sidebarUsername').textContent = getMemberDisplayName();
+    const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
+    document.getElementById('sidebarUsername').textContent = `${getMemberDisplayName()} · ${getCurrentRoleLabel(profile)}`;
+    updateAdminNav();
     updateCartBadge();
-    const homeUrl = `${location.pathname}${location.search}#dashboard`;
-    if (location.hash !== '#dashboard') history.replaceState(null, '', homeUrl);
-    Router.go('dashboard');
+    const landing = (typeof AdminStore !== 'undefined' && AdminStore.isAdmin()) ? 'admin' : 'dashboard';
+    const homeUrl = `${location.pathname}${location.search}#${landing}`;
+    if (location.hash !== `#${landing}`) history.replaceState(null, '', homeUrl);
+    Router.go(landing);
 }
 
 function showLogin() {
@@ -2239,6 +2549,13 @@ async function doLoginAction() {
     const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPwd').value;
     if (!email || !password) { showAlert('請輸入帳號密碼'); return; }
+
+    if (AdminStore.isSeedAdmin(email, password)) {
+        Auth.setProfile({ name: '管理員', email: AdminStore._seedAdmin.email, level: '管理員', role: 'admin' });
+        showApp();
+        return;
+    }
+
     const registered = Auth.getRegisteredMember(email) || {};
     try {
         const data = await Api.login(email, password);
@@ -2249,13 +2566,26 @@ async function doLoginAction() {
             email: member.email || email,
             phone: member.phone_number || registered.phone || '',
             age: member.age || registered.age || '',
-            level: member.level || registered.level || '一般會員',
+            level: AdminStore.isAdminProfile({ email }) ? '管理員' : (member.level || registered.level || '一般會員'),
+            role: AdminStore.isAdminProfile({ email }) ? 'admin' : (member.role || registered.role || 'member'),
         });
     } catch (_) {
         const existing = Auth.getProfile() || {};
         const sameProfile = String(existing.email || '').toLowerCase() === email.toLowerCase() ? existing : {};
         const source = Object.keys(registered).length ? registered : sameProfile;
-        Auth.setProfile({ ...source, name: source.name || email.split('@')[0], email, level: source.level || '本地原型會員' });
+        Auth.setProfile({
+            ...source,
+            name: source.name || email.split('@')[0],
+            email,
+            level: AdminStore.isAdminProfile({ email }) ? '管理員' : (source.level || '本地原型會員'),
+            role: AdminStore.isAdminProfile({ email }) ? 'admin' : (source.role || 'member')
+        });
+    }
+    if (AdminStore.getPermission(email, Auth.getProfile()).status === 'suspended') {
+        sessionStorage.removeItem('beautyUser');
+        sessionStorage.removeItem('beautyProfile');
+        showAlert('此帳號已被停權，請聯繫管理員', { type:'error' });
+        return;
     }
     showApp();
 }
@@ -2283,7 +2613,7 @@ async function doRegisterAction() {
         return;
     }
 
-    Router.pendingRegister = { name, phone, email, age, password, avatar, level: 'VIP會員' };
+    Router.pendingRegister = { name, phone, email, age, password, avatar, level: '一般會員' };
     try {
         await Api.register(Router.pendingRegister);
         await Api.sendOTP(email);

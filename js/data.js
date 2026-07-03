@@ -118,59 +118,24 @@ function svgDataUrl(svg) {
     return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
-function demoProductImage(product, index) {
+// 純色塊 + 分類文字的中性佔位圖，不假裝畫出商品照片
+function demoProductImage(product) {
     const palettes = {
-        '底妝': ['#EBD4BF', '#C99A73', '#8C5B3A'],
-        '眼影': ['#F0B7A8', '#D97375', '#A94F4D'],
-        '眼線/睫毛': ['#3A241C', '#6B4430', '#B98545'],
-        '唇彩': ['#F0C0C2', '#D88B8A', '#B85B4D'],
-        '腮紅': ['#F2B8B2', '#D97375', '#A94F4D'],
-        '眉毛彩妝': ['#D4A982', '#8C5B3A', '#3A241C'],
-        '修容': ['#D6B6A4', '#A9774F', '#6B4430'],
-        '打亮': ['#F5DFC0', '#D9B77A', '#A78544'],
+        '底妝': ['#EFE4D8', '#8C5B3A'],
+        '眼影': ['#F3DEDA', '#A94F4D'],
+        '眼線/睫毛': ['#E7DED2', '#3A241C'],
+        '唇彩': ['#F4DEDF', '#B85B4D'],
+        '腮紅': ['#F5DEDC', '#A94F4D'],
+        '眉毛彩妝': ['#EAE0D2', '#6B4430'],
+        '修容': ['#EBDED2', '#6B4430'],
+        '打亮': ['#F6EBD6', '#A78544'],
     };
-    const [light, main, deep] = palettes[product.cat] || ['#EBD4BF', '#C99A73', '#8C5B3A'];
-    const kind = product.cat;
-    const productShape = (kind === '腮紅' || kind === '眼影')
-        ? `<circle cx="300" cy="325" r="124" fill="${deep}" opacity=".9"/>
-           <circle cx="300" cy="305" r="112" fill="${main}"/>
-           <circle cx="300" cy="292" r="68" fill="${light}"/>
-           <path d="M215 250 C250 205 350 205 385 250" fill="none" stroke="#fff" stroke-width="14" opacity=".22"/>`
-        : (kind === '眼線/睫毛' || kind === '眉毛彩妝')
-            ? `<rect x="270" y="130" width="60" height="330" rx="30" fill="${deep}"/>
-               <rect x="282" y="82" width="36" height="62" rx="18" fill="#E8D0A3"/>
-               <rect x="292" y="48" width="16" height="46" rx="8" fill="${deep}"/>
-               <text x="302" y="300" text-anchor="middle" transform="rotate(90 302 300)" fill="#fff" font-size="20" font-family="Jost, Arial" opacity=".82">Decorate Me</text>`
-            : `<rect x="250" y="142" width="100" height="300" rx="48" fill="url(#bottle)"/>
-               <rect x="266" y="92" width="68" height="74" rx="34" fill="url(#cap)"/>
-               <text x="302" y="300" text-anchor="middle" transform="rotate(90 302 300)" fill="#fff" font-size="20" font-family="Jost, Arial" opacity=".82">Decorate Me</text>`;
+    const [bg, ink] = palettes[product.cat] || ['#EFE4D8', '#8C5B3A'];
     return svgDataUrl(`
         <svg xmlns="http://www.w3.org/2000/svg" width="600" height="760" viewBox="0 0 600 760">
-            <defs>
-                <linearGradient id="bg" x1="0" x2="0" y1="0" y2="1">
-                    <stop offset="0" stop-color="#EFE7DD"/>
-                    <stop offset=".72" stop-color="#F8F1E8"/>
-                    <stop offset="1" stop-color="#FFFDF8"/>
-                </linearGradient>
-                <linearGradient id="bottle" x1="0" x2="1">
-                    <stop offset="0" stop-color="${light}"/>
-                    <stop offset=".58" stop-color="${main}"/>
-                    <stop offset="1" stop-color="${deep}"/>
-                </linearGradient>
-                <linearGradient id="cap" x1="0" x2="1">
-                    <stop offset="0" stop-color="#AE7E37"/>
-                    <stop offset=".48" stop-color="#F7E4B8"/>
-                    <stop offset="1" stop-color="#8F5F2E"/>
-                </linearGradient>
-                <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
-                    <feDropShadow dx="0" dy="24" stdDeviation="18" flood-color="#6B4430" flood-opacity=".22"/>
-                </filter>
-            </defs>
-            <rect width="600" height="760" rx="28" fill="url(#bg)"/>
-            <rect y="540" width="600" height="220" fill="#E8DACB" opacity=".38"/>
-            <g filter="url(#shadow)">${productShape}</g>
-            <text x="300" y="690" text-anchor="middle" fill="#8B442B" font-size="24" font-family="Noto Serif TC, serif">${product.name}</text>
-            <text x="300" y="722" text-anchor="middle" fill="#B08A5D" font-size="13" letter-spacing="6" font-family="Jost, Arial">DEMO PRODUCT ${String(index + 1).padStart(2, '0')}</text>
+            <rect width="600" height="760" fill="${bg}"/>
+            <text x="300" y="390" text-anchor="middle" fill="${ink}" font-size="22" letter-spacing="4" font-family="Jost, Arial" opacity=".7">${product.cat || ''}</text>
+            <text x="300" y="424" text-anchor="middle" fill="${ink}" font-size="13" letter-spacing="3" font-family="Jost, Arial" opacity=".45">尚無商品圖片</text>
         </svg>
     `);
 }
