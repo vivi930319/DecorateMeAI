@@ -2,8 +2,8 @@
 const HEART_SVG = '<span class="pulse"></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.4S3.6 15.6 3.6 9.4C3.6 6.5 5.7 4.7 8 4.7c1.7 0 3.1 1 4 2.4 0.9-1.4 2.3-2.4 4-2.4 2.3 0 4.4 1.8 4.4 4.7 0 6.2-8.4 11-8.4 11z"/></svg>';
 const CAT_EN = { '底妝':'FOUNDATION','眼影':'EYESHADOW','眼線/睫毛':'EYES & LASH','唇彩':'LIP COLOR','腮紅':'BLUSH','眉毛彩妝':'BROW','修容':'CONTOUR','打亮':'HIGHLIGHT' };
 function phBox(cls, label, src){
-    const cap = (cls.indexOf('product-thumb')>-1) ? '' : `<span class="ph-cap">${label||''}</span>`;
-    const img = src ? `<img src="${src}" alt="${label||''}" onload="this.classList.add('loaded')">` : '';
+    const cap = (cls.indexOf('product-thumb')>-1) ? '' : `<span class="ph-cap">${escapeHtml(label||'')}</span>`;
+    const img = src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(label||'')}" onload="this.classList.add('loaded')">` : '';
     return `<div class="ph ${cls}">${cap}${img}</div>`;
 }
 
@@ -14,6 +14,24 @@ function escapeHtml(value) {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#039;');
+}
+
+// 呼叫完外部 AI 服務（Ollama／Replicate）後，強制冷卻幾秒才能再按，避免使用者短時間內連點造成後端連線壓力
+function startButtonCooldown(btn, seconds, idleText) {
+    if (!btn) return;
+    let remaining = seconds;
+    btn.disabled = true;
+    btn.textContent = `請稍候 ${remaining} 秒...`;
+    const timer = setInterval(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+            clearInterval(timer);
+            btn.disabled = false;
+            btn.textContent = idleText;
+        } else {
+            btn.textContent = `請稍候 ${remaining} 秒...`;
+        }
+    }, 1000);
 }
 
 function normalizeAdviceTitle(title) {
@@ -1688,8 +1706,7 @@ const PageInit = {
                 showAlert('妝容建議失敗：' + err.message, { type: 'error' });
                 renderAnalysisResult(null);
             } finally {
-                btn.disabled = false;
-                btn.textContent = originalText;
+                startButtonCooldown(btn, 15, originalText);
             }
         };
 
@@ -1814,7 +1831,7 @@ const PageInit = {
                         <div class="pd-price-lg">${p.price}</div>
                         <div class="pd-color">
                             <div class="pd-color-label">色號 <span>Shade</span></div>
-                            <div class="pd-shades">${shades.map((c,i)=>`<button class="shade ${i===0?'active':''}" data-shade="${i}" style="background:${c}" aria-label="色號 ${i+1}"></button>`).join('')}</div>
+                            <div class="pd-shades">${shades.filter(c => /^#[0-9a-fA-F]{3,8}$/.test(c)).map((c,i)=>`<button class="shade ${i===0?'active':''}" data-shade="${i}" style="background:${escapeHtml(c)}" aria-label="色號 ${i+1}"></button>`).join('')}</div>
                         </div>
                         <div class="pd-actions">
                             <button class="add-bag" data-bag="${p.id}">加入購物袋</button>
@@ -2128,7 +2145,7 @@ const PageInit = {
                     <ul class="tier-benefits">
                         <li>BASIC 臉部分析</li>
                         <li>${isVip ? 'PRO 臉部分析（進階多角度）' : 'PRO 臉部分析（VIP 專屬）'}</li>
-                        <li>AI 渲染妝容：${remaining === Infinity ? '不限次數' : `每日 ${AdminStore._dailyRenderLimit} 次（今日剩餘 ${remaining} 次）`}</li>
+                        <li>渲染妝容：${remaining === Infinity ? '不限次數' : `每日 ${AdminStore._dailyRenderLimit} 次（今日剩餘 ${remaining} 次）`}</li>
                     </ul>
                     ${pending ? `<div class="tier-pending">升級申請已送出，請等候管理員審核</div>` : ''}
                 </div>
@@ -2218,7 +2235,7 @@ const PageInit = {
         const pageLabels = {
             analysisBasic: 'BASIC 分析',
             analysisPro: 'PRO 分析',
-            unlimitedRender: 'AI 渲染不限次數',
+            unlimitedRender: '渲染不限次數',
             style: '風格試妝',
             products: '商品推薦',
             favorites: '收藏',
@@ -2407,9 +2424,14 @@ const PageInit = {
             const img = document.getElementById('adminProductImg')?.value.trim();
             const desc = document.getElementById('adminProductDesc')?.value.trim();
             const shadesRaw = document.getElementById('adminProductShades')?.value.trim();
-            const shades = shadesRaw ? shadesRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+            const shadesInput = shadesRaw ? shadesRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+            const shades = shadesInput.filter(c => /^#[0-9a-fA-F]{3,8}$/.test(c));
             if (!name || !cat || !price) {
                 showAlert('請完整填寫商品名稱、分類與價格', { type:'error' });
+                return;
+            }
+            if (shades.length !== shadesInput.length) {
+                showAlert('色號格式不正確，只接受 Hex 色碼（例如 #3A241C），不合格式的色號已被忽略。', { type:'error' });
                 return;
             }
             if (editingProductId) {
