@@ -4,8 +4,33 @@ struct LoginView: View {
     @EnvironmentObject private var state: AppState
     @State private var email = ""
     @State private var password = ""
+    @State private var showForgotPassword = false
+    @State private var showRegister = false
 
     var body: some View {
+        ZStack {
+            if showForgotPassword {
+                ForgotPasswordView {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        showForgotPassword = false
+                    }
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else if showRegister {
+                RegisterView {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        showRegister = false
+                    }
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                loginContent
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+        }
+    }
+
+    private var loginContent: some View {
         ZStack {
             LinearGradient(
                 colors: [
@@ -66,8 +91,17 @@ struct LoginView: View {
                     .padding(.top, 22)
 
                     VStack(spacing: 24) {
-                        Button("忘記密碼？") { }
-                        Button("還沒有帳號？立即註冊") { }
+                        Button("忘記密碼？") {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                showForgotPassword = true
+                            }
+                        }
+
+                        Button("還沒有帳號？立即註冊") {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                showRegister = true
+                            }
+                        }
                     }
                     .font(.system(size: 15, weight: .light))
                     .foregroundStyle(Color(red: 0.70, green: 0.43, blue: 0.39))

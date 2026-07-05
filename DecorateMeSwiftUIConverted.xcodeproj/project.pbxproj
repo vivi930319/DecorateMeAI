@@ -8,6 +8,8 @@
 
 /* Begin PBXBuildFile section */
 		796DCDEA2FEF6DA50012061F /* RegisterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 796DCDE92FEF6DA40012061F /* RegisterView.swift */; };
+		79DE00082FFA6F74009C7A4E /* Untitled.swift in Sources */ = {isa = PBXBuildFile; fileRef = 796DCDEB2FEF6DAD0012061F /* Untitled.swift */; };
+		79DE00092FFA6F8E009C7A4E /* ForgotPasswordView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79DE00072FFA6D31009C7A4E /* ForgotPasswordView.swift */; };
 		A00000000000000000000001 /* DecorateMeApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000011 /* DecorateMeApp.swift */; };
 		A00000000000000000000002 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* AppState.swift */; };
 		A00000000000000000000003 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000013 /* Models.swift */; };
@@ -22,6 +24,8 @@
 		796DCDE92FEF6DA40012061F /* RegisterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegisterView.swift; sourceTree = "<group>"; };
 		796DCDEB2FEF6DAD0012061F /* Untitled.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Untitled.swift; sourceTree = "<group>"; };
 		796DCDEC2FEF6DAD0012061F /* ForgotPasswordView.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ForgotPasswordView.txt; sourceTree = "<group>"; };
+		79A2519C2FFA66CD00F5C56A /* Untitled.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Untitled.swift; sourceTree = "<group>"; };
+		79DE00072FFA6D31009C7A4E /* ForgotPasswordView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForgotPasswordView.swift; sourceTree = "<group>"; };
 		A00000000000000000000010 /* DecorateMeSwiftUIConverted.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DecorateMeSwiftUIConverted.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000011 /* DecorateMeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DecorateMeApp.swift; sourceTree = "<group>"; };
 		A00000000000000000000012 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -47,6 +51,7 @@
 		A00000000000000000000030 = {
 			isa = PBXGroup;
 			children = (
+				79A2519C2FFA66CD00F5C56A /* Untitled.swift */,
 				A00000000000000000000040 /* DecorateMeSwiftUIConverted */,
 				A00000000000000000000050 /* Products */,
 				796DCDEC2FEF6DAD0012061F /* ForgotPasswordView.txt */,
@@ -56,6 +61,7 @@
 		A00000000000000000000040 /* DecorateMeSwiftUIConverted */ = {
 			isa = PBXGroup;
 			children = (
+				79DE00072FFA6D31009C7A4E /* ForgotPasswordView.swift */,
 				796DCDEB2FEF6DAD0012061F /* Untitled.swift */,
 				796DCDE92FEF6DA40012061F /* RegisterView.swift */,
 				A00000000000000000000011 /* DecorateMeApp.swift */,
@@ -150,10 +156,12 @@
 				A00000000000000000000001 /* DecorateMeApp.swift in Sources */,
 				A00000000000000000000002 /* AppState.swift in Sources */,
 				A00000000000000000000003 /* Models.swift in Sources */,
+				79DE00082FFA6F74009C7A4E /* Untitled.swift in Sources */,
 				A00000000000000000000004 /* RootView.swift in Sources */,
 				A00000000000000000000005 /* LoginView.swift in Sources */,
 				796DCDEA2FEF6DA50012061F /* RegisterView.swift in Sources */,
 				A00000000000000000000006 /* MainShellView.swift in Sources */,
+				79DE00092FFA6F8E009C7A4E /* ForgotPasswordView.swift in Sources */,
 				A00000000000000000000007 /* Pages.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
