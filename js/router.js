@@ -94,14 +94,50 @@ function renderMakeupAdviceGrid(text) {
 }
 
 function getFeaturedProducts(limit = 6) {
-    const external = Array.isArray(window.HOT_PRODUCTS) ? window.HOT_PRODUCTS : null;
-    const stored = (() => {
-        try { return JSON.parse(localStorage.getItem('hotProducts') || 'null'); } catch (_) { return null; }
-    })();
-    const source = Array.isArray(external) ? external : (Array.isArray(stored) ? stored : getProductCatalog());
-    return [...source]
-        .sort((a, b) => Number(b.popularity || b.sales || b.views || b.reviews || 0) - Number(a.popularity || a.sales || a.views || a.reviews || 0))
-        .slice(0, limit);
+    const source = Array.isArray(Router?.generalProductCatalog) ? Router.generalProductCatalog : [];
+    const hasPopularity = source.some(product => getProductPopularity(product) > 0);
+    if (hasPopularity) {
+        return [...source].sort((a, b) => getProductPopularity(b) - getProductPopularity(a)).slice(0, limit);
+    }
+    // 沒有熱門度資料時（目前商品 API 本身沒有這個欄位），不要直接切前 N 筆——
+    // API 回傳常常是同一系列色號排在一起，切前幾筆容易全部擠在同一分類。
+    // 改成每個大類先各挑第一項，讓精選商品至少涵蓋多種分類。
+    const seenCats = new Set();
+    const oneCatPicks = [];
+    for (const product of source) {
+        if (!product?.cat || seenCats.has(product.cat)) continue;
+        seenCats.add(product.cat);
+        oneCatPicks.push(product);
+        if (oneCatPicks.length >= limit) break;
+    }
+    if (oneCatPicks.length >= limit) return oneCatPicks;
+    // 分類數不夠補滿 limit，用其餘商品照原順序補齊，避免精選數量比預期少
+    const pickedIds = new Set(oneCatPicks.map(p => p.id));
+    const rest = source.filter(p => !pickedIds.has(p.id));
+    return [...oneCatPicks, ...rest].slice(0, limit);
+}
+
+function getProductPopularity(product) {
+    return Number(product?.popularity || product?.sales || product?.views || product?.reviews || product?.score || 0);
+}
+
+function loadGeneralProductCatalog(onDone) {
+    if (Array.isArray(Router?.generalProductCatalog) && Router.generalProductCatalog.length) {
+        if (typeof onDone === 'function') onDone();
+        return;
+    }
+    if (Router?.generalProductLoading) return;
+    Router.generalProductLoading = true;
+    Api.listProducts()
+        .then(rec => {
+            Router.generalProductCatalog = rec?.products?.length ? rec.products : [];
+            if (typeof onDone === 'function') onDone();
+        })
+        .catch(() => {
+            Router.generalProductCatalog = [];
+            if (typeof onDone === 'function') onDone();
+        })
+        .finally(() => { Router.generalProductLoading = false; });
 }
 
 function getProductCatalog(){
@@ -115,6 +151,14 @@ function getProductCatalog(){
         if (typeof demoProductImage === 'function') withImage.img = demoProductImage(withImage, index);
         return withImage;
     });
+}
+
+function getRecommendedProductCatalog() {
+    const fromPackage = Router?.analysisPackage?.recommendations?.products;
+    if (Array.isArray(fromPackage) && fromPackage.length) return fromPackage;
+    const draft = typeof AnalysisDraft !== 'undefined' ? AnalysisDraft.load() : null;
+    const fromDraft = draft?.recommendations?.products;
+    return Array.isArray(fromDraft) ? fromDraft : [];
 }
 
 // 跟 getProductCatalog 不同：不套用 demoProductImage 預設圖，後台編輯表單要看到的是「真正存的值」
@@ -224,7 +268,8 @@ function getCurrentRoleLabel(profile){
     const p = profile || (Auth.getProfile ? Auth.getProfile() : {});
     if (typeof AdminStore !== 'undefined' && AdminStore.isAdminProfile(p)) return '管理員';
     if ((p.level || '') === '訪客' || (p.name || '') === '訪客') return '訪客';
-    return '一般使用者';
+    if (typeof AdminStore !== 'undefined' && AdminStore.isVip(p)) return 'PRO / VIP 會員';
+    return '一般會員';
 }
 
 function updateAdminNav(){
@@ -240,6 +285,10 @@ function updateCartBadge(){
     const count = Cart.count();
     badge.textContent = String(count);
     badge.classList.toggle('has-items', count > 0);
+}
+
+function refreshMemberTheme() {
+    if (typeof MemberRewards !== 'undefined') MemberRewards.applyActiveTheme(Auth.getProfile()?.email);
 }
 
 function showCartPanel(){
@@ -442,6 +491,10 @@ dashboard: `
     </div>
     <div class="greet-r"><div class="greet-date" id="dashDate">—</div><div class="greet-meta">Your Beauty Atelier</div></div>
 </div>
+<section id="dashPersonalSection" style="display:none;">
+    <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">AI</span><h2>猜你喜歡</h2></div></div>
+    <div class="glow-row" id="dashPersonal"></div>
+</section>
 <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">01</span><h2>風格靈感</h2></div><span class="sh-link" data-nav="style">瀏覽全部風格</span></div>
 <div class="insp-row" id="dashInsp"></div>
 <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">02</span><h2>為你精選</h2></div><span class="sh-link" data-nav="products">查看全部商品</span></div>
@@ -546,11 +599,11 @@ products: `<div id="productsArea"></div>`,
 favorites: `<div class="page-header"><span class="eyebrow">Wishlist</span><h1>我的收藏</h1><div class="divider"></div></div><div id="favArea"></div>`,
 history: `<div class="page-header"><span class="eyebrow">Archive</span><h1>分析紀錄</h1><div class="divider"></div></div><div id="historyArea"></div>`,
 compare: `
-<div class="page-header"><h1>妝容對比圖</h1><div class="divider"></div><p>保留 iOS 端的前後對比流程：選擇風格後可按住切換渲染前 / 渲染後效果。</p></div>
+<div class="page-header"><h1>妝容對比圖</h1><div class="divider"></div><p>保留 iOS 端的前後對比流程：選擇風格後可按下切換渲染前 / 渲染後效果。</p></div>
 <div class="compare-layout">
     <div class="compare-preview" id="comparePreview">
         <div class="ph compare-stage before" id="compareStage"></div>
-        <button class="compare-hold-btn" id="compareHoldBtn">按住對比</button>
+        <button class="compare-hold-btn" id="compareHoldBtn">查看渲染後</button>
     </div>
     <div class="analysis-section">
         <h3>目前風格</h3>
@@ -578,10 +631,14 @@ profile: `
     <div class="member-stats">
         <div class="stat-cell"><div class="stat-en">Wishlist</div><div class="stat-num" id="profileFavCount">0</div><div class="stat-label">收藏商品</div></div>
         <div class="stat-cell"><div class="stat-en">Analysis</div><div class="stat-num" id="profileAnalyzeCount">0</div><div class="stat-label">分析次數</div></div>
-            <div class="stat-cell"><div class="stat-en">Looks</div><div class="stat-num" id="profileSuggestionCount">0</div><div class="stat-label">收藏妝容</div></div>
-        <div class="stat-cell stat-link" data-nav="analysis"><div class="stat-en">Start</div><div class="stat-mark">＋</div><div class="stat-label">開始新分析</div></div>
+        <div class="stat-cell"><div class="stat-en">Looks</div><div class="stat-num" id="profileSuggestionCount">0</div><div class="stat-label">收藏妝容</div></div>
+        <div class="stat-cell"><div class="stat-en">Points</div><div class="stat-num" id="profilePointCount">0</div><div class="stat-label">會員點數</div></div>
     </div>
 </div>
+<section class="member-tier"><div class="member-section-head"><span>Membership</span><h2>會員等級</h2></div><div id="profileTierCard"></div></section>
+<section class="member-tier"><div class="member-section-head"><span>Check-in</span><h2>每日打卡</h2></div><div id="profileCheckinCard"></div></section>
+<section class="member-tier"><div class="member-section-head"><span>Theme Shop</span><h2>點數商店</h2></div><div id="profileThemeShop"></div></section>
+<section class="member-tier"><div class="member-section-head"><span>Ledger</span><h2>點數紀錄</h2></div><div id="profilePointLedger"></div></section>
 <section class="member-suggestions"><div class="member-section-head"><span>Saved Looks</span><h2>已收藏的妝容對比圖</h2></div><div id="profileSuggestionArea"></div></section>`
     };
     return fallbacks[page] || null;
@@ -607,6 +664,9 @@ const Router = {
     pendingRegister: null,
     latestRenderedAfter: false,
     currentCategory: null,
+    productRecommendationLoading: false,
+    generalProductCatalog: null,
+    generalProductLoading: false,
 
     stopAnalysisCameras() {
         if (this.proScanTimer) clearInterval(this.proScanTimer);
@@ -660,6 +720,7 @@ const Router = {
                 a.classList.toggle('active', a.dataset.page === page);
             });
             updateAdminNav();
+            refreshMemberTheme();
             // 手機：把目前頁的藥丸捲到可見
             const navEl = document.querySelector('.topbar-nav');
             const activeEl = navEl && navEl.querySelector('a.active');
@@ -681,6 +742,7 @@ const Router = {
                     a.classList.toggle('active', a.dataset.page === page);
                 });
                 updateAdminNav();
+                refreshMemberTheme();
                 if (typeof PageInit[page] === 'function') PageInit[page](opts);
                 return;
             }
@@ -751,6 +813,27 @@ const PageInit = {
             dEl.textContent = `${now.getMonth()+1}月 ${now.getDate()}日 · 週${wd}`;
         }
 
+        // AI 猜你喜歡：依賴組員資料庫的登入 session，訪客或沒有推薦結果時整塊保持隱藏，不影響其他版位。
+        const personalSection = document.getElementById('dashPersonalSection');
+        const personalArea = document.getElementById('dashPersonal');
+        if (personalSection && personalArea && !isGuest() && typeof Api !== 'undefined' && Api.getPersonalRecommendations) {
+            Api.getPersonalRecommendations().then(picks => {
+                if (!picks?.length || Router.currentPage !== 'dashboard') return;
+                personalSection.style.display = '';
+                personalArea.innerHTML = picks.map(p => `
+                    <div class="glow-card reveal-in" data-pid="${p.id}">
+                        <div class="gc-img">${phBox('', p.name, p.img)}</div>
+                        <div class="gc-meta">
+                            <div class="gc-top"><span class="gc-name">${escapeHtml(p.name)}</span><span class="gc-price">${escapeHtml(p.price)}</span></div>
+                            <div class="gc-rating"><span class="stars">★★★★★</span><span class="gc-rev">${p.similarity != null ? `契合度 ${p.similarity}%` : (p.brand || '')}</span></div>
+                        </div>
+                    </div>`).join('');
+                personalArea.querySelectorAll('.glow-card[data-pid]').forEach(card => {
+                    card.onclick = () => Router.go('products', { productId: card.dataset.pid });
+                });
+            }).catch(() => {});
+        }
+
         // 風格靈感 · 人像卡橫排（真實 STYLES）
         const insp = document.getElementById('dashInsp');
         if (insp && typeof STYLES !== 'undefined') {
@@ -769,29 +852,45 @@ const PageInit = {
             insp.querySelectorAll('.insp-card').forEach(c => c.onclick = () => Router.go('style', { styleId: c.dataset.style }));
         }
 
-        // 首頁商品推薦：保留錯落排版，圖片沿用商品推薦頁同一套 DEMO 佔位。
+        // 首頁商品推薦：與商品頁共用商品 API 真資料；若無熱門度欄位，照 API 回傳前幾筆顯示。
         const glow = document.getElementById('dashGlow');
-        if (glow && typeof ALL_PRODUCTS !== 'undefined') {
+        if (glow) {
             const picks = getFeaturedProducts(6);
-            glow.innerHTML = picks.map((p) => `
+            if (!picks.length && !Router.generalProductLoading) {
+                loadGeneralProductCatalog(() => {
+                    if (Router.currentPage === 'dashboard') PageInit.dashboard();
+                });
+            }
+            if (!picks.length) {
+                glow.innerHTML = Router.generalProductLoading
+                    ? Array.from({ length: 4 }).map(() => `
+                        <div class="glow-card">
+                            <div class="gc-img"><div class="skel-block" style="width:100%;height:100%;"></div></div>
+                            <div class="skel-block" style="width:72%;height:16px;margin-bottom:10px;"></div>
+                            <div class="skel-block" style="width:38%;height:12px;"></div>
+                        </div>`).join('')
+                    : '<div class="empty-state compact">目前沒有商品資料</div>';
+            } else {
+                glow.innerHTML = picks.map((p) => `
                 <div class="glow-card reveal-in" data-pid="${p.id}">
                     <div class="gc-img">
                         ${phBox('', p.name, p.img)}
                         <button class="heart-btn gc-heart ${Fav.has(p.id)?'fav':''}" data-fav="${p.id}" aria-label="收藏">${HEART_SVG}</button>
                     </div>
                     <div class="gc-meta">
-                        <div class="gc-top"><span class="gc-name">${p.name}</span><span class="gc-price">${p.price}</span></div>
-                        <div class="gc-rating"><span class="stars">★★★★★</span><span class="gc-rev">${p.reviews || 643} 則評價</span></div>
+                        <div class="gc-top"><span class="gc-name">${escapeHtml(p.name)}</span><span class="gc-price">${escapeHtml(p.price)}</span></div>
+                        <div class="gc-rating"><span class="stars">★★★★★</span><span class="gc-rev">${p.brand ? escapeHtml(p.brand) : (p.score != null ? `推薦分數 ${Math.round(p.score)}` : '商品資料庫')}</span></div>
                     </div>
                 </div>`).join('');
-            glow.querySelectorAll('.glow-card').forEach(card => {
+            }
+            glow.querySelectorAll('.glow-card[data-pid]').forEach(card => {
                 card.onclick = (e) => { if (!e.target.closest('.heart-btn')) Router.go('products', { productId: card.dataset.pid }); };
             });
             glow.querySelectorAll('.gc-heart').forEach(btn => {
                 btn.onclick = (e) => {
                     e.stopPropagation();
                     const id = btn.dataset.fav; const wasFav = Fav.has(id);
-                    Fav.toggle(id); btn.classList.toggle('fav', !wasFav);
+                    Fav.toggle(id, picks.find(x => String(x.id) === String(id))); btn.classList.toggle('fav', !wasFav);
                     btn.classList.remove('swap'); void btn.offsetWidth; btn.classList.add('swap');
                     if (!wasFav) showToast('已加入收藏');
                 };
@@ -1643,7 +1742,11 @@ const PageInit = {
                     style: style?.name || '日常自然妝',
                     userNote: style?.tags?.join('、') || ''
                 });
-                const fullText = response.suggestion || '';
+                // 防呆：Ollama 有時候會把「第二部分」英文渲染指令漏拆、黏在中文建議尾巴，
+                // 這裡先切乾淨，切下來的內容優先當渲染指令用（後端有正確拆出 renderPromptEn 的話，還是以後端的為準）。
+                const { suggestion: cleanSuggestion, leakedEnglishPart } = splitOllamaTwoPartSuggestion(response.suggestion);
+                const fullText = cleanSuggestion || '';
+                const ollamaRenderPromptEn = response.renderPromptEn || leakedEnglishPart || '';
 
                 fill.style.width = '100%';
                 status.textContent = '建議已產生';
@@ -1658,10 +1761,12 @@ const PageInit = {
                         status: 'completed',
                         error: null,
                         fallbackUsed: false,
+                        ollamaRenderPromptEn: ollamaRenderPromptEn || null,
                         renderPromptEn: buildRenderPrompt(
                             pkg?.faceAnalysis || Router.analysisPackage?.faceAnalysis,
                             Router.selectedStyleId,
-                            fullText
+                            fullText,
+                            ollamaRenderPromptEn
                         )
                     },
                     recommendations: {
@@ -1763,26 +1868,67 @@ const PageInit = {
             const cats = CATEGORIES.map(c => c.id);
             const chips = [`<button class="chip ${filter==='all'?'active':''}" data-filter="all">全部<span class="chip-en">All</span></button>`]
                 .concat(cats.map(id => `<button class="chip ${filter===id?'active':''}" data-filter="${id}">${id}</button>`)).join('');
-            const catalog = getProductCatalog();
+            const recommended = getRecommendedProductCatalog();
+            const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
+            const shouldLoadGeneralProducts = !recommended.length && !apiCatalog.length && !Router.generalProductLoading;
+            if (shouldLoadGeneralProducts) {
+                loadGeneralProductCatalog(() => {
+                    if (Router.currentPage === 'products') renderShop(filter);
+                });
+            }
+            const catalog = apiCatalog;
             const list = filter === 'all' ? catalog : catalog.filter(p => p.cat === filter);
+            const isLoadingProducts = Router.generalProductLoading && !apiCatalog.length;
             const header = `
                 <div class="page-header"><span class="eyebrow">Boutique · 選物</span><h1>商品推薦</h1><div class="divider"></div></div>
+                ${recommended.length ? `<section class="recommended-strip">
+                    <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">AI</span><h2>本次個人化推薦</h2></div></div>
+                    <div class="prod-grid recommended-grid">${recommended.slice(0, 4).map((p, i) => `
+                        <div class="prod-card reveal-in" data-rec-pid="${escapeHtml(p.id)}" style="animation-delay:${Math.min(i*0.035,0.2)}s">
+                            <div class="pc-imgwrap">${phBox('', p.name, p.img)}</div>
+                            <div class="pc-cat">${CAT_EN[p.cat]||p.cat}${p.brand ? ` · ${escapeHtml(p.brand)}` : ''}</div>
+                            <div class="pc-name">${escapeHtml(p.name)}</div>
+                            <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
+                        </div>`).join('')}
+                    </div>
+                </section>` : ''}
                 <div class="filter-bar">${chips}</div>
-                <div class="prod-count">${list.length} 件商品</div>`;
+                <div class="prod-count">${isLoadingProducts ? '商品載入中' : `${list.length} 件商品`}</div>`;
             const bindChips = () => {
                 area.querySelectorAll('.chip').forEach(ch => ch.onclick = () => renderShop(ch.dataset.filter));
             };
-            // 1) 骨架載入
-            area.innerHTML = header + `<div class="prod-grid">` + Array.from({length:Math.min(list.length||4,8)}).map(()=>`
-                <div><div class="skel-block" style="width:100%;aspect-ratio:4/5;margin-bottom:15px;"></div>
-                <div class="skel-block" style="width:40%;height:10px;margin-bottom:9px;"></div>
-                <div class="skel-block" style="width:78%;height:14px;margin-bottom:10px;"></div>
-                <div class="skel-block" style="width:30%;height:14px;"></div></div>`).join('') + `</div>`;
+            if (!recommended.length && !Router.productRecommendationLoading && Router.analysisPackage?.faceAnalysis) {
+                Router.productRecommendationLoading = true;
+                Api.recommendProducts(Router.analysisPackage.faceAnalysis, Router.selectedStyleId)
+                    .then(rec => {
+                        if (rec?.products?.length) {
+                            Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
+                                recommendations: {
+                                    ...(Router.analysisPackage.recommendations || {}),
+                                    products: rec.products
+                                }
+                            });
+                            AnalysisDraft.save(Router.analysisPackage);
+                            if (Router.currentPage === 'products') renderShop(filter);
+                        }
+                    })
+                    .catch(() => {})
+                    .finally(() => { Router.productRecommendationLoading = false; });
+            }
+            // 1) API 載入中只顯示骨架，不再用前端假商品補畫面
+            area.innerHTML = header + (isLoadingProducts
+                ? `<div class="prod-grid">` + Array.from({length:8}).map(()=>`
+                    <div><div class="skel-block" style="width:100%;aspect-ratio:1/1;margin-bottom:15px;"></div>
+                    <div class="skel-block" style="width:40%;height:10px;margin-bottom:9px;"></div>
+                    <div class="skel-block" style="width:78%;height:14px;margin-bottom:10px;"></div>
+                    <div class="skel-block" style="width:30%;height:14px;"></div></div>`).join('') + `</div>`
+                : '');
             bindChips();
             // 2) 淡入商品卡
             setTimeout(() => {
                 if (Router.currentPage !== 'products' || Router.shopFilter !== filter) return;
-                area.innerHTML = header + `<div class="prod-grid">` + list.map((p, i) => `
+                const content = list.length
+                    ? `<div class="prod-grid">` + list.map((p, i) => `
                     <div class="prod-card reveal-in" data-pid="${p.id}" style="animation-delay:${Math.min(i*0.035,0.4)}s">
                         <div class="pc-imgwrap">
                             ${phBox('', p.name, p.img)}
@@ -1790,18 +1936,24 @@ const PageInit = {
                         </div>
                         <div class="pc-cat">${CAT_EN[p.cat]||p.cat}</div>
                         <div class="pc-name">${p.name}</div>
+                        ${p.brand ? `<div class="pc-cat">${escapeHtml(p.brand)}</div>` : ''}
                         <div class="pc-foot"><span class="pc-price">${p.price}</span></div>
-                    </div>`).join('') + `</div>`;
+                    </div>`).join('') + `</div>`
+                    : `<div class="empty-state compact">${isLoadingProducts ? '商品載入中' : '目前沒有商品資料'}</div>`;
+                area.innerHTML = header + content;
                 bindChips();
                 area.querySelectorAll('.prod-card').forEach(card => {
-                    card.onclick = (e) => { if (!e.target.closest('.heart-btn')) renderProductDetail(card.dataset.pid); };
+                    card.onclick = (e) => {
+                        if (e.target.closest('.heart-btn')) return;
+                        renderProductDetail(card.dataset.pid || card.dataset.recPid);
+                    };
                 });
                 area.querySelectorAll('.pc-heart').forEach(btn => {
                     btn.onclick = (e) => {
                         e.stopPropagation();
                         const id = btn.dataset.fav;
                         const wasFav = Fav.has(id);
-                        Fav.toggle(id);
+                        Fav.toggle(id, list.find(x => String(x.id) === String(id)));
                         btn.classList.toggle('fav', !wasFav);
                         btn.classList.remove('swap'); void btn.offsetWidth; btn.classList.add('swap');
                         if (!wasFav) showToast('已加入收藏');
@@ -1811,13 +1963,30 @@ const PageInit = {
         }
 
         function renderProductDetail(id) {
-            const catalog = getProductCatalog();
+            const recommended = getRecommendedProductCatalog();
+            const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
+            const catalog = [...recommended, ...apiCatalog];
             const p = catalog.find(x => String(x.id) === String(id));
             if (!p) return;
             const area = document.getElementById('productsArea');
-            const shades = (p.shades && p.shades.length) ? p.shades : ['#3A241C','#C99070','#B5654A','#9A4E3C','#7C3F30'];
+            // 這批商品每一筆本身就是一個獨立色號（不是一個商品配多組色號），色票只顯示這支商品自己的真實顏色。
+            // 商品清單 API 沒有 hex，只有單品詳情 API（/api/product/{type}/{id}）才有，先用清單裡有的，沒有就非同步補抓。
             let related = catalog.filter(x => x.cat === p.cat && String(x.id) !== String(p.id)).slice(0,3);
             if (related.length < 3) related = related.concat(catalog.filter(x => x.cat !== p.cat && String(x.id) !== String(p.id)).slice(0, 3 - related.length));
+            const renderColorBox = (hex) => hex
+                ? `<div class="pd-color"><div class="pd-color-label">色號 <span>Shade</span></div><div class="pd-shades"><span class="shade active" style="background:${escapeHtml(hex)}" aria-label="商品色號"></span><code style="margin-left:8px;font-size:12px;color:var(--mid);">${escapeHtml(hex)}</code></div></div>`
+                : '';
+            const renderRelatedGrid = (items, heading) => `
+                <div class="pd-related">
+                    <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">❧</span><h2>${escapeHtml(heading)}</h2></div><span class="sh-link" onclick="PageInit.products();">查看全部</span></div>
+                    <div class="prod-grid">${items.map(r => `
+                        <div class="prod-card reveal-in" data-rel="${r.id}">
+                            <div class="pc-imgwrap">${phBox('', r.name, r.img)}</div>
+                            <div class="pc-cat">${CAT_EN[r.cat]||r.cat}${r.similarity != null ? ` · ${r.similarity}% 相似` : ''}</div>
+                            <div class="pc-name">${r.name}</div>
+                            <div class="pc-foot"><span class="pc-price">${r.price}</span></div>
+                        </div>`).join('')}</div>
+                </div>`;
             area.innerHTML = `
                 <div class="pd-top">
                     <a href="#" class="back-link" onclick="PageInit.products({category:'${p.cat}'});return false;">← ${p.cat}</a>
@@ -1828,33 +1997,18 @@ const PageInit = {
                     <div class="pd-info">
                         <div class="pd-en">${CAT_EN[p.cat]||'BEAUTY'}</div>
                         <div class="pd-name">${p.name}</div>
+                        ${p.brand ? `<div class="pd-en">${escapeHtml(p.brand)}</div>` : ''}
                         <div class="pd-price-lg">${p.price}</div>
-                        <div class="pd-color">
-                            <div class="pd-color-label">色號 <span>Shade</span></div>
-                            <div class="pd-shades">${shades.filter(c => /^#[0-9a-fA-F]{3,8}$/.test(c)).map((c,i)=>`<button class="shade ${i===0?'active':''}" data-shade="${i}" style="background:${escapeHtml(c)}" aria-label="色號 ${i+1}"></button>`).join('')}</div>
-                        </div>
+                        <div id="pdColorBox">${renderColorBox(p.hex)}</div>
                         <div class="pd-actions">
                             <button class="add-bag" data-bag="${p.id}">加入購物袋</button>
                             <button class="heart-btn pd-heart ${Fav.has(p.id)?'fav':''}" data-fav-detail="${p.id}" aria-label="收藏">${HEART_SVG}</button>
                         </div>
-                        <div class="pd-desc">${escapeHtml(p.desc || '商品詳細說明區域。可放入完整描述、使用方式、成分說明等資訊。')}</div>
+                        <div class="pd-desc">${escapeHtml(p.desc || p.matchReason || '商品詳細說明區域。可放入完整描述、使用方式、成分說明等資訊。')}</div>
                     </div>
                 </div>
-                <div class="pd-related">
-                    <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">❧</span><h2>你可能也喜歡</h2></div><span class="sh-link" onclick="PageInit.products();">查看全部</span></div>
-                    <div class="prod-grid">${related.map(r => `
-                        <div class="prod-card reveal-in" data-rel="${r.id}">
-                            <div class="pc-imgwrap">${phBox('', r.name, r.img)}</div>
-                            <div class="pc-cat">${CAT_EN[r.cat]||r.cat}</div>
-                            <div class="pc-name">${r.name}</div>
-                            <div class="pc-foot"><span class="pc-price">${r.price}</span></div>
-                        </div>`).join('')}</div>
-                </div>
+                <div id="pdRelatedBox">${renderRelatedGrid(related, '你可能也喜歡')}</div>
             `;
-            area.querySelectorAll('.shade').forEach(s => s.onclick = () => {
-                area.querySelectorAll('.shade').forEach(x => x.classList.remove('active'));
-                s.classList.add('active');
-            });
             const bag = area.querySelector('[data-bag]');
             if (bag) bag.onclick = () => {
                 Cart.add(p.id);
@@ -1864,18 +2018,54 @@ const PageInit = {
             const dBtn = area.querySelector('[data-fav-detail]');
             if (dBtn) dBtn.onclick = () => {
                 const wasFav = Fav.has(p.id);
-                Fav.toggle(p.id);
+                Fav.toggle(p.id, p);
                 dBtn.classList.toggle('fav', !wasFav);
                 dBtn.classList.remove('swap'); void dBtn.offsetWidth; dBtn.classList.add('swap');
                 if (!wasFav) showToast('已加入收藏');
             };
-            area.querySelectorAll('[data-rel]').forEach(c => c.onclick = () => { window.scrollTo(0,0); renderProductDetail(c.dataset.rel); });
+            const bindRelatedClicks = () => {
+                area.querySelectorAll('[data-rel]').forEach(c => c.onclick = () => { window.scrollTo(0,0); renderProductDetail(c.dataset.rel); });
+            };
+            bindRelatedClicks();
+
+            // 非同步補強：真實色號 + AI 以色找色相似推薦（只有商品 API 來源、且清單本身沒有 hex 時才需要多打一支 API）
+            if (p.source === 'product-api' && p.apiType && p.rawId != null) {
+                if (!p.hex && typeof Api !== 'undefined' && Api.getProductDetail) {
+                    Api.getProductDetail(p.apiType, p.rawId).then(detail => {
+                        if (!detail?.hex || Router.currentPage !== 'products') return;
+                        const box = document.getElementById('pdColorBox');
+                        if (box) box.innerHTML = renderColorBox(detail.hex);
+                    }).catch(() => {});
+                }
+                if (typeof Api !== 'undefined' && Api.getSimilarColorProducts) {
+                    Api.getSimilarColorProducts(p.apiType, p.rawId).then(similar => {
+                        if (!similar?.length || Router.currentPage !== 'products') return;
+                        const box = document.getElementById('pdRelatedBox');
+                        if (!box) return;
+                        box.innerHTML = renderRelatedGrid(similar.slice(0, 3), 'AI 相似色彩推薦');
+                        bindRelatedClicks();
+                    }).catch(() => {});
+                }
+            }
         }
     },
 
     favorites() {
-        const items = ALL_PRODUCTS.filter(p => Fav.has(p.id));
+        // 收藏可能來自 ALL_PRODUCTS demo 資料、真實商品 API、或分析後的個人化推薦，三邊都要查，不然收藏了也看不到。
+        const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
+        const recommended = getRecommendedProductCatalog();
+        const combined = [...ALL_PRODUCTS, ...apiCatalog, ...recommended];
+        const seenIds = new Set();
+        const catalog = combined.filter(p => {
+            if (seenIds.has(String(p.id))) return false;
+            seenIds.add(String(p.id));
+            return true;
+        });
+        const items = catalog.filter(p => Fav.has(p.id));
         const area = document.getElementById('favArea');
+        if (!apiCatalog.length && !Router.generalProductLoading) {
+            loadGeneralProductCatalog(() => { if (Router.currentPage === 'favorites') PageInit.favorites(); });
+        }
         if (!items.length) { area.innerHTML = '<div class="empty-state">目前尚無收藏商品</div>'; return; }
         area.innerHTML = `<div class="prod-count">${items.length} 件收藏</div><div class="prod-grid">` + items.map((p, i) => `
             <div class="prod-card reveal-in" data-pid="${p.id}" style="animation-delay:${Math.min(i*0.035,0.4)}s">
@@ -1897,7 +2087,8 @@ const PageInit = {
                 btn.classList.remove('swap'); void btn.offsetWidth; btn.classList.add('swap');
                 const card = btn.closest('.prod-card');
                 if (card) { card.style.transition='opacity .35s var(--ease), transform .35s var(--ease)'; card.style.opacity='0'; card.style.transform='translateY(10px)'; }
-                setTimeout(()=>{ Fav.toggle(btn.dataset.unfav); PageInit.favorites(); }, 320);
+                const product = items.find(x => String(x.id) === String(btn.dataset.unfav));
+                setTimeout(()=>{ Fav.toggle(btn.dataset.unfav, product); PageInit.favorites(); }, 320);
             };
         });
     },
@@ -1919,17 +2110,20 @@ const PageInit = {
             stage.classList.remove('before');
             stage.classList.add('after');
             setCompareImage('after');
+            holdBtn.textContent = '查看渲染前';
         };
         const showBefore = () => {
             stage.classList.remove('after');
             stage.classList.add('before');
             setCompareImage('before');
+            holdBtn.textContent = '查看渲染後';
         };
-        holdBtn.onpointerdown = showAfter;
-        holdBtn.onpointerup = showBefore;
-        holdBtn.onpointerleave = showBefore;
-        holdBtn.onfocus = showAfter;
-        holdBtn.onblur = showBefore;
+        // 改成按下切換（不用長按），目前顯示哪一張就切去另一張
+        showBefore();
+        holdBtn.onclick = () => {
+            if (stage.classList.contains('after')) showBefore();
+            else showAfter();
+        };
         document.getElementById('compareGoStyleBtn').onclick = () => Router.go('style');
 
         const renderBtn = document.getElementById('compareRenderBtn');
@@ -1951,7 +2145,7 @@ const PageInit = {
                 const pkg = Router.analysisPackage;
                 const imageDataUrl = pkg?.images?.front?.compressedDataUrl || pkg?.images?.front?.dataUrl || '';
                 if (!imageDataUrl) { showAlert('尚未上傳照片，請先完成臉部分析。', { type: 'error' }); return; }
-                const prompt = buildRenderPrompt(pkg?.faceAnalysis, Router.selectedStyleId, pkg?.generativeText?.suggestion || '');
+                const prompt = buildRenderPrompt(pkg?.faceAnalysis, Router.selectedStyleId, pkg?.generativeText?.suggestion || '', pkg?.generativeText?.ollamaRenderPromptEn || '');
                 if (!prompt) { showAlert('尚未產生妝容建議，請先在風格頁按「確認風格」。', { type: 'error' }); return; }
 
                 // 顯示送出的英文 prompt 讓用戶確認
@@ -2122,6 +2316,7 @@ const PageInit = {
     profile() {
         const user = getMemberDisplayName();
         const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
+        if (typeof ProSubscription !== 'undefined' && profile?.email) ProSubscription.syncExpiry(profile.email);
         document.getElementById('profileName').textContent = user || '訪客';
         const roleEl = document.getElementById('profileRole');
         if (roleEl) roleEl.textContent = getCurrentRoleLabel(profile);
@@ -2139,17 +2334,25 @@ const PageInit = {
             const permission = profile?.email ? AdminStore.getPermission(profile.email, profile) : null;
             const pending = !!permission?.vipRequested && !isVip;
             const remaining = AdminStore.getRemainingRenders(profile);
+            const tier = (typeof MemberTier !== 'undefined') ? MemberTier.describe(profile) : { name: isVip ? 'PRO / VIP 會員' : '一般會員', autoTier: false };
+            const nextTier = tier.autoTier ? MemberTier.nextTier(tier.lifetime) : null;
+            const tierProgressLine = nextTier
+                ? `<li>距離「${nextTier.name}」還差 ${nextTier.min - tier.lifetime} 點累計點數</li>`
+                : (tier.autoTier ? `<li>已達目前等級制度的最高等級</li>` : '');
             tierCard.innerHTML = `
-                <div>
-                    <span class="tier-badge ${isVip ? 'vip' : 'general'}">${isAdminUser ? '管理員' : (isVip ? 'VIP 會員' : '一般會員')}</span>
+                <div class="tier-card">
+                    <div>
+                    <span class="tier-badge ${isVip ? 'vip' : 'general'}">${tier.name}</span>
                     <ul class="tier-benefits">
                         <li>BASIC 臉部分析</li>
-                        <li>${isVip ? 'PRO 臉部分析（進階多角度）' : 'PRO 臉部分析（VIP 專屬）'}</li>
+                        <li>${isVip ? 'PRO 臉部分析已開通' : 'PRO 臉部分析需後台開通'}</li>
                         <li>渲染妝容：${remaining === Infinity ? '不限次數' : `每日 ${AdminStore._dailyRenderLimit} 次（今日剩餘 ${remaining} 次）`}</li>
+                        ${tierProgressLine}
                     </ul>
                     ${pending ? `<div class="tier-pending">升級申請已送出，請等候管理員審核</div>` : ''}
+                    </div>
+                    ${(!isVip && !isAdminUser) ? `<button class="btn-gold btn-sm" id="profileVipUpgradeBtn" ${pending ? 'disabled' : ''}>${pending ? '審核中' : '申請升級 VIP'}</button>` : ''}
                 </div>
-                ${(!isVip && !isAdminUser) ? `<button class="btn-gold btn-sm" id="profileVipUpgradeBtn" ${pending ? 'disabled' : ''}>${pending ? '審核中' : '申請升級 VIP'}</button>` : ''}
             `;
             const upgradeBtn = document.getElementById('profileVipUpgradeBtn');
             if (upgradeBtn) upgradeBtn.onclick = () => {
@@ -2162,12 +2365,179 @@ const PageInit = {
         const favEl = document.getElementById('profileFavCount');
         const anEl = document.getElementById('profileAnalyzeCount');
         const suggestionEl = document.getElementById('profileSuggestionCount');
+        const pointEl = document.getElementById('profilePointCount');
         const suggestions = (() => {
             try { return JSON.parse(localStorage.getItem('beautySuggestions') || '[]'); } catch (_) { return []; }
         })();
         if (favEl) { favEl.textContent = ALL_PRODUCTS.filter(p => Fav.has(p.id)).length; favEl.classList.add('num-pop'); }
         if (anEl) { anEl.textContent = History.list().length; anEl.classList.add('num-pop'); anEl.style.animationDelay='.1s'; }
         if (suggestionEl) { suggestionEl.textContent = suggestions.length; suggestionEl.classList.add('num-pop'); suggestionEl.style.animationDelay='.16s'; }
+        if (pointEl) { pointEl.textContent = MemberRewards.getPoints(profile.email); pointEl.classList.add('num-pop'); pointEl.style.animationDelay='.2s'; }
+
+        const proCard = document.getElementById('profileProCard');
+        if (proCard) {
+            if (isGuest() || typeof ProSubscription === 'undefined') {
+                proCard.innerHTML = '<div class="empty-state compact">登入會員後即可購買 PRO 方案</div>';
+            } else {
+                const sub = ProSubscription.getSubscription(profile.email);
+                const orders = ProSubscription.orders(profile.email);
+                const statusLine = sub.active
+                    ? `<p>目前方案：<b>${escapeHtml(sub.plan === 'yearly' ? 'PRO 年費方案' : 'PRO 月費方案')}</b>，到期日 ${new Date(sub.expiresAt).toLocaleDateString('zh-TW')}（剩餘 ${sub.daysLeft} 天）</p>`
+                    : '<p>目前沒有生效中的付費方案，購買後立即解鎖 PRO 分析與無限渲染。</p>';
+                proCard.innerHTML = `
+                    <div class="pro-plan-status">${statusLine}</div>
+                    <div class="pro-plan-grid">
+                        ${ProSubscription.plans.map(plan => `
+                            <div class="member-action-card pro-plan-card">
+                                <div>
+                                    <b>${escapeHtml(plan.name)}</b>
+                                    <p>NT$ ${plan.price} / ${plan.days} 天（Demo 付款，不會真的扣款）</p>
+                                </div>
+                                <button class="btn-gold btn-sm" data-pro-plan="${plan.id}">${sub.active ? '續約' : '立即購買'}</button>
+                            </div>
+                        `).join('')}
+                    </div>
+                    <div class="pro-order-history">
+                        <h4>訂單紀錄</h4>
+                        ${orders.length ? orders.slice(0, 5).map(o => `<div class="point-ledger-row">
+                            <span>${escapeHtml(o.planName)}</span>
+                            <time>${new Date(o.createdAt).toLocaleString('zh-TW')}</time>
+                            <b>NT$ ${o.amount}</b>
+                        </div>`).join('') : '<div class="empty-state compact">尚無訂單紀錄</div>'}
+                    </div>
+                `;
+                proCard.querySelectorAll('[data-pro-plan]').forEach(btn => {
+                    btn.onclick = () => {
+                        const result = ProSubscription.purchase(profile.email, btn.dataset.proPlan);
+                        if (!result.ok) { showAlert(result.message, { type: 'error' }); return; }
+                        showToast(`付款成功（Demo），PRO 已開通至 ${new Date(result.expiresAt).toLocaleDateString('zh-TW')}`);
+                        PageInit.profile();
+                    };
+                });
+            }
+        }
+
+        const checkinCard = document.getElementById('profileCheckinCard');
+        if (checkinCard) {
+            const status = MemberRewards.checkinStatus(profile.email);
+            const nextMilestone = MemberRewards.nextStreakMilestone(status.streak);
+            const streakLine = status.streak > 0
+                ? `目前連續簽到 <b>${status.streak}</b> 天${nextMilestone ? `，再簽 ${nextMilestone - status.streak} 天可拿額外 ${MemberRewards._streakBonusTable[nextMilestone]} 點` : '，已達最高獎勵天數'}`
+                : '今天開始簽到就能累積連續天數';
+            checkinCard.innerHTML = `<div class="member-action-card">
+                <div>
+                    <b>${status.checkedToday ? '今天已完成打卡' : '今天還沒打卡'}</b>
+                    <p>每日打卡可獲得 10 點；連續簽到 3 / 7 / 14 / 30 天另有加碼獎勵。</p>
+                    <p class="checkin-streak">${streakLine}</p>
+                </div>
+                <button class="btn-gold btn-sm" id="dailyCheckinBtn" ${status.checkedToday || isGuest() ? 'disabled' : ''}>${status.checkedToday ? '已打卡' : '打卡 +10'}</button>
+            </div>`;
+            const btn = document.getElementById('dailyCheckinBtn');
+            if (btn) btn.onclick = () => {
+                const result = MemberRewards.checkin(profile.email);
+                if (!result.ok) { showAlert(result.message, { type:'error' }); return; }
+                showToast(result.bonus
+                    ? `打卡成功！連續 ${result.streak} 天，獲得 ${result.points} 點（含連續簽到獎勵 ${result.bonus} 點）`
+                    : `打卡成功，獲得 ${result.points} 點`);
+                PageInit.profile();
+            };
+        }
+
+        const taskCenter = document.getElementById('profileTaskCenter');
+        if (taskCenter) {
+            if (isGuest() || typeof Tasks === 'undefined') {
+                taskCenter.innerHTML = '<div class="empty-state compact">登入會員後即可查看任務中心</div>';
+            } else {
+                const tasks = Tasks.status(profile.email);
+                const groups = [...new Set(tasks.map(t => t.group))];
+                taskCenter.innerHTML = groups.map(group => `
+                    <div class="task-group">
+                        <h4>${escapeHtml(group)}</h4>
+                        ${tasks.filter(t => t.group === group).map(t => `
+                            <div class="member-action-card task-row">
+                                <div>
+                                    <b>${escapeHtml(t.title)}</b>
+                                    <p>獎勵 ${t.reward} 點</p>
+                                </div>
+                                <button class="btn-gold btn-sm" data-task-id="${t.id}" ${(!t.done || t.claimed) ? 'disabled' : ''}>${t.claimed ? '已領取' : (t.done ? '領取獎勵' : '尚未完成')}</button>
+                            </div>
+                        `).join('')}
+                    </div>
+                `).join('');
+                taskCenter.querySelectorAll('[data-task-id]').forEach(btn => {
+                    btn.onclick = () => {
+                        const result = Tasks.claim(profile.email, btn.dataset.taskId);
+                        if (!result.ok) { showAlert(result.message || '尚未完成這個任務。', { type: 'error' }); return; }
+                        showToast(`任務完成，獲得 ${result.reward} 點`);
+                        PageInit.profile();
+                    };
+                });
+            }
+        }
+
+        const referralCard = document.getElementById('profileReferralCard');
+        if (referralCard) {
+            if (isGuest() || typeof Referral === 'undefined') {
+                referralCard.innerHTML = '<div class="empty-state compact">登入會員後即可產生你的專屬推薦碼</div>';
+            } else {
+                const code = Referral.myCode(profile.email);
+                const count = Referral.countReferrals(profile.email);
+                referralCard.innerHTML = `<div class="member-action-card">
+                    <div>
+                        <b>你的推薦碼：<span id="myReferralCode">${escapeHtml(code)}</span></b>
+                        <p>朋友註冊時填入這組碼，驗證完成後你會獲得 ${Referral._rewardPoints} 點；已成功推薦 ${count} 人。</p>
+                    </div>
+                    <button class="btn-outline btn-sm" id="copyReferralBtn">複製推薦碼</button>
+                </div>`;
+                const copyBtn = document.getElementById('copyReferralBtn');
+                if (copyBtn) copyBtn.onclick = () => {
+                    navigator.clipboard?.writeText(code).then(() => showToast('推薦碼已複製')).catch(() => showToast('複製失敗，請手動選取'));
+                };
+            }
+        }
+
+        const themeShop = document.getElementById('profileThemeShop');
+        if (themeShop) {
+            const activeTheme = MemberRewards.getActiveTheme(profile.email);
+            themeShop.innerHTML = `<div class="theme-shop-grid">${MemberRewards.themes.map(theme => {
+                const owned = MemberRewards.hasTheme(profile.email, theme.id);
+                const active = activeTheme === theme.id;
+                return `<article class="theme-card ${active ? 'active' : ''}">
+                    <div class="theme-swatches">${theme.swatches.map(c => `<span style="background:${escapeHtml(c)}"></span>`).join('')}</div>
+                    <h3>${escapeHtml(theme.name)}</h3>
+                    <p>${escapeHtml(theme.desc)}</p>
+                    <div class="theme-card-foot">
+                        <b>${theme.cost ? `${theme.cost} 點` : '免費'}</b>
+                        <button class="${owned ? 'btn-outline' : 'btn-gold'} btn-sm" data-theme-action="${owned ? 'apply' : 'redeem'}" data-theme-id="${escapeHtml(theme.id)}" ${active ? 'disabled' : ''}>${active ? '使用中' : (owned ? '套用' : '兌換')}</button>
+                    </div>
+                </article>`;
+            }).join('')}</div>`;
+            themeShop.querySelectorAll('[data-theme-id]').forEach(btn => {
+                btn.onclick = () => {
+                    const id = btn.dataset.themeId;
+                    if (btn.dataset.themeAction === 'redeem') {
+                        const result = MemberRewards.redeemTheme(profile.email, id);
+                        if (!result.ok) { showAlert(result.message, { type:'error' }); return; }
+                        MemberRewards.setActiveTheme(profile.email, id);
+                        showToast('已兌換並套用主題');
+                    } else {
+                        MemberRewards.setActiveTheme(profile.email, id);
+                        showToast('已套用主題');
+                    }
+                    PageInit.profile();
+                };
+            });
+        }
+
+        const ledgerEl = document.getElementById('profilePointLedger');
+        if (ledgerEl) {
+            const rows = MemberRewards.ledger(profile.email);
+            ledgerEl.innerHTML = rows.length ? `<div class="point-ledger">${rows.slice(0, 8).map(row => `<div>
+                <span>${escapeHtml(row.reason)}</span>
+                <time>${new Date(row.createdAt).toLocaleString('zh-TW')}</time>
+                <b class="${row.delta >= 0 ? 'plus' : 'minus'}">${row.delta >= 0 ? '+' : ''}${row.delta}</b>
+            </div>`).join('')}</div>` : '<div class="empty-state compact">尚無點數紀錄</div>';
+        }
         const suggestionArea = document.getElementById('profileSuggestionArea');
         if (suggestionArea) {
             if (!suggestions.length) {
@@ -2285,8 +2655,9 @@ const PageInit = {
                     </td>
                     <td>
                         <select class="admin-select" data-admin-level ${AdminStore.isAdminProfile(member) ? 'disabled' : ''}>
-                            <option value="一般會員" ${member.level !== 'VIP會員' ? 'selected' : ''}>一般會員</option>
+                            <option value="一般會員" ${!['VIP會員','PRO會員'].includes(member.level) ? 'selected' : ''}>一般會員</option>
                             <option value="VIP會員" ${member.level === 'VIP會員' ? 'selected' : ''}>VIP會員（可用 PRO）</option>
+                            <option value="PRO會員" ${member.level === 'PRO會員' ? 'selected' : ''}>PRO會員（展示開通）</option>
                         </select>
                     </td>
                     <td>
@@ -2298,7 +2669,7 @@ const PageInit = {
                     <td>
                         <div class="admin-perms">
                             ${Object.keys(pageLabels).map(page => {
-                                const checked = allowed.has(page) || (['analysisPro', 'unlimitedRender'].includes(page) && member.level === 'VIP會員');
+                                const checked = allowed.has(page) || (['analysisPro', 'unlimitedRender'].includes(page) && AdminStore.isVip(member));
                                 return `<label><input type="checkbox" data-admin-page="${page}" ${checked ? 'checked' : ''}>${pageLabels[page]}</label>`;
                             }).join('')}
                         </div>
@@ -2336,13 +2707,13 @@ const PageInit = {
                 if (!allowedPages.includes('profile')) allowedPages.push('profile');
                 if (role === 'admin' && !allowedPages.includes('admin')) allowedPages.push('admin');
                 // VIP 會員自動連動勾選 PRO 分析、無限渲染權限，管理員也還是能單獨手動勾給非 VIP 會員
-                if (levelSelect && !levelSelect.disabled && levelSelect.value === 'VIP會員') {
+                if (levelSelect && !levelSelect.disabled && ['VIP會員', 'PRO會員'].includes(levelSelect.value)) {
                     ['analysisPro', 'unlimitedRender'].forEach(p => { if (!allowedPages.includes(p)) allowedPages.push(p); });
                 }
                 AdminStore.setPermission(email, { role, allowedPages });
                 if (levelSelect && !levelSelect.disabled) {
                     AdminStore.setMemberLevel(email, levelSelect.value);
-                    if (levelSelect.value === 'VIP會員') AdminStore.clearVipRequest(email);
+                    if (['VIP會員', 'PRO會員'].includes(levelSelect.value)) AdminStore.clearVipRequest(email);
                 }
             });
             showToast('權限已更新');
@@ -2488,6 +2859,7 @@ function showApp() {
     document.getElementById('sidebarUsername').textContent = `${getMemberDisplayName()} · ${getCurrentRoleLabel(profile)}`;
     updateAdminNav();
     updateCartBadge();
+    refreshMemberTheme();
     const landing = (typeof AdminStore !== 'undefined' && AdminStore.isAdmin()) ? 'admin' : 'dashboard';
     const homeUrl = `${location.pathname}${location.search}#${landing}`;
     if (location.hash !== `#${landing}`) history.replaceState(null, '', homeUrl);
@@ -2530,6 +2902,7 @@ function showRegister() {
                 <div class="input-group"><label>年齡</label><input type="number" id="regAge" placeholder="20"></div>
                 <div class="input-group"><label>密碼</label><input type="password" id="regPwd" placeholder="••••••••"></div>
                 <div class="input-group"><label>確認密碼</label><input type="password" id="regPwd2" placeholder="••••••••"></div>
+                <div class="input-group"><label>推薦碼（選填）</label><input type="text" id="regReferral" placeholder="朋友的推薦碼"></div>
                 <button class="btn-gold btn-full" onclick="doRegisterAction()" style="margin-top:8px;">註　冊</button>
                 <div style="margin-top:16px;"><span class="auth-link" onclick="showLogin()">已有帳號？返回登入</span></div>
             </div>
@@ -2572,12 +2945,6 @@ async function doLoginAction() {
     const password = document.getElementById('loginPwd').value;
     if (!email || !password) { showAlert('請輸入帳號密碼'); return; }
 
-    if (AdminStore.isSeedAdmin(email, password)) {
-        Auth.setProfile({ name: '管理員', email: AdminStore._seedAdmin.email, level: '管理員', role: 'admin' });
-        showApp();
-        return;
-    }
-
     const registered = Auth.getRegisteredMember(email) || {};
     try {
         const data = await Api.login(email, password);
@@ -2591,17 +2958,11 @@ async function doLoginAction() {
             level: AdminStore.isAdminProfile({ email }) ? '管理員' : (member.level || registered.level || '一般會員'),
             role: AdminStore.isAdminProfile({ email }) ? 'admin' : (member.role || registered.role || 'member'),
         });
-    } catch (_) {
-        const existing = Auth.getProfile() || {};
-        const sameProfile = String(existing.email || '').toLowerCase() === email.toLowerCase() ? existing : {};
-        const source = Object.keys(registered).length ? registered : sameProfile;
-        Auth.setProfile({
-            ...source,
-            name: source.name || email.split('@')[0],
-            email,
-            level: AdminStore.isAdminProfile({ email }) ? '管理員' : (source.level || '本地原型會員'),
-            role: AdminStore.isAdminProfile({ email }) ? 'admin' : (source.role || 'member')
-        });
+    } catch (err) {
+        // 不管是伺服器明確拒絕，還是根本連不上會員資料庫，都不能放行——
+        // 沒有真正在資料庫裡的會員，一律不能用登入方式進去，避免有人靠擋網路/竄改 DNS 繞過驗證。
+        showAlert(err.networkFailure ? '無法連線到會員資料庫，請稍後再試' : (err.message || '帳號或密碼錯誤'), { type: 'error' });
+        return;
     }
     if (AdminStore.getPermission(email, Auth.getProfile()).status === 'suspended') {
         sessionStorage.removeItem('beautyUser');
@@ -2625,6 +2986,7 @@ async function doRegisterAction() {
     const password = document.getElementById('regPwd').value;
     const confirm = document.getElementById('regPwd2').value;
     const avatar = document.getElementById('regAvatarPreview').src || '';
+    const referralCode = document.getElementById('regReferral')?.value.trim() || '';
 
     if (!name || !phone || !email || !age || !password || !confirm) {
         showAlert('請完整填寫所有欄位');
@@ -2635,7 +2997,7 @@ async function doRegisterAction() {
         return;
     }
 
-    Router.pendingRegister = { name, phone, email, age, password, avatar, level: '一般會員' };
+    Router.pendingRegister = { name, phone, email, age, password, avatar, referralCode, level: '一般會員' };
     try {
         await Api.register(Router.pendingRegister);
         await Api.sendOTP(email);
@@ -2667,8 +3029,14 @@ async function doVerifyOTP() {
         avatar: pending.avatar,
         password: pending.password
     });
+    const referralResult = (typeof Referral !== 'undefined' && pending.referralCode)
+        ? Referral.applyReferral(pending.email, pending.referralCode)
+        : { ok: false };
     Router.pendingRegister = null;
-    showAlert('帳號已成功建立', { type:'success', onOk: showApp });
+    showAlert(
+        referralResult.ok ? '帳號已成功建立，推薦碼已套用' : '帳號已成功建立',
+        { type:'success', onOk: showApp }
+    );
 }
 
 async function resendOTP() {

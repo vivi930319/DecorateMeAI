@@ -38,10 +38,11 @@ const ApiConfig = {
         },
         product: {
             baseUrl: RuntimeApiConfig.productUrl || '',
-            recommendPath: '/recommend-products'
+            recommendPath: '/recommend-products',
+            listPath: '/api/products'
         },
         memberDatabase: {
-            baseUrl: RuntimeApiConfig.memberDatabaseUrl || 'https://vegetation-arguments-final-inspiration.trycloudflare.com',
+            baseUrl: RuntimeApiConfig.memberDatabaseUrl || '',
             loginPath: '/api/login',
             registerPath: '/api/register',
             sendOtpPaths: ['/api/send-otp', '/api/register'],
@@ -191,6 +192,169 @@ const Api = {
         return data;
     },
 
+    // 我們的分析結果 LAB 欄位是小寫 {L,a,b}，但 product 服務要求大寫 {L,A,B}，不轉換的話永遠會被判定缺欄位
+    _labToUpperKeys(lab) {
+        if (!lab || typeof lab !== 'object') return null;
+        const L = lab.L ?? lab.l;
+        const A = lab.A ?? lab.a;
+        const B = lab.B ?? lab.b;
+        if (L == null && A == null && B == null) return null;
+        return { L, A, B };
+    },
+
+    _normalizeProduct(product) {
+        if (!product || typeof product !== 'object') return null;
+        const categoryMap = {
+            base: '底妝',
+            foundations: '底妝',
+            foundation: '底妝',
+            eye: '眼影',
+            eyeshadow: '眼影',
+            eyeshadows: '眼影',
+            eyeliner: '眼線/睫毛',
+            eyeliners: '眼線/睫毛',
+            mascara: '眼線/睫毛',
+            mascaras: '眼線/睫毛',
+            eyeliner_mascara: '眼線/睫毛',
+            lash: '眼線/睫毛',
+            lip: '唇彩',
+            lipstick: '唇彩',
+            lipsticks: '唇彩',
+            lipgloss: '唇彩',
+            lipglosses: '唇彩',
+            blush: '腮紅',
+            blushes: '腮紅',
+            brow: '眉毛彩妝',
+            eyebrow: '眉毛彩妝',
+            eyebrows: '眉毛彩妝',
+            contour: '修容',
+            contours: '修容',
+            contouring: '修容',
+            highlight: '打亮',
+            highlighter: '打亮',
+            highlighters: '打亮'
+        };
+        const rawCat = String(product.category || product.cat || product.type || '').trim();
+        const tagCat = Array.isArray(product.tags) ? product.tags.find(tag => categoryMap[String(tag).trim()]) : '';
+        const cat = categoryMap[rawCat] || categoryMap[tagCat] || product.cat || '底妝';
+        const price = product.price == null
+            ? ''
+            : (String(product.price).startsWith('NT$') ? String(product.price) : `NT$${product.price}`);
+        return {
+            id: product.id != null ? `api-${rawCat || cat}-${product.id}` : `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            rawId: product.id ?? null,
+            apiType: rawCat || null, // 原始 type slug（例如 lipsticks），呼叫 /api/product/{type}/{id} 這類單品 API 要用
+            cat,
+            name: product.name || '推薦商品',
+            brand: product.brand || '',
+            price,
+            img: product.imageUrl || product.image_url || product.img || '',
+            desc: product.matchReason || product.description || product.desc || '',
+            matchReason: product.matchReason || '',
+            score: product.score ?? null,
+            popularity: product.popularity ?? product.sales ?? product.views ?? product.reviews ?? product.favorite_count ?? product.score ?? 0,
+            salePageId: product.sale_page_id || product.salePageId || null,
+            hex: /^#[0-9a-fA-F]{3,8}$/.test(product.hex || '') ? product.hex : null,
+            tags: product.tags || [],
+            source: 'product-api'
+        };
+    },
+
+    // 單品詳情：只有這支 API 才有真正的 hex/lab/vector，商品清單 API 沒有
+    async getProductDetail(apiType, rawId) {
+        const baseUrl = this.config.services.product.baseUrl;
+        if (!baseUrl || !apiType || rawId == null) return null;
+        try {
+            const res = await fetch(`${baseUrl}/api/product/${encodeURIComponent(apiType)}/${encodeURIComponent(rawId)}`, { cache: 'no-store' });
+            if (!res.ok) return null;
+            const data = await res.json();
+            if (!data?.success || !data.product) return null;
+            const p = data.product;
+            return {
+                hex: /^#[0-9a-fA-F]{3,8}$/.test(p.hex || '') ? p.hex : null,
+                lab: p.lab && typeof p.lab === 'object' ? p.lab : null,
+                vector: Array.isArray(p.vector) ? p.vector : null,
+                salePageId: p.salepage || null
+            };
+        } catch (_) {
+            return null;
+        }
+    },
+
+    // 以色找色：用 12 維色彩向量算相似度，回傳同類型的相似色號商品
+    async getSimilarColorProducts(apiType, rawId) {
+        const baseUrl = this.config.services.product.baseUrl;
+        if (!baseUrl || !apiType || rawId == null) return [];
+        try {
+            const res = await fetch(`${baseUrl}/api/recommend/${encodeURIComponent(apiType)}/${encodeURIComponent(rawId)}`, { cache: 'no-store' });
+            if (!res.ok) return [];
+            const data = await res.json();
+            if (!data?.success || !Array.isArray(data.recommendations)) return [];
+            return data.recommendations.map(rec => ({
+                ...this._normalizeProduct({
+                    id: rec.id, type: rec.type, name: rec.name, brand: rec.brand,
+                    price: rec.price, image_url: rec.image_url, description: rec.desc, hex: rec.hex
+                }),
+                similarity: rec.similarity ?? null
+            })).filter(Boolean);
+        } catch (_) {
+            return [];
+        }
+    },
+
+    // 個人化推薦：依賴組員資料庫的登入 session，登入狀態不確定時優雅地回傳空陣列，不影響其他功能
+    async getPersonalRecommendations() {
+        const baseUrl = this.config.services.product.baseUrl;
+        if (!baseUrl) return [];
+        try {
+            const res = await fetch(`${baseUrl}/api/recommend/personal`, { credentials: 'include', cache: 'no-store' });
+            if (!res.ok) return [];
+            const data = await res.json();
+            if (!data?.success || !Array.isArray(data.recommendations)) return [];
+            return data.recommendations.map(rec => ({
+                ...this._normalizeProduct({
+                    id: rec.id, type: rec.type, name: rec.name, brand: rec.brand,
+                    price: rec.price, image_url: rec.image_url, description: rec.desc, hex: rec.hex
+                }),
+                similarity: rec.similarity ?? null
+            })).filter(Boolean);
+        } catch (_) {
+            return [];
+        }
+    },
+
+    // 伺服器端收藏同步：跨裝置同步用，依賴組員資料庫的登入 session（同上，失敗時不影響本機 Fav）
+    async toggleRemoteFavorite(itemId, itemType) {
+        const baseUrl = this.config.services.product.baseUrl;
+        if (!baseUrl) return null;
+        try {
+            const res = await fetch(`${baseUrl}/api/favorites/toggle`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ item_id: itemId, item_type: itemType })
+            });
+            if (!res.ok) return null;
+            return res.json();
+        } catch (_) {
+            return null;
+        }
+    },
+
+    async listProducts() {
+        const url = this.config.url('product', 'listPath');
+        if (!url) return { products: [] };
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) return { products: [] };
+        const data = await res.json();
+        return {
+            ...data,
+            products: Array.isArray(data.products)
+                ? data.products.map(item => this._normalizeProduct(item)).filter(Boolean)
+                : []
+        };
+    },
+
     async recommendProducts(faceAnalysis, styleId) {
         const url = this.config.url('product', 'recommendPath');
         if (!url) return null;
@@ -203,23 +367,45 @@ const Api = {
                 skinTone: {
                     season:  faceAnalysis?.skinTone?.season || null,
                     level:   faceAnalysis?.skinTone?.level  || null,
-                    lab:     faceAnalysis?.skinTone?.lab    || null,
+                    lab:     this._labToUpperKeys(faceAnalysis?.skinTone?.lab),
                 },
-                lipLab:     faceAnalysis?.lipLab     || null,
+                lipLab:     this._labToUpperKeys(faceAnalysis?.lipLab),
                 style:      styleId || null,
             })
         });
         if (!res.ok) return null;
-        return res.json();
+        const data = await res.json();
+        return {
+            ...data,
+            products: Array.isArray(data.products)
+                ? data.products.map(item => this._normalizeProduct(item)).filter(Boolean)
+                : []
+        };
     },
 
     async login(email, password) {
-        const res = await fetch(this.config.url('memberDatabase', 'loginPath'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password })
-        });
-        if (!res.ok) throw new Error('登入 API 連線失敗');
+        let res;
+        try {
+            res = await fetch(this.config.url('memberDatabase', 'loginPath'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password })
+            });
+        } catch (err) {
+            // 真正連不上後端（DNS/斷線/CORS 擋掉），才算「網路失敗」，允許前端 fallback 成本機模擬
+            const networkErr = new Error('登入 API 連線失敗：' + err.message);
+            networkErr.networkFailure = true;
+            throw networkErr;
+        }
+        if (!res.ok) {
+            // 伺服器有回應，只是明確拒絕（帳密錯誤、帳號停權等）——這不是「連不上」，不能被當成 fallback 條件，否則等於帳密驗證形同虛設
+            let detail = null;
+            try { detail = await res.json(); } catch (_) {}
+            const err = new Error(detail?.error?.message || '帳號或密碼錯誤');
+            err.networkFailure = false;
+            err.status = res.status;
+            throw err;
+        }
         return res.json();
     },
 
@@ -563,108 +749,31 @@ const AnalysisPackage = {
     }
 };
 
-function buildRenderPrompt(faceAnalysis, styleId, suggestion = '') {
-    const styleMap = {
-        softBaddie:     'soft baddie makeup: matte blurred skin, smudged earthy smoky eye, rosy mauve lips',
-        richGirl:       'luxury rich girl makeup: glass skin, muted taupe eyeshadow, nude rosy lip',
-        hongKong:       'Hong Kong retro vintage makeup: defined brows, warm brown smoky eye, brick red lip',
-        koreanClean:    'Korean glass skin no-makeup look: dewy sheer base, soft pink blush, MLBB lip',
-        yandere:        'yandere aesthetic makeup: pale ethereal skin, rosy under-eye blush, blood red bitten lip',
-        japaneseClear:  'Japanese magazine fresh makeup: airy veil skin, soft peach eyeshadow, coral lip',
-        mensPlain:      'minimal men grooming: clean even skin tone, neat natural brows, no-makeup feel',
-    };
-    const faceShapeMap = {
-        '橢圓形臉': 'oval face', '圓形臉': 'round face', '心形臉': 'heart-shaped face',
-        '方形臉': 'square jawline face', '長形臉': 'oblong face', '菱形臉': 'diamond-shaped face',
-        '梯形臉': 'trapezoidal face',
-    };
-    const eyeShapeMap = {
-        '杏仁眼': 'almond-shaped eyes', '圓杏眼': 'round almond eyes', '圓眼': 'round eyes',
-        '桃花眼': 'peach blossom eyes', '丹鳳眼': 'phoenix eyes', '瑞鳳眼': 'upturned phoenix eyes',
-        '細長眼': 'elongated narrow eyes',
-    };
-    const browShapeMap = {
-        '一字眉': 'straight flat brows', '彎月眉': 'arched crescent brows',
-        '落尾眉': 'drooping tail brows', '標準眉': 'natural standard brows',
-    };
-    const noseMap = {
-        '寬鼻': 'wide nose bridge', '窄鼻': 'narrow nose bridge', '標準鼻': 'standard nose',
-    };
-    const lipMap = {
-        '厚唇': 'full thick lips', '薄唇': 'thin lips', 'M型唇': 'M-shaped cupid bow lips',
-        '微笑唇': 'naturally upturned smile lips', '花瓣唇': 'petal-shaped lips',
-    };
-    const skinSeasonMap = {
-        '春季': 'warm ivory spring skin tone', '夏季': 'cool soft summer skin tone',
-        '秋季': 'warm golden autumn skin tone', '冬季': 'cool porcelain winter skin tone',
-    };
+// Ollama 有時候會把「第一部分：中文建議」「第二部分：英文渲染指令」黏在同一串文字裡回傳，
+// 後端拆分不穩定，偶爾會漏拆。這裡在前端再做一層保護：只要偵測到「第二部分」標記，
+// 就把它從中文建議裡切掉，切下來的內容轉去當渲染指令用，不會顯示在建議畫面上。
+function splitOllamaTwoPartSuggestion(rawText) {
+    const text = String(rawText || '');
+    const match = text.match(/(?:^|\n)\s*第[二2]部分[^\n]*\n?/);
+    if (!match) return { suggestion: text.trim(), leakedEnglishPart: '' };
+    const suggestion = text.slice(0, match.index).trim();
+    const leakedEnglishPart = text.slice(match.index + match[0].length).trim();
+    return { suggestion, leakedEnglishPart };
+}
 
-    // 從 Ollama 中文建議提取關鍵妝容詞彙翻成英文
-    const makeupTerms = [
-        // 底妝
-        ['水光底妝','dewy glass skin base'], ['霧面底妝','matte satin foundation'], ['輕透底妝','sheer luminous base'],
-        ['自然底妝','natural skin finish'], ['遮瑕','light coverage concealer'],
-        // 眼妝技法
-        ['煙燻眼','smoky eye'], ['貓眼','cat eye liner'], ['臥蠶妝','puppy eye aegyo-sal'],
-        ['眼線','defined eyeliner'], ['下眼線','lower lash line liner'], ['雙眼皮','double eyelid effect'],
-        ['假睫毛','voluminous lashes'], ['眼尾上揚','lifted outer eye'],
-        // 眼影顏色
-        ['大地色系眼影','earthy tone eyeshadow'], ['棕色眼影','warm brown eyeshadow'],
-        ['玫瑰色眼影','rose eyeshadow'], ['珊瑚色眼影','coral eyeshadow'],
-        ['粉色眼影','soft pink eyeshadow'], ['裸色眼影','nude eyeshadow'],
-        ['橘色眼影','orange eyeshadow'], ['金色眼影','golden shimmer eyeshadow'],
-        ['紫色眼影','purple eyeshadow'], ['酒紅眼影','burgundy eyeshadow'],
-        ['深色眼影','deep dark eyeshadow'], ['亮片眼影','glitter eyeshadow'],
-        // 唇妝
-        ['裸唇','nude lip'], ['玫瑰唇','rose lip'], ['珊瑚唇色','coral lip'],
-        ['磚紅唇','brick red lip'], ['正紅唇','classic red lip'], ['酒紅唇','burgundy lip'],
-        ['橘紅唇','orange-red lip'], ['莓果唇','berry lip'], ['豆沙唇','muted mauve lip'],
-        ['咬唇妝','bitten lip'], ['漸層唇','gradient ombre lip'], ['水光唇','glossy dewy lip'],
-        ['霧面唇','matte lip'], ['自然唇色','natural MLBB lip'],
-        // 腮紅
-        ['橘色腮紅','warm orange blush'], ['粉色腮紅','soft pink blush'],
-        ['玫瑰色腮紅','rose blush'], ['珊瑚腮紅','coral blush'],
-        ['下打腮紅','under-eye blush'], ['蘋果肌','apple cheek blush'],
-        // 眉型
-        ['平眉','straight flat brows'], ['弓形眉','arched brows'], ['自然眉','natural feathery brows'],
-        ['粗眉','bold thick brows'], ['細眉','thin delicate brows'],
-        // 修容
-        ['修容','subtle contouring'], ['打亮','highlight'],
-        // 膚感
-        ['玻璃肌','glass skin'], ['水光肌','dewy skin'], ['霧感肌','matte velvet skin'],
-    ];
+function buildRenderPrompt(faceAnalysis, styleId, suggestion = '', ollamaRenderPromptEn = '') {
+    // 只剩兩塊：Ollama 自己生成的妝容指令 + 我們固定的「不要改人物」鎖定句
+    const makeupInstruction = String(ollamaRenderPromptEn || '').trim() || 'Apply natural everyday makeup.';
 
-    const found = makeupTerms
-        .filter(([zh]) => suggestion.includes(zh))
-        .map(([, en]) => en)
-        .slice(0, 5);
+    const identityLock = [
+        `Do not change this person's identity or appearance.`,
+        `Keep face shape, facial structure, eye shape, nose, lips, skin tone, skin texture, pores, wrinkles, and hair completely identical to the original photo.`,
+        `Keep the exact same pose, posture, body position, head angle, hand position, gesture, and action as the original photo — do not let the person move, turn, or change stance.`,
+        `Keep clothing, background, lighting, camera angle, camera framing, and expression completely identical to the original photo.`,
+        `This must be the exact same person in the exact same pose, only wearing makeup — nothing else about the photo should change.`,
+    ].join(' ');
 
-    const fa = faceAnalysis || {};
-    const faceParts = [
-        faceShapeMap[fa.faceShape],
-        eyeShapeMap[fa.eyeShape],
-        browShapeMap[fa.browShape],
-        noseMap[fa.noseFront],
-        lipMap[fa.lipShape],
-        skinSeasonMap[fa.skinTone?.season],
-        fa.skinTone?.level ? `${fa.skinTone.level} skin brightness` : null,
-    ].filter(Boolean);
-
-    const style = styleMap[styleId] || 'natural everyday makeup';
-    const makeupDetail = [...found.slice(0, 4), style].filter(Boolean).join('; ');
-    const faceDesc = faceParts.length ? `This person has ${faceParts.join(', ')}.` : '';
-
-    return [
-        `Apply makeup to this exact person.`,
-        faceDesc,
-        `Only add the following makeup: ${makeupDetail}.`,
-        `Apply the makeup with a light, sheer hand: soft and subtle, low-intensity pigmentation, natural finish. Avoid heavy, bold, or exaggerated application.`,
-        `Do not change anything else.`,
-        `Keep this person's face shape, eye shape, nose, lips, skin tone, skin texture, pores, wrinkles, hair, body, clothing, background, lighting, camera angle, and expression completely identical to the original photo.`,
-        `This must be the exact same person with the exact same facial expression as the original photo — only the makeup is different, nothing else.`,
-        `Photorealistic result: real skin texture and pores, natural light and shadow, no illustration, no cartoon, no airbrushed or plastic look, no AI-generated artifacts.`,
-        `This must look like the same person wearing makeup, not a different person.`,
-    ].filter(Boolean).join(' ');
+    return `${makeupInstruction} ${identityLock}`;
 }
 
 const AnalysisDraft = {
@@ -720,12 +829,7 @@ const AdminStore = {
     // analysisPro 不放在預設清單裡：一般會員預設沒有 PRO，要 VIP 或後台手動勾選才會拿到
     _defaultPages: ['dashboard', 'analysisBasic', 'style', 'products', 'favorites', 'history', 'compare', 'suggestion', 'profile'],
     _adminEmails: ['admin@decorateme.local', 'admin@decorateme.test'],
-    // 寫死的管理員帳號：memberDatabase 還沒接上，OTP 也發不出去，先用固定帳密繞過註冊/驗證流程
-    _seedAdmin: { email: 'admin@decorateme.local', password: 'decorateme888' },
     _email(email) { return String(email || '').trim().toLowerCase(); },
-    isSeedAdmin(email, password) {
-        return this._email(email) === this._email(this._seedAdmin.email) && password === this._seedAdmin.password;
-    },
     // 暫時邏輯：member_database 串接真正後端驗證後，管理員身分判斷要移到後端，這裡的 email 規則就可以拿掉
     isAdminProfile(profile) {
         const email = this._email(profile?.email);
@@ -736,7 +840,7 @@ const AdminStore = {
     },
     // VIP 會員（管理員視同 VIP，全功能都能用）
     isVip(profile) {
-        return profile?.level === 'VIP會員' || this.isAdminProfile(profile);
+        return ['VIP會員', 'PRO會員'].includes(profile?.level) || this.isAdminProfile(profile);
     },
     // PRO 分析解鎖規則：VIP 身分「或」後台單獨勾選 analysisPro 權限，兩套機制並存、互不打架
     canUseProAnalysis(profile) {
@@ -799,6 +903,8 @@ const AdminStore = {
         try { members = JSON.parse(localStorage.getItem(Auth._membersKey) || '{}'); } catch (_) {}
         members[key] = { ...(members[key] || {}), level };
         localStorage.setItem(Auth._membersKey, JSON.stringify(members));
+        const current = Auth.getProfile();
+        if (this._email(current?.email) === key) Auth.setProfile({ ...current, level });
     },
     isAdmin() {
         return this.isAdminProfile(Auth.getProfile());
@@ -907,16 +1013,364 @@ const AdminStore = {
     }
 };
 
+// ═══ 會員點數 / 打卡 / 主題商店 Demo：正式版可改接會員資料庫 API ═══
+const MemberRewards = {
+    _pointsKey: 'beautyMemberPoints',
+    _ledgerKey: 'beautyPointLedger',
+    _checkinKey: 'beautyDailyCheckins',
+    _themesKey: 'beautyUnlockedThemes',
+    _activeThemeKey: 'beautyActiveTheme',
+    _email(email) {
+        const raw = String(email || Auth.getProfile()?.email || '').trim().toLowerCase();
+        return raw || 'guest';
+    },
+    _today() { return new Date().toISOString().slice(0, 10); },
+    _load(key, fallback) {
+        try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); }
+        catch (_) { return fallback; }
+    },
+    _save(key, value) { localStorage.setItem(key, JSON.stringify(value)); },
+    themes: [
+        { id: 'classic', name: '經典奶茶', cost: 0, swatches: ['#F7F0E6', '#C49A62', '#4A3438'], desc: '預設會員中心主題' },
+        { id: 'rose', name: '玫瑰柔霧', cost: 80, swatches: ['#F8E1E4', '#C56B7B', '#5B3A38'], desc: '柔粉色會員介面' },
+        { id: 'jade', name: '青玉光澤', cost: 120, swatches: ['#E6F0EA', '#6A9A7C', '#30483A'], desc: '清透綠色會員介面' },
+        { id: 'noir', name: '黑金 PRO', cost: 180, swatches: ['#2F2629', '#D9B66F', '#F7EAD2'], desc: '深色高級會員介面' }
+    ],
+    getPoints(email) {
+        const points = this._load(this._pointsKey, {});
+        return Number(points[this._email(email)] || 0);
+    },
+    setPoints(email, value) {
+        const points = this._load(this._pointsKey, {});
+        points[this._email(email)] = Math.max(0, Number(value) || 0);
+        this._save(this._pointsKey, points);
+    },
+    _lifetimeKey: 'beautyMemberLifetimePoints',
+    // 累計「獲得過」的點數，兌換/扣點不會讓它變少，會員等級門檻用這個算，避免花點數被降級
+    getLifetimePoints(email) {
+        const lifetime = this._load(this._lifetimeKey, {});
+        return Number(lifetime[this._email(email)] || 0);
+    },
+    addPoints(email, amount, reason, meta) {
+        const key = this._email(email);
+        const before = this.getPoints(key);
+        const delta = Number(amount) || 0;
+        this.setPoints(key, before + delta);
+        if (delta > 0) {
+            const lifetime = this._load(this._lifetimeKey, {});
+            lifetime[key] = (lifetime[key] || 0) + delta;
+            this._save(this._lifetimeKey, lifetime);
+        }
+        const ledger = this._load(this._ledgerKey, {});
+        const rows = ledger[key] || [];
+        rows.unshift({
+            id: `pt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            delta,
+            balance: this.getPoints(key),
+            reason: reason || '點數異動',
+            meta: meta || null,
+            createdAt: new Date().toISOString()
+        });
+        ledger[key] = rows.slice(0, 60);
+        this._save(this._ledgerKey, ledger);
+        return this.getPoints(key);
+    },
+    ledger(email) {
+        return this._load(this._ledgerKey, {})[this._email(email)] || [];
+    },
+    // 連續簽到獎勵表：達到第 N 天當天額外加碼（跟每日 +10 疊加，不是取代）
+    _streakBonusTable: { 3: 5, 7: 20, 14: 40, 30: 100 },
+    _isYesterday(dateStr) {
+        if (!dateStr) return false;
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        return dateStr === yesterday.toISOString().slice(0, 10);
+    },
+    nextStreakMilestone(streak) {
+        const milestones = Object.keys(this._streakBonusTable).map(Number).sort((a, b) => a - b);
+        return milestones.find(m => m > streak) || null;
+    },
+    checkinStatus(email) {
+        const key = this._email(email);
+        const all = this._load(this._checkinKey, {});
+        const row = all[key] || {};
+        // 中斷一天以上，連續天數要斷掉重算，但這裡只讀狀態不寫入，真正斷開發生在下次 checkin()
+        const streak = row.date === this._today() || this._isYesterday(row.date) ? (row.streak || 0) : 0;
+        return { checkedToday: row.date === this._today(), lastDate: row.date || null, streak };
+    },
+    checkin(email) {
+        const key = this._email(email);
+        if (key === 'guest') return { ok: false, message: '請先登入會員再打卡。' };
+        const all = this._load(this._checkinKey, {});
+        const prev = all[key] || {};
+        if (prev.date === this._today()) return { ok: false, message: '今天已經打卡過了。' };
+        const streak = this._isYesterday(prev.date) ? (prev.streak || 0) + 1 : 1;
+        all[key] = { date: this._today(), updatedAt: new Date().toISOString(), streak };
+        this._save(this._checkinKey, all);
+        let balance = this.addPoints(key, 10, '每日打卡', { type: 'daily_checkin', streak });
+        const bonus = this._streakBonusTable[streak] || 0;
+        if (bonus) balance = this.addPoints(key, bonus, `連續簽到 ${streak} 天獎勵`, { type: 'streak_bonus', streak });
+        return { ok: true, points: 10 + bonus, bonus, streak, balance };
+    },
+    unlockedThemes(email) {
+        const key = this._email(email);
+        const all = this._load(this._themesKey, {});
+        const ids = new Set(['classic', ...(all[key] || [])]);
+        return Array.from(ids);
+    },
+    hasTheme(email, themeId) {
+        return this.unlockedThemes(email).includes(themeId);
+    },
+    redeemTheme(email, themeId) {
+        const key = this._email(email);
+        if (key === 'guest') return { ok: false, message: '請先登入會員再兌換主題。' };
+        const theme = this.themes.find(t => t.id === themeId);
+        if (!theme) return { ok: false, message: '找不到這個主題。' };
+        if (this.hasTheme(key, themeId)) return { ok: true, already: true, message: '你已經擁有這個主題。' };
+        if (this.getPoints(key) < theme.cost) return { ok: false, message: `點數不足，還差 ${theme.cost - this.getPoints(key)} 點。` };
+        const all = this._load(this._themesKey, {});
+        all[key] = [...(all[key] || []), themeId];
+        this._save(this._themesKey, all);
+        this.addPoints(key, -theme.cost, `兌換主題：${theme.name}`, { type: 'redeem_theme', themeId });
+        return { ok: true, theme };
+    },
+    getActiveTheme(email) {
+        const all = this._load(this._activeThemeKey, {});
+        const id = all[this._email(email)] || 'classic';
+        return this.hasTheme(email, id) ? id : 'classic';
+    },
+    setActiveTheme(email, themeId) {
+        if (!this.hasTheme(email, themeId)) return false;
+        const all = this._load(this._activeThemeKey, {});
+        all[this._email(email)] = themeId;
+        this._save(this._activeThemeKey, all);
+        this.applyActiveTheme(email);
+        return true;
+    },
+    applyActiveTheme(email) {
+        if (typeof document === 'undefined') return;
+        const themeId = this.getActiveTheme(email);
+        document.body.dataset.memberTheme = themeId;
+    }
+};
+
+// ═══ 推薦碼 Demo：註冊時自動綁定推薦人，完成註冊即發點（防刷留待正式版再補）══
+const Referral = {
+    _usedKey: 'beautyReferralUsed',
+    _rewardPoints: 50,
+    _email(email) { return String(email || '').trim().toLowerCase(); },
+    _load(key, fallback) {
+        try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); }
+        catch (_) { return fallback; }
+    },
+    _save(key, value) { localStorage.setItem(key, JSON.stringify(value)); },
+    // 推薦碼是 email 的固定雜湊值，不用額外存表，任何人只要知道 email 就能算出同一組碼
+    myCode(email) {
+        const key = this._email(email);
+        if (!key || key === 'guest') return '';
+        let hash = 0;
+        for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+        return hash.toString(36).toUpperCase().padStart(6, '0').slice(-6);
+    },
+    // 反查推薦碼屬於哪個 email：只能在「已知會員」清單裡找，找不到就當作無效碼
+    _knownEmails() {
+        const emails = new Set();
+        try {
+            const members = JSON.parse(localStorage.getItem(Auth._membersKey) || '{}');
+            Object.keys(members).forEach(e => emails.add(e));
+        } catch (_) {}
+        if (typeof AdminStore !== 'undefined') (AdminStore._adminEmails || []).forEach(e => emails.add(e));
+        const current = Auth.getProfile()?.email;
+        if (current) emails.add(this._email(current));
+        return Array.from(emails);
+    },
+    findEmailByCode(code) {
+        const target = String(code || '').trim().toUpperCase();
+        if (!target) return null;
+        return this._knownEmails().find(email => this.myCode(email) === target) || null;
+    },
+    // 新會員完成註冊（OTP 驗證通過）當下呼叫一次；同一個帳號只會生效一次，擋掉重複套用
+    applyReferral(newMemberEmail, code) {
+        const newKey = this._email(newMemberEmail);
+        if (!code || !newKey) return { ok: false };
+        const used = this._load(this._usedKey, {});
+        if (used[newKey]) return { ok: false, message: '此帳號已經使用過推薦碼。' };
+        const referrerEmail = this.findEmailByCode(code);
+        if (!referrerEmail) return { ok: false, message: '推薦碼不存在，註冊仍會成功，但不會發送推薦獎勵。' };
+        if (referrerEmail === newKey) return { ok: false, message: '不能使用自己的推薦碼。' };
+        used[newKey] = { code: String(code).toUpperCase(), referrerEmail, grantedAt: new Date().toISOString() };
+        this._save(this._usedKey, used);
+        MemberRewards.addPoints(referrerEmail, this._rewardPoints, '推薦新會員加入獎勵', { type: 'referral', newMemberEmail: newKey });
+        return { ok: true, referrerEmail };
+    },
+    referredBy(email) { return this._load(this._usedKey, {})[this._email(email)] || null; },
+    countReferrals(email) {
+        const used = this._load(this._usedKey, {});
+        const key = this._email(email);
+        return Object.values(used).filter(row => row.referrerEmail === key).length;
+    }
+};
+
+// ═══ PRO 付費解鎖 Demo：不串正式金流，purchase() 直接視為付款成功並自動開通 ═══
+const ProSubscription = {
+    _subsKey: 'beautyProSubscriptions',
+    _ordersKey: 'beautyProOrders',
+    _email(email) { return String(email || '').trim().toLowerCase(); },
+    _load(key, fallback) {
+        try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); }
+        catch (_) { return fallback; }
+    },
+    _save(key, value) { localStorage.setItem(key, JSON.stringify(value)); },
+    plans: [
+        { id: 'monthly', name: 'PRO 月費方案', days: 30, price: 199 },
+        { id: 'yearly', name: 'PRO 年費方案', days: 365, price: 1990 }
+    ],
+    getSubscription(email) {
+        const row = this._load(this._subsKey, {})[this._email(email)];
+        if (!row) return { active: false, expiresAt: null, daysLeft: 0, plan: null };
+        const expiresAt = new Date(row.expiresAt);
+        const active = expiresAt.getTime() > Date.now();
+        const daysLeft = active ? Math.ceil((expiresAt.getTime() - Date.now()) / 86400000) : 0;
+        return { active, expiresAt: row.expiresAt, daysLeft, plan: row.plan };
+    },
+    orders(email) {
+        return this._load(this._ordersKey, {})[this._email(email)] || [];
+    },
+    // Demo 付款：呼叫這支就直接視為付款成功，沒有真正的金流串接
+    purchase(email, planId) {
+        const key = this._email(email);
+        if (!key || key === 'guest') return { ok: false, message: '請先登入會員再購買。' };
+        const plan = this.plans.find(p => p.id === planId);
+        if (!plan) return { ok: false, message: '找不到這個方案。' };
+
+        const current = this.getSubscription(key);
+        const base = current.active ? new Date(current.expiresAt) : new Date();
+        const expiresAt = new Date(base.getTime() + plan.days * 86400000);
+
+        const subs = this._load(this._subsKey, {});
+        subs[key] = { expiresAt: expiresAt.toISOString(), plan: plan.id };
+        this._save(this._subsKey, subs);
+
+        const orders = this._load(this._ordersKey, {});
+        const rows = orders[key] || [];
+        rows.unshift({
+            id: `order-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            plan: plan.id,
+            planName: plan.name,
+            amount: plan.price,
+            days: plan.days,
+            status: 'paid',
+            createdAt: new Date().toISOString()
+        });
+        orders[key] = rows.slice(0, 30);
+        this._save(this._ordersKey, orders);
+
+        // 自動開通：跟後台手動升級 VIP 並存，不衝突；付費解鎖不需要管理員審核
+        if (typeof AdminStore !== 'undefined') {
+            AdminStore.setMemberLevel(key, 'VIP會員');
+            AdminStore.clearVipRequest(key);
+        }
+        return { ok: true, expiresAt: subs[key].expiresAt, order: rows[0] };
+    },
+    // 到期就把等級退回一般會員；只處理「透過付費開通」的訂閱，沒有訂閱紀錄的帳號（例如後台手動核發的 VIP）不會被這支動到
+    syncExpiry(email) {
+        const key = this._email(email);
+        const sub = this._load(this._subsKey, {})[key];
+        if (!sub) return;
+        if (new Date(sub.expiresAt).getTime() <= Date.now() && typeof AdminStore !== 'undefined') {
+            AdminStore.setMemberLevel(key, '一般會員');
+        }
+    }
+};
+
+// ═══ 會員等級擴充：一般／銀卡／金卡由累計點數自動判定；VIP／管理員仍走原本手動核發那套 ═══
+const MemberTier = {
+    _ladder: [
+        { id: 'general', name: '一般會員', min: 0 },
+        { id: 'silver', name: '銀卡會員', min: 100 },
+        { id: 'gold', name: '金卡會員', min: 300 }
+    ],
+    tierForPoints(lifetimePoints) {
+        let current = this._ladder[0];
+        for (const t of this._ladder) if (lifetimePoints >= t.min) current = t;
+        return current;
+    },
+    nextTier(lifetimePoints) {
+        return this._ladder.find(t => t.min > lifetimePoints) || null;
+    },
+    // VIP／管理員優先於銀金卡顯示，兩套判定互不衝突：VIP 是後台手動核發，銀金卡是點數自動累積
+    describe(profile) {
+        if (typeof AdminStore !== 'undefined') {
+            if (AdminStore.isAdminProfile(profile)) return { id: 'admin', name: '管理員', autoTier: false };
+            if (AdminStore.isVip(profile)) return { id: 'vip', name: 'PRO / VIP 會員', autoTier: false };
+        }
+        const lifetime = MemberRewards.getLifetimePoints(profile?.email);
+        return { ...this.tierForPoints(lifetime), autoTier: true, lifetime };
+    }
+};
+
+// ═══ 任務中心 Demo：新手／每日任務，完成條件沿用既有的分析/收藏/打卡/推薦紀錄 ═══
+const Tasks = {
+    _claimedKey: 'beautyTaskClaims',
+    _email(email) { return String(email || '').trim().toLowerCase(); },
+    _today() { return new Date().toISOString().slice(0, 10); },
+    _load(key, fallback) {
+        try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); }
+        catch (_) { return fallback; }
+    },
+    _save(key, value) { localStorage.setItem(key, JSON.stringify(value)); },
+    list: [
+        { id: 'first_analysis', group: '新手任務', title: '完成第一次臉部分析', reward: 20, daily: false, check: () => (typeof History !== 'undefined' ? History.list().length > 0 : false) },
+        { id: 'first_favorite', group: '新手任務', title: '收藏一件商品', reward: 10, daily: false, check: () => (typeof Fav !== 'undefined' ? Fav.list().length > 0 : false) },
+        { id: 'first_referral', group: '新手任務', title: '成功推薦一位好友', reward: 20, daily: false, check: email => (typeof Referral !== 'undefined' ? Referral.countReferrals(email) > 0 : false) },
+        { id: 'daily_checkin', group: '每日任務', title: '完成今日打卡', reward: 5, daily: true, check: email => MemberRewards.checkinStatus(email).checkedToday }
+    ],
+    _claimKey(taskId, daily) { return daily ? `${taskId}:${this._today()}` : taskId; },
+    claimedMap(email) {
+        const all = this._load(this._claimedKey, {});
+        return all[this._email(email)] || {};
+    },
+    status(email) {
+        const claimed = this.claimedMap(email);
+        return this.list.map(task => {
+            const key = this._claimKey(task.id, task.daily);
+            return { ...task, done: !!task.check(email), claimed: !!claimed[key] };
+        });
+    },
+    claim(email, taskId) {
+        const key = this._email(email);
+        const task = this.list.find(t => t.id === taskId);
+        if (!task) return { ok: false };
+        const claimKey = this._claimKey(taskId, task.daily);
+        const all = this._load(this._claimedKey, {});
+        const mine = all[key] || {};
+        if (mine[claimKey]) return { ok: false, message: '已經領取過了。' };
+        if (!task.check(key)) return { ok: false, message: '尚未完成這個任務。' };
+        mine[claimKey] = true;
+        all[key] = mine;
+        this._save(this._claimedKey, all);
+        const balance = MemberRewards.addPoints(key, task.reward, `任務獎勵：${task.title}`, { type: 'task_reward', taskId });
+        return { ok: true, balance, reward: task.reward };
+    }
+};
+
 // ═══ 收藏模組 ═══
 const Fav = {
     _key: 'beautyFav',
     list()     { return JSON.parse(localStorage.getItem(this._key) || '[]'); },
     has(id)    { return this.list().some(x => String(x) === String(id)); },
-    toggle(id) {
+    // product 是選填的完整商品物件（要有 apiType/rawId 才能同步到組員資料庫）。
+    // 本機收藏永遠是可信來源，遠端同步只是盡力而為，失敗也不影響本機功能。
+    toggle(id, product) {
         const arr = this.list();
         const idx = arr.findIndex(x => String(x) === String(id));
+        const nowFav = idx < 0;
         if (idx >= 0) arr.splice(idx, 1); else arr.push(id);
         localStorage.setItem(this._key, JSON.stringify(arr));
+        if (product?.apiType && product?.rawId != null && typeof Auth !== 'undefined' && Auth.isLoggedIn?.() && typeof Api !== 'undefined' && Api.toggleRemoteFavorite) {
+            Api.toggleRemoteFavorite(product.rawId, product.apiType).catch(() => {});
+        }
+        return nowFav;
     }
 };
 
