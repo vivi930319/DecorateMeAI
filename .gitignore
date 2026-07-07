@@ -4,7 +4,6 @@
 !.gitignore
 !.dockerignore
 !README.md
-!Face_analyzer.py
 !Face_analyzer_BASIC.py
 !Face_analyzer_PRO.py
 !Ollama_suggestion.py

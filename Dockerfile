@@ -20,19 +20,20 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN python -c "\
 import os; os.environ['INSIGHTFACE_HOME']='/app';\
 from insightface.app import FaceAnalysis;\
-app = FaceAnalysis(name='buffalo_l', root='/app/.insightface', providers=['CPUExecutionProvider']);\
-app.prepare(ctx_id=-1, det_size=(640,640));\
+app = FaceAnalysis(name='buffalo_l', root='/app/.insightface', allowed_modules=['detection','landmark_3d_68'], providers=['CPUExecutionProvider']);\
+app.prepare(ctx_id=-1, det_size=(384,384));\
 print('InsightFace models ready at /app/.insightface')"
 
 ENV INSIGHTFACE_HOME=/app
+ENV MAX_IMAGE_SIZE=1024
+ENV INSIGHT_DET_SIZE=384
+ENV INSIGHT_ALLOWED_MODULES=detection,landmark_3d_68
 
 COPY Face_analyzer_BASIC.py .
 COPY Face_analyzer_PRO.py .
 COPY Ollama_suggestion.py .
 COPY dev_server_utils.py .
 COPY cloud_start.py .
-COPY eyelid_model.onnx .
-COPY eyelid_model.onnx.data .
 COPY job_store.py .
 # replicate_render.py 尚未交付；預設 backend image 不直接複製不存在檔案
 

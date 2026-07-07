@@ -40,7 +40,7 @@ def _analyze_side_supplementary(side_bytes: bytes) -> dict | None:
     失敗時靜默回傳 None，不中斷主流程。
     """
     try:
-        analyzer = FaceAnalyzer(side_bytes, strict_angle=False)
+        analyzer = FaceAnalyzer(side_bytes, strict_angle=False, require_insight=False)
         lip_L, lip_a, lip_b, season, shade_label, L, a, b = analyzer.get_skin_color()
         return {
             "膚色": {

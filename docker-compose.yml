@@ -5,13 +5,11 @@ services:
     ports:
       - "8001:8001"
     environment:
-      - MAX_IMAGE_SIZE=2048
+      - MAX_IMAGE_SIZE=1280
+      - INSIGHT_DET_SIZE=512
       - FACE_JOB_TIMEOUT_SECONDS=180
       - FACE_JOB_RETENTION_SECONDS=3600
       - FACE_JOB_MAX_COUNT=200
-    volumes:
-      - ./eyelid_model.onnx:/app/eyelid_model.onnx:ro
-      - ./eyelid_model.onnx.data:/app/eyelid_model.onnx.data:ro
     command: ["uvicorn", "Face_analyzer_BASIC:app", "--host", "0.0.0.0", "--port", "8001"]
     restart: always
 
@@ -21,13 +19,11 @@ services:
     ports:
       - "8002:8002"
     environment:
-      - MAX_IMAGE_SIZE=2048
+      - MAX_IMAGE_SIZE=1280
+      - INSIGHT_DET_SIZE=512
       - FACE_JOB_TIMEOUT_SECONDS=180
       - FACE_JOB_RETENTION_SECONDS=3600
       - FACE_JOB_MAX_COUNT=200
-    volumes:
-      - ./eyelid_model.onnx:/app/eyelid_model.onnx:ro
-      - ./eyelid_model.onnx.data:/app/eyelid_model.onnx.data:ro
     command: ["uvicorn", "Face_analyzer_PRO:app", "--host", "0.0.0.0", "--port", "8002"]
     restart: always
 
@@ -45,12 +41,14 @@ services:
 
   replicate_render:
     profiles: ["optional"]
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile.render
     container_name: replicate_render
     ports:
       - "8020:8020"
     environment:
       - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
-    command: ["uvicorn", "replicate_render:app", "--host", "0.0.0.0", "--port", "8020"]
+    command: ["uvicorn", "replicate_render_api:app", "--host", "0.0.0.0", "--port", "8020"]
     restart: always
     # 組員尚未交付 replicate_render.py 前，不會隨預設 docker compose up 啟動

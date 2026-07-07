@@ -2,12 +2,10 @@ import cv2
 import numpy as np
 import mediapipe as mp
 import json
-import onnxruntime as ort
 import os
 import uuid
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-from pathlib import Path
 from fastapi import BackgroundTasks, FastAPI, UploadFile, HTTPException, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -18,6 +16,9 @@ from dev_server_utils import get_cors_origins, run_dev_server
 
 @asynccontextmanager
 async def _lifespan(_app):
+    # 預熱模型，避免第一個請求額外承擔模型初始化時間。
+    _get_insight()
+    _get_face_mesh()
     yield
     global _face_mesh
     if _face_mesh is not None:
@@ -38,16 +39,22 @@ app.add_middleware(
 import job_store
 
 _insight_app = None
-_eyelid_sess = None
 _face_mesh = None
 _COL = "face_jobs_basic"
 
-MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "2048"))
+MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1024"))
+INSIGHT_DET_SIZE = int(os.getenv("INSIGHT_DET_SIZE", "384"))
+INSIGHT_ALLOWED_MODULES = [
+    module.strip()
+    for module in os.getenv("INSIGHT_ALLOWED_MODULES", "detection,landmark_3d_68").split(",")
+    if module.strip()
+]
 FACE_JOB_TIMEOUT_SECONDS = int(os.getenv("FACE_JOB_TIMEOUT_SECONDS", "180"))
 
 # ─── 亮度增強 ───────────────────────────────────────────────────────────────
 BRIGHTNESS_LOW_THRESHOLD = float(os.getenv("BRIGHTNESS_LOW_THRESHOLD", "70"))
 BRIGHTNESS_GAMMA         = float(os.getenv("BRIGHTNESS_GAMMA", "0.65"))
+_BRIGHTNESS_LUT = np.array([int(255 * (i / 255.0) ** BRIGHTNESS_GAMMA) for i in range(256)], dtype=np.uint8)
 
 
 def _measure_brightness(frame_bgr: np.ndarray) -> float:
@@ -59,7 +66,7 @@ def _enhance_brightness_auto(frame_bgr: np.ndarray, gamma: float = 0.65) -> np.n
     """Gamma 校正提亮中間調（皮膚色調），自然不過曝；gamma < 1 越小越亮。"""
     lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
-    lut = np.array([int(255 * (i / 255.0) ** gamma) for i in range(256)], dtype=np.uint8)
+    lut = _BRIGHTNESS_LUT if abs(gamma - BRIGHTNESS_GAMMA) < 1e-6 else np.array([int(255 * (i / 255.0) ** gamma) for i in range(256)], dtype=np.uint8)
     return cv2.cvtColor(cv2.merge([lut[l], a, b]), cv2.COLOR_LAB2BGR)
 
 
@@ -78,19 +85,11 @@ def _get_insight():
         _insight_app = InsightFaceApp(
             name="buffalo_l",
             root="/app/.insightface",
+            allowed_modules=INSIGHT_ALLOWED_MODULES or None,
             providers=["CPUExecutionProvider"]
         )
-        _insight_app.prepare(ctx_id=-1, det_size=(640, 640))
+        _insight_app.prepare(ctx_id=-1, det_size=(INSIGHT_DET_SIZE, INSIGHT_DET_SIZE))
     return _insight_app
-
-def _get_eyelid_sess():
-    global _eyelid_sess
-    if _eyelid_sess is None:
-        onnx_path = Path("eyelid_model.onnx")
-        if not onnx_path.exists():
-            return None
-        _eyelid_sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
-    return _eyelid_sess
 
 
 def _get_face_mesh():
@@ -340,7 +339,7 @@ class FaceAnalyzer:
     YAW_LIMIT   = 18.0
     PITCH_LIMIT = 15.0
 
-    def __init__(self, image_input, strict_angle=True, brightness_mode="none", brightness_level=1.0):
+    def __init__(self, image_input, strict_angle=True, brightness_mode="none", brightness_level=1.0, require_insight=True):
         if isinstance(image_input, str):
             self.frame = cv2.imdecode(np.fromfile(image_input, dtype=np.uint8), cv2.IMREAD_COLOR)
         elif isinstance(image_input, bytes):
@@ -362,38 +361,41 @@ class FaceAnalyzer:
             )
 
         # ── 亮度增強（在特徵分析前處理）──────────────────────────────────
-        original_brightness = _measure_brightness(self.frame)
         self.brightness_info: dict = {
             "mode": brightness_mode,
-            "originalBrightness": round(original_brightness, 1),
+            "originalBrightness": None,
             "enhanced": False,
             "enhancedBrightness": None,
         }
-        if brightness_mode == "auto" and original_brightness < BRIGHTNESS_LOW_THRESHOLD:
-            self.frame = _enhance_brightness_auto(self.frame, BRIGHTNESS_GAMMA)
-            self.brightness_info["enhanced"] = True
-            self.brightness_info["enhancedBrightness"] = round(_measure_brightness(self.frame), 1)
-        elif brightness_mode == "manual" and abs(brightness_level - 1.0) > 0.01:
-            self.frame = _enhance_brightness_manual(self.frame, brightness_level)
-            self.brightness_info["enhanced"] = True
-            self.brightness_info["enhancedBrightness"] = round(_measure_brightness(self.frame), 1)
+        if brightness_mode != "none":
+            original_brightness = _measure_brightness(self.frame)
+            self.brightness_info["originalBrightness"] = round(original_brightness, 1)
+            if brightness_mode == "auto" and original_brightness < BRIGHTNESS_LOW_THRESHOLD:
+                self.frame = _enhance_brightness_auto(self.frame, BRIGHTNESS_GAMMA)
+                self.brightness_info["enhanced"] = True
+                self.brightness_info["enhancedBrightness"] = round(_measure_brightness(self.frame), 1)
+            elif brightness_mode == "manual" and abs(brightness_level - 1.0) > 0.01:
+                self.frame = _enhance_brightness_manual(self.frame, brightness_level)
+                self.brightness_info["enhanced"] = True
+                self.brightness_info["enhancedBrightness"] = round(_measure_brightness(self.frame), 1)
 
         self.h, self.w, _ = self.frame.shape
         rgb = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
 
         # Step 1：InsightFace 正臉驗證
-        insight = _get_insight()
-        faces   = insight.get(rgb)
+        if require_insight:
+            insight = _get_insight()
+            faces = insight.get(rgb)
 
-        if not faces:
-            raise ValueError("沒偵測到人臉")
+            if not faces:
+                raise ValueError("沒偵測到人臉")
 
-        face = max(faces, key=lambda f: f.det_score)
+            face = max(faces, key=lambda f: f.det_score)
 
-        if strict_angle and hasattr(face, "pose") and face.pose is not None:
-            yaw, pitch = float(face.pose[0]), float(face.pose[1])
-            if abs(yaw) > self.YAW_LIMIT or abs(pitch) > self.PITCH_LIMIT:
-                raise ValueError(f"請上傳正面照片（偏角：yaw={yaw:.1f}°, pitch={pitch:.1f}°）")
+            if strict_angle and hasattr(face, "pose") and face.pose is not None:
+                yaw, pitch = float(face.pose[0]), float(face.pose[1])
+                if abs(yaw) > self.YAW_LIMIT or abs(pitch) > self.PITCH_LIMIT:
+                    raise ValueError(f"請上傳正面照片（偏角：yaw={yaw:.1f}°, pitch={pitch:.1f}°）")
 
         # Step 2：MediaPipe FaceMesh
         mp_face_mesh = mp.solutions.face_mesh
@@ -406,13 +408,14 @@ class FaceAnalyzer:
         self.lm             = results.multi_face_landmarks[0].landmark
         self.face_landmarks = results.multi_face_landmarks[0]
         self.mp_face_mesh   = mp_face_mesh
-        self.eyelid_sess    = _get_eyelid_sess()
+        self._pts_cache = np.array(
+            [[int(lm.x * self.w), int(lm.y * self.h)] for lm in self.lm],
+            dtype=np.int32,
+        )
+        self._landmark_indices_cache = {}
 
     def _pt(self, index):
-        return np.array([
-            int(self.lm[index].x * self.w),
-            int(self.lm[index].y * self.h)
-        ])
+        return self._pts_cache[index].copy()
 
     def _dist(self, a, b):
         return float(np.linalg.norm(self._pt(a) - self._pt(b)))
@@ -420,6 +423,10 @@ class FaceAnalyzer:
     def _collect_landmark_indices(self, connections_or_indices):
         if not connections_or_indices:
             return []
+        cache_key = id(connections_or_indices)
+        cached = self._landmark_indices_cache.get(cache_key)
+        if cached is not None:
+            return cached
         seq = list(connections_or_indices)
         if not seq:
             return []
@@ -428,8 +435,11 @@ class FaceAnalyzer:
             s = set()
             for a, b in seq:
                 s.add(int(a)); s.add(int(b))
-            return sorted(s)
-        return sorted({int(x) for x in seq})
+            result = sorted(s)
+        else:
+            result = sorted({int(x) for x in seq})
+        self._landmark_indices_cache[cache_key] = result
+        return result
 
     def _align_points_by_eyes(self, points_xy):
         left_eye  = self._pt(33).astype(np.float32)
@@ -575,7 +585,7 @@ class FaceAnalyzer:
         if tail_ratio > 0.100:                               return "落尾眉"
         if arch_ratio < 0.115 and abs(tail_ratio) < 0.080: return "一字眉"
         if arch_ratio > 0.155 and abs(tail_ratio) < 0.115: return "彎月眉"
-        return "標準眉"
+        return "彎月眉"
 
     def _eye_side_metrics(self, inner_idx, outer_idx, upper_ids, lower_idx, brow_ids):
         inner = self._pt(inner_idx).astype(np.float32)
@@ -620,7 +630,7 @@ class FaceAnalyzer:
         if ratio_to_face < 0.12: return "瞇縫眼"
         elif angle > 6: return "下垂眼"
         elif ear > 0.40: return "圓眼"
-        elif ear < 0.20: return "瑞鳳眼"
+        elif ear < 0.20: return "細長眼"
         elif ear <= 0.24:
             return "丹鳳眼" if angle < -2 else "細長眼"
         elif ear <= 0.35:
@@ -628,7 +638,7 @@ class FaceAnalyzer:
             elif angle > 3: return "下垂眼"
             else: return "杏仁眼"
         else:
-            return "桃花眼" if angle < -1 else "圓杏眼"
+            return "桃花眼" if angle < -1 else "圓眼"
 
     def get_nose_shape(self):
         nose_width  = self._dist(129, 358)

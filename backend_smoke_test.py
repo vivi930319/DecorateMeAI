@@ -7,22 +7,40 @@ from pathlib import Path
 import requests
 
 
-def pick_default_image():
+def iter_smoke_image_candidates():
     auto_labels = Path("data/basic_usable/auto_labels_basic.csv")
     if auto_labels.exists():
         with auto_labels.open(encoding="utf-8", newline="") as f:
             for row in csv.DictReader(f):
                 if row.get("status") == "ok":
-                    candidate = Path("data/basic_usable/raw_images") / row["image_id"]
-                    if candidate.exists():
-                        return candidate
+                    yield Path("data/basic_usable/raw_images") / row["image_id"]
 
-    raw_dir = Path("data/basic_usable/raw_images")
-    first = next(raw_dir.glob("*.jpg"), None) if raw_dir.exists() else None
-    if first:
-        return first
+    preferred_dirs = [
+        Path("data/basic_usable/raw_images"),
+        Path("data/asian_faces/DCleaning_tool/raw_images"),
+        Path("data"),
+    ]
+    for base_dir in preferred_dirs:
+        if not base_dir.exists():
+            continue
+        pattern = "**/*.jpg" if base_dir.name != "raw_images" else "*.jpg"
+        for candidate in base_dir.glob(pattern):
+            yield candidate
 
-    raise SystemExit("No smoke-test image found. Run select_basic_usable_images.py first.")
+
+def pick_default_image():
+    seen = set()
+    for candidate in iter_smoke_image_candidates():
+        candidate = candidate.resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if candidate.exists():
+            return candidate
+
+    raise SystemExit(
+        "No smoke-test image found. Checked data/basic_usable/raw_images and fallback image folders."
+    )
 
 
 def request_json(method, url, **kwargs):

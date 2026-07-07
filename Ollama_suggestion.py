@@ -102,24 +102,24 @@ MAKEUP_DATABASE = {
 }
 
 # 英文 enum → 中文標籤對照
-MAP_FACE   = {"oval": "鵝蛋臉", "round": "圓形臉", "square": "方形臉", "oblong": "長形臉", "heart": "心形臉", "diamond": "菱形臉", "trapezoid": "正三角臉", "unknown": "未知臉型"}
-MAP_BROW   = {"straight": "一字眉", "curved": "彎月眉", "drooping_tail": "落尾眉", "standard": "標準眉", "unknown": "未知眉型"}
-MAP_EYE    = {"narrow": "長眼", "downturned": "長眼", "round": "圓眼", "slender_phoenix": "長眼", "phoenix": "長眼", "slender": "長眼", "peach_blossom": "雙眼皮", "almond": "雙眼皮", "round_almond": "雙眼皮", "unknown": "未知眼型"}
+MAP_FACE   = {"oval": "鵝蛋臉", "round": "圓形臉", "square": "方形臉", "oblong": "長形臉", "heart": "心形臉", "unknown": "未知臉型"}
+MAP_BROW   = {"straight": "一字眉", "curved": "彎月眉", "drooping_tail": "落尾眉", "unknown": "未知眉型"}
+MAP_EYE    = {"narrow": "瞇縫眼", "downturned": "下垂眼", "round": "圓眼", "phoenix": "丹鳳眼", "slender": "細長眼", "peach_blossom": "桃花眼", "almond": "杏仁眼", "unknown": "未知眼型"}
 MAP_NOSE   = {"standard": "直鼻", "wide": "寬鼻", "narrow": "短鼻", "unknown": "未知鼻型"}
 MAP_LIP    = {"full": "厚唇", "thin": "薄唇", "m_shape": "M型唇", "smile": "微笑唇", "petal": "花瓣唇", "unknown": "未知唇型"}
 MAP_SEASON = {"spring": "春季型", "summer": "夏季型", "autumn": "秋季型", "winter": "冬季型", "unknown": "未知膚色屬性"}
 
 # 特徵描述邏輯
-FACE_LOGIC     = {"鵝蛋臉": "比例完美流暢", "菱形臉": "顴骨突出有神", "圓形臉": "雙頰圓潤飽滿", "長形臉": "比例顯得成熟", "正三角臉": "下顎線條分明", "方形臉": "輪廓英氣硬朗", "心形臉": "下巴精緻纖細", "梯形臉": "下顎厚實穩重"}
-EYEBROW_LOGIC  = {"標準眉": "眉頭眼頭垂直", "一字眉": "眉型平直無邪", "彎月眉": "弧度圓潤溫柔", "落尾眉": "眉尾優雅下落"}
-EYE_LOGIC      = {"圓眼": "眼神圓潤清澈", "長眼": "眼神嫵媚狹長", "雙眼皮": "褶皺層次分明", "單眼皮": "眼皮厚實有神"}
+FACE_LOGIC     = {"鵝蛋臉": "比例完美流暢", "圓形臉": "雙頰圓潤飽滿", "長形臉": "比例顯得成熟", "方形臉": "輪廓英氣硬朗", "心形臉": "下巴精緻纖細"}
+EYEBROW_LOGIC  = {"一字眉": "眉型平直無邪", "彎月眉": "弧度圓潤溫柔", "落尾眉": "眉尾優雅下落"}
+EYE_LOGIC      = {"圓眼": "眼神圓潤清澈", "瞇縫眼": "眼型細窄有神", "下垂眼": "眼尾柔和下垂", "丹鳳眼": "眼尾俐落上揚", "細長眼": "眼神嫵媚狹長", "桃花眼": "眼神柔亮有魅力", "杏仁眼": "眼型均衡柔和"}
 NOSE_LOGIC     = {"直鼻": "鼻樑高挺筆直", "寬鼻": "鼻翼大氣飽滿", "短鼻": "山根小巧精緻", "未知鼻型": "依照鼻型自然修飾"}
 LIP_LOGIC      = {"M型唇": "唇峰稜角立體", "花瓣唇": "唇形飽滿豐盈", "微笑唇": "嘴角天然上揚", "厚唇": "唇部感性飽滿", "薄唇": "唇線俐落清秀"}
 SKIN_LOGIC     = {"春季型": "適合亮暖黃系", "夏季型": "適合冷粉灰系", "秋季型": "適合深邃暖米", "冬季型": "適合對比冷青"}
 
 # 特定技法
-FACE_METHOD    = {"鵝蛋臉": "輕掃下顎線；腮紅斜上暈染；打亮額頭鼻尖。", "菱形臉": "修容顴骨最高點；太陽穴打亮；腮紅銜接修容。", "圓形臉": "從耳際斜下刷修容；腮紅調高拉提；打亮下巴。", "長形臉": "修容額頭頂與下巴底；腮紅橫平刷；打亮眼下。", "正三角臉": "加強下顎陰影；太陽穴打亮擴張；腮紅斜向延伸。", "方形臉": "下頷稜角圓潤修容；蘋果肌打圈腮紅；打亮中心。", "心形臉": "顴骨下方向內收縮；下巴尖端打亮；腮紅斜掃顴骨。", "梯形臉": "下顎兩側收縮；額頭太陽穴打亮；腮紅向斜上延伸。"}
-EYEBROW_METHOD = {"標準眉": "順原生毛流填補空隙。", "一字眉": "縮短中庭，眉尾拉平。", "彎月眉": "圓潤轉折，修飾硬朗。", "落尾眉": "眉峰後移，輕輕下撇。"}
+FACE_METHOD    = {"鵝蛋臉": "輕掃下顎線；腮紅斜上暈染；打亮額頭鼻尖。", "圓形臉": "從耳際斜下刷修容；腮紅調高拉提；打亮下巴。", "長形臉": "修容額頭頂與下巴底；腮紅橫平刷；打亮眼下。", "方形臉": "下頷稜角圓潤修容；蘋果肌打圈腮紅；打亮中心。", "心形臉": "顴骨下方向內收縮；下巴尖端打亮；腮紅斜掃顴骨。"}
+EYEBROW_METHOD = {"一字眉": "縮短中庭，眉尾拉平。", "彎月眉": "圓潤轉折，修飾硬朗。", "落尾眉": "眉峰後移，輕輕下撇。"}
 
 
 # ═══ Request Schema ═══
@@ -218,41 +218,6 @@ def build_prompt(payload: SuggestRequest) -> str:
 5. 總字數限制在 350 ~ 1050 中文字。"""
 
 
-def build_render_prompt(payload: SuggestRequest) -> str:
-    face_analysis = _extract_face_analysis(payload)
-    style = payload.style or "日常自然妝"
-    user_note = payload.userNote or "None"
-
-    style_cfg = MAKEUP_DATABASE.get(style, MAKEUP_DATABASE["日常自然妝"])
-
-    face_shape_raw = _pick(face_analysis, "faceShape", "臉型")
-    brow_shape_raw = _pick(face_analysis, "browShape", "眉型")
-    eye_shape_raw  = _pick(face_analysis, "eyeShape",  "眼型")
-    skin_tone      = face_analysis.get("skinTone") or face_analysis.get("膚色") or {}
-    season_raw     = skin_tone.get("season") if isinstance(skin_tone, dict) else None
-
-    return f"""You write concise English makeup instructions for an image rendering model.
-
-Requested makeup style: {style}
-User preference: {user_note}
-Face shape: {face_shape_raw}
-Brow shape: {brow_shape_raw}
-Eye shape: {eye_shape_raw}
-Skin tone: {season_raw or str(skin_tone)}
-
-Style foundation: {style_cfg['base_detail']}
-Style eye technique: {style_cfg['eye_layers']}
-Style blush placement: {style_cfg['blush_detail']}
-Style lip finish: {style_cfg['lip_detail']}
-
-Output one English rendering prompt only. Describe foundation finish, blush placement and color,
-eyebrow styling, eyeshadow color and placement, eyeliner, eyelashes, and lip color and finish.
-Preserve the person's identity, facial structure, skin tone, hairstyle, pose, camera angle,
-background, and lighting. Apply realistic makeup only. Do not mention analysis labels, explanations,
-medical claims, brands, JSON, markdown, or negative commentary. Do not invent side-profile features.
-You MUST end with this exact sentence: "Preserve the person's identity, facial structure, skin tone, hairstyle, pose, camera angle, background, and lighting. Change makeup only.\""""
-
-
 def call_ollama(prompt: str, model: str) -> str:
     response = requests.post(
         f"{OLLAMA_BASE_URL}/api/generate",
@@ -311,7 +276,6 @@ async def suggest(payload: SuggestRequest):
     prompt = build_prompt(payload)
     try:
         suggestion = call_ollama(prompt, model)
-        render_prompt_en = call_ollama(build_render_prompt(payload), model)
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -331,7 +295,6 @@ async def suggest(payload: SuggestRequest):
         "fallbackUsed": False,
         "createdAt": _now_iso(),
         "suggestion": suggestion,
-        "renderPromptEn": render_prompt_en,
     }
 
 
@@ -378,13 +341,7 @@ async def suggest_stream(payload: SuggestRequest):
             except Exception:
                 continue
 
-        # 取得 render prompt（不串流，結束後一次帶回）
-        try:
-            render_prompt_en = call_ollama(build_render_prompt(payload), model)
-        except Exception:
-            render_prompt_en = ""
-
-        yield f"data: {json.dumps({'done': True, 'suggestion': full_text.strip(), 'renderPromptEn': render_prompt_en, 'model': model})}\n\n"
+        yield f"data: {json.dumps({'done': True, 'suggestion': full_text.strip(), 'model': model})}\n\n"
 
     return StreamingResponse(
         generate(),

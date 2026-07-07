@@ -3,3 +3,4 @@ uvicorn[standard]
 replicate
 requests
 python-dotenv
+google-cloud-storage

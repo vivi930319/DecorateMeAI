@@ -19,7 +19,7 @@ FEATURES = {
 def safe_name(value: str) -> str:
     text = (value or "").strip()
     if not text:
-        return "_unknown"
+        return ""
     return (
         text.replace("/", "_")
         .replace("\\", "_")
@@ -53,6 +53,9 @@ def organize_rows(input_csv: Path, output_root: Path, copy_mode: str) -> tuple[i
 
             for feature, column in FEATURES.items():
                 label = safe_name(row.get(column, ""))
+                if not label:
+                    skipped += 1
+                    continue
                 target_dir = output_root / feature / label
                 target_dir.mkdir(parents=True, exist_ok=True)
                 target_file = target_dir / source.name
@@ -82,6 +85,8 @@ def write_manifests(input_csv: Path, output_root: Path) -> None:
             file_path = row.get("file_path", "")
             for feature, column in FEATURES.items():
                 label = safe_name(row.get(column, ""))
+                if not label:
+                    continue
                 grouped_path = output_root / feature / label / image_id
                 rows_by_feature[feature].append([image_id, file_path, label, str(grouped_path)])
 

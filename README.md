@@ -4,6 +4,293 @@
 
 ---
 
+## 2026-07-07 自動檢查摘要
+
+- 重新讀取本機 `README.md`、`TODO.txt` 與前端 `C:\Users\isach\OneDrive\桌面\web_frontend\README.md`。
+- 後端程式碼與設定檔目前仍包含：
+  - BASIC / PRO `/health`
+  - BASIC / PRO `/v1/face/analyze/*`
+  - BASIC / PRO 非同步 jobs API
+  - BASIC `/v1/face/pose`
+  - `Dockerfile` / `.dockerignore` / `docker-compose.yml`
+- `.venv` 重新檢查：
+  - `python -m py_compile Face_analyzer_BASIC.py Face_analyzer_PRO.py Ollama_suggestion.py backend_smoke_test.py ollama_suggestion_smoke_test.py analysis_package.py replicate_render.py replicate_render_api.py job_store.py`：通過
+  - `python -m pip check`：通過
+- 前端重新檢查：
+  - `node --check js/api.js js/data.js js/router.js`：通過
+  - `node frontend_smoke_check.js`：通過
+- `docker compose config`：可正常解析
+- 今日 live / cloud 狀態：
+  - `GET http://127.0.0.1:8001/health`：連線被拒
+  - `GET http://127.0.0.1:8002/health`：連線被拒
+  - `GET http://127.0.0.1:8010/health`：連線被拒
+  - `GET https://face-basic-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://face-pro-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://replicate-render-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://morning-deeper-kick-medium.trycloudflare.com/health`：`403 Forbidden`
+  - `POST https://morning-deeper-kick-medium.trycloudflare.com/suggest`（帶 `X-API-Key`）可到達，最小測試回 `422 VALIDATION_ERROR`
+  - `GET https://div-oct-deposits-acer.trycloudflare.com/health`：DNS 無法解析
+- 這次確認到的主要差異：
+  - `replicate-render` Cloud Run `/health` 現在已回 `storage_configured=true`，永久 `afterImageUrl` 的部署阻塞已解除
+  - 前端 `memberDatabaseUrl` / `productUrl` 目前指向同一個 Cloudflare URL，但今天 DNS 無法解析，不能再視為可用整合基準
+  - `textSuggestion` 仍不是整條服務掛掉，而是公開 `/health` 需要 API key；實際 `/suggest` 仍可到達
+  - `job_store.py` 仍是 Firestore 共用 job store；正式多 worker / queue 仍未落地
+- 目前新的主要阻塞：
+  - 本機 `8001` / `8002` / `8010` 今天都沒有常駐服務，展示前必須先用 `.venv` 或 `start_full_stack_local.bat` 重啟
+  - `memberDatabase` / `product` Cloudflare URL 今天 DNS 無法解析，會員 / 商品正式串接暫時無法驗證
+  - `textSuggestion` 對外 `/health` 目前不可直接拿來當 team health check 基準，文件需改成以 `/suggest` 實測或請組員補開放健康檢查
+  - Redis / Celery / RQ 或其他正式 queue 方案仍未落地
+- 目前版本控制狀態：
+  - `PythonProject12` 是 Git repo，今天沒有新的未追蹤專案檔；未提交變更包含 `.dockerignore`、`.gitignore`、`Dockerfile`、`Face_analyzer_BASIC.py`、`Face_analyzer_PRO.py`、`Ollama_suggestion.py`、`README.md`、`analysis_package.py`、`backend_smoke_test.py`、`docker-compose.yml`、`job_store.py`、`replicate_render.py`、`requirements.txt` 等
+  - 前端 `web_frontend` 是獨立 Git repo，目前已有未提交修改 `config.local.js`、`css/main.css`、`firebase.json`、`js/api.js`、`js/router.js`、`pages/profile.html`，今天沒有新的未追蹤重要專案檔
+
+---
+
+## 2026-07-06 自動檢查摘要
+
+- 重新讀取本機 `README.md`、`TODO.txt` 與前端 `C:\Users\isach\OneDrive\桌面\web_frontend\README.md`。
+- 後端程式碼與設定檔目前仍包含：
+  - BASIC / PRO `/health`
+  - BASIC / PRO `/v1/face/analyze/*`
+  - BASIC / PRO 非同步 jobs API
+  - BASIC `/v1/face/pose`
+  - `Dockerfile` / `.dockerignore` / `docker-compose.yml`
+- `.venv` 重新檢查：
+  - `python -m py_compile Face_analyzer_BASIC.py Face_analyzer_PRO.py Ollama_suggestion.py backend_smoke_test.py ollama_suggestion_smoke_test.py analysis_package.py replicate_render.py replicate_render_api.py job_store.py`：通過
+  - `python -m pip check`：通過
+- 前端重新檢查：
+  - `node --check js/api.js js/data.js js/router.js`：通過
+  - `node frontend_smoke_check.js`：通過
+- 今日 live / cloud 狀態：
+  - `GET http://127.0.0.1:8001/health`：連線被拒
+  - `GET http://127.0.0.1:8002/health`：連線被拒
+  - `GET http://127.0.0.1:8010/health`：連線被拒
+  - `GET https://face-basic-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://face-pro-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://replicate-render-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://morning-deeper-kick-medium.trycloudflare.com/health`：`403 Forbidden`
+  - `POST https://morning-deeper-kick-medium.trycloudflare.com/suggest`（帶 `X-API-Key`）可到達，最小測試回 `422 VALIDATION_ERROR`
+  - `GET https://div-oct-deposits-acer.trycloudflare.com/health`：`200 OK`
+  - `POST https://div-oct-deposits-acer.trycloudflare.com/recommend-products`：`400`，但已證明 endpoint 存在
+  - `POST https://div-oct-deposits-acer.trycloudflare.com/recommend-products`（帶 LAB 測試資料）：`200 OK`，可回傳商品推薦清單
+  - `POST https://div-oct-deposits-acer.trycloudflare.com/api/login`：`400 MISSING_CREDENTIALS`
+- 這次確認到的主要差異：
+  - 前端目前的 `memberDatabaseUrl` / `productUrl` 已不是失效網址，兩者都指向同一個可達的 Cloudflare service
+  - 前端已補上商品 API 回傳格式轉換：`imageUrl/category/brand/matchReason` 會轉成商品卡需要的 `img/cat/brand/desc`
+  - 商品頁會優先顯示 `analysisPackage.recommendations.products`；若分析後尚未存到推薦商品，進商品頁時會自動補打一輪 `/recommend-products` 再刷新
+  - 商品頁已移除前端內建假商品 demo fallback；商品 API 尚未回來時顯示載入骨架，API 無資料時顯示「目前沒有商品資料」
+  - 首頁「為你精選」也改用商品 API 真資料；若商品有熱門度欄位就排序，沒有熱門度時直接取 API 回傳前幾筆
+  - `textSuggestion` 目前不是 DNS 失敗，而是 `/health` 對外回 `403`；真正的 `/suggest` 仍可到達
+  - `docker compose config` 可正常解析，`Dockerfile`、`.dockerignore`、`docker-compose.yml` 目前一致
+  - `job_store.py` 仍是 Firestore 共用 job store；正式多 worker / queue 仍未落地
+- 目前新的主要阻塞：
+  - 本機 `8001` / `8002` / `8010` 今天都沒有常駐服務，展示前必須先用 `.venv` 或 `start_full_stack_local.bat` 重啟
+  - `textSuggestion` 對外 `/health` 目前不可直接拿來當 team health check 基準，文件需改成以 `/suggest` 實測或請組員補開放健康檢查
+  - `replicate-render` 目前 `storage_configured=false`，與「必須回保存後永久 `afterImageUrl`」的整合規則仍有落差
+  - Redis / Celery / RQ 或其他正式 queue 方案仍未落地
+- 目前版本控制狀態：
+  - `PythonProject12` 是 Git repo，今天沒有新的未追蹤專案檔；未提交變更包含 `.dockerignore`、`.gitignore`、`Dockerfile`、`Face_analyzer_BASIC.py`、`Face_analyzer_PRO.py`、`Ollama_suggestion.py`、`README.md`、`analysis_package.py`、`backend_smoke_test.py`、`docker-compose.yml`、`job_store.py`、`replicate_render.py`、`requirements.txt` 等
+  - 前端 `web_frontend` 是獨立 Git repo，目前已有未提交修改 `config.local.js`、`css/main.css`、`js/api.js`、`js/router.js`、`pages/profile.html`
+
+---
+
+## 2026-07-05 自動檢查摘要
+
+- 重新讀取本機 `README.md`、`TODO.txt` 與前端 `C:\Users\isach\OneDrive\桌面\web_frontend\README.md`。
+- 後端程式碼與設定檔目前仍包含：
+  - BASIC / PRO `/health`
+  - BASIC / PRO `/v1/face/analyze/*`
+  - BASIC / PRO 非同步 jobs API
+  - BASIC `/v1/face/pose`
+- `.venv` 重新檢查：
+  - `python -m py_compile Face_analyzer_BASIC.py Face_analyzer_PRO.py Ollama_suggestion.py backend_smoke_test.py ollama_suggestion_smoke_test.py analysis_package.py replicate_render.py replicate_render_api.py job_store.py`：通過
+  - `python -m pip check`：通過
+- 前端重新檢查：
+  - `node --check js/api.js js/data.js js/router.js`：通過
+  - `node frontend_smoke_check.js`：通過
+- 今日 live / cloud 狀態：
+  - `GET http://127.0.0.1:8001/health`：連線被拒
+  - `GET http://127.0.0.1:8002/health`：連線被拒
+  - `GET http://127.0.0.1:8010/health`：連線被拒
+  - `GET https://face-basic-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://face-pro-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://replicate-render-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://ohio-gender-success-excerpt.trycloudflare.com/health`：DNS 無法解析
+  - `GET https://vegetation-arguments-final-inspiration.trycloudflare.com/health`：DNS 無法解析
+- 這次確認到的主要差異：
+  - `backend_smoke_test.py` 已補成會自動從現有資料夾挑 smoke-test 圖片；今天重新執行後會先打到 BASIC `POST /v1/face/pose`，再因本機 `8001` 沒有常駐服務而失敗
+  - `job_store.py` 仍是 Firestore 共用 job store；若沒有 Firestore 套件或憑證，才會退回記憶體 store
+  - 前端 `config.local.js` 目前的 `textSuggestion` Cloudflare URL 今天也已 DNS 無法解析，`memberDatabase` 預設 fallback 仍是失效網址
+  - `replicate-render` Cloud Run `/health` 仍明確回 `storage_configured=false`
+- 目前新的主要阻塞：
+  - 本機 `8001` / `8002` / `8010` 今天都沒有常駐服務，展示前必須先用 `.venv` 或 `start_full_stack_local.bat` 重啟
+  - `memberDatabase` 仍指向失效 Cloudflare URL，今天仍 DNS 無法解析
+  - `product` 正式 API 仍未填入前端設定
+  - `replicate-render` 目前 `storage_configured=false`，與「必須回保存後永久 `afterImageUrl`」的整合規則仍有落差
+- 目前版本控制狀態：
+  - `PythonProject12` 是 Git repo，今天沒有新的未追蹤專案檔；未提交變更包含 `.dockerignore`、`.gitignore`、`Dockerfile`、`Face_analyzer_BASIC.py`、`Ollama_suggestion.py`、`README.md`、`analysis_package.py`、`docker-compose.yml`、`job_store.py`、`requirements.txt` 等
+  - 前端 `web_frontend` 是獨立 Git repo，目前未追蹤的重要檔案是 `membership_flowchart.drawio`
+
+---
+
+## 2026-07-03 自動檢查摘要
+
+- 重新讀取本機 `README.md`、`TODO.txt` 與前端 `C:\Users\isach\OneDrive\桌面\web_frontend\README.md`。
+- 後端程式碼與設定檔目前仍包含：
+  - BASIC / PRO `/health`
+  - BASIC / PRO `/v1/face/analyze/*`
+  - BASIC / PRO 非同步 jobs API
+  - BASIC `/v1/face/pose`
+- `.venv` 重新檢查：
+  - `python -m py_compile Face_analyzer_BASIC.py Face_analyzer_PRO.py Ollama_suggestion.py backend_smoke_test.py ollama_suggestion_smoke_test.py analysis_package.py replicate_render.py replicate_render_api.py job_store.py`：通過
+  - `python -m pip check`：通過
+- 前端重新檢查：
+  - `node --check js/api.js js/data.js js/router.js`：通過
+  - `node frontend_smoke_check.js`：通過
+- 今日 live / cloud 狀態：
+  - `GET http://127.0.0.1:8001/health`：連線被拒
+  - `GET http://127.0.0.1:8002/health`：連線被拒
+  - `GET http://127.0.0.1:8010/health`：連線被拒
+  - `GET https://face-basic-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://face-pro-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://replicate-render-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://ohio-gender-success-excerpt.trycloudflare.com/health`：`200 OK`
+  - `GET https://vegetation-arguments-final-inspiration.trycloudflare.com/health`：DNS 無法解析
+- 這次確認到的主要差異：
+  - `backend_smoke_test.py` 今天失敗在 BASIC `POST /v1/face/pose`，原因是本機 `8001` 沒有常駐服務，不是 Python 語法或套件衝突
+  - `job_store.py` 仍是 Firestore 共用 job store；舊文件裡的純記憶體 `_jobs dict` 不應再當現況
+  - 前端 `config.local.js` 已改用新的 `textSuggestion` Cloudflare URL，而且今天 `/health` 可達；README 舊的 DNS 失敗描述已過時
+  - `replicate-render` Cloud Run `/health` 仍明確回 `storage_configured=false`
+- 目前新的主要阻塞：
+  - 本機 `8001` / `8002` / `8010` 今天都沒有常駐服務，展示前必須先用 `.venv` 或 `start_full_stack_local.bat` 重啟，再重跑 `backend_smoke_test.py`
+  - `memberDatabase` 仍指向失效 Cloudflare URL，今天仍 DNS 無法解析
+  - `product` 正式 API 仍未填入前端設定
+  - `replicate-render` 目前 `storage_configured=false`，與「必須回保存後永久 `afterImageUrl`」的整合規則仍有落差
+- 目前版本控制狀態：
+  - `PythonProject12` 是 Git repo，今天沒有新的未追蹤專案檔；既有未提交變更仍包含本機 `README.md` 與 `docker-compose.yml`
+  - 前端 `web_frontend` 是獨立 Git repo，目前有已修改的 `config.local.js`、`js/api.js` 與未追蹤 `dev_server.py`
+
+---
+
+## 2026-07-01 自動檢查摘要
+
+- 重新讀取本機 `README.md`、`TODO.txt` 與前端 `C:\Users\isach\OneDrive\桌面\web_frontend\README.md`。
+- 後端程式碼與設定檔目前仍包含：
+  - BASIC / PRO `/health`
+  - BASIC / PRO `/v1/face/analyze/*`
+  - BASIC / PRO 非同步 jobs API
+  - BASIC `/v1/face/pose`
+- `.venv` 重新檢查：
+  - `python -m py_compile Face_analyzer_BASIC.py Face_analyzer_PRO.py Ollama_suggestion.py backend_smoke_test.py ollama_suggestion_smoke_test.py analysis_package.py replicate_render.py replicate_render_api.py job_store.py`：通過
+  - `python -m pip check`：通過
+  - `python ollama_suggestion_smoke_test.py`：通過
+  - `python backend_smoke_test.py`：通過
+- 前端重新檢查：
+  - `node --check js/api.js js/data.js js/router.js`：通過
+  - `node frontend_smoke_check.js`：通過
+- 今日 live / cloud 狀態：
+  - `GET http://127.0.0.1:8001/health`：`200 OK`
+  - `GET http://127.0.0.1:8002/health`：`200 OK`
+  - `GET http://127.0.0.1:8010/health`：`200 OK`
+  - `GET https://face-basic-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://face-pro-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://replicate-render-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://router-identification-compatible-tolerance.trycloudflare.com/health`：DNS 無法解析
+- 這次確認到的主要差異：
+  - `backend_smoke_test.py` 今天再次完整通過，BASIC `/v1/face/pose`、BASIC / PRO sync 與 async result 都仍符合目前 contract
+  - BASIC / PRO async job 狀態仍是 `job_store.py` 的 Firestore 共用實作，不是舊文件裡提到的純記憶體 `_jobs dict`
+  - `start_full_stack_local.bat` 已固定使用 `.venv\Scripts\python.exe`，但目前監聽 `8001`、`8002`、`8010` 的實際進程仍是系統 Python `C:\Users\isach\AppData\Local\Programs\Python\Python310\python.exe`
+  - `replicate-render` Cloud Run `/health` 仍明確回 `storage_configured=false`
+- 目前新的主要阻塞：
+  - 本機三支 live port 雖可用，但目前不是由 `.venv` 進程提供服務；展示前仍應先清掉舊進程，再用 `start_full_stack_local.bat` 或 `.venv` 明確重啟
+  - Suggestion `/health` 仍回報本機 Ollama `127.0.0.1:11434` 不可達，而且 `fallbackEnabled=false`
+  - 前端 `config.local.js` 目前指向的 `textSuggestion` Cloudflare URL 今天已 DNS 無法解析，展示時不能把它當可用正式位址
+  - 前端 `memberDatabase` 仍指向 `https://vegetation-arguments-final-inspiration.trycloudflare.com/health`，今天仍 DNS 無法解析
+  - `replicate-render` 目前 `storage_configured=false`，與「必須回保存後永久 `afterImageUrl`」的整合規則仍有落差
+- 目前版本控制狀態：
+  - `PythonProject12` 是 Git repo，本輪除了本機文件外，既有未提交變更還包含 `docker-compose.yml`
+  - 前端 `web_frontend` 是獨立 Git repo，目前只有 `dev_server.py` 未追蹤
+
+---
+
+## 2026-06-30 自動檢查摘要
+
+- 重新讀取本機 `README.md`、`TODO.txt` 與前端 `C:\Users\isach\OneDrive\桌面\web_frontend\README.md`。
+- 後端程式碼與設定檔目前仍包含：
+  - BASIC / PRO `/health`
+  - BASIC / PRO `/v1/face/analyze/*`
+  - BASIC / PRO 非同步 jobs API
+  - BASIC `/v1/face/pose`
+- `.venv` 重新檢查：
+  - `python -m py_compile Face_analyzer_BASIC.py Face_analyzer_PRO.py Ollama_suggestion.py backend_smoke_test.py ollama_suggestion_smoke_test.py analysis_package.py`：通過
+  - `python -m pip check`：通過
+  - `python ollama_suggestion_smoke_test.py`：通過
+  - `python backend_smoke_test.py`：通過
+- 前端重新檢查：
+  - `node --check js/api.js js/data.js js/router.js`：通過
+  - `node frontend_smoke_check.js`：通過
+- 今日 live / cloud 狀態：
+  - `GET http://127.0.0.1:8001/health`：`200 OK`
+  - `GET http://127.0.0.1:8002/health`：`200 OK`
+  - `GET http://127.0.0.1:8010/health`：`200 OK`
+  - `GET https://face-basic-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://face-pro-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://replicate-render-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://router-identification-compatible-tolerance.trycloudflare.com/health`：`200 OK`
+- 這次確認到的主要差異：
+  - BASIC / PRO async job 狀態已不是純記憶體 `_jobs dict`，目前改由 `job_store.py` 使用 Firestore 共用
+  - 監聽中的 `8001`、`8002`、`8010` 進程仍是系統 Python `C:\Users\isach\AppData\Local\Programs\Python\Python310\python.exe`，不是 `.venv\Scripts\python.exe`
+  - `replicate-render` Cloud Run `/health` 仍明確回 `storage_configured=false`
+- 目前新的主要阻塞：
+  - PRO live async job 在 `/health` 正常時仍可能卡住或回應過慢，展示前要先清掉舊進程並用 `.venv` 重啟後重跑 `backend_smoke_test.py`
+  - Suggestion `/health` 仍回報本機 Ollama `127.0.0.1:11434` 不可達，而且 `fallbackEnabled=false`
+  - 前端 `memberDatabase` 仍指向 `https://vegetation-arguments-final-inspiration.trycloudflare.com/health`，今天仍 DNS 無法解析
+  - `replicate-render` 目前 `storage_configured=false`，與「必須回保存後永久 `afterImageUrl`」的整合規則仍有落差
+- 目前版本控制狀態：
+  - `PythonProject12` 是 Git repo，本輪有本機文件更新
+  - 前端 `web_frontend` 是獨立 Git repo，目前只有 `dev_server.py` 未追蹤
+
+---
+
+## 2026-06-29 自動檢查摘要
+
+- 重新讀取本機 `README.md`、`TODO.txt` 與前端 `C:\Users\isach\OneDrive\桌面\web_frontend\README.md`。
+- 後端程式碼與設定檔目前仍包含：
+  - BASIC / PRO `/health`
+  - BASIC / PRO `/v1/face/analyze/*`
+  - BASIC / PRO 非同步 jobs API
+  - BASIC `/v1/face/pose`
+- `.venv` 重新檢查：
+  - `python -m py_compile Face_analyzer_BASIC.py Face_analyzer_PRO.py Ollama_suggestion.py backend_smoke_test.py ollama_suggestion_smoke_test.py analysis_package.py`：通過
+  - `python -m pip check`：通過
+  - `python backend_smoke_test.py`：通過
+  - `python ollama_suggestion_smoke_test.py`：通過
+- 前端重新檢查：
+  - `node --check js/api.js js/data.js js/router.js`：通過
+  - `node frontend_smoke_check.js`：通過
+- 今日 live / cloud 狀態：
+  - `GET http://127.0.0.1:8001/health`：`200 OK`
+  - `GET http://127.0.0.1:8002/health`：`200 OK`
+  - `GET http://127.0.0.1:8010/health`：`200 OK`
+  - `GET https://face-basic-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://face-pro-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://replicate-render-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://router-identification-compatible-tolerance.trycloudflare.com/health`：`200 OK`
+- 這次確認到的主要差異：
+  - 前端 `config.local.js` 的 `textSuggestionUrl` 已不是舊的 `possibly-polyester-bargains-transcript`，目前新 Cloudflare URL 可正常回 `200 OK`
+  - `replicate-render` Cloud Run `/health` 已可達，但明確回 `storage_configured=false`
+  - `docker-compose.yml` 的 optional `replicate_render` 已對齊 `Dockerfile.render`，目前會啟動 `replicate_render_api:app`
+- 目前新的主要阻塞：
+  - 監聽中的 `8001`、`8002`、`8010` 進程仍是系統 Python `C:\Users\isach\AppData\Local\Programs\Python\Python310\python.exe`，不是 `.venv\Scripts\python.exe`
+  - Suggestion `/health` 仍回報本機 Ollama `127.0.0.1:11434` 不可達，而且 `fallbackEnabled=false`
+  - 前端 `memberDatabase` 仍指向 `https://vegetation-arguments-final-inspiration.trycloudflare.com/health`，今天仍 DNS 無法解析
+  - `replicate-render` 目前 `storage_configured=false`，與「必須回保存後永久 `afterImageUrl`」的整合規則仍有落差
+- 目前版本控制狀態：
+  - `PythonProject12` 是 Git repo，本輪只有本機文件更新
+  - 前端 `web_frontend` 是獨立 Git repo，目前只有 `dev_server.py` 未追蹤
+
+---
+
 ## 專題剩餘工作與時程估算
 
 ### 目前完成狀態
@@ -62,6 +349,51 @@
 
 樂觀（BASIC/PRO 只是小改）：約 **4 天**。
 保守（分析邏輯需重新校正）：約 **1 週**。
+
+### 會員功能升級規劃與進度（2026-07-05）
+
+目標是把目前的會員功能從「登入 / VIP 手動升級 / 本機資料」升級成完整的會員成長系統：簽到、點數、推薦、點數商店、任務中心、會員等級、PRO 付費解鎖與後台管理。
+
+#### 預估工期
+
+| 版本 | 範圍 | 預估時間 | 備註 |
+|------|------|---------|------|
+| Demo / 原型版 | 前端流程 + localStorage / mock API，可展示主要體驗，付費用模擬付款 | 3–5 天 | 不串正式金流、不做嚴格防作弊 |
+| 可串接後端版 | API contract、資料表、前後端串接、後台審核，付款仍可先用 demo 訂單 | 6–9 天 | 需要會員資料庫服務可用 |
+| 正式上線版 | 正式金流、自動開通、訂單狀態、權限驗證、防刷推薦、完整測試 | 10–15 天 | 若金流審核或外部 API 卡住會再增加 |
+
+目前如果「全部都做，但付費功能只做 demo」，建議估 **1 週左右** 比較合理；若要正式金流上線版，仍建議抓 **2 週左右** 比較穩。
+
+#### 功能進度
+
+| 功能 | 狀態 | 目前進度 | 下一步 |
+|------|------|---------|--------|
+| 會員登入 / 註冊 | 🟡 部分完成 | `memberDatabaseUrl` 已可達（`purpose-violin-conflict-header`，2026-07-07 更新；tunnel 網址組員重啟就會換），`/api/login` 錯誤處理正常；但 `/api/register` 一直回傳 `400 MISSING_FIELDS`，懷疑跟網頁表單的 `csrf_token` 有關 | 已整理問題訊息要問組員，回覆前無法實測完整註冊流程 |
+| 管理員升級 VIP | 🟡 部分完成 | 前端後台已有介面概念；`MEMBER_DATABASE_INTEGRATION_SPEC.md` 第 3 節已定義 `PATCH /api/members/{email}`（level/status） | 後端補正式權限與資料庫寫入 |
+| 每日打卡集點 | 🟢 Demo 完成 | `MemberRewards.checkin()`（`js/api.js`），前端 localStorage，每日 +10 點 | 之後接資料庫時把邏輯搬到後端 |
+| 連續簽到獎勵 | 🟢 Demo 完成（2026-07-06） | 加入 streak 天數追蹤，3/7/14/30 天分別加碼 +5/+20/+40/+100，中斷自動歸零重算 | 之後接資料庫時把邏輯搬到後端 |
+| 點數紀錄 ledger | 🟢 Demo 完成 + 🟡 正式規格已發 | 前端 `MemberRewards.ledger()` 已可用；`MEMBER_DATABASE_INTEGRATION_SPEC.md` 第 8 節已定義正式 `points_transactions` 表 | 等資料庫組員回覆或建好 |
+| 推薦碼 / 推薦集點 | 🟢 Demo 完成（2026-07-06） | 註冊時自動綁定推薦人（`Referral.applyReferral()`），完成註冊即發 50 點給推薦人，會員中心顯示專屬推薦碼與已推薦人數 | 之後接資料庫時把邏輯搬到後端 |
+| 推薦防刷 | ⚪ 未開始 | 目前只擋「自己推薦自己」和「同帳號重複套用」 | 擋重複帳號、同裝置異常等更嚴格的防刷規則 |
+| 點數換主題 | ⚪ 未開始 | 目前只有流程圖設計 | 建立 redeem API、主題商品表與已解鎖清單 |
+| 點數商店擴充 | ⚪ 未開始 | 尚未實作 | 增加頭像框、背景、功能券、PRO 折扣券 |
+| 任務中心 | 🟢 Demo 完成（2026-07-06） | `Tasks` 模組（`js/api.js`）：新手任務（首次分析/收藏/推薦）+ 每日打卡任務，防重複領取 | 之後可再加每週任務；接資料庫時把邏輯搬到後端 |
+| 會員等級 | 🟢 Demo 完成（2026-07-06） | `MemberTier` 模組：用累計點數自動判定一般/銀卡(100)/金卡(300)，VIP/管理員仍走後台手動核發 | 之後接資料庫時把邏輯搬到後端 |
+| PRO 付費解鎖 Demo | 🟢 Demo 完成（2026-07-06） | `ProSubscription` 模組：月費/年費方案，`purchase()` 直接視為付款成功並自動開通 VIP，訂單寫入 `beautyProOrders` | 之後接資料庫時把邏輯搬到後端，接正式金流 |
+| PRO 到期 / 續費 Demo | 🟢 Demo 完成（2026-07-06） | 到期日追蹤、續約會從現有到期日累加天數、`syncExpiry()` 到期自動退回一般會員 | 之後接資料庫時把邏輯搬到後端 |
+| 後台會員管理 | 🟡 規格已發 | `MEMBER_DATABASE_INTEGRATION_SPEC.md` 第 7 節已補 role / allowedPages 擴充、操作紀錄 audit-log、商品管理 CRUD 規格 | 等資料庫組員回覆或建好，之後接回 `AdminStore` |
+
+**2026-07-06 補充**：`member_database` 服務已上線，`config.local.js` 的 `memberDatabaseUrl` 與 `productUrl` 都指向這個網址（同一服務同時處理會員與商品推薦）。網址是 Cloudflare Tunnel，組員重啟後會變動，目前最新是 `https://purpose-violin-conflict-header.trycloudflare.com`（2026-07-07 更新；`threshold-commitments-jet-gabriel`、`div-oct-deposits-acer` 均已失效）。已針對後台管理與點數系統的缺口，在 `MEMBER_DATABASE_INTEGRATION_SPEC.md` 補上第 7、8 節規格書。目前卡點是 `/api/register` 一直回傳 `MISSING_FIELDS`，懷疑要 `csrf_token`，已整理問題待問組員，回覆前這條線的後續整合都無法真正實測。
+
+#### 建議開發順序
+
+1. **會員資料庫正式串接**：先讓登入、註冊、會員等級可真正同步。
+2. **點數 ledger**：所有打卡、推薦、兌換、任務都依賴這個核心。
+3. **每日打卡 + 連續簽到**：最快讓會員中心變得有互動。
+4. **點數商店 + 主題解鎖**：讓點數有用途。
+5. **推薦碼自動化**：先做自動綁定與發點，再補防刷。
+6. **會員等級 + 任務中心**：把留存玩法整理成一套成長系統。
+7. **PRO 付費 Demo 與自動開通**：先做模擬付款成功、訂單紀錄、PRO 權限開通；正式金流等展示後再接。
 
 ### 使用者完整流程（目標）
 
@@ -579,13 +911,13 @@ branch: Isa
 - PRO 多角度欄位預留
 - BASIC / PRO `GET /health`
 - BASIC / PRO `/v1/face/analyze/*` 相容入口
-- `MAX_IMAGE_SIZE` 可用環境變數調整，預設 2048
+- `MAX_IMAGE_SIZE` 可用環境變數調整，預設 1280；`INSIGHT_DET_SIZE` 預設 512
 - `numpy<2` 與 `mediapipe==0.10.21` 相容設定
 - BASIC / PRO 非同步 jobs API 第一版
 - BASIC / PRO jobs 已加入 timeout、保留時間與記憶體數量上限
 - Docker Compose 同時啟動 BASIC 與 PRO 服務
 - Docker Compose 可啟動 Ollama 文字建議本機轉接服務
-- ONNX 模型檔以 Docker volume 掛載
+- BASIC/PRO 主流程不再需要 ONNX 眼皮模型
 - CelebA 第一批 BASIC 可用正面圖已篩選 500 張，輸出到 `data/basic_usable/raw_images`
 - BASIC 眉型與臉型分類閾值校正（修正彎月眉 94% 偏差、長形臉幾乎不出現的問題）
 - 臉部對稱性分析（`get_face_symmetry()`）：score / eyeOpenRatio / noseDeviation / mouthSymmetry
@@ -609,7 +941,6 @@ backend_smoke_test.py           BASIC / PRO health、同步、非同步 API 測�
 ollama_suggestion_smoke_test.py 文字建議 prompt / fallback 測試
 
 # 以下為舊版原型，不在 Docker 內，僅供參考
-Face_analyzer.py                中間版原型（有 eyelid 邏輯、無 jobs API）
 Face_test.py                    最舊原型（無 InsightFace）
 ```
 
@@ -643,7 +974,7 @@ python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 ```
 
-> 請一律用 `.venv` 內的 Python 啟動，不要用系統 Python，否則可能缺 `uvicorn`、`onnxruntime`、`insightface`。
+> 請一律用 `.venv` 內的 Python 啟動，不要用系統 Python，否則可能缺 `uvicorn`、`insightface`。
 
 ## 快速啟動
 
@@ -1025,9 +1356,9 @@ subject_0001/
 - Replicate 圖片渲染耗時
 - 多人同時請求可能佔滿 worker
 
-目前非同步 Job API 使用 FastAPI `BackgroundTasks` 與記憶體 job 狀態，後續正式部署時再升級 Redis + Celery/RQ。
+目前非同步 Job API 使用 FastAPI `BackgroundTasks` 觸發背景工作，job 狀態由 `job_store.py` 寫入 Firestore 共用；若缺少 Firestore 環境才退回單機記憶體描述已不再符合目前主流程。後續正式部署時仍規劃再升級 Redis + Celery/RQ。
 
-目前記憶體 job 狀態已有展示階段保護：
+目前 job 狀態已有展示階段保護：
 
 ```txt
 FACE_JOB_TIMEOUT_SECONDS=180       單一 job 超過 180 秒會標成 failed / timeout
@@ -1089,7 +1420,7 @@ upload (queued, 0%)
 
 ```txt
 第 1 階段：保留同步 API，加 timeout / fallback（已保留同步 API）
-第 2 階段：FastAPI BackgroundTasks + 記憶體 job 狀態（已完成第一版，已加 timeout / cleanup）
+第 2 階段：FastAPI BackgroundTasks + Firestore 共用 job 狀態（已完成第一版，已加 timeout / cleanup）
 第 3 階段：Redis + Celery/RQ + PostgreSQL job 狀態
 第 4 階段：圖片改 object storage，API 只傳 imageId/url
 ```
@@ -1097,7 +1428,7 @@ upload (queued, 0%)
 ### 多執行緒 / 多 worker TODO
 
 - 優先在後端處理多 worker 或背景工作佇列，而不是只放在前端。
-- 臉部分析主要耗時點在 `FaceAnalyzer(...).export_json()`，包含 OpenCV、MediaPipe、InsightFace、ONNXRuntime 等 CPU/模型推論流程。
+- 臉部分析主要耗時點在 `FaceAnalyzer(...).export_json()`，包含 OpenCV、MediaPipe、InsightFace 等 CPU/模型推論流程。
 - 展示階段可先用同步 API；多人同時上傳或分析時間變長時，改成 job queue 流程，避免單一請求長時間佔住 API worker。
 - 可評估啟動多個 Uvicorn workers，或導入 Redis + Celery/RQ，把臉部分析任務交給背景 worker 執行。
 - 前端 Web Worker 主要用來改善圖片壓縮、轉檔、資料包封裝時的 UI 卡頓；真正影響分析吞吐量的部分仍以後端 worker 為主。
@@ -1323,96 +1654,17 @@ Outputs:
 
 第一階段不急著訓練完整模型，先用標註資料校正目前規則法與 threshold。
 
-## BASIC 分類閾值校正紀錄
+## BASIC 分類標準
 
-### 問題發現（分析 basic_face_analysis.csv，3400 筆，2333 筆成功）
+目前 BASIC 訓練資料以 `Group_yun` 為唯一標準，資料位於 `data/basic_full/grouped`。
 
-| 特徵 | 修正前分佈 | 問題 |
-|------|-----------|------|
-| 眉型 - 彎月眉 | 94.5% | 幾乎所有人都被判為彎月眉 |
-| 眉型 - 標準眉 | 2.1% | 應為最大宗，實際卻幾乎沒有 |
-| 眉型 - 一字眉 | 0% | 完全消失 |
-| 臉型 - 長形臉 | 0.1%（3 筆） | 幾乎不出現 |
-| 臉型 - 心形臉/菱形臉/梯形臉 | 0% | 條件過嚴，從未觸發 |
+- 臉型：心形臉、方形臉、長形臉、圓形臉、鵝蛋臉
+- 眉型：一字眉、落尾眉、彎月眉
+- 眼型：下垂眼、丹鳳眼、杏仁眼、桃花眼、細長眼、圓眼、瞇縫眼
+- 鼻型：窄鼻、寬鼻、標準鼻
+- 嘴型：花瓣唇、厚唇、微笑唇、薄唇、M型唇
 
-### 根本原因
-
-**眉型（`get_eyebrow_shape`）**
-
-`arch_ratio` = `(眉頭眉尾連線中點y − 眉峰y) / 眉毛寬度`
-
-只要眉毛有任何弓形，`arch_ratio` 就很容易超過舊閾值 `0.120`，導致彎月眉條件幾乎把所有人吃掉，標準眉與一字眉幾乎無法出現。
-
-**臉型（`get_face_shape`）**
-
-長形臉有兩條判斷路徑，閾值不一致：
-
-- `all_similar` 分支（額頭、顴骨、下顎寬度相近）：`hw >= 1.35` ← 合理
-- **顴骨最寬分支（最常見）**：`hw >= 1.45` ← 比其他分支嚴 0.10，導致絕大多數臉型進到這裡後判不出長形臉
-
-### 修正內容（`Face_analyzer_BASIC.py`，原始檔備份為 `.bak`）
-
-**眉型閾值**
-
-```python
-# 修正前
-if abs(tail_ratio) < 0.045 and arch_ratio < 0.080: return "一字眉"
-if tail_ratio > 0.105:                             return "落尾眉"
-if arch_ratio > 0.120 and abs(tail_ratio) < 0.110:  return "彎月眉"
-return "標準眉"
-
-# 修正後
-if abs(tail_ratio) < 0.060 and arch_ratio < 0.095: return "一字眉"
-if tail_ratio > 0.100:                            return "落尾眉"
-if arch_ratio > 0.175 and abs(tail_ratio) < 0.115: return "彎月眉"
-return "標準眉"
-```
-
-| 規則 | 閾值變化 | 目的 |
-|------|---------|------|
-| 一字眉 | `0.045/0.080` → `0.060/0.095` | 放寬，讓平眉可進入 |
-| 落尾眉 | `> 0.105` → `> 0.100` | 微調 |
-| **彎月眉** | **`arch > 0.120`** → **`arch > 0.175`** | 核心修正，只有明顯高弓眉才判 |
-
-**臉型閾值**
-
-```python
-# 修正前（顴骨最寬分支）
-if hw >= 1.45: return "長形臉"
-
-# 修正後（與 all_similar 分支統一）
-if hw >= 1.35: return "長形臉"
-```
-
-### 第二次校正（2026-06-19）—— 更換 Metric
-
-第一次校正（閾值 0.120→0.175）無效，原因是：MediaPipe landmark **105/334** 是眉骨脊（brow ridge, 骨骼），不是實際眉毛的弓頂。對 CelebA 100 張量測發現，舊 arch_ratio 全部落在 [0.23, 0.31]，任何閾值都無法有效分類。
-
-改用眉毛輪廓 5 點（`46/53/52/65/55` 左眉，`276/283/282/295/285` 右眉）的最高點（min-y）作為弓頂，並重新校正閾值：
-
-```python
-# 修正後（眉毛輪廓最高點 + 校正閾值）
-if tail_ratio > 0.100:                               return "落尾眉"
-if arch_ratio < 0.115 and abs(tail_ratio) < 0.080: return "一字眉"
-if arch_ratio > 0.155 and abs(tail_ratio) < 0.115: return "彎月眉"
-return "標準眉"
-```
-
-新 arch_ratio 分佈（CelebA 100 張）：[0.096, 0.192]，mean=0.139，Q1=0.125，Q3=0.154。
-
-| 類別 | 閾值 | 預估比例 |
-|------|------|------|
-| 落尾眉 | tail > 0.100 | ~7% |
-| 一字眉 | arch < 0.115 & abs(tail) < 0.080 | ~12% |
-| 彎月眉 | arch > 0.155 & abs(tail) < 0.115 | ~22% |
-| 標準眉 | 其餘 | ~60% |
-
-**長形臉（hw）**：CelebA 對齊圖 hw 全部在 [1.08, 1.25]，長形臉閾值 1.35 超出資料集範圍，是資料集裁切對齊造成的特性，不修改閾值（閾值對真實使用者照片仍有效）。
-
-### 預期效果
-
-- 彎月眉從 ~95% 降至 ~22%，標準眉恢復為最大宗（~60%），一字眉恢復出現（~12%）
-- 長形臉因 CelebA 資料集特性維持 0%，不影響生產環境判斷
+舊分類、空分類與眼皮分類不再使用；資料整理工具遇到空標籤會跳過，不會建立 `_unknown`。
 
 ## 後續優先順序
 

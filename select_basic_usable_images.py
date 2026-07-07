@@ -132,11 +132,11 @@ def main():
             writer.writerow([image_id, split])
 
     label_map = {
-        "face_shape": ["round", "oval", "square", "long", "heart"],
-        "nose_front": ["standard", "wide", "narrow"],
-        "eye_shape": ["almond", "round", "peach_blossom", "monolid", "double_eyelid"],
-        "brow_shape": ["straight", "curved", "willow", "arched"],
-        "lip_shape": ["standard", "smile", "thick", "thin", "flower_petal"],
+        "face_shape": ["心形臉", "方形臉", "長形臉", "圓形臉", "鵝蛋臉"],
+        "nose_front": ["窄鼻", "寬鼻", "標準鼻"],
+        "eye_shape": ["下垂眼", "丹鳳眼", "杏仁眼", "桃花眼", "細長眼", "圓眼", "瞇縫眼"],
+        "brow_shape": ["一字眉", "落尾眉", "彎月眉"],
+        "lip_shape": ["花瓣唇", "厚唇", "微笑唇", "薄唇", "M型唇"],
         "quality": ["good", "ok", "bad"],
     }
     label_map_json.write_text(json.dumps(label_map, ensure_ascii=False, indent=2), encoding="utf-8")

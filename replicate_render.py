@@ -3,6 +3,7 @@ import base64
 import json
 import mimetypes
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,33 @@ load_dotenv()
 REPLICATE_MODEL = "black-forest-labs/flux-kontext-pro"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
+# guidance 越高，模型越會嚴格照 prompt 做（包含「保留原本人物/姿勢」的指令），但太高可能出現偽影；
+# 3.5 測完還是偏容易失真，再調高到 4.5，可用環境變數覆蓋方便之後再微調不用改程式碼。
+RENDER_GUIDANCE = float(os.getenv("RENDER_GUIDANCE", "4.5"))
+# Replicate 回傳的 afterImageUrl 只是暫存網址（幾天內會失效），收藏功能需要永久網址才能長期使用。
+# bucket 已經存在且 allUsers 有 objectViewer 權限（公開可讀），不需要額外簽名 URL。
+GCS_BUCKET_NAME = os.getenv("GCS_RENDER_BUCKET", "decorate-me-renders")
+
+
+def upload_to_permanent_storage(temp_image_url: str) -> str | None:
+    """把 Replicate 暫存網址的圖片下載後傳到 GCS，回傳永久公開網址；任何一步失敗都回傳 None，讓呼叫端 fallback 回暫存網址。"""
+    try:
+        from google.cloud import storage  # 延遲載入，沒裝套件或沒憑證時不應該讓整個渲染流程掛掉
+
+        response = requests.get(temp_image_url, timeout=60)
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "image/jpeg").split(";")[0]
+        ext = mimetypes.guess_extension(content_type) or ".jpg"
+
+        client = storage.Client()
+        bucket = client.bucket(GCS_BUCKET_NAME)
+        blob = bucket.blob(f"rendered/{uuid.uuid4().hex}{ext}")
+        blob.upload_from_string(response.content, content_type=content_type)
+
+        return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{blob.name}"
+    except Exception as exc:  # noqa: BLE001 — 儲存失敗不該讓渲染整支失敗，記錄後照舊回暫存網址
+        print(f"[replicate_render] 上傳永久儲存失敗，fallback 回暫存網址：{exc}")
+        return None
 
 
 IMAGE_DATA_URL_KEYS = ("imageDataUrl", "image_data_url", "image")
@@ -168,13 +196,15 @@ def build_render_prompt(frontend_package: dict[str, Any], face_analysis: dict[st
     makeup_detail = ", ".join(filter(None, [style_hint, suggestion[:300]]))
     ollama_line = f"Makeup reference (translated from advisor): {suggestion[:300].strip()}." if suggestion else ""
     parts = [
-        "Apply makeup to this exact person.",
+        "This is a makeup-only edit on the exact person in the input photo.",
         face_desc,
-        f"Only add the following makeup: {makeup_detail or 'natural everyday makeup'}.",
+        f"The ONLY change allowed is adding this makeup: {makeup_detail or 'natural everyday makeup'}.",
         ollama_line,
-        "Do not change anything else.",
-        "Keep this person's face shape, eye shape, nose, lips, skin tone, skin texture, pores, wrinkles, hair, body, clothing, background, lighting, camera angle, and expression completely identical to the original photo.",
-        "This must look like the same person wearing makeup, not a different person.",
+        "Do not change anything else in the image.",
+        "Keep this person's face shape, facial structure, eye shape, nose, lips, skin tone, skin texture, pores, wrinkles, and hair completely identical to the original photo.",
+        "Keep the exact same pose, posture, body position, head angle, hand position, gesture, and action as the original photo — do not let the person move, turn, or change stance.",
+        "Keep clothing, background, lighting, camera angle, camera framing, and expression completely identical to the original photo.",
+        "This must look like the same person in the same moment, only wearing makeup — not a different person, not a different pose, not a different photo.",
     ]
     return " ".join(p for p in parts if p)
 
@@ -187,22 +217,26 @@ def call_replicate_render(image_data_url: str, prompt: str) -> dict[str, Any]:
             "input_image": image_data_url,
             "output_format": "jpg",
             "output_quality": 90,
-            "guidance": 2.5,
+            "guidance": RENDER_GUIDANCE,
         },
     )
 
     # replicate SDK 1.x: output.url 是字串屬性；舊版才是 callable
     if hasattr(output, "url"):
         url_val = output.url
-        after_image_url = url_val() if callable(url_val) else str(url_val)
+        temp_image_url = url_val() if callable(url_val) else str(url_val)
     elif isinstance(output, list):
-        after_image_url = str(output[0])
+        temp_image_url = str(output[0])
     else:
-        after_image_url = str(output)
+        temp_image_url = str(output)
+
+    permanent_url = upload_to_permanent_storage(temp_image_url)
 
     return {
         "status": "completed",
-        "afterImageUrl": after_image_url,
+        "afterImageUrl": permanent_url or temp_image_url,
+        "replicateTempUrl": temp_image_url,
+        "isPermanent": permanent_url is not None,
         "model": REPLICATE_MODEL,
     }
 

@@ -3,12 +3,19 @@ Firestore-backed job store shared by BASIC and PRO analyzers.
 Replaces in-memory _jobs dict so all Cloud Run instances share state.
 """
 import os
-from google.cloud import firestore
+
+try:
+    from google.cloud import firestore
+except ImportError:
+    firestore = None
 
 _client = None
+_memory_jobs: dict[str, dict[str, dict]] = {}
 
 
 def _col(collection: str):
+    if firestore is None:
+        return None
     global _client
     if _client is None:
         _client = firestore.Client(
@@ -18,21 +25,40 @@ def _col(collection: str):
 
 
 def create(col: str, job_id: str, data: dict) -> None:
-    _col(col).document(job_id).set(data)
+    collection = _col(col)
+    if collection is None:
+        _memory_jobs.setdefault(col, {})[job_id] = dict(data)
+        return
+    collection.document(job_id).set(data)
 
 
 def get(col: str, job_id: str) -> dict | None:
-    doc = _col(col).document(job_id).get()
+    collection = _col(col)
+    if collection is None:
+        job = _memory_jobs.get(col, {}).get(job_id)
+        return dict(job) if job is not None else None
+    doc = collection.document(job_id).get()
     return doc.to_dict() if doc.exists else None
 
 
 def patch(col: str, job_id: str, updates: dict) -> None:
-    _col(col).document(job_id).update(updates)
+    collection = _col(col)
+    if collection is None:
+        _memory_jobs.setdefault(col, {}).setdefault(job_id, {}).update(updates)
+        return
+    collection.document(job_id).update(updates)
 
 
 def delete(col: str, job_id: str) -> None:
-    _col(col).document(job_id).delete()
+    collection = _col(col)
+    if collection is None:
+        _memory_jobs.get(col, {}).pop(job_id, None)
+        return
+    collection.document(job_id).delete()
 
 
 def all_jobs(col: str) -> list[dict]:
-    return [d.to_dict() for d in _col(col).stream() if d.exists]
+    collection = _col(col)
+    if collection is None:
+        return [dict(job) for job in _memory_jobs.get(col, {}).values()]
+    return [d.to_dict() for d in collection.stream() if d.exists]

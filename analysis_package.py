@@ -26,7 +26,6 @@ BROW_SHAPE_CODES = {
     "一字眉": "straight",
     "彎月眉": "curved",
     "落尾眉": "drooping_tail",
-    "標準眉": "standard",
     "未知": "unknown",
 }
 
@@ -34,12 +33,10 @@ EYE_SHAPE_CODES = {
     "瞇縫眼": "narrow",
     "下垂眼": "downturned",
     "圓眼": "round",
-    "瑞鳳眼": "slender_phoenix",
     "丹鳳眼": "phoenix",
     "細長眼": "slender",
     "桃花眼": "peach_blossom",
     "杏仁眼": "almond",
-    "圓杏眼": "round_almond",
     "未知": "unknown",
 }
 
