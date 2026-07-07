@@ -2131,15 +2131,22 @@ const PageInit = {
         const renderQuotaEl = document.getElementById('compareRenderQuota');
         const refreshRenderQuota = () => {
             if (!renderQuotaEl) return;
-            const remaining = AdminStore.getRemainingRenders(Auth.getProfile());
-            renderQuotaEl.textContent = remaining === Infinity ? 'VIP 會員：渲染次數不限' : `今日剩餘渲染次數：${remaining} / ${AdminStore._dailyRenderLimit}`;
+            const quotaProfile = Auth.getProfile();
+            const remaining = AdminStore.getRemainingRenders(quotaProfile);
+            renderQuotaEl.textContent = isGuest()
+                ? '訪客無法使用 AI 渲染，請先註冊會員'
+                : (remaining === Infinity ? '管理員：渲染次數不限' : `今日剩餘渲染次數：${remaining} / ${AdminStore.getDailyRenderLimit(quotaProfile)}`);
         };
         refreshRenderQuota();
         if (renderBtn) {
             renderBtn.onclick = async () => {
                 const profile = Auth.getProfile();
+                if (isGuest()) {
+                    promptGuestAuth('AI 渲染妝容');
+                    return;
+                }
                 if (!AdminStore.canRender(profile)) {
-                    showAlert(`今日免費渲染次數已用完（每日 ${AdminStore._dailyRenderLimit} 次），升級 VIP 會員可無限次使用，請至會員中心申請升級。`, { type: 'error' });
+                    showAlert(`今日渲染次數已用完（每日 ${AdminStore.getDailyRenderLimit(profile)} 次），升級 VIP 會員可提高至每日 ${AdminStore._vipDailyRenderLimit} 次，請至會員中心申請升級。`, { type: 'error' });
                     return;
                 }
                 const pkg = Router.analysisPackage;
@@ -2346,7 +2353,7 @@ const PageInit = {
                     <ul class="tier-benefits">
                         <li>BASIC 臉部分析</li>
                         <li>${isVip ? 'PRO 臉部分析已開通' : 'PRO 臉部分析需後台開通'}</li>
-                        <li>渲染妝容：${remaining === Infinity ? '不限次數' : `每日 ${AdminStore._dailyRenderLimit} 次（今日剩餘 ${remaining} 次）`}</li>
+                        <li>渲染妝容：${remaining === Infinity ? '不限次數' : `每日 ${AdminStore.getDailyRenderLimit(profile)} 次（今日剩餘 ${remaining} 次）${isVip ? '' : `，升級 VIP 可達每日 ${AdminStore._vipDailyRenderLimit} 次`}`}</li>
                         ${tierProgressLine}
                     </ul>
                     ${pending ? `<div class="tier-pending">升級申請已送出，請等候管理員審核</div>` : ''}

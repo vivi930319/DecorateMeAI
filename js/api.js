@@ -850,9 +850,12 @@ const AdminStore = {
         if (permission.status === 'suspended') return false;
         return (permission.allowedPages || this._defaultPages).includes('analysisPro');
     },
-    // AI 渲染妝容每次都是真的在打 Replicate API、有實際成本，一般會員每天限額，VIP/管理員不限
+    // AI 渲染妝容每次都是真的在打 Replicate API、有實際成本。分級：訪客 0 次（要註冊）、
+    // 一般會員每日 3 次、VIP 每日 10 次（不做「不限次數」，守住 Replicate 成本上限）。
+    // 管理員與後台單獨勾選 unlimitedRender 的帳號仍不限，方便內部測試。
     _renderQuotaKey: 'beautyRenderUsage',
     _dailyRenderLimit: 3,
+    _vipDailyRenderLimit: 10,
     _today() { return new Date().toISOString().slice(0, 10); },
     getRenderUsage(email) {
         const key = this._email(email) || 'guest';
@@ -862,21 +865,31 @@ const AdminStore = {
         if (!entry || entry.date !== this._today()) return { date: this._today(), count: 0 };
         return entry;
     },
-    // 不限次數規則：VIP 身分「或」後台單獨勾選 unlimitedRender 權限，兩套機制並存、互不打架
+    _isGuestProfile(profile) {
+        const p = profile || Auth.getProfile();
+        return !this._email(p?.email);
+    },
     hasUnlimitedRender(profile) {
         const p = profile || Auth.getProfile();
-        if (this.isVip(p)) return true;
+        if (this.isAdminProfile(p)) return true;
         const permission = this.getPermission(p?.email, p);
         if (permission.status === 'suspended') return false;
         return (permission.allowedPages || this._defaultPages).includes('unlimitedRender');
     },
+    getDailyRenderLimit(profile) {
+        const p = profile || Auth.getProfile();
+        if (this._isGuestProfile(p)) return 0;
+        return this.isVip(p) ? this._vipDailyRenderLimit : this._dailyRenderLimit;
+    },
     canRender(profile) {
+        if (this._isGuestProfile(profile)) return false;
         if (this.hasUnlimitedRender(profile)) return true;
-        return this.getRenderUsage(profile?.email).count < this._dailyRenderLimit;
+        return this.getRenderUsage(profile?.email).count < this.getDailyRenderLimit(profile);
     },
     getRemainingRenders(profile) {
+        if (this._isGuestProfile(profile)) return 0;
         if (this.hasUnlimitedRender(profile)) return Infinity;
-        return Math.max(0, this._dailyRenderLimit - this.getRenderUsage(profile?.email).count);
+        return Math.max(0, this.getDailyRenderLimit(profile) - this.getRenderUsage(profile?.email).count);
     },
     recordRenderUsage(profile) {
         if (this.hasUnlimitedRender(profile)) return;
