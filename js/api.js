@@ -355,6 +355,75 @@ const Api = {
         };
     },
 
+    // ═══ 後台管理：組員資料庫正式端點。寫入類端點用管理員 session cookie 驗證（登入時已帶 credentials 種下）═══
+    async fetchAdminMembers() {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl) return null;
+        try {
+            const res = await fetch(`${baseUrl}/api/members`, { credentials: 'include', cache: 'no-store' });
+            if (!res.ok) return null;
+            const data = await res.json();
+            return Array.isArray(data.members) ? data.members : null;
+        } catch (_) {
+            return null;
+        }
+    },
+
+    async patchMember(email, patch) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl) return { ok: false, error: 'memberDatabaseUrl 未設定' };
+        try {
+            const res = await fetch(`${baseUrl}/api/members/${encodeURIComponent(email)}`, {
+                method: 'PATCH',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(patch)
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
+            return { ok: true, member: data.member || null };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    async patchRemoteProduct(rawId, payload) {
+        const baseUrl = this.config.services.product.baseUrl;
+        if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
+        if (rawId == null) return { ok: false, error: '找不到這筆商品的資料庫 id' };
+        try {
+            const res = await fetch(`${baseUrl}/api/products/${encodeURIComponent(rawId)}`, {
+                method: 'PATCH',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
+            return { ok: true, product: data.product || data };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    async createRemoteProduct(payload) {
+        const baseUrl = this.config.services.product.baseUrl;
+        if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
+        try {
+            const res = await fetch(`${baseUrl}/api/products`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
+            return { ok: true, product: data.product || data };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
     async recommendProducts(faceAnalysis, styleId) {
         const url = this.config.url('product', 'recommendPath');
         if (!url) return null;
@@ -385,12 +454,17 @@ const Api = {
 
     async login(email, password) {
         let res;
+        const doLogin = (withCreds) => fetch(this.config.url('memberDatabase', 'loginPath'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+            ...(withCreds ? { credentials: 'include' } : {})
+        });
         try {
-            res = await fetch(this.config.url('memberDatabase', 'loginPath'), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password })
-            });
+            // 優先帶 credentials 讓後端 session cookie 種進來（後台管理端點靠它驗證）；
+            // 對方 CORS 若沒開放 credentials 會直接 TypeError，退回無 cookie 模式讓一般登入不受影響。
+            try { res = await doLogin(true); }
+            catch (_) { res = await doLogin(false); }
         } catch (err) {
             // 真正連不上後端（DNS/斷線/CORS 擋掉），才算「網路失敗」，允許前端 fallback 成本機模擬
             const networkErr = new Error('登入 API 連線失敗：' + err.message);

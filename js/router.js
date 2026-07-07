@@ -2622,9 +2622,58 @@ const PageInit = {
         };
         let filter = 'all';
 
+        // 資料來源：優先吃組員資料庫 GET /api/members；抓不到才退回本機 demo，並在工具列標明目前模式
+        let dbMembers = null;
+        const dbStatusEl = (() => {
+            const toolbar = document.querySelector('.admin-toolbar');
+            if (!toolbar) return null;
+            let el = document.getElementById('adminDbStatus');
+            if (!el) {
+                el = document.createElement('span');
+                el.id = 'adminDbStatus';
+                el.style.cssText = 'font-size:12px;letter-spacing:.06em;margin-left:auto;margin-right:12px;';
+                toolbar.insertBefore(el, document.getElementById('adminSaveBtn'));
+            }
+            return el;
+        })();
+        const setDbStatus = (text, ok) => { if (dbStatusEl) { dbStatusEl.textContent = text; dbStatusEl.style.color = ok ? '#4E7A5A' : '#A0522D'; } };
+        setDbStatus('資料庫載入中…', true);
+        Api.fetchAdminMembers().then(list => {
+            if (list && list.length) {
+                dbMembers = list;
+                setDbStatus(`已連接會員資料庫（${list.length} 位會員）`, true);
+            } else {
+                setDbStatus('資料庫連不上，目前顯示本機 demo 資料', false);
+            }
+            render();
+        });
+
+        const membersFromDb = () => dbMembers.map(m => {
+            const localPerm = AdminStore.getPermission(m.email, m);
+            return {
+                name: m.name,
+                email: m.email,
+                level: m.level || '一般會員',
+                role: m.role || 'member',
+                points: m.points ?? null,
+                permission: {
+                    role: m.role || 'member',
+                    status: m.status || 'active',
+                    allowedPages: (Array.isArray(m.allowedPages) && m.allowedPages.length) ? m.allowedPages : (localPerm.allowedPages || []),
+                    vipRequested: !!localPerm.vipRequested
+                }
+            };
+        });
+
         const render = () => {
             const keyword = String(searchEl?.value || '').trim().toLowerCase();
-            let members = AdminStore.listMembers();
+            // 只吃真會員資料庫，連不上就明講，不退回 demo 假資料
+            if (!dbMembers) {
+                rowsEl.innerHTML = '<tr><td colspan="6"><div class="empty-state compact">會員資料庫載入中…連不上時這裡會一直是空的（已停用 demo 假資料）</div></td></tr>';
+                ['adminTotal','adminActive','adminSuspended','adminAdmins'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '—'; });
+                return;
+            }
+            let members = membersFromDb();
             const total = members.length;
             const active = members.filter(m => m.permission.status !== 'suspended').length;
             const suspended = members.filter(m => m.permission.status === 'suspended').length;
@@ -2685,11 +2734,17 @@ const PageInit = {
             }).join('') || '<tr><td colspan="6"><div class="empty-state compact">沒有符合條件的使用者</div></td></tr>';
 
             rowsEl.querySelectorAll('[data-admin-status]').forEach(btn => {
-                btn.onclick = () => {
+                btn.onclick = async () => {
                     const row = btn.closest('[data-admin-email]');
                     const email = row?.dataset.adminEmail;
-                    const current = AdminStore.getPermission(email);
-                    AdminStore.setPermission(email, { status: current.status === 'suspended' ? 'active' : 'suspended' });
+                    const target = dbMembers.find(m => m.email === email);
+                    const nextStatus = (target?.status === 'suspended') ? 'active' : 'suspended';
+                    btn.disabled = true;
+                    const result = await Api.patchMember(email, { status: nextStatus });
+                    btn.disabled = false;
+                    if (!result.ok) { showAlert(`停權狀態同步失敗：${result.error}`, { type: 'error' }); return; }
+                    if (target) target.status = nextStatus;
+                    showToast(nextStatus === 'suspended' ? '已停權（已寫入資料庫）' : '已恢復啟用（已寫入資料庫）');
                     render();
                 };
             });
@@ -2704,8 +2759,8 @@ const PageInit = {
         });
         if (searchEl) searchEl.oninput = render;
         const saveBtn = document.getElementById('adminSaveBtn');
-        if (saveBtn) saveBtn.onclick = () => {
-            rowsEl.querySelectorAll('[data-admin-email]').forEach(row => {
+        if (saveBtn) saveBtn.onclick = async () => {
+            const rows = Array.from(rowsEl.querySelectorAll('[data-admin-email]')).map(row => {
                 const email = row.dataset.adminEmail;
                 const role = row.querySelector('[data-admin-role]')?.value || 'member';
                 const levelSelect = row.querySelector('[data-admin-level]');
@@ -2717,13 +2772,32 @@ const PageInit = {
                 if (levelSelect && !levelSelect.disabled && ['VIP會員', 'PRO會員'].includes(levelSelect.value)) {
                     ['analysisPro', 'unlimitedRender'].forEach(p => { if (!allowedPages.includes(p)) allowedPages.push(p); });
                 }
-                AdminStore.setPermission(email, { role, allowedPages });
-                if (levelSelect && !levelSelect.disabled) {
-                    AdminStore.setMemberLevel(email, levelSelect.value);
-                    if (['VIP會員', 'PRO會員'].includes(levelSelect.value)) AdminStore.clearVipRequest(email);
-                }
+                return { email, role, allowedPages, level: (levelSelect && !levelSelect.disabled) ? levelSelect.value : null };
             });
-            showToast('權限已更新');
+
+            if (!dbMembers) { showAlert('會員資料庫連不上，無法儲存（已停用 demo 模式）', { type: 'error' }); return; }
+            // 逐筆 PATCH 進資料庫；本機 AdminStore 只當快取鏡射，讓前台其他頁立即反映
+            saveBtn.disabled = true;
+            const failures = [];
+            for (const r of rows) {
+                const patch = { role: r.role, allowedPages: r.allowedPages };
+                if (r.level) patch.level = r.level;
+                const result = await Api.patchMember(r.email, patch);
+                if (!result.ok) { failures.push(`${r.email}：${result.error}`); continue; }
+                AdminStore.setPermission(r.email, { role: r.role, allowedPages: r.allowedPages });
+                if (r.level) {
+                    AdminStore.setMemberLevel(r.email, r.level);
+                    if (['VIP會員', 'PRO會員'].includes(r.level)) AdminStore.clearVipRequest(r.email);
+                }
+                const target = dbMembers.find(m => m.email === r.email);
+                if (target) { target.role = r.role; target.allowedPages = r.allowedPages; if (r.level) target.level = r.level; }
+            }
+            saveBtn.disabled = false;
+            if (failures.length) {
+                showAlert(`有 ${failures.length} 筆沒寫進資料庫：\n${failures.join('\n')}\n（401 = 管理員 session 沒帶上，請用資料庫的 admin 帳號重新登入）`, { type: 'error' });
+            } else {
+                showToast(`權限已更新並寫入資料庫（${rows.length} 筆）`);
+            }
             updateAdminNav();
             render();
         };
@@ -2741,8 +2815,13 @@ const PageInit = {
             cancelBtn.style.display = 'none';
         };
 
+        // 商品管理：只吃真商品資料庫（/api/products），不再顯示本機 demo 商品
+        let dbProducts = null;
+        const ADMIN_PRODUCT_ROWS_LIMIT = 30;
+        const CAT_TO_TYPE = { '底妝':'foundations', '眼影':'eyeshadows', '眼線/睫毛':'eyeliner_mascara', '唇彩':'lipsticks', '腮紅':'blushes', '眉毛彩妝':'eyebrows', '修容':'contouring', '打亮':'highlighters' };
+
         const enterEditMode = (id) => {
-            const product = getRawProduct(id);
+            const product = (dbProducts || []).find(p => String(p.id) === String(id));
             if (!product) return;
             editingProductId = id;
             document.getElementById('adminProductName').value = product.name || '';
@@ -2750,7 +2829,7 @@ const PageInit = {
             document.getElementById('adminProductPrice').value = product.price || '';
             document.getElementById('adminProductImg').value = product.img || '';
             document.getElementById('adminProductDesc').value = product.desc || '';
-            document.getElementById('adminProductShades').value = (product.shades || []).join(',');
+            document.getElementById('adminProductShades').value = product.hex || '';
             productForm.classList.add('is-editing');
             editingLabel.textContent = product.name || id;
             submitBtn.textContent = '更新產品';
@@ -2762,7 +2841,16 @@ const PageInit = {
             const area = document.getElementById('adminProductRows');
             const preview = document.getElementById('adminProductPreview');
             if (!area) return;
-            const products = getProductCatalog();
+            if (!dbProducts) {
+                area.innerHTML = '<tr><td colspan="6"><div class="empty-state compact">商品資料庫載入中…</div></td></tr>';
+                return;
+            }
+            if (!dbProducts.length) {
+                area.innerHTML = '<tr><td colspan="6"><div class="empty-state compact">商品資料庫連不上或沒有資料（不顯示 demo）</div></td></tr>';
+                if (preview) preview.innerHTML = '';
+                return;
+            }
+            const products = dbProducts;
             if (preview) {
                 preview.innerHTML = products.slice(0, 8).map((product, index) => `<article class="prod-card admin-preview-card" data-preview-product="${escapeHtml(product.id)}" style="animation-delay:${Math.min(index * 0.025, 0.18)}s">
                     <div class="pc-imgwrap">
@@ -2774,15 +2862,20 @@ const PageInit = {
                     <div class="pc-foot"><span class="pc-price">${escapeHtml(product.price)}</span></div>
                 </article>`).join('');
             }
-            area.innerHTML = products.map(product => `<tr class="admin-product-row" data-edit-product="${escapeHtml(product.id)}">
-                <td><div class="admin-product-cell">${phBox('product-thumb', product.name, product.img)}<div class="admin-user"><b>${escapeHtml(product.name)}</b><span>${escapeHtml(product.id)}</span></div></div></td>
+            area.innerHTML = products.slice(0, ADMIN_PRODUCT_ROWS_LIMIT).map(product => `<tr class="admin-product-row" data-edit-product="${escapeHtml(product.id)}">
+                <td><div class="admin-product-cell">${phBox('product-thumb', product.name, product.img)}<div class="admin-user"><b>${escapeHtml(product.name)}</b><span>DB id: ${escapeHtml(String(product.rawId ?? product.id))}</span></div></div></td>
                 <td>${escapeHtml(product.cat)}</td>
                 <td>${escapeHtml(product.price)}</td>
-                <td><span class="admin-source ${product.source === 'admin' ? 'manual' : ''}">${product.source === 'admin' ? '後台新增' : '前台商品'}</span></td>
+                <td><span class="admin-source">商品資料庫</span></td>
                 <td><span class="admin-fail ok">已上架</span></td>
                 <td><button class="btn-outline btn-sm" type="button" data-edit-btn="${escapeHtml(product.id)}">編輯</button></td>
-            </tr>`).join('') || '<tr><td colspan="6"><div class="empty-state compact">目前沒有商品</div></td></tr>';
+            </tr>`).join('') + (products.length > ADMIN_PRODUCT_ROWS_LIMIT ? `<tr><td colspan="6"><div class="empty-state compact">僅顯示前 ${ADMIN_PRODUCT_ROWS_LIMIT} 筆，資料庫共 ${products.length} 筆</div></td></tr>` : '');
         };
+
+        Api.listProducts().then(rec => {
+            dbProducts = rec?.products || [];
+            renderProducts();
+        });
 
         const productRowsEl = document.getElementById('adminProductRows');
         if (productRowsEl) productRowsEl.addEventListener('click', (e) => {
@@ -2812,16 +2905,37 @@ const PageInit = {
                 showAlert('色號格式不正確，只接受 Hex 色碼（例如 #3A241C），不合格式的色號已被忽略。', { type:'error' });
                 return;
             }
+            // 全部走真商品資料庫，不再寫 localStorage demo
+            const payload = {
+                name, price,
+                type: CAT_TO_TYPE[cat] || 'foundations',
+                image_url: img || '',
+                description: desc || '',
+                hex: shades[0] || null
+            };
+            submitBtn.disabled = true;
+            const finish = (result, okMsg) => {
+                submitBtn.disabled = false;
+                if (!result.ok) {
+                    showAlert(`資料庫寫入失敗：${result.error}${result.status === 401 ? '（管理員 session 沒帶上——請確認已用資料庫的 admin 帳號重新登入）' : ''}`, { type: 'error' });
+                    return false;
+                }
+                showToast(okMsg);
+                Router.generalProductCatalog = null; // 讓商品頁下次重抓最新清單
+                dbProducts = null;
+                Api.listProducts().then(rec => { dbProducts = rec?.products || []; renderProducts(); });
+                return true;
+            };
             if (editingProductId) {
-                AdminStore.updateProduct(editingProductId, { name, cat, price, img, desc, shades });
-                showToast('產品已更新');
-                exitEditMode();
+                const target = (dbProducts || []).find(p => String(p.id) === String(editingProductId));
+                Api.patchRemoteProduct(target?.rawId, payload).then(result => {
+                    if (finish(result, '產品已更新並寫入資料庫')) exitEditMode();
+                });
             } else {
-                AdminStore.addProduct({ name, cat, price, img, desc, shades });
-                showToast('產品已新增');
-                productForm.reset();
+                Api.createRemoteProduct(payload).then(result => {
+                    if (finish(result, '產品已新增並寫入資料庫')) productForm.reset();
+                });
             }
-            renderProducts();
         };
         render();
         renderProducts();
