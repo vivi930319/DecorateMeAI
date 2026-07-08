@@ -8,7 +8,11 @@
 })();
 
 // ═══ API 設定：所有外部服務都走這裡，不直接連 PostgreSQL 或 Ollama 11434 ═══
-const RuntimeApiConfig = typeof window !== 'undefined' ? (window.DECORATE_ME_CONFIG || {}) : {};
+function getRuntimeApiConfig() {
+    return typeof window !== 'undefined' ? (window.DECORATE_ME_CONFIG || {}) : {};
+}
+
+const RuntimeApiConfig = getRuntimeApiConfig();
 
 const ApiConfig = {
     services: {
@@ -48,7 +52,8 @@ const ApiConfig = {
             baseUrl: RuntimeApiConfig.memberDatabaseUrl || '',
             loginPath: '/api/login',
             registerPath: '/api/register',
-            sendOtpPaths: ['/api/send-otp', '/api/register'],
+            // 只打正規發碼端點；不要 fallback 到 /api/register，否則會送出只帶 email 的殘缺請求，被後端回 400 MISSING_FIELDS（曾被誤判成 CSRF）
+            sendOtpPaths: ['/api/send-otp'],
             verifyOtpPath: '/api/verify-otp'
         }
     },
@@ -179,11 +184,22 @@ const Api = {
     },
 
     async renderMakeup({ imageDataUrl, prompt, strength = 0.45 }) {
-        const url = this.config.url('render', 'renderPath');
+        const runtimeConfig = getRuntimeApiConfig();
+        const serviceConfig = {
+            ...(this.config.services.render || {}),
+            baseUrl: runtimeConfig.renderUrl || this.config.services.render.baseUrl || '',
+            apiKey: runtimeConfig.renderApiKey || this.config.services.render.apiKey || '',
+        };
+        const url = serviceConfig.baseUrl && serviceConfig.renderPath
+            ? `${serviceConfig.baseUrl}${serviceConfig.renderPath}`
+            : '';
         if (!url) throw new Error('renderUrl 未設定，請聯繫渲染端組員提供 Cloud Run URL');
         const headers = { 'Content-Type': 'application/json' };
-        const apiKey = this.config.services.render.apiKey;
+        const apiKey = serviceConfig.apiKey;
         if (apiKey) headers['X-API-Key'] = apiKey;
+        const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
+        if (profile.email) headers['X-User-Email'] = profile.email;
+        if (profile.role) headers['X-User-Role'] = profile.role;
         let res;
         try {
             res = await fetch(url, {
@@ -196,10 +212,20 @@ const Api = {
         }
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
+            if (res.status === 401) {
+                if (!apiKey) {
+                    throw new Error('Render API 需要金鑰，但目前頁面沒有載到 renderApiKey。請重新整理，或檢查 config.local.js / 部署設定。');
+                }
+                throw new Error('Render API 金鑰驗證失敗。請重新整理頁面後再試，若仍失敗表示目前前端設定的 renderApiKey 與伺服器不一致。');
+            }
             throw new Error(data?.error?.message || data?.error || `Render API HTTP ${res.status}`);
         }
         if (data.status !== 'completed' || !data.afterImageUrl) {
             throw new Error(data?.error?.message || data?.error || '妝容渲染失敗');
+        }
+        if (data.renderQuota && Auth.getProfile) {
+            const current = Auth.getProfile() || {};
+            Auth.setProfile({ ...current, renderQuota: data.renderQuota });
         }
         return data;
     },
@@ -260,7 +286,7 @@ const Api = {
             name: product.name || '推薦商品',
             brand: product.brand || '',
             price,
-            img: product.imageUrl || product.image_url || product.img || '',
+            img: product.imageUrl || product.image_url || product.image_src || product.img || product.image || '',
             desc: product.matchReason || product.description || product.desc || '',
             matchReason: product.matchReason || '',
             score: product.score ?? null,
@@ -367,20 +393,43 @@ const Api = {
         };
     },
 
-    // ═══ 後台管理：組員資料庫正式端點。寫入類端點用管理員 session cookie 驗證（登入時已帶 credentials 種下）═══
+    // ═══ 後台管理：members 讀寫都走管理員 session cookie；若 GET /api/members 失敗，通常是 admin session / CORS / SameSite 設定有問題 ═══
     async fetchAdminMembers() {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
-        if (!baseUrl) return null;
-        // 讀取類先不帶 credentials：組員 CORS 目前沒回 Access-Control-Allow-Credentials，
-        // 帶 credentials 會被瀏覽器整個擋掉。等組員把 GET /api/members 鎖權限 + 補 Allow-Credentials
-        // 後，這裡再改回 credentials:'include'（屆時就需要管理員 session 才撈得到）。
+        if (!baseUrl) return { ok: false, error: 'memberDatabaseUrl 未設定' };
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeout = controller ? setTimeout(() => controller.abort(), 12000) : null;
         try {
-            const res = await fetch(`${baseUrl}/api/members`, { cache: 'no-store' });
-            if (!res.ok) return null;
+            const res = await fetch(`${baseUrl}/api/members`, {
+                credentials: 'include',
+                cache: 'no-store',
+                ...(controller ? { signal: controller.signal } : {})
+            });
+            if (timeout) clearTimeout(timeout);
             const data = await res.json();
-            return Array.isArray(data.members) ? data.members : null;
-        } catch (_) {
-            return null;
+            if (!res.ok) {
+                return {
+                    ok: false,
+                    status: res.status,
+                    error: data?.error?.message || `HTTP ${res.status}`
+                };
+            }
+            return {
+                ok: true,
+                members: Array.isArray(data.members) ? data.members : []
+            };
+        } catch (err) {
+            if (timeout) clearTimeout(timeout);
+            if (err?.name === 'AbortError') {
+                return {
+                    ok: false,
+                    error: '讀取會員資料逾時（12 秒）。請確認資料庫 tunnel、CORS 與 admin session 是否正常。'
+                };
+            }
+            return {
+                ok: false,
+                error: '連線失敗：' + err.message
+            };
         }
     },
 
@@ -399,6 +448,58 @@ const Api = {
             return { ok: true, member: data.member || null };
         } catch (err) {
             return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    // ═══ 收藏妝容對比圖 saved_looks：跨裝置持久化，走登入 session（本機 localStorage 仍是離線快取，遠端失敗不影響本機） ═══
+    async listSavedLooks(email) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false, looks: [] };
+        try {
+            const res = await fetch(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
+                method: 'GET',
+                credentials: 'include',
+                cache: 'no-store'
+            });
+            if (!res.ok) return { ok: false, status: res.status, looks: [] };
+            const data = await res.json().catch(() => ({}));
+            return { ok: true, looks: Array.isArray(data.looks) ? data.looks : [] };
+        } catch (_) {
+            return { ok: false, looks: [] };
+        }
+    },
+
+    async createSavedLook(email, payload) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false };
+        // 後端要求 style 與 afterImageUrl 必填；沒有渲染後永久網址就不送，維持本機收藏即可
+        if (!payload?.style || !payload?.afterImageUrl) return { ok: false, skipped: true };
+        try {
+            const res = await fetch(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!res.ok) return { ok: false, status: res.status };
+            const look = await res.json().catch(() => ({}));
+            return { ok: true, look };
+        } catch (_) {
+            return { ok: false };
+        }
+    },
+
+    async deleteSavedLook(email, id) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email || id == null) return { ok: false };
+        try {
+            const res = await fetch(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks/${encodeURIComponent(id)}`, {
+                method: 'DELETE',
+                credentials: 'include'
+            });
+            return { ok: res.ok, status: res.status };
+        } catch (_) {
+            return { ok: false };
         }
     },
 
@@ -912,48 +1013,44 @@ const Auth = {
 
 // ═══ Admin 權限原型：之後可改接會員資料庫 API ═══
 const AdminStore = {
-    _permissionsKey: 'beautyMemberPermissions',
     _productsKey: 'beautyAdminProducts',
     _overridesKey: 'beautyAdminProductOverrides',
-    // analysisPro 不放在預設清單裡：一般會員預設沒有 PRO，要 VIP 或後台手動勾選才會拿到
     _defaultPages: ['dashboard', 'analysisBasic', 'style', 'products', 'favorites', 'history', 'compare', 'suggestion', 'profile'],
-    // 明確白名單（跟資料庫寫死的 admin 帳號一致），當前端快取用，避免資料庫暫時抓不到 role 時鎖死後台。
-    _adminEmails: ['admin@decorateme.local', 'admin@decorateme.test'],
     _email(email) { return String(email || '').trim().toLowerCase(); },
-    // 管理員身分以資料庫回傳的 role / level 為準。原本「任何 admin@ 開頭都算管理員」的寬鬆規則已移除，
-    // 避免有人在資料庫註冊 admin@任意網域 就自動變成管理員。
-    isAdminProfile(profile) {
-        const email = this._email(profile?.email);
-        return profile?.role === 'admin'
-            || profile?.level === '管理員'
-            || this._adminEmails.includes(email);
+    _syncCurrentProfile(email, patch) {
+        const key = this._email(email);
+        const current = Auth.getProfile();
+        if (!key || this._email(current?.email) !== key) return;
+        Auth.setProfile({ ...current, ...patch });
     },
-    // VIP 會員（管理員視同 VIP，全功能都能用）
+    _normalizeAllowedPages(profile) {
+        const raw = profile?.allowedPages || profile?.permission?.allowedPages;
+        if (Array.isArray(raw) && raw.length) return [...new Set(raw)];
+        const role = profile?.role || profile?.permission?.role;
+        return role === 'admin' ? [...this._defaultPages, 'admin'] : [...this._defaultPages];
+    },
+    permissionSnapshot(profile) {
+        const p = profile || Auth.getProfile() || {};
+        return {
+            role: p.role || p.permission?.role || 'member',
+            status: p.status || p.permission?.status || 'active',
+            allowedPages: this._normalizeAllowedPages(p),
+            vipRequested: !!(p.vipRequested || p.permission?.vipRequested),
+            renderQuota: p.renderQuota || p.permission?.renderQuota || null
+        };
+    },
+    isAdminProfile(profile) {
+        return profile?.role === 'admin' || profile?.level === '管理員';
+    },
     isVip(profile) {
         return ['VIP會員', 'PRO會員'].includes(profile?.level) || this.isAdminProfile(profile);
     },
-    // PRO 分析解鎖規則：VIP 身分「或」後台單獨勾選 analysisPro 權限，兩套機制並存、互不打架
     canUseProAnalysis(profile) {
         const p = profile || Auth.getProfile();
         if (this.isVip(p)) return true;
-        const permission = this.getPermission(p?.email, p);
+        const permission = this.permissionSnapshot(p);
         if (permission.status === 'suspended') return false;
-        return (permission.allowedPages || this._defaultPages).includes('analysisPro');
-    },
-    // AI 渲染妝容每次都是真的在打 Replicate API、有實際成本。分級：訪客 0 次（要註冊）、
-    // 一般會員每日 3 次、VIP 每日 10 次（不做「不限次數」，守住 Replicate 成本上限）。
-    // 管理員與後台單獨勾選 unlimitedRender 的帳號仍不限，方便內部測試。
-    _renderQuotaKey: 'beautyRenderUsage',
-    _dailyRenderLimit: 3,
-    _vipDailyRenderLimit: 10,
-    _today() { return new Date().toISOString().slice(0, 10); },
-    getRenderUsage(email) {
-        const key = this._email(email) || 'guest';
-        let usage = {};
-        try { usage = JSON.parse(localStorage.getItem(this._renderQuotaKey) || '{}'); } catch (_) {}
-        const entry = usage[key];
-        if (!entry || entry.date !== this._today()) return { date: this._today(), count: 0 };
-        return entry;
+        return permission.allowedPages.includes('analysisPro');
     },
     _isGuestProfile(profile) {
         const p = profile || Auth.getProfile();
@@ -962,52 +1059,34 @@ const AdminStore = {
     hasUnlimitedRender(profile) {
         const p = profile || Auth.getProfile();
         if (this.isAdminProfile(p)) return true;
-        const permission = this.getPermission(p?.email, p);
+        const permission = this.permissionSnapshot(p);
         if (permission.status === 'suspended') return false;
-        return (permission.allowedPages || this._defaultPages).includes('unlimitedRender');
+        return this.isVip(p) || permission.allowedPages.includes('unlimitedRender');
     },
     getDailyRenderLimit(profile) {
         const p = profile || Auth.getProfile();
         if (this._isGuestProfile(p)) return 0;
-        return this.isVip(p) ? this._vipDailyRenderLimit : this._dailyRenderLimit;
+        const quota = this.permissionSnapshot(p).renderQuota;
+        if (quota && Number.isFinite(Number(quota.dailyLimit))) return Number(quota.dailyLimit);
+        if (this.hasUnlimitedRender(p)) return Infinity;
+        return null;
     },
     canRender(profile) {
-        if (this._isGuestProfile(profile)) return false;
-        if (this.hasUnlimitedRender(profile)) return true;
-        return this.getRenderUsage(profile?.email).count < this.getDailyRenderLimit(profile);
+        const p = profile || Auth.getProfile();
+        if (this._isGuestProfile(p)) return false;
+        const permission = this.permissionSnapshot(p);
+        if (permission.status === 'suspended') return false;
+        return true;
     },
     getRemainingRenders(profile) {
         if (this._isGuestProfile(profile)) return 0;
         if (this.hasUnlimitedRender(profile)) return Infinity;
-        return Math.max(0, this.getDailyRenderLimit(profile) - this.getRenderUsage(profile?.email).count);
-    },
-    recordRenderUsage(profile) {
-        if (this.hasUnlimitedRender(profile)) return;
-        const key = this._email(profile?.email) || 'guest';
-        let usage = {};
-        try { usage = JSON.parse(localStorage.getItem(this._renderQuotaKey) || '{}'); } catch (_) {}
-        const today = this._today();
-        const entry = (usage[key] && usage[key].date === today) ? usage[key] : { date: today, count: 0 };
-        entry.count += 1;
-        usage[key] = entry;
-        localStorage.setItem(this._renderQuotaKey, JSON.stringify(usage));
-    },
-    // 自助升級申請：會員在個人頁按「申請升級」，記一筆待審旗標給後台看
-    requestVipUpgrade(email) {
-        this.setPermission(email, { vipRequested: true });
-    },
-    clearVipRequest(email) {
-        this.setPermission(email, { vipRequested: false });
+        const quota = this.permissionSnapshot(profile).renderQuota;
+        if (quota && Number.isFinite(Number(quota.remaining))) return Math.max(0, Number(quota.remaining));
+        return null;
     },
     setMemberLevel(email, level) {
-        const key = this._email(email);
-        if (!key) return;
-        let members = {};
-        try { members = JSON.parse(localStorage.getItem(Auth._membersKey) || '{}'); } catch (_) {}
-        members[key] = { ...(members[key] || {}), level };
-        localStorage.setItem(Auth._membersKey, JSON.stringify(members));
-        const current = Auth.getProfile();
-        if (this._email(current?.email) === key) Auth.setProfile({ ...current, level });
+        this._syncCurrentProfile(email, { level });
     },
     isAdmin() {
         return this.isAdminProfile(Auth.getProfile());
@@ -1016,40 +1095,27 @@ const AdminStore = {
         const allowedPages = role === 'admin' ? [...this._defaultPages, 'admin'] : [...this._defaultPages];
         return { role: role || 'member', status: 'active', allowedPages };
     },
-    loadPermissions() {
-        try { return JSON.parse(localStorage.getItem(this._permissionsKey) || '{}'); }
-        catch (_) { return {}; }
-    },
-    savePermissions(map) {
-        localStorage.setItem(this._permissionsKey, JSON.stringify(map || {}));
-    },
     getPermission(email, profile) {
-        const key = this._email(email || profile?.email);
-        const saved = this.loadPermissions()[key];
-        if (saved) return saved;
+        const snapshot = this.permissionSnapshot(profile || (this._email(email) === this._email(Auth.getProfile()?.email) ? Auth.getProfile() : null));
+        if (snapshot.allowedPages.length) return snapshot;
         return this.defaultPermissions(this.isAdminProfile(profile || { email }) ? 'admin' : 'member');
     },
     setPermission(email, patch) {
-        const key = this._email(email);
-        if (!key) return;
-        const map = this.loadPermissions();
-        map[key] = { ...this.getPermission(key), ...patch };
-        this.savePermissions(map);
+        this._syncCurrentProfile(email, patch);
     },
     failureReason(member) {
-        const permission = member?.permission || this.getPermission(member?.email, member);
+        const permission = member?.permission || this.permissionSnapshot(member);
         if (permission.status === 'suspended') return '登入失敗：帳號已停權';
-        const blocked = this._defaultPages.filter(page => !['dashboard', 'profile'].includes(page) && !(permission.allowedPages || []).includes(page));
+        const blocked = this._defaultPages.filter(page => !['dashboard', 'profile'].includes(page) && !permission.allowedPages.includes(page));
         if (blocked.length) return `功能受限：${blocked.length} 個功能未開啟`;
         return '正常';
     },
     canAccess(page, profile) {
         const p = profile || Auth.getProfile();
         if (this.isAdminProfile(p)) return true;
-        const permission = this.getPermission(p?.email, p);
+        const permission = this.permissionSnapshot(p);
         if (permission.status === 'suspended') return false;
-        const allowed = permission.allowedPages || this._defaultPages;
-        // 臉部分析頁面本身只要 BASIC 或 PRO 其中一個開放就能進去，頁面裡的 tab 才各自判斷
+        const allowed = permission.allowedPages;
         if (page === 'analysis') return allowed.includes('analysisBasic') || allowed.includes('analysisPro') || this.isVip(p);
         return allowed.includes(page);
     },
@@ -1058,13 +1124,9 @@ const AdminStore = {
         try { members = JSON.parse(localStorage.getItem(Auth._membersKey) || '{}'); } catch (_) {}
         const current = Auth.getProfile();
         if (current?.email) members[this._email(current.email)] = { ...(members[this._email(current.email)] || {}), ...current };
-        for (const email of this._adminEmails) {
-            members[email] = members[email] || { name: 'Admin', email, level: '管理員', role: 'admin' };
-        }
-        const permissions = this.loadPermissions();
         return Object.keys(members).map(email => {
             const profile = { ...members[email], email: members[email].email || email };
-            const permission = this.getPermission(email, profile);
+            const permission = this.permissionSnapshot(profile);
             return { ...profile, email, permission };
         }).sort((a, b) => String(a.email).localeCompare(String(b.email)));
     },
@@ -1282,7 +1344,6 @@ const Referral = {
             const members = JSON.parse(localStorage.getItem(Auth._membersKey) || '{}');
             Object.keys(members).forEach(e => emails.add(e));
         } catch (_) {}
-        if (typeof AdminStore !== 'undefined') (AdminStore._adminEmails || []).forEach(e => emails.add(e));
         const current = Auth.getProfile()?.email;
         if (current) emails.add(this._email(current));
         return Array.from(emails);
@@ -1341,48 +1402,10 @@ const ProSubscription = {
     },
     // Demo 付款：呼叫這支就直接視為付款成功，沒有真正的金流串接
     purchase(email, planId) {
-        const key = this._email(email);
-        if (!key || key === 'guest') return { ok: false, message: '請先登入會員再購買。' };
-        const plan = this.plans.find(p => p.id === planId);
-        if (!plan) return { ok: false, message: '找不到這個方案。' };
-
-        const current = this.getSubscription(key);
-        const base = current.active ? new Date(current.expiresAt) : new Date();
-        const expiresAt = new Date(base.getTime() + plan.days * 86400000);
-
-        const subs = this._load(this._subsKey, {});
-        subs[key] = { expiresAt: expiresAt.toISOString(), plan: plan.id };
-        this._save(this._subsKey, subs);
-
-        const orders = this._load(this._ordersKey, {});
-        const rows = orders[key] || [];
-        rows.unshift({
-            id: `order-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-            plan: plan.id,
-            planName: plan.name,
-            amount: plan.price,
-            days: plan.days,
-            status: 'paid',
-            createdAt: new Date().toISOString()
-        });
-        orders[key] = rows.slice(0, 30);
-        this._save(this._ordersKey, orders);
-
-        // 自動開通：跟後台手動升級 VIP 並存，不衝突；付費解鎖不需要管理員審核
-        if (typeof AdminStore !== 'undefined') {
-            AdminStore.setMemberLevel(key, 'VIP會員');
-            AdminStore.clearVipRequest(key);
-        }
-        return { ok: true, expiresAt: subs[key].expiresAt, order: rows[0] };
+        return { ok: false, message: '前端 demo 付款已停用；PRO / VIP 權限僅以後端會員資料為準。' };
     },
-    // 到期就把等級退回一般會員；只處理「透過付費開通」的訂閱，沒有訂閱紀錄的帳號（例如後台手動核發的 VIP）不會被這支動到
     syncExpiry(email) {
-        const key = this._email(email);
-        const sub = this._load(this._subsKey, {})[key];
-        if (!sub) return;
-        if (new Date(sub.expiresAt).getTime() <= Date.now() && typeof AdminStore !== 'undefined') {
-            AdminStore.setMemberLevel(key, '一般會員');
-        }
+        return this.getSubscription(email);
     }
 };
 

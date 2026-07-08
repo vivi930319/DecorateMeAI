@@ -9,5 +9,7 @@ window.DECORATE_ME_CONFIG = {
     renderUrl:         'https://replicate-render-<專案編號>.asia-east1.run.app',
     renderApiKey:      '<render 服務的 X-API-Key，需與 Cloud Run 環境變數 RENDER_API_KEY 一致>',
     textSuggestionUrl: 'https://<Ollama建議服務的-cloudflare-tunnel>.trycloudflare.com',
-    textSuggestionApiKey: '<Ollama 建議服務的 X-API-Key>'
+    textSuggestionApiKey: '<Ollama 建議服務的 X-API-Key>',
+    // 只在純本機 demo、且你明確接受假 OTP 風險時才設 true；預設應維持 false/省略。
+    allowInsecureOtpBypass: false
 };

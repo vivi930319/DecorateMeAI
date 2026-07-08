@@ -51,8 +51,11 @@ sandbox.AdminStore.setPermission('user@example.com', { allowedPages: ['dashboard
 if (sandbox.AdminStore.canAccess('analysis', sandbox.Auth.getProfile())) {
   throw new Error('Permission override should block analysis');
 }
-if (!sandbox.AdminStore.isAdminProfile({ email: 'admin@decorateme.local' })) {
-  throw new Error('Admin profile inference failed');
+if (!sandbox.AdminStore.isAdminProfile({ email: 'admin@example.com', role: 'admin' })) {
+  throw new Error('Admin profile should trust backend role');
+}
+if (sandbox.AdminStore.isAdminProfile({ email: 'admin@decorateme.local' })) {
+  throw new Error('Admin profile should not trust email naming fallback');
 }
 sandbox.Cart.add(1);
 sandbox.Cart.add(1);
@@ -84,6 +87,16 @@ for (const method of ['compressForPackage', 'compressInWorker', 'compressOnMainT
 }
 if (sandbox.ImagePipeline.workerPath !== 'js/image-worker.js') {
   throw new Error(`Bad image worker path: ${sandbox.ImagePipeline.workerPath}`);
+}
+
+// ── 本機設定安全預設 ─────────────────────────────────────────
+const configExample = fs.readFileSync(path.join(rootDir, 'config.local.example.js'), 'utf8');
+if (!configExample.includes('allowInsecureOtpBypass: false')) {
+  throw new Error('config.local.example.js must keep allowInsecureOtpBypass disabled by default');
+}
+const gitignore = fs.readFileSync(path.join(rootDir, '.gitignore'), 'utf8');
+if (!gitignore.includes('config.local.js')) {
+  throw new Error('.gitignore must exclude config.local.js');
 }
 
 // ── AnalysisPackage 基本結構 ───────────────────────────────────

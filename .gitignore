@@ -15,3 +15,4 @@ Thumbs.db
 # 所有 Markdown 文件不上傳
 *.md
 config.local.js
+*.bak-before-split

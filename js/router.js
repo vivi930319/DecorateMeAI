@@ -406,17 +406,59 @@ function buildCurrentLookRecord(){
     };
 }
 
+// 後端 saved_looks 一筆 → 本機妝容記錄格式（供跨裝置拉回時重繪用）
+function mapRemoteSavedLook(L){
+    const a = (L && L.analysisSummary) || {};
+    return {
+        kind: 'compare',
+        title: '妝容對比圖',
+        style: (L && L.style) || '妝容建議',
+        advice: {},
+        analysis: { faceShape: a.faceShape || null, eyeShape: a.eyeShape || null, skinTone: { season: a.skinSeason || null } },
+        beforeImage: (L && L.beforeImageUrl) || '',
+        renderedImage: (L && L.afterImageUrl) || '',
+        analysisPackageId: null,
+        timestamp: (L && L.createdAt) || null,
+        remoteId: (L && L.id != null) ? L.id : null
+    };
+}
+
 function saveCurrentLook(){
     if (isGuest()) {
         promptGuestAuth('收藏妝容對比圖');
         return null;
     }
     const record = Router.pendingLook || buildCurrentLookRecord();
+    const stored = { ...record, timestamp: new Date().toISOString() };
     const records = JSON.parse(localStorage.getItem('beautySuggestions') || '[]');
-    records.unshift({ ...record, timestamp: new Date().toISOString() });
+    records.unshift(stored);
     localStorage.setItem('beautySuggestions', JSON.stringify(records.slice(0, 20)));
     Router.pendingLook = null;
     Router.pendingLookSaved = true;
+    // 盡力同步到後端（跨裝置持久化）；只有渲染後永久網址存在才送，失敗不影響本機收藏
+    const em = (typeof Auth !== 'undefined' && Auth.getProfile()) ? Auth.getProfile().email : null;
+    if (em) {
+        const a = stored.analysis || {};
+        Api.createSavedLook(em, {
+            style: stored.style || null,
+            beforeImageUrl: stored.beforeImage || null,
+            afterImageUrl: stored.renderedImage || null,
+            analysisSummary: {
+                faceShape: a.faceShape || null,
+                eyeShape: a.eyeShape || null,
+                skinSeason: (a.skinTone && a.skinTone.season) || null
+            }
+        }).then(r => {
+            // 把後端配發的 id 寫回本機該筆，之後刪除才能連動後端
+            if (r && r.ok && r.look && r.look.id != null) {
+                try {
+                    const recs = JSON.parse(localStorage.getItem('beautySuggestions') || '[]');
+                    const hit = recs.find(x => x.timestamp === stored.timestamp);
+                    if (hit) { hit.remoteId = r.look.id; localStorage.setItem('beautySuggestions', JSON.stringify(recs)); }
+                } catch (_) {}
+            }
+        });
+    }
     return record;
 }
 
@@ -616,6 +658,103 @@ compare: `
     </div>
 </div>`,
 suggestion: `<div class="page-header"><h1>妝容建議</h1><div class="divider"></div><p>依照臉部分析結果與選擇風格，產生妝容建議與可收藏的妝容對比圖。</p></div><div id="suggestionArea"></div>`,
+admin: `
+<div class="page-header admin-header">
+    <h1>管理中台</h1>
+    <div class="divider"></div>
+</div>
+
+<section class="admin-panel">
+    <div class="admin-summary">
+        <div><span>全部會員</span><b id="adminTotal">0</b></div>
+        <div><span>啟用中</span><b id="adminActive">0</b></div>
+        <div><span>已停權</span><b id="adminSuspended">0</b></div>
+        <div><span>管理員</span><b id="adminAdmins">0</b></div>
+    </div>
+
+    <div class="admin-actions-row">
+        <button class="admin-tab active" data-admin-filter="all">全部使用者</button>
+        <button class="admin-tab" data-admin-filter="active">啟用中</button>
+        <button class="admin-tab" data-admin-filter="suspended">已停權</button>
+        <button class="admin-tab" data-admin-filter="admin">管理員</button>
+    </div>
+
+    <div class="admin-main">
+        <div class="admin-toolbar">
+            <label class="admin-search">
+                <span>搜尋</span>
+                <input id="adminSearch" type="search" placeholder="姓名或 Email">
+            </label>
+            <button class="btn-gold btn-sm" id="adminSaveBtn" type="button">儲存權限</button>
+        </div>
+
+        <div class="admin-table-wrap">
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th>使用者</th>
+                        <th>角色</th>
+                        <th>會員等級</th>
+                        <th>狀態</th>
+                        <th>失敗原因</th>
+                        <th>功能權限</th>
+                    </tr>
+                </thead>
+                <tbody id="adminUserRows"></tbody>
+            </table>
+        </div>
+    </div>
+</section>
+
+<section class="admin-products">
+    <div class="member-section-head">
+        <h2>商品管理</h2>
+    </div>
+    <div class="admin-product-grid">
+        <form class="admin-product-form" id="adminProductForm">
+            <div class="admin-product-form-mode">編輯中：<span id="adminProductEditingLabel"></span></div>
+            <label>商品名稱<input id="adminProductName" type="text" placeholder="例如：柔霧粉底液"></label>
+            <label>分類
+                <select id="adminProductCategory">
+                    <option value="底妝">底妝</option>
+                    <option value="眼影">眼影</option>
+                    <option value="眼線/睫毛">眼線/睫毛</option>
+                    <option value="唇彩">唇彩</option>
+                    <option value="腮紅">腮紅</option>
+                    <option value="眉毛彩妝">眉毛彩妝</option>
+                    <option value="修容">修容</option>
+                    <option value="打亮">打亮</option>
+                </select>
+            </label>
+            <label>價格<input id="adminProductPrice" type="text" placeholder="例如：NT$980"></label>
+            <label>圖片網址<input id="adminProductImg" type="text" placeholder="留空則使用預設示意圖"></label>
+            <label>商品描述<textarea id="adminProductDesc" placeholder="顯示在前台商品詳情頁的說明文字"></textarea></label>
+            <label>色號（用逗號分隔 Hex 色碼）<input id="adminProductShades" type="text" placeholder="例如：#3A241C,#C99070,#B5654A"></label>
+            <div class="admin-product-form-actions">
+                <button class="btn-gold btn-sm" type="submit" id="adminProductSubmitBtn">新增產品</button>
+                <button class="btn-outline btn-sm" type="button" id="adminProductCancelBtn" style="display:none">取消編輯</button>
+            </div>
+        </form>
+        <div class="admin-product-manager">
+            <div class="admin-preview-grid" id="adminProductPreview"></div>
+            <div class="admin-table-wrap">
+                <table class="admin-table admin-product-table">
+                    <thead>
+                        <tr>
+                            <th>商品</th>
+                            <th>分類</th>
+                            <th>價格</th>
+                            <th>來源</th>
+                            <th>狀態</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="adminProductRows"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</section>`,
 profile: `
 <div class="page-header"><span class="eyebrow">Member</span><h1>會員中心</h1><div class="divider"></div></div>
 <div class="member-wrap">
@@ -662,6 +801,7 @@ const Router = {
     pendingLookSaved: false,
     leaveGuardOpen: false,
     pendingRegister: null,
+    prefillRegister: null,
     latestRenderedAfter: false,
     currentCategory: null,
     productRecommendationLoading: false,
@@ -2133,9 +2273,21 @@ const PageInit = {
             if (!renderQuotaEl) return;
             const quotaProfile = Auth.getProfile();
             const remaining = AdminStore.getRemainingRenders(quotaProfile);
-            renderQuotaEl.textContent = isGuest()
-                ? '訪客無法使用 AI 渲染，請先註冊會員'
-                : (remaining === Infinity ? '管理員：渲染次數不限' : `今日剩餘渲染次數：${remaining} / ${AdminStore.getDailyRenderLimit(quotaProfile)}`);
+            const dailyLimit = AdminStore.getDailyRenderLimit(quotaProfile);
+            const resetAt = quotaProfile?.renderQuota?.resetAt;
+            if (isGuest()) {
+                renderQuotaEl.textContent = '訪客無法使用 AI 渲染，請先註冊會員';
+                return;
+            }
+            if (remaining === Infinity || dailyLimit === Infinity) {
+                renderQuotaEl.textContent = '此帳號的渲染配額由後端判定：目前不限次數';
+                return;
+            }
+            if (remaining != null && dailyLimit != null && resetAt) {
+                renderQuotaEl.textContent = `此帳號的渲染配額由後端判定：今日剩餘 ${remaining} / ${dailyLimit}`;
+                return;
+            }
+            renderQuotaEl.textContent = '此帳號的渲染配額由後端判定；目前前端未持有可驗證的即時剩餘次數';
         };
         refreshRenderQuota();
         if (renderBtn) {
@@ -2146,12 +2298,19 @@ const PageInit = {
                     return;
                 }
                 if (!AdminStore.canRender(profile)) {
-                    showAlert(`今日渲染次數已用完（每日 ${AdminStore.getDailyRenderLimit(profile)} 次），升級 VIP 會員可提高至每日 ${AdminStore._vipDailyRenderLimit} 次，請至會員中心申請升級。`, { type: 'error' });
+                    showAlert('此帳號目前無法使用 AI 渲染，請確認後端會員權限設定。', { type: 'error' });
                     return;
                 }
                 const pkg = Router.analysisPackage;
                 const imageDataUrl = pkg?.images?.front?.compressedDataUrl || pkg?.images?.front?.dataUrl || '';
                 if (!imageDataUrl) { showAlert('尚未上傳照片，請先完成臉部分析。', { type: 'error' }); return; }
+                const currentRenderApiKey = window.DECORATE_ME_CONFIG?.renderApiKey || '';
+                if (!currentRenderApiKey) {
+                    renderStatus.style.display = 'block';
+                    renderStatus.textContent = '目前頁面沒有載到 renderApiKey，請重新整理或檢查 config.local.js';
+                    showAlert('目前頁面沒有載到 renderApiKey，請重新整理頁面後再試；若還是一樣，表示部署環境沒有載入正確的 render 設定檔。', { type: 'error' });
+                    return;
+                }
                 const prompt = buildRenderPrompt(pkg?.faceAnalysis, Router.selectedStyleId, pkg?.generativeText?.suggestion || '', pkg?.generativeText?.ollamaRenderPromptEn || '');
                 if (!prompt) { showAlert('尚未產生妝容建議，請先在風格頁按「確認風格」。', { type: 'error' }); return; }
 
@@ -2167,8 +2326,10 @@ const PageInit = {
                 try {
                     renderStatus.textContent = 'Replicate 生成中，約需 30–60 秒...';
                     const result = await Api.renderMakeup({ imageDataUrl, prompt, strength: 0.35 });
-                    AdminStore.recordRenderUsage(profile);
                     refreshRenderQuota();
+                    if (!result.renderQuota && renderQuotaEl) {
+                        renderQuotaEl.textContent = '渲染已完成；若後端未回最新 quota，剩餘次數會在下次會員資料同步後更新';
+                    }
                     Router.analysisPackage = AnalysisPackage.update(pkg, {
                         render: {
                             ...(pkg.render || {}),
@@ -2341,6 +2502,13 @@ const PageInit = {
             const permission = profile?.email ? AdminStore.getPermission(profile.email, profile) : null;
             const pending = !!permission?.vipRequested && !isVip;
             const remaining = AdminStore.getRemainingRenders(profile);
+            const dailyLimit = AdminStore.getDailyRenderLimit(profile);
+            const resetAt = profile?.renderQuota?.resetAt;
+            const renderQuotaLine = remaining === Infinity || dailyLimit === Infinity
+                ? '渲染妝容：由後端判定為不限次數'
+                : (remaining != null && dailyLimit != null && resetAt
+                    ? `渲染妝容：由後端判定為每日 ${dailyLimit} 次（今日剩餘 ${remaining} 次）`
+                    : '渲染妝容：由後端判定配額；前端目前不顯示未驗證的剩餘次數');
             const tier = (typeof MemberTier !== 'undefined') ? MemberTier.describe(profile) : { name: isVip ? 'PRO / VIP 會員' : '一般會員', autoTier: false };
             const nextTier = tier.autoTier ? MemberTier.nextTier(tier.lifetime) : null;
             const tierProgressLine = nextTier
@@ -2352,22 +2520,14 @@ const PageInit = {
                     <span class="tier-badge ${isVip ? 'vip' : 'general'}">${tier.name}</span>
                     <ul class="tier-benefits">
                         <li>BASIC 臉部分析</li>
-                        <li>${isVip ? 'PRO 臉部分析已開通' : 'PRO 臉部分析需後台開通'}</li>
-                        <li>渲染妝容：${remaining === Infinity ? '不限次數' : `每日 ${AdminStore.getDailyRenderLimit(profile)} 次（今日剩餘 ${remaining} 次）${isVip ? '' : `，升級 VIP 可達每日 ${AdminStore._vipDailyRenderLimit} 次`}`}</li>
+                        <li>${isVip ? 'PRO 臉部分析已由後端開通' : 'PRO 臉部分析需由後端開通'}</li>
+                        <li>${renderQuotaLine}</li>
                         ${tierProgressLine}
                     </ul>
-                    ${pending ? `<div class="tier-pending">升級申請已送出，請等候管理員審核</div>` : ''}
+                    ${pending ? `<div class="tier-pending">升級申請狀態由後端顯示：目前審核中</div>` : '<div class="tier-pending">會員等級與可用功能僅依後端回傳結果顯示</div>'}
                     </div>
-                    ${(!isVip && !isAdminUser) ? `<button class="btn-gold btn-sm" id="profileVipUpgradeBtn" ${pending ? 'disabled' : ''}>${pending ? '審核中' : '申請升級 VIP'}</button>` : ''}
                 </div>
             `;
-            const upgradeBtn = document.getElementById('profileVipUpgradeBtn');
-            if (upgradeBtn) upgradeBtn.onclick = () => {
-                if (!profile?.email) { showAlert('訪客身分無法申請升級，請先註冊會員。', { type: 'error' }); return; }
-                AdminStore.requestVipUpgrade(profile.email);
-                showToast('已送出升級申請，請等候管理員審核');
-                PageInit.profile();
-            };
         }
         const favEl = document.getElementById('profileFavCount');
         const anEl = document.getElementById('profileAnalyzeCount');
@@ -2383,44 +2543,15 @@ const PageInit = {
 
         const proCard = document.getElementById('profileProCard');
         if (proCard) {
-            if (isGuest() || typeof ProSubscription === 'undefined') {
+            if (isGuest()) {
                 proCard.innerHTML = '<div class="empty-state compact">登入會員後即可購買 PRO 方案</div>';
             } else {
-                const sub = ProSubscription.getSubscription(profile.email);
-                const orders = ProSubscription.orders(profile.email);
-                const statusLine = sub.active
-                    ? `<p>目前方案：<b>${escapeHtml(sub.plan === 'yearly' ? 'PRO 年費方案' : 'PRO 月費方案')}</b>，到期日 ${new Date(sub.expiresAt).toLocaleDateString('zh-TW')}（剩餘 ${sub.daysLeft} 天）</p>`
-                    : '<p>目前沒有生效中的付費方案，購買後立即解鎖 PRO 分析與無限渲染。</p>';
                 proCard.innerHTML = `
-                    <div class="pro-plan-status">${statusLine}</div>
-                    <div class="pro-plan-grid">
-                        ${ProSubscription.plans.map(plan => `
-                            <div class="member-action-card pro-plan-card">
-                                <div>
-                                    <b>${escapeHtml(plan.name)}</b>
-                                    <p>NT$ ${plan.price} / ${plan.days} 天（Demo 付款，不會真的扣款）</p>
-                                </div>
-                                <button class="btn-gold btn-sm" data-pro-plan="${plan.id}">${sub.active ? '續約' : '立即購買'}</button>
-                            </div>
-                        `).join('')}
-                    </div>
-                    <div class="pro-order-history">
-                        <h4>訂單紀錄</h4>
-                        ${orders.length ? orders.slice(0, 5).map(o => `<div class="point-ledger-row">
-                            <span>${escapeHtml(o.planName)}</span>
-                            <time>${new Date(o.createdAt).toLocaleString('zh-TW')}</time>
-                            <b>NT$ ${o.amount}</b>
-                        </div>`).join('') : '<div class="empty-state compact">尚無訂單紀錄</div>'}
+                    <div class="pro-plan-status">
+                        <p>前端不再用 demo 付款自行開通 PRO。是否可用 PRO / render / admin，僅顯示後端會員資料回傳結果。</p>
+                        <p>若需變更方案或權限，請由後端會員系統或管理員處理。</p>
                     </div>
                 `;
-                proCard.querySelectorAll('[data-pro-plan]').forEach(btn => {
-                    btn.onclick = () => {
-                        const result = ProSubscription.purchase(profile.email, btn.dataset.proPlan);
-                        if (!result.ok) { showAlert(result.message, { type: 'error' }); return; }
-                        showToast(`付款成功（Demo），PRO 已開通至 ${new Date(result.expiresAt).toLocaleDateString('zh-TW')}`);
-                        PageInit.profile();
-                    };
-                });
             }
         }
 
@@ -2545,49 +2676,70 @@ const PageInit = {
                 <b class="${row.delta >= 0 ? 'plus' : 'minus'}">${row.delta >= 0 ? '+' : ''}${row.delta}</b>
             </div>`).join('')}</div>` : '<div class="empty-state compact">尚無點數紀錄</div>';
         }
-        const suggestionArea = document.getElementById('profileSuggestionArea');
-        if (suggestionArea) {
-            if (!suggestions.length) {
-                suggestionArea.innerHTML = '<div class="empty-state compact">尚未收藏妝容對比圖</div>';
-            } else {
-                suggestionArea.innerHTML = `<div class="saved-look-grid">${suggestions.slice(0, 6).map((item, index) => `
-                    <article class="saved-look-card reveal-in" data-look="${index}" style="animation-delay:${Math.min(index * 0.04, 0.24)}s">
-                        <button class="look-del" data-del="${index}" aria-label="刪除此妝容">×</button>
-                        <div class="saved-look-photo">
-                            ${item.renderedImage
-                                ? `<img src="${item.renderedImage}" alt="${item.style || '妝容對比圖'}" onload="this.classList.add('loaded')">${String(item.renderedImage).includes('replicate.delivery') ? '<span class="saved-look-expire">此圖為舊版臨時網址，可能已失效</span>' : ''}`
-                                : `<span>${item.style || 'Saved Look'}</span>`
-                            }
-                        </div>
-                        <div class="saved-look-body">
-                            <div class="saved-look-kicker">Saved Look</div>
-                            <h3>${item.style || '妝容對比圖'}</h3>
-                            <p>${formatSavedAdvice(item)}</p>
-                            <time>${item.timestamp ? new Date(item.timestamp).toLocaleString('zh-TW') : ''}</time>
-                        </div>
-                    </article>
-                `).join('')}</div>`;
+        const paintSavedLooks = (list) => {
+            const area = document.getElementById('profileSuggestionArea');
+            const countEl = document.getElementById('profileSuggestionCount');
+            if (countEl) countEl.textContent = list.length;
+            if (!area) return;
+            if (!list.length) {
+                area.innerHTML = '<div class="empty-state compact">尚未收藏妝容對比圖</div>';
+                return;
+            }
+            area.innerHTML = `<div class="saved-look-grid">${list.slice(0, 6).map((item, index) => `
+                <article class="saved-look-card reveal-in" data-look="${index}" style="animation-delay:${Math.min(index * 0.04, 0.24)}s">
+                    <button class="look-del" data-del="${index}" aria-label="刪除此妝容">×</button>
+                    <div class="saved-look-photo">
+                        ${item.renderedImage
+                            ? `<img src="${item.renderedImage}" alt="${item.style || '妝容對比圖'}" onload="this.classList.add('loaded')">${String(item.renderedImage).includes('replicate.delivery') ? '<span class="saved-look-expire">此圖為舊版臨時網址，可能已失效</span>' : ''}`
+                            : `<span>${item.style || 'Saved Look'}</span>`
+                        }
+                    </div>
+                    <div class="saved-look-body">
+                        <div class="saved-look-kicker">Saved Look</div>
+                        <h3>${item.style || '妝容對比圖'}</h3>
+                        <p>${formatSavedAdvice(item)}</p>
+                        <time>${item.timestamp ? new Date(item.timestamp).toLocaleString('zh-TW') : ''}</time>
+                    </div>
+                </article>
+            `).join('')}</div>`;
+            area.querySelectorAll('.saved-look-card[data-look]').forEach(function(card){ card.style.cursor='pointer'; card.onclick=function(){ openLookModal(list[+card.dataset.look]); }; });
+            area.querySelectorAll('.look-del[data-del]').forEach(function(btn){
+                btn.onclick = function(e){
+                    e.stopPropagation();
+                    var idx = +btn.dataset.del;
+                    showConfirm("確定要刪除這個收藏的妝容嗎？此動作無法復原。", {
+                        title: "刪除妝容對比圖", type: "error", okText: "刪除", cancelText: "保留",
+                        onOk: function(){
+                            var recs = []; try { recs = JSON.parse(localStorage.getItem("beautySuggestions") || "[]"); } catch(_){}
+                            var removed = recs.splice(idx, 1)[0];
+                            localStorage.setItem("beautySuggestions", JSON.stringify(recs));
+                            // 若該筆已同步到後端，連動刪除（盡力而為，失敗不影響本機）
+                            var em = (typeof Auth !== 'undefined' && Auth.getProfile()) ? Auth.getProfile().email : null;
+                            if (em && removed && removed.remoteId != null) { Api.deleteSavedLook(em, removed.remoteId); }
+                            showToast("已刪除妝容");
+                            paintSavedLooks(recs);
+                        }
+                    });
+                };
+            });
+        };
+        paintSavedLooks(suggestions);
+        document.querySelectorAll('#mainContent [data-nav]').forEach(el => el.onclick = () => Router.go(el.dataset.nav));
+        // 背景從後端拉最新收藏（跨裝置）；成功就與本機未同步的收藏合併、覆蓋快取並重繪
+        if (!isGuest()) {
+            const __em = (typeof Auth !== 'undefined' && Auth.getProfile()) ? Auth.getProfile().email : null;
+            if (__em) {
+                Api.listSavedLooks(__em).then(r => {
+                    if (!r || !r.ok) return;
+                    const remote = r.looks.map(mapRemoteSavedLook);
+                    let localOnly = [];
+                    try { localOnly = JSON.parse(localStorage.getItem('beautySuggestions') || '[]').filter(x => x.remoteId == null); } catch (_) {}
+                    const merged = remote.concat(localOnly).sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+                    localStorage.setItem('beautySuggestions', JSON.stringify(merged.slice(0, 20)));
+                    if (Router.currentPage === 'profile') paintSavedLooks(merged);
+                });
             }
         }
-        document.querySelectorAll('#mainContent [data-nav]').forEach(el => el.onclick = () => Router.go(el.dataset.nav));
-        var __looks = suggestions;
-        document.querySelectorAll('.saved-look-card[data-look]').forEach(function(card){ card.style.cursor='pointer'; card.onclick=function(){ openLookModal(__looks[+card.dataset.look]); }; });
-        document.querySelectorAll('.look-del[data-del]').forEach(function(btn){
-            btn.onclick = function(e){
-                e.stopPropagation();
-                var idx = +btn.dataset.del;
-                showConfirm("確定要刪除這個收藏的妝容嗎？此動作無法復原。", {
-                    title: "刪除妝容對比圖", type: "error", okText: "刪除", cancelText: "保留",
-                    onOk: function(){
-                        var recs = []; try { recs = JSON.parse(localStorage.getItem("beautySuggestions") || "[]"); } catch(_){}
-                        recs.splice(idx, 1);
-                        localStorage.setItem("beautySuggestions", JSON.stringify(recs));
-                        showToast("已刪除妝容");
-                        PageInit.profile();
-                    }
-                });
-            };
-        });
         // 更改密碼：訪客隱藏
         var __cpBtn = document.getElementById("changePwdBtn");
         if (__cpBtn) {
@@ -2624,6 +2776,16 @@ const PageInit = {
 
         // 資料來源：優先吃組員資料庫 GET /api/members；抓不到才退回本機 demo，並在工具列標明目前模式
         let dbMembers = null;
+        let dbMembersError = '';
+        let dbMembersLoading = true;
+        // 每位會員的妝容收藏（saved_looks）：undefined=還沒抓、null=抓失敗、陣列=實際收藏。用來在後台即時看資料庫寫入狀況
+        const looksByEmail = {};
+        const lookCountLabel = (email) => {
+            const v = looksByEmail[email];
+            if (v === undefined) return '…';
+            if (v === null) return '—';
+            return String(v.length);
+        };
         const dbStatusEl = (() => {
             const toolbar = document.querySelector('.admin-toolbar');
             if (!toolbar) return null;
@@ -2637,19 +2799,63 @@ const PageInit = {
             return el;
         })();
         const setDbStatus = (text, ok) => { if (dbStatusEl) { dbStatusEl.textContent = text; dbStatusEl.style.color = ok ? '#4E7A5A' : '#A0522D'; } };
-        setDbStatus('資料庫載入中…', true);
-        Api.fetchAdminMembers().then(list => {
-            if (list && list.length) {
-                dbMembers = list;
-                setDbStatus(`已連接會員資料庫（${list.length} 位會員）`, true);
-            } else {
-                setDbStatus('資料庫連不上，目前顯示本機 demo 資料', false);
+        const ensureReloadBtn = (() => {
+            let btn = document.getElementById('adminReloadBtn');
+            if (!btn) {
+                btn = document.createElement('button');
+                btn.id = 'adminReloadBtn';
+                btn.type = 'button';
+                btn.className = 'btn-outline btn-sm';
+                btn.textContent = '重新讀取';
+                const save = document.getElementById('adminSaveBtn');
+                if (save && save.parentNode) save.parentNode.insertBefore(btn, save);
             }
+            return btn;
+        })();
+        const classifyMemberLoadError = (result) => {
+            if (result?.status === 401 || result?.status === 403) {
+                return '請確認目前登入的是 admin 帳號，且 members API 已啟用 session 驗證';
+            }
+            if (/credentials|cors|failed to fetch|networkerror|load failed/i.test(String(result?.error || ''))) {
+                return '請確認後端已回 Access-Control-Allow-Credentials，且 cookie 為 SameSite=None; Secure';
+            }
+            if (result && result.ok === false) {
+                return '請確認 members API 有回合法 JSON，且 response body 內包含 members[]';
+            }
+            return '請確認 admin session、CORS 與 cookie 設定';
+        };
+        const loadAdminMembers = () => {
+            dbMembersLoading = true;
+            dbMembersError = '';
+            setDbStatus('會員資料庫載入中…', true);
+            if (ensureReloadBtn) ensureReloadBtn.disabled = true;
+            render();
+            Api.fetchAdminMembers().then(result => {
+                dbMembersLoading = false;
+            if (result?.ok) {
+                dbMembers = result.members || [];
+                dbMembersError = '';
+                setDbStatus('', true);
+                loadAllSavedLooks();
+            } else {
+                dbMembers = null;
+                dbMembersError = result?.error || '未知錯誤';
+                const hint = classifyMemberLoadError(result);
+                setDbStatus(`會員資料庫讀取失敗：${dbMembersError}。${hint}`, false);
+                // 401 = admin session 已過期（跨站 cookie 常被瀏覽器清掉）。直接提供一鍵重登，不用讓使用者卡在看不懂的錯誤
+                if (result?.status === 401) {
+                    showConfirm('管理員登入已過期（session 失效，跨站 cookie 被瀏覽器清除所致）。請重新登入後再回到管理中台。', {
+                        title: '登入已過期', type: 'error', okText: '重新登入', cancelText: '稍後',
+                        onOk: function(){ showLogin(); }
+                    });
+                }
+            }
+                if (ensureReloadBtn) ensureReloadBtn.disabled = false;
             render();
         });
+        };
 
         const membersFromDb = () => dbMembers.map(m => {
-            const localPerm = AdminStore.getPermission(m.email, m);
             return {
                 name: m.name,
                 email: m.email,
@@ -2659,8 +2865,8 @@ const PageInit = {
                 permission: {
                     role: m.role || 'member',
                     status: m.status || 'active',
-                    allowedPages: (Array.isArray(m.allowedPages) && m.allowedPages.length) ? m.allowedPages : (localPerm.allowedPages || []),
-                    vipRequested: !!localPerm.vipRequested
+                    allowedPages: (Array.isArray(m.allowedPages) && m.allowedPages.length) ? m.allowedPages : AdminStore.defaultPermissions(m.role).allowedPages,
+                    vipRequested: !!(m.vipRequested || m.permission?.vipRequested)
                 }
             };
         });
@@ -2669,7 +2875,10 @@ const PageInit = {
             const keyword = String(searchEl?.value || '').trim().toLowerCase();
             // 只吃真會員資料庫，連不上就明講，不退回 demo 假資料
             if (!dbMembers) {
-                rowsEl.innerHTML = '<tr><td colspan="6"><div class="empty-state compact">會員資料庫載入中…連不上時這裡會一直是空的（已停用 demo 假資料）</div></td></tr>';
+                const message = dbMembersLoading
+                    ? '會員資料庫載入中…'
+                    : `會員資料庫目前無法讀取。${escapeHtml(dbMembersError || '請確認 admin session、CORS 與 cookie 設定。')}（已停用 demo 假資料）`;
+                rowsEl.innerHTML = `<tr><td colspan="6"><div class="empty-state compact">${message}</div></td></tr>`;
                 ['adminTotal','adminActive','adminSuspended','adminAdmins'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '—'; });
                 return;
             }
@@ -2701,6 +2910,7 @@ const PageInit = {
                         <div class="admin-user">
                             <b>${escapeHtml(member.name || member.email.split('@')[0])}${perm.vipRequested && member.level !== 'VIP會員' ? ' <span class="admin-fail warn">申請升級中</span>' : ''}</b>
                             <span>${escapeHtml(member.email)}</span>
+                            <span class="admin-look-count" data-look-email="${escapeHtml(member.email)}" style="margin-top:4px;font-size:12px;color:#7A4A42;cursor:pointer;text-decoration:underline dotted;" title="點開看這位會員的妝容收藏（從資料庫即時抓）">妝容收藏：${lookCountLabel(member.email)}</span>
                         </div>
                     </td>
                     <td>
@@ -2748,7 +2958,67 @@ const PageInit = {
                     render();
                 };
             });
+
+            // 等級下拉連動權限：選 VIP／PRO 會員時，即時自動勾選「PRO 分析」「渲染不限次數」；改回一般會員則取消勾選（實際寫入仍以「儲存權限」為準）
+            rowsEl.querySelectorAll('[data-admin-level]').forEach(sel => {
+                sel.onchange = () => {
+                    const row = sel.closest('[data-admin-email]');
+                    if (!row) return;
+                    const isVipTier = ['VIP會員', 'PRO會員'].includes(sel.value);
+                    ['analysisPro', 'unlimitedRender'].forEach(page => {
+                        const box = row.querySelector(`[data-admin-page="${page}"]`);
+                        if (box) box.checked = isVipTier;
+                    });
+                };
+            });
+
+            // 妝容收藏數：點開看該會員的收藏縮圖（從資料庫即時抓）
+            rowsEl.querySelectorAll('.admin-look-count[data-look-email]').forEach(function(el){
+                el.onclick = function(){ openMemberLooksModal(el.dataset.lookEmail); };
+            });
         };
+
+        // 背景逐會員抓 saved_looks，抓完重繪讓收藏數顯示出來（demo 時後台可即時看到資料庫寫入）
+        const loadAllSavedLooks = () => {
+            if (!Array.isArray(dbMembers) || !dbMembers.length) return;
+            Promise.all(dbMembers.map(m =>
+                Api.listSavedLooks(m.email)
+                    .then(r => { looksByEmail[m.email] = (r && r.ok) ? r.looks : null; })
+                    .catch(() => { looksByEmail[m.email] = null; })
+            )).then(() => { if (Router.currentPage === 'admin') render(); });
+        };
+
+        // 縮圖 modal：只顯示渲染後圖＋風格＋時間，不顯示 before 真人臉照（隱私）
+        const openMemberLooksModal = (email) => {
+            const looks = looksByEmail[email];
+            const old = document.getElementById('adminLooksModal'); if (old) old.remove();
+            const ov = document.createElement('div'); ov.id = 'adminLooksModal'; ov.className = 'glass-alert';
+            const body = (Array.isArray(looks) && looks.length)
+                ? `<div class="saved-look-grid">${looks.map(L => `
+                    <article class="saved-look-card">
+                        <div class="saved-look-photo">${L.afterImageUrl
+                            ? `<img src="${escapeHtml(L.afterImageUrl)}" alt="${escapeHtml(L.style || '妝容')}" onload="this.classList.add('loaded')">`
+                            : `<span>${escapeHtml(L.style || 'Look')}</span>`}</div>
+                        <div class="saved-look-body"><h3>${escapeHtml(L.style || '妝容')}</h3><time>${L.createdAt ? new Date(L.createdAt).toLocaleString('zh-TW') : ''}</time></div>
+                    </article>`).join('')}</div>`
+                : (looks === null
+                    ? '<div class="empty-state compact">讀取這位會員的收藏失敗（請確認 admin session 與資料庫連線）</div>'
+                    : '<div class="empty-state compact">這位會員目前沒有收藏妝容</div>');
+            ov.innerHTML = `<div class="ga-card" role="dialog" aria-modal="true" style="max-width:640px;width:92%;max-height:82vh;overflow:auto;">
+                <button class="lm-close" aria-label="關閉">×</button>
+                <h3 class="ga-title">妝容收藏（資料庫即時）</h3>
+                <p class="ga-sub">${escapeHtml(email)}</p>
+                ${body}
+            </div>`;
+            document.body.appendChild(ov); void ov.offsetWidth; ov.classList.add('show');
+            const close = () => { ov.classList.remove('show'); setTimeout(() => ov.remove(), 300); };
+            ov.querySelector('.lm-close').onclick = close;
+            ov.addEventListener('click', e => { if (e.target === ov) close(); });
+        };
+
+        // render 為 const，必須等它初始化後才能呼叫 loadAdminMembers（內部會呼叫 render），否則觸發 TDZ「Cannot access 'render' before initialization」
+        if (ensureReloadBtn) ensureReloadBtn.onclick = loadAdminMembers;
+        loadAdminMembers();
 
         filters.forEach(btn => {
             btn.onclick = () => {
@@ -2775,8 +3045,8 @@ const PageInit = {
                 return { email, role, allowedPages, level: (levelSelect && !levelSelect.disabled) ? levelSelect.value : null };
             });
 
-            if (!dbMembers) { showAlert('會員資料庫連不上，無法儲存（已停用 demo 模式）', { type: 'error' }); return; }
-            // 逐筆 PATCH 進資料庫；本機 AdminStore 只當快取鏡射，讓前台其他頁立即反映
+            if (!dbMembers) { showAlert(`會員資料庫無法讀取，無法儲存：${dbMembersError || '請確認 admin session、CORS 與 cookie 設定'}`, { type: 'error' }); return; }
+            // 逐筆 PATCH 進資料庫；前端不再自行核發權限，只在成功後同步顯示資料庫回傳結果
             saveBtn.disabled = true;
             const failures = [];
             for (const r of rows) {
@@ -2784,13 +3054,21 @@ const PageInit = {
                 if (r.level) patch.level = r.level;
                 const result = await Api.patchMember(r.email, patch);
                 if (!result.ok) { failures.push(`${r.email}：${result.error}`); continue; }
-                AdminStore.setPermission(r.email, { role: r.role, allowedPages: r.allowedPages });
-                if (r.level) {
-                    AdminStore.setMemberLevel(r.email, r.level);
-                    if (['VIP會員', 'PRO會員'].includes(r.level)) AdminStore.clearVipRequest(r.email);
-                }
                 const target = dbMembers.find(m => m.email === r.email);
-                if (target) { target.role = r.role; target.allowedPages = r.allowedPages; if (r.level) target.level = r.level; }
+                const memberFromServer = result.member || {};
+                if (target) {
+                    target.role = memberFromServer.role || r.role;
+                    target.allowedPages = memberFromServer.allowedPages || r.allowedPages;
+                    target.status = memberFromServer.status || target.status;
+                    target.vipRequested = !!(memberFromServer.vipRequested || memberFromServer.permission?.vipRequested);
+                    if (r.level) target.level = memberFromServer.level || r.level;
+                }
+                if ((Auth.getProfile()?.email || '').toLowerCase() === String(r.email || '').toLowerCase()) {
+                    Auth.setProfile({
+                        ...(Auth.getProfile() || {}),
+                        ...(memberFromServer.email ? memberFromServer : patch)
+                    });
+                }
             }
             saveBtn.disabled = false;
             if (failures.length) {
@@ -3029,6 +3307,14 @@ function showRegister() {
             </div>
         </div>
     `;
+    // 從登入失敗「去註冊」帶過來的帳密：自動填入 email 與密碼（含確認），使用者只要補其他欄位
+    const pf = Router.prefillRegister;
+    if (pf) {
+        Router.prefillRegister = null;
+        const e = document.getElementById('regEmail'); if (e && pf.email) e.value = pf.email;
+        const p = document.getElementById('regPwd'); if (p && pf.password) p.value = pf.password;
+        const p2 = document.getElementById('regPwd2'); if (p2 && pf.password) p2.value = pf.password;
+    }
 }
 
 function showVerification(email) {
@@ -3072,17 +3358,34 @@ async function doLoginAction() {
         const member = data.member || {};
         Auth.setProfile({
             ...registered,
-            name: registered.name || member.name || email.split('@')[0],
+            ...member,
+            name: member.name || registered.name || email.split('@')[0],
             email: member.email || email,
             phone: member.phone_number || registered.phone || '',
             age: member.age || registered.age || '',
-            level: AdminStore.isAdminProfile({ email }) ? '管理員' : (member.level || registered.level || '一般會員'),
-            role: AdminStore.isAdminProfile({ email }) ? 'admin' : (member.role || registered.role || 'member'),
+            level: member.level || registered.level || '一般會員',
+            role: member.role || registered.role || 'member',
+            status: member.status || registered.status || 'active',
+            allowedPages: Array.isArray(member.allowedPages) ? member.allowedPages : (registered.allowedPages || undefined),
+            vipRequested: !!(member.vipRequested || registered.vipRequested),
+            renderQuota: member.renderQuota || registered.renderQuota || null
         });
     } catch (err) {
         // 不管是伺服器明確拒絕，還是根本連不上會員資料庫，都不能放行——
         // 沒有真正在資料庫裡的會員，一律不能用登入方式進去，避免有人靠擋網路/竄改 DNS 繞過驗證。
-        showAlert(err.networkFailure ? '無法連線到會員資料庫，請稍後再試' : (err.message || '帳號或密碼錯誤'), { type: 'error' });
+        if (err.networkFailure) {
+            showAlert('無法連線到會員資料庫，請稍後再試', { type: 'error' });
+            return;
+        }
+        // 後端對「未註冊」與「密碼錯」回一樣的錯誤（防帳號枚舉），前端無法區分；
+        // 一律提供「用剛才輸入的帳密直接去註冊」捷徑，已註冊者選「重新輸入」即可。
+        showConfirm((err.message || '帳號或密碼錯誤') + '。還沒有帳號嗎？可以用剛才輸入的資料直接去註冊。', {
+            title: '登入失敗',
+            type: 'error',
+            okText: '去註冊',
+            cancelText: '重新輸入',
+            onOk: function(){ Router.prefillRegister = { email: email, password: password }; showRegister(); }
+        });
         return;
     }
     if (AdminStore.getPermission(email, Auth.getProfile()).status === 'suspended') {
@@ -3122,8 +3425,9 @@ async function doRegisterAction() {
     try {
         await Api.register(Router.pendingRegister);
         await Api.sendOTP(email);
-    } catch (_) {
-        console.warn('Auth API unavailable, using local OTP simulation.');
+    } catch (err) {
+        showAlert(err?.message || '註冊或驗證碼發送失敗，請稍後再試', { type:'error' });
+        return;
     }
     showVerification(email);
 }
@@ -3133,14 +3437,7 @@ async function doVerifyOTP() {
     if (!code) { showAlert('請輸入驗證碼'); return; }
     const pending = Router.pendingRegister;
     if (!pending) { showAlert('註冊資料已過期，請重新註冊', { type:'error', onOk: showRegister }); return; }
-    try {
-        await Api.verifyOTP(pending.email, code);
-    } catch (_) {
-        if (code.length < 4) {
-            showAlert('驗證碼至少 4 碼');
-            return;
-        }
-    }
+    if (!(await verifyOtpWithOptionalBypass(pending.email, code))) return;
     Auth.setProfile({
         name: pending.name,
         phone: pending.phone,
@@ -3194,9 +3491,26 @@ function showForgotVerify(email){
 async function doVerifyForgotOTP(){
     var code = document.getElementById('forgotOtp').value.trim();
     if (!code) { showAlert('請輸入驗證碼'); return; }
-    try { await Api.verifyOTP(Router.forgotEmail, code); }
-    catch (_) { if (code.length < 4) { showAlert('驗證碼至少 4 碼'); return; } }
+    if (!(await verifyOtpWithOptionalBypass(Router.forgotEmail, code))) return;
     showResetPassword();
+}
+
+async function verifyOtpWithOptionalBypass(email, code) {
+    const allowOtpBypass = !!window.DECORATE_ME_CONFIG?.allowInsecureOtpBypass;
+    try {
+        await Api.verifyOTP(email, code);
+        return true;
+    } catch (err) {
+        if (!allowOtpBypass) {
+            showAlert(err?.message || '驗證碼驗證失敗，請稍後再試', { type:'error' });
+            return false;
+        }
+        if (code.length < 4) {
+            showAlert('驗證碼至少 4 碼');
+            return false;
+        }
+        return true;
+    }
 }
 
 async function resendForgotOTP(){
