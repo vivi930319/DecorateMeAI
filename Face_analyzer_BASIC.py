@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks, FastAPI, UploadFile, HTTPException, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 import insightface
 from insightface.app import FaceAnalysis as InsightFaceApp
 from dev_server_utils import get_cors_origins, run_dev_server
@@ -35,6 +35,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 分析端點加 API key，擋掉直接掃 Cloud Run URL 濫用運算資源。
+# 環境變數 FACE_API_KEY 沒設定時（本機開發）不擋；/health、根路徑、CORS preflight(OPTIONS) 一律放行。
+FACE_API_KEY = os.getenv("FACE_API_KEY", "")
+_API_KEY_OPEN_PATHS = {"/health", "/"}
+
+
+@app.middleware("http")
+async def _api_key_guard(request, call_next):
+    if (FACE_API_KEY and request.method != "OPTIONS"
+            and request.url.path not in _API_KEY_OPEN_PATHS):
+        if request.headers.get("x-api-key") != FACE_API_KEY:
+            return JSONResponse(
+                status_code=401,
+                content={"error": {"code": "FORBIDDEN", "message": "Invalid or missing API key.", "retryable": False}},
+            )
+    return await call_next(request)
 
 import job_store
 

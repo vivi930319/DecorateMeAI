@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 import job_store
 from Face_analyzer_BASIC import FaceAnalyzer
@@ -24,6 +25,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 分析端點 API key 保護，比照 BASIC；FACE_API_KEY 沒設定不擋，/health、根路徑、OPTIONS 放行。
+FACE_API_KEY = os.getenv("FACE_API_KEY", "")
+_API_KEY_OPEN_PATHS = {"/health", "/"}
+
+
+@app.middleware("http")
+async def _api_key_guard(request, call_next):
+    if (FACE_API_KEY and request.method != "OPTIONS"
+            and request.url.path not in _API_KEY_OPEN_PATHS):
+        if request.headers.get("x-api-key") != FACE_API_KEY:
+            return JSONResponse(
+                status_code=401,
+                content={"error": {"code": "FORBIDDEN", "message": "Invalid or missing API key.", "retryable": False}},
+            )
+    return await call_next(request)
 
 
 async def _read_image(file: UploadFile, label: str) -> bytes:
