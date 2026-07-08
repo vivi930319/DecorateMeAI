@@ -3,6 +3,7 @@
 window.DECORATE_ME_CONFIG = {
     faceBasicUrl:      'https://face-basic-<專案編號>.asia-east1.run.app',
     faceProUrl:        'https://face-pro-<專案編號>.asia-east1.run.app',
+    faceApiKey:        '<face 服務的 X-API-Key，需與 Cloud Run 環境變數 FACE_API_KEY 一致>',
     memberDatabaseUrl: 'https://<會員資料庫的-cloudflare-tunnel>.trycloudflare.com',
     productUrl:        'https://<商品服務的-cloudflare-tunnel>.trycloudflare.com',
     renderUrl:         'https://replicate-render-<專案編號>.asia-east1.run.app',

@@ -14,6 +14,7 @@ const ApiConfig = {
     services: {
         faceBasic: {
             baseUrl: RuntimeApiConfig.faceBasicUrl || 'http://127.0.0.1:8001',
+            apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/basic',
             posePath: '/v1/face/pose',
             jobPath: '/v1/face/jobs/basic',
@@ -22,6 +23,7 @@ const ApiConfig = {
         },
         facePro: {
             baseUrl: RuntimeApiConfig.faceProUrl || 'http://127.0.0.1:8002',
+            apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/pro',
             jobPath: '/v1/face/jobs/pro',
             jobStatusPath: '/v1/face/jobs/{jobId}',
@@ -68,11 +70,17 @@ const ApiConfig = {
 const Api = {
     config: ApiConfig,
 
+    // 臉部分析服務的 X-API-Key（faceBasic/facePro 共用同一把）；沒設定時回空物件、不影響本機。
+    _faceHeaders(service) {
+        const key = this.config.services[service]?.apiKey;
+        return key ? { 'X-API-Key': key } : {};
+    },
+
     // 臉部分析
     async detectFacePose(file) {
         const fd = new FormData();
         fd.append('file', file);
-        const res = await fetch(this.config.url('faceBasic', 'posePath'), { method: 'POST', body: fd });
+        const res = await fetch(this.config.url('faceBasic', 'posePath'), { method: 'POST', body: fd, headers: this._faceHeaders('faceBasic') });
         if (!res.ok) {
             const err = await res.json().catch(() => ({ detail: '角度偵測失敗' }));
             throw new Error(err.detail?.error?.message || err.detail || '角度偵測失敗');
@@ -83,7 +91,7 @@ const Api = {
     async createFaceJob(file) {
         const fd = new FormData();
         fd.append('file', file);
-        const res = await fetch(this.config.url('faceBasic', 'jobPath'), { method: 'POST', body: fd });
+        const res = await fetch(this.config.url('faceBasic', 'jobPath'), { method: 'POST', body: fd, headers: this._faceHeaders('faceBasic') });
         if (!res.ok) {
             const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
             throw new Error(err.detail?.error?.message || err.detail || '建立 BASIC job 失敗');
@@ -97,7 +105,7 @@ const Api = {
         for (const role of ['left45', 'right45', 'side']) {
             if (files[role]) fd.append(role, files[role]);
         }
-        const res = await fetch(this.config.url('facePro', 'jobPath'), { method: 'POST', body: fd });
+        const res = await fetch(this.config.url('facePro', 'jobPath'), { method: 'POST', body: fd, headers: this._faceHeaders('facePro') });
         if (!res.ok) {
             const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
             throw new Error(err.detail?.error?.message || err.detail || '建立 PRO job 失敗');
@@ -107,7 +115,7 @@ const Api = {
 
     async getFaceJob(mode, jobId) {
         const service = mode === 'pro' ? 'facePro' : 'faceBasic';
-        const res = await fetch(this.config.jobUrl(service, 'jobStatusPath', jobId), { cache: 'no-store' });
+        const res = await fetch(this.config.jobUrl(service, 'jobStatusPath', jobId), { cache: 'no-store', headers: this._faceHeaders(service) });
         if (!res.ok) {
             const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
             throw new Error(err.detail?.error?.message || err.detail || '查詢 job 失敗');
@@ -117,7 +125,7 @@ const Api = {
 
     async getFaceJobResult(mode, jobId) {
         const service = mode === 'pro' ? 'facePro' : 'faceBasic';
-        const res = await fetch(this.config.jobUrl(service, 'jobResultPath', jobId), { cache: 'no-store' });
+        const res = await fetch(this.config.jobUrl(service, 'jobResultPath', jobId), { cache: 'no-store', headers: this._faceHeaders(service) });
         if (!res.ok) {
             const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
             throw new Error(err.detail?.error?.message || err.detail || '取得 job 結果失敗');
