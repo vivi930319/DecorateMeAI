@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -13,6 +13,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 每次渲染都真的花 Replicate 錢，加 API key 擋掉直接掃到 Cloud Run URL 的濫用。
+# 正式環境務必用環境變數設定 RENDER_API_KEY；沒設定時（本機開發）不擋，但會在 /health 標明。
+RENDER_API_KEY = os.getenv("RENDER_API_KEY", "")
+
+
+def require_api_key(x_api_key: str | None = Header(default=None)):
+    if RENDER_API_KEY and x_api_key != RENDER_API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"code": "FORBIDDEN", "message": "Invalid or missing API key.", "retryable": False}},
+        )
 
 
 class RenderRequest(BaseModel):
@@ -41,11 +53,12 @@ def health():
         "token_configured": bool(os.getenv("REPLICATE_API_TOKEN")),
         "storage_configured": _storage_configured(),
         "storage_bucket": GCS_BUCKET_NAME,
+        "api_key_required": bool(RENDER_API_KEY),
     }
 
 
 @app.post("/render")
-async def render(req: RenderRequest):
+async def render(req: RenderRequest, _=Depends(require_api_key)):
     try:
         result = call_replicate_render(req.image, req.prompt)
         return {

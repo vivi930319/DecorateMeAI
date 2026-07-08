@@ -4,6 +4,58 @@
 
 ---
 
+## 2026-07-08 資安收尾（本輪）
+
+- **render 服務加 API key 保護**：`replicate_render_api.py` 的 `/render` 需帶 `X-API-Key`（環境變數 `RENDER_API_KEY`），擋掉直接掃 Cloud Run URL 無限燒 Replicate 錢的濫用。實測未帶/錯 key 回 `401`、`/health` 回 `api_key_required: true`。前端 `config.local.js` 帶 `renderApiKey`，Cloud Run 已設同值環境變數。
+- **前端管理員身分收斂**：`AdminStore.isAdminProfile()` 移除「任何 `admin@` 開頭 email 都算管理員」的寬鬆規則，改以資料庫回傳的 `role`/`level` 為準（保留明確白名單當快取）。
+- **`config.local.js` 移出版控**：加入 `.gitignore`、新增 `config.local.example.js` 範本，避免 API 金鑰進 git 歷史。
+- **收藏頁臨時網址提示**：舊版收藏若圖片是 `replicate.delivery` 臨時網址，卡片上顯示「可能已失效」。
+- 完整體檢見 `專案體檢與缺口報告.md`；資料庫端待辦見 `00_資料庫整合_請先讀我_READ_FIRST.md`。
+
+## 2026-07-08 自動檢查摘要
+
+- 重新讀取本機 `README.md`、`TODO.txt` 與前端 `C:\Users\isach\OneDrive\桌面\web_frontend\README.md`。
+- 後端程式碼與設定檔目前仍包含：
+  - BASIC / PRO `/health`
+  - BASIC / PRO `/v1/face/analyze/*`
+  - BASIC / PRO 非同步 jobs API
+  - BASIC `/v1/face/pose`
+  - `Dockerfile` / `.dockerignore` / `docker-compose.yml`
+- `.venv` 重新檢查：
+  - `python -m py_compile Face_analyzer_BASIC.py Face_analyzer_PRO.py Ollama_suggestion.py backend_smoke_test.py ollama_suggestion_smoke_test.py analysis_package.py replicate_render.py replicate_render_api.py job_store.py`：通過
+  - `python -m pip check`：通過
+- 前端重新檢查：
+  - `node --check js/api.js js/data.js js/router.js`：通過
+  - `node frontend_smoke_check.js`：通過
+- `docker compose config`：可正常解析
+- 今日 live / cloud 狀態：
+  - `GET http://127.0.0.1:8001/health`：連線被拒
+  - `GET http://127.0.0.1:8002/health`：連線被拒
+  - `GET http://127.0.0.1:8010/health`：連線被拒
+  - `GET https://face-basic-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://face-pro-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://replicate-render-258021445391.asia-east1.run.app/health`：`200 OK`
+  - `GET https://morning-deeper-kick-medium.trycloudflare.com/health`：`403 Forbidden`
+  - `POST https://morning-deeper-kick-medium.trycloudflare.com/suggest`（帶 `X-API-Key`）可到達，但最小測試因 payload 不完整回 `400`
+  - `GET https://purpose-violin-conflict-header.trycloudflare.com/health`：`200 OK`
+  - `POST https://purpose-violin-conflict-header.trycloudflare.com/recommend-products`（帶 LAB 測試資料）：`200 OK`
+  - `POST https://purpose-violin-conflict-header.trycloudflare.com/api/login`：`400`
+- 這次確認到的主要差異：
+  - 前端 `config.local.js` 現在實際使用的 `memberDatabaseUrl` / `productUrl` 是 `https://purpose-violin-conflict-header.trycloudflare.com`，昨日文件中仍引用舊的 `div-oct-deposits-acer` 已過時
+  - `memberDatabase` / `product` 目前不是 DNS 失敗，而是可到達狀態；阻塞點回到註冊 csrf 與後續正式串接
+  - `textSuggestion` 仍不是整條服務掛掉，而是公開 `/health` 需要權限；帶 key 的 `/suggest` 可以到達
+  - `job_store.py` 仍是 Firestore 共用 job store；正式多 worker / queue 仍未落地
+- 目前新的主要阻塞：
+  - 本機 `8001` / `8002` / `8010` 今天都沒有常駐服務，展示前必須先用 `.venv` 或 `start_full_stack_local.bat` 重啟
+  - `backend_smoke_test.py` 仍失敗在 BASIC `/v1/face/pose`，原因是本機 `8001` 沒有服務
+  - `textSuggestion` 對外 `/health` 目前不可直接拿來當 team health check 基準，文件需改成以 `/suggest` 實測或請組員補開放健康檢查
+  - Redis / Celery / RQ 或其他正式 queue 方案仍未落地
+- 目前版本控制狀態：
+  - `PythonProject12` 是 Git repo，今天沒有新的未追蹤專案檔
+  - `web_frontend` 是獨立 Git repo，不是桌面 repo；目前只有 `js/api.js` 有未提交修改
+
+---
+
 ## 2026-07-07 自動檢查摘要
 
 - 重新讀取本機 `README.md`、`TODO.txt` 與前端 `C:\Users\isach\OneDrive\桌面\web_frontend\README.md`。
