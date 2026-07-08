@@ -3,7 +3,7 @@ const HEART_SVG = '<span class="pulse"></span><svg viewBox="0 0 24 24" aria-hidd
 const CAT_EN = { '底妝':'FOUNDATION','眼影':'EYESHADOW','眼線/睫毛':'EYES & LASH','唇彩':'LIP COLOR','腮紅':'BLUSH','眉毛彩妝':'BROW','修容':'CONTOUR','打亮':'HIGHLIGHT' };
 function phBox(cls, label, src){
     const cap = (cls.indexOf('product-thumb')>-1) ? '' : `<span class="ph-cap">${escapeHtml(label||'')}</span>`;
-    const img = src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(label||'')}" onload="this.classList.add('loaded')">` : '';
+    const img = src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(label||'')}" loading="lazy" decoding="async" onload="this.classList.add('loaded')">` : '';
     return `<div class="ph ${cls}">${cap}${img}</div>`;
 }
 
