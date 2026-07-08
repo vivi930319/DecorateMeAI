@@ -2555,7 +2555,7 @@ const PageInit = {
                         <button class="look-del" data-del="${index}" aria-label="刪除此妝容">×</button>
                         <div class="saved-look-photo">
                             ${item.renderedImage
-                                ? `<img src="${item.renderedImage}" alt="${item.style || '妝容對比圖'}" onload="this.classList.add('loaded')">`
+                                ? `<img src="${item.renderedImage}" alt="${item.style || '妝容對比圖'}" onload="this.classList.add('loaded')">${String(item.renderedImage).includes('replicate.delivery') ? '<span class="saved-look-expire">此圖為舊版臨時網址，可能已失效</span>' : ''}`
                                 : `<span>${item.style || 'Saved Look'}</span>`
                             }
                         </div>

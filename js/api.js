@@ -34,6 +34,7 @@ const ApiConfig = {
         },
         render: {
             baseUrl: RuntimeApiConfig.renderUrl || '',
+            apiKey: RuntimeApiConfig.renderApiKey || '',
             renderPath: '/render'
         },
         product: {
@@ -172,11 +173,14 @@ const Api = {
     async renderMakeup({ imageDataUrl, prompt, strength = 0.45 }) {
         const url = this.config.url('render', 'renderPath');
         if (!url) throw new Error('renderUrl 未設定，請聯繫渲染端組員提供 Cloud Run URL');
+        const headers = { 'Content-Type': 'application/json' };
+        const apiKey = this.config.services.render.apiKey;
+        if (apiKey) headers['X-API-Key'] = apiKey;
         let res;
         try {
             res = await fetch(url, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify({ image: imageDataUrl, prompt, strength }),
             });
         } catch (err) {
@@ -359,8 +363,11 @@ const Api = {
     async fetchAdminMembers() {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl) return null;
+        // 讀取類先不帶 credentials：組員 CORS 目前沒回 Access-Control-Allow-Credentials，
+        // 帶 credentials 會被瀏覽器整個擋掉。等組員把 GET /api/members 鎖權限 + 補 Allow-Credentials
+        // 後，這裡再改回 credentials:'include'（屆時就需要管理員 session 才撈得到）。
         try {
-            const res = await fetch(`${baseUrl}/api/members`, { credentials: 'include', cache: 'no-store' });
+            const res = await fetch(`${baseUrl}/api/members`, { cache: 'no-store' });
             if (!res.ok) return null;
             const data = await res.json();
             return Array.isArray(data.members) ? data.members : null;
@@ -902,15 +909,16 @@ const AdminStore = {
     _overridesKey: 'beautyAdminProductOverrides',
     // analysisPro 不放在預設清單裡：一般會員預設沒有 PRO，要 VIP 或後台手動勾選才會拿到
     _defaultPages: ['dashboard', 'analysisBasic', 'style', 'products', 'favorites', 'history', 'compare', 'suggestion', 'profile'],
+    // 明確白名單（跟資料庫寫死的 admin 帳號一致），當前端快取用，避免資料庫暫時抓不到 role 時鎖死後台。
     _adminEmails: ['admin@decorateme.local', 'admin@decorateme.test'],
     _email(email) { return String(email || '').trim().toLowerCase(); },
-    // 暫時邏輯：member_database 串接真正後端驗證後，管理員身分判斷要移到後端，這裡的 email 規則就可以拿掉
+    // 管理員身分以資料庫回傳的 role / level 為準。原本「任何 admin@ 開頭都算管理員」的寬鬆規則已移除，
+    // 避免有人在資料庫註冊 admin@任意網域 就自動變成管理員。
     isAdminProfile(profile) {
         const email = this._email(profile?.email);
         return profile?.role === 'admin'
             || profile?.level === '管理員'
-            || this._adminEmails.includes(email)
-            || email.startsWith('admin@');
+            || this._adminEmails.includes(email);
     },
     // VIP 會員（管理員視同 VIP，全功能都能用）
     isVip(profile) {
