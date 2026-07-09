@@ -381,30 +381,52 @@ const Api = {
 
     async listProducts() {
         const url = this.config.url('product', 'listPath');
-        if (!url) return { products: [] };
-        const res = await fetch(url, { cache: 'no-store' });
-        if (!res.ok) return { products: [] };
-        const data = await res.json();
-        return {
-            ...data,
-            products: Array.isArray(data.products)
-                ? data.products.map(item => this._normalizeProduct(item)).filter(Boolean)
-                : []
-        };
+        if (!url) return { ok: false, products: [] };
+        try {
+            const res = await fetch(url, { cache: 'no-store' });
+            if (!res.ok) return { ok: false, status: res.status, products: [] };
+            const data = await res.json();
+            return {
+                ok: true,
+                ...data,
+                products: Array.isArray(data.products)
+                    ? data.products.map(item => this._normalizeProduct(item)).filter(Boolean)
+                    : []
+            };
+        } catch (_) {
+            return { ok: false, products: [] };
+        }
     },
 
     // ═══ 後台管理：members 讀寫都走管理員 session cookie；若 GET /api/members 失敗，通常是 admin session / CORS / SameSite 設定有問題 ═══
+    // 跨站 session cookie 常在重整後被瀏覽器清掉，導致 admin 請求變 401。
+    // 用登入時暫存的帳密（sessionStorage，關分頁即清）在背景自動重登一次拿新 cookie，使用者無感。
+    async _reLogin() {
+        let creds = null;
+        try { creds = JSON.parse(sessionStorage.getItem('beautyAuthCreds') || 'null'); } catch (_) {}
+        if (!creds || !creds.email || !creds.password) return false;
+        try { await this.login(creds.email, creds.password); return true; } catch (_) { return false; }
+    },
+    // 一般請求包一層：遇到 401 就自動重登再重試一次（login 本身走原生 fetch，不會遞迴）
+    async _fetchWithRelogin(input, init) {
+        let res = await fetch(input, init);
+        if (res.status === 401 && await this._reLogin()) {
+            res = await fetch(input, init);
+        }
+        return res;
+    },
+
     async fetchAdminMembers() {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl) return { ok: false, error: 'memberDatabaseUrl 未設定' };
         const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
         const timeout = controller ? setTimeout(() => controller.abort(), 12000) : null;
+        const opts = { credentials: 'include', cache: 'no-store', ...(controller ? { signal: controller.signal } : {}) };
         try {
-            const res = await fetch(`${baseUrl}/api/members`, {
-                credentials: 'include',
-                cache: 'no-store',
-                ...(controller ? { signal: controller.signal } : {})
-            });
+            let res = await fetch(`${baseUrl}/api/members`, opts);
+            if (res.status === 401 && await this._reLogin()) {
+                res = await fetch(`${baseUrl}/api/members`, opts);
+            }
             if (timeout) clearTimeout(timeout);
             const data = await res.json();
             if (!res.ok) {
@@ -437,7 +459,7 @@ const Api = {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl) return { ok: false, error: 'memberDatabaseUrl 未設定' };
         try {
-            const res = await fetch(`${baseUrl}/api/members/${encodeURIComponent(email)}`, {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}`, {
                 method: 'PATCH',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
@@ -451,12 +473,35 @@ const Api = {
         }
     },
 
+    // 會員點數：GET /api/members/{email}/points → { balance, transactions[] }。後台顯示用，admin session 可讀任一會員
+    async getMemberPoints(email) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false, balance: null };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/points`, {
+                method: 'GET',
+                credentials: 'include',
+                cache: 'no-store'
+            });
+            if (!res.ok) return { ok: false, status: res.status, balance: null };
+            const data = await res.json().catch(() => ({}));
+            const txns = Array.isArray(data.transactions) ? data.transactions : [];
+            // 累積獲得點數 = 所有正向交易加總（只增不減）；沒有明細時退回目前餘額
+            const earned = txns.length
+                ? txns.reduce((s, t) => s + (Number(t.delta) > 0 ? Number(t.delta) : 0), 0)
+                : null;
+            return { ok: true, balance: data.balance ?? null, earned };
+        } catch (_) {
+            return { ok: false, balance: null };
+        }
+    },
+
     // ═══ 收藏妝容對比圖 saved_looks：跨裝置持久化，走登入 session（本機 localStorage 仍是離線快取，遠端失敗不影響本機） ═══
     async listSavedLooks(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false, looks: [] };
         try {
-            const res = await fetch(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
                 method: 'GET',
                 credentials: 'include',
                 cache: 'no-store'
@@ -475,7 +520,7 @@ const Api = {
         // 後端要求 style 與 afterImageUrl 必填；沒有渲染後永久網址就不送，維持本機收藏即可
         if (!payload?.style || !payload?.afterImageUrl) return { ok: false, skipped: true };
         try {
-            const res = await fetch(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
@@ -493,7 +538,7 @@ const Api = {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email || id == null) return { ok: false };
         try {
-            const res = await fetch(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks/${encodeURIComponent(id)}`, {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks/${encodeURIComponent(id)}`, {
                 method: 'DELETE',
                 credentials: 'include'
             });
@@ -508,7 +553,7 @@ const Api = {
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
         if (rawId == null) return { ok: false, error: '找不到這筆商品的資料庫 id' };
         try {
-            const res = await fetch(`${baseUrl}/api/products/${encodeURIComponent(rawId)}`, {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/products/${encodeURIComponent(rawId)}`, {
                 method: 'PATCH',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
@@ -526,7 +571,7 @@ const Api = {
         const baseUrl = this.config.services.product.baseUrl;
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
         try {
-            const res = await fetch(`${baseUrl}/api/products`, {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/products`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
@@ -542,30 +587,35 @@ const Api = {
 
     async recommendProducts(faceAnalysis, styleId) {
         const url = this.config.url('product', 'recommendPath');
-        if (!url) return null;
-        const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                faceShape:  faceAnalysis?.faceShape  || null,
-                eyeShape:   faceAnalysis?.eyeShape   || null,
-                skinTone: {
-                    season:  faceAnalysis?.skinTone?.season || null,
-                    level:   faceAnalysis?.skinTone?.level  || null,
-                    lab:     this._labToUpperKeys(faceAnalysis?.skinTone?.lab),
-                },
-                lipLab:     this._labToUpperKeys(faceAnalysis?.lipLab),
-                style:      styleId || null,
-            })
-        });
-        if (!res.ok) return null;
-        const data = await res.json();
-        return {
-            ...data,
-            products: Array.isArray(data.products)
-                ? data.products.map(item => this._normalizeProduct(item)).filter(Boolean)
-                : []
-        };
+        if (!url) return { ok: false, products: [] };
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    faceShape:  faceAnalysis?.faceShape  || null,
+                    eyeShape:   faceAnalysis?.eyeShape   || null,
+                    skinTone: {
+                        season:  faceAnalysis?.skinTone?.season || null,
+                        level:   faceAnalysis?.skinTone?.level  || null,
+                        lab:     this._labToUpperKeys(faceAnalysis?.skinTone?.lab),
+                    },
+                    lipLab:     this._labToUpperKeys(faceAnalysis?.lipLab),
+                    style:      styleId || null,
+                })
+            });
+            if (!res.ok) return { ok: false, status: res.status, products: [] };
+            const data = await res.json();
+            return {
+                ok: true,
+                ...data,
+                products: Array.isArray(data.products)
+                    ? data.products.map(item => this._normalizeProduct(item)).filter(Boolean)
+                    : []
+            };
+        } catch (_) {
+            return { ok: false, products: [] };
+        }
     },
 
     async login(email, password) {
@@ -596,6 +646,8 @@ const Api = {
             err.status = res.status;
             throw err;
         }
+        // 暫存帳密（sessionStorage，關分頁即清）供 session 掉時背景自動重登用
+        try { sessionStorage.setItem('beautyAuthCreds', JSON.stringify({ email, password })); } catch (_) {}
         return res.json();
     },
 
@@ -1007,6 +1059,7 @@ const Auth = {
     logout() {
         sessionStorage.removeItem('beautyUser');
         sessionStorage.removeItem('beautyProfile');
+        sessionStorage.removeItem('beautyAuthCreds');
         location.reload();
     },
 };
@@ -1402,7 +1455,7 @@ const ProSubscription = {
     },
     // Demo 付款：呼叫這支就直接視為付款成功，沒有真正的金流串接
     purchase(email, planId) {
-        return { ok: false, message: '前端 demo 付款已停用；PRO / VIP 權限僅以後端會員資料為準。' };
+        return { ok: false, message: 'PRO / VIP 由你的會員方案決定，無法在此開通。' };
     },
     syncExpiry(email) {
         return this.getSubscription(email);

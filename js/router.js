@@ -131,10 +131,12 @@ function loadGeneralProductCatalog(onDone) {
     Api.listProducts()
         .then(rec => {
             Router.generalProductCatalog = rec?.products?.length ? rec.products : [];
+            Router.generalProductError = !(rec && rec.ok); // 區分「載入失敗」與「真的沒商品」
             if (typeof onDone === 'function') onDone();
         })
         .catch(() => {
             Router.generalProductCatalog = [];
+            Router.generalProductError = true;
             if (typeof onDone === 'function') onDone();
         })
         .finally(() => { Router.generalProductLoading = false; });
@@ -312,7 +314,7 @@ function showCartPanel(){
         overlay.querySelectorAll('[data-cart-minus]').forEach(btn => btn.onclick = () => { Cart.change(btn.dataset.cartMinus, -1); updateCartBadge(); render(); });
         overlay.querySelectorAll('[data-cart-plus]').forEach(btn => btn.onclick = () => { Cart.change(btn.dataset.cartPlus, 1); updateCartBadge(); render(); });
         const checkout = overlay.querySelector('.cart-checkout');
-        if (checkout && !checkout.disabled) checkout.onclick = () => showToast('結帳功能將由後端購物流程接續');
+        if (checkout && !checkout.disabled) checkout.onclick = () => showToast('結帳功能開發中，敬請期待');
     };
     render();
     overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
@@ -456,7 +458,14 @@ function saveCurrentLook(){
                     const hit = recs.find(x => x.timestamp === stored.timestamp);
                     if (hit) { hit.remoteId = r.look.id; localStorage.setItem('beautySuggestions', JSON.stringify(recs)); }
                 } catch (_) {}
+                if (typeof showToast === 'function') showToast('已同步到雲端資料庫');
+            } else if (r && r.skipped) {
+                // 沒有渲染後永久網址（例如純文字妝容建議），只存本機、不打擾使用者
+            } else {
+                if (typeof showToast === 'function') showToast('雲端同步失敗（已存本機）' + (r && r.status ? `：HTTP ${r.status}` : '，請重整後重試'));
             }
+        }).catch(() => {
+            if (typeof showToast === 'function') showToast('雲端同步失敗（已存本機）');
         });
     }
     return record;
@@ -1597,7 +1606,7 @@ const PageInit = {
                 proScanCurrentTarget = '';
                 const msg = String(err.message || err);
                 setProScanHint(msg.includes('404')
-                    ? '角度偵測 API 尚未啟用，請重啟 BASIC 後端或使用手動擷取。'
+                    ? '角度偵測暫時無法使用，請改用手動擷取。'
                     : '偵測中：' + msg);
             } finally {
                 Router.proScanBusy = false;
@@ -1705,7 +1714,7 @@ const PageInit = {
                 });
                 AnalysisDraft.save(Router.analysisPackage);
                 updatePackageStatus();
-                setLoadingStatus(`已建立 job：${job.jobId}，等待後端分析`, true);
+                setLoadingStatus('已送出照片，等待分析…', true);
 
                 const response = await Api.waitForFaceJob(Router.analyzeMode, job.jobId, latestJob => {
                     const progress = Number(latestJob.progress || 0);
@@ -1722,7 +1731,7 @@ const PageInit = {
                     });
                     AnalysisDraft.save(Router.analysisPackage);
                     updatePackageStatus();
-                    setLoadingStatus(`後端分析中：${latestJob.stage || latestJob.status} ${progress}%`, true);
+                    setLoadingStatus(`分析中：${latestJob.stage || latestJob.status} ${progress}%`, true);
                 });
                 const data = response.result || response.data || response;
                 Router.analysisResult = data;
@@ -1793,7 +1802,7 @@ const PageInit = {
                 setLoadingStatus('分析失敗，已保留草稿狀態', false);
                 const offline = /Failed to fetch|NetworkError|Load failed/i.test(String(err.message || err));
                 showAlert(offline
-                    ? '無法連接分析服務。請先執行後端資料夾的 start_full_stack_local.bat，並從 http://127.0.0.1:5500 開啟網站。'
+                    ? '目前無法連接臉部分析服務，請稍後再試。'
                     : '分析失敗：' + err.message, { type:'error' });
             }
         };
@@ -2032,8 +2041,9 @@ const PageInit = {
                         </div>`).join('')}
                     </div>
                 </section>` : ''}
+                ${Router.productRecommendationError && !recommended.length ? '<div class="empty-state compact">個人化推薦暫時無法載入（推薦服務維護中），先為你顯示全部商品。</div>' : ''}
                 <div class="filter-bar">${chips}</div>
-                <div class="prod-count">${isLoadingProducts ? '商品載入中' : `${list.length} 件商品`}</div>`;
+                <div class="prod-count">${isLoadingProducts ? '商品載入中' : (Router.generalProductError && !list.length ? '商品服務暫時無法載入，請稍後再試' : `${list.length} 件商品`)}</div>`;
             const bindChips = () => {
                 area.querySelectorAll('.chip').forEach(ch => ch.onclick = () => renderShop(ch.dataset.filter));
             };
@@ -2042,6 +2052,7 @@ const PageInit = {
                 Api.recommendProducts(Router.analysisPackage.faceAnalysis, Router.selectedStyleId)
                     .then(rec => {
                         if (rec?.products?.length) {
+                            Router.productRecommendationError = false;
                             Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
                                 recommendations: {
                                     ...(Router.analysisPackage.recommendations || {}),
@@ -2050,9 +2061,13 @@ const PageInit = {
                             });
                             AnalysisDraft.save(Router.analysisPackage);
                             if (Router.currentPage === 'products') renderShop(filter);
+                        } else if (rec && rec.ok === false) {
+                            // 推薦服務打不到（例如 /recommend-products 404）——記錄下來讓畫面顯示提示，不再靜默
+                            Router.productRecommendationError = true;
+                            if (Router.currentPage === 'products') renderShop(filter);
                         }
                     })
-                    .catch(() => {})
+                    .catch(() => { Router.productRecommendationError = true; })
                     .finally(() => { Router.productRecommendationLoading = false; });
             }
             // 1) API 載入中只顯示骨架，不再用前端假商品補畫面
@@ -2280,14 +2295,14 @@ const PageInit = {
                 return;
             }
             if (remaining === Infinity || dailyLimit === Infinity) {
-                renderQuotaEl.textContent = '此帳號的渲染配額由後端判定：目前不限次數';
+                renderQuotaEl.textContent = 'AI 妝容渲染：無限次';
                 return;
             }
             if (remaining != null && dailyLimit != null && resetAt) {
-                renderQuotaEl.textContent = `此帳號的渲染配額由後端判定：今日剩餘 ${remaining} / ${dailyLimit}`;
+                renderQuotaEl.textContent = `AI 妝容渲染：今天還剩 ${remaining} / ${dailyLimit} 次`;
                 return;
             }
-            renderQuotaEl.textContent = '此帳號的渲染配額由後端判定；目前前端未持有可驗證的即時剩餘次數';
+            renderQuotaEl.textContent = 'AI 妝容渲染：依你的會員方案提供每日次數';
         };
         refreshRenderQuota();
         if (renderBtn) {
@@ -2298,7 +2313,7 @@ const PageInit = {
                     return;
                 }
                 if (!AdminStore.canRender(profile)) {
-                    showAlert('此帳號目前無法使用 AI 渲染，請確認後端會員權限設定。', { type: 'error' });
+                    showAlert('你目前的方案無法使用 AI 妝容渲染。', { type: 'error' });
                     return;
                 }
                 const pkg = Router.analysisPackage;
@@ -2328,7 +2343,7 @@ const PageInit = {
                     const result = await Api.renderMakeup({ imageDataUrl, prompt, strength: 0.35 });
                     refreshRenderQuota();
                     if (!result.renderQuota && renderQuotaEl) {
-                        renderQuotaEl.textContent = '渲染已完成；若後端未回最新 quota，剩餘次數會在下次會員資料同步後更新';
+                        renderQuotaEl.textContent = '妝容渲染完成！剩餘次數稍後更新。';
                     }
                     Router.analysisPackage = AnalysisPackage.update(pkg, {
                         render: {
@@ -2505,10 +2520,10 @@ const PageInit = {
             const dailyLimit = AdminStore.getDailyRenderLimit(profile);
             const resetAt = profile?.renderQuota?.resetAt;
             const renderQuotaLine = remaining === Infinity || dailyLimit === Infinity
-                ? '渲染妝容：由後端判定為不限次數'
+                ? 'AI 妝容渲染：無限次'
                 : (remaining != null && dailyLimit != null && resetAt
-                    ? `渲染妝容：由後端判定為每日 ${dailyLimit} 次（今日剩餘 ${remaining} 次）`
-                    : '渲染妝容：由後端判定配額；前端目前不顯示未驗證的剩餘次數');
+                    ? `AI 妝容渲染：每日 ${dailyLimit} 次（今天還剩 ${remaining} 次）`
+                    : 'AI 妝容渲染：依你的會員方案提供每日次數');
             const tier = (typeof MemberTier !== 'undefined') ? MemberTier.describe(profile) : { name: isVip ? 'PRO / VIP 會員' : '一般會員', autoTier: false };
             const nextTier = tier.autoTier ? MemberTier.nextTier(tier.lifetime) : null;
             const tierProgressLine = nextTier
@@ -2520,11 +2535,11 @@ const PageInit = {
                     <span class="tier-badge ${isVip ? 'vip' : 'general'}">${tier.name}</span>
                     <ul class="tier-benefits">
                         <li>BASIC 臉部分析</li>
-                        <li>${isVip ? 'PRO 臉部分析已由後端開通' : 'PRO 臉部分析需由後端開通'}</li>
+                        <li>${isVip ? 'PRO 臉部分析（已開通）' : 'PRO 臉部分析（升級 VIP 解鎖）'}</li>
                         <li>${renderQuotaLine}</li>
                         ${tierProgressLine}
                     </ul>
-                    ${pending ? `<div class="tier-pending">升級申請狀態由後端顯示：目前審核中</div>` : '<div class="tier-pending">會員等級與可用功能僅依後端回傳結果顯示</div>'}
+                    ${pending ? `<div class="tier-pending">你的 VIP 升級申請審核中</div>` : ''}
                     </div>
                 </div>
             `;
@@ -2540,20 +2555,6 @@ const PageInit = {
         if (anEl) { anEl.textContent = History.list().length; anEl.classList.add('num-pop'); anEl.style.animationDelay='.1s'; }
         if (suggestionEl) { suggestionEl.textContent = suggestions.length; suggestionEl.classList.add('num-pop'); suggestionEl.style.animationDelay='.16s'; }
         if (pointEl) { pointEl.textContent = MemberRewards.getPoints(profile.email); pointEl.classList.add('num-pop'); pointEl.style.animationDelay='.2s'; }
-
-        const proCard = document.getElementById('profileProCard');
-        if (proCard) {
-            if (isGuest()) {
-                proCard.innerHTML = '<div class="empty-state compact">登入會員後即可購買 PRO 方案</div>';
-            } else {
-                proCard.innerHTML = `
-                    <div class="pro-plan-status">
-                        <p>前端不再用 demo 付款自行開通 PRO。是否可用 PRO / render / admin，僅顯示後端會員資料回傳結果。</p>
-                        <p>若需變更方案或權限，請由後端會員系統或管理員處理。</p>
-                    </div>
-                `;
-            }
-        }
 
         const checkinCard = document.getElementById('profileCheckinCard');
         if (checkinCard) {
@@ -2786,6 +2787,14 @@ const PageInit = {
             if (v === null) return '—';
             return String(v.length);
         };
+        // 每位會員的點數：undefined=還沒抓、null=抓失敗、物件={balance,earned}
+        const pointsByEmail = {};
+        const pointsLabel = (email) => {
+            const v = pointsByEmail[email];
+            if (v === undefined) return '…';
+            if (v === null || v.balance == null) return '—';
+            return String(v.balance);
+        };
         const dbStatusEl = (() => {
             const toolbar = document.querySelector('.admin-toolbar');
             if (!toolbar) return null;
@@ -2911,6 +2920,7 @@ const PageInit = {
                             <b>${escapeHtml(member.name || member.email.split('@')[0])}${perm.vipRequested && member.level !== 'VIP會員' ? ' <span class="admin-fail warn">申請升級中</span>' : ''}</b>
                             <span>${escapeHtml(member.email)}</span>
                             <span class="admin-look-count" data-look-email="${escapeHtml(member.email)}" style="margin-top:4px;font-size:12px;color:#7A4A42;cursor:pointer;text-decoration:underline dotted;" title="點開看這位會員的妝容收藏（從資料庫即時抓）">妝容收藏：${lookCountLabel(member.email)}</span>
+                            <span style="margin-top:2px;font-size:12px;color:#7A4A42;" title="會員目前點數餘額（從資料庫即時抓）">點數：${pointsLabel(member.email)}</span>
                         </div>
                     </td>
                     <td>
@@ -2978,14 +2988,17 @@ const PageInit = {
             });
         };
 
-        // 背景逐會員抓 saved_looks，抓完重繪讓收藏數顯示出來（demo 時後台可即時看到資料庫寫入）
+        // 背景逐會員抓 saved_looks 與點數，抓完重繪（demo 時後台可即時看到資料庫寫入）
         const loadAllSavedLooks = () => {
             if (!Array.isArray(dbMembers) || !dbMembers.length) return;
-            Promise.all(dbMembers.map(m =>
+            Promise.all(dbMembers.map(m => Promise.all([
                 Api.listSavedLooks(m.email)
                     .then(r => { looksByEmail[m.email] = (r && r.ok) ? r.looks : null; })
-                    .catch(() => { looksByEmail[m.email] = null; })
-            )).then(() => { if (Router.currentPage === 'admin') render(); });
+                    .catch(() => { looksByEmail[m.email] = null; }),
+                Api.getMemberPoints(m.email)
+                    .then(r => { pointsByEmail[m.email] = (r && r.ok) ? { balance: r.balance, earned: r.earned } : null; })
+                    .catch(() => { pointsByEmail[m.email] = null; })
+            ]))).then(() => { if (Router.currentPage === 'admin') render(); });
         };
 
         // 縮圖 modal：只顯示渲染後圖＋風格＋時間，不顯示 before 真人臉照（隱私）
@@ -3020,6 +3033,22 @@ const PageInit = {
         if (ensureReloadBtn) ensureReloadBtn.onclick = loadAdminMembers;
         loadAdminMembers();
 
+        // 後台自動刷新：切回這個分頁 / 視窗重新取得焦點時自動重抓會員與收藏數，不用手按「重新讀取」
+        Router._reloadAdmin = loadAdminMembers;
+        if (!Router._adminAutoRefreshBound) {
+            Router._adminAutoRefreshBound = true;
+            let lastAutoReload = 0;
+            const autoReload = () => {
+                if (Router.currentPage !== 'admin' || typeof Router._reloadAdmin !== 'function') return;
+                const now = Date.now();
+                if (now - lastAutoReload < 3000) return; // 3 秒內只刷一次，避免快速切分頁猛打資料庫
+                lastAutoReload = now;
+                Router._reloadAdmin();
+            };
+            window.addEventListener('focus', autoReload);
+            document.addEventListener('visibilitychange', () => { if (!document.hidden) autoReload(); });
+        }
+
         filters.forEach(btn => {
             btn.onclick = () => {
                 filter = btn.dataset.adminFilter || 'all';
@@ -3027,7 +3056,10 @@ const PageInit = {
                 render();
             };
         });
-        if (searchEl) searchEl.oninput = render;
+        if (searchEl) {
+            let searchTimer = null;
+            searchEl.oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(render, 200); };
+        }
         const saveBtn = document.getElementById('adminSaveBtn');
         if (saveBtn) saveBtn.onclick = async () => {
             const rows = Array.from(rowsEl.querySelectorAll('[data-admin-email]')).map(row => {
