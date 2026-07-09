@@ -12,7 +12,12 @@ Thumbs.db
 # Firebase 本機快取
 .firebase/
 
-# 所有 Markdown 文件不上傳
+# 文件檔一律不進 git（只留程式碼）
 *.md
+*.docx
+*.pdf
+*.drawio
+*.pptx
+docs/
 config.local.js
 *.bak-before-split
