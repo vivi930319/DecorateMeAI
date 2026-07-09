@@ -1,5 +1,6 @@
 import os
 import time
+import hashlib
 from collections import deque
 from threading import Lock
 
@@ -27,6 +28,47 @@ RENDER_RATE_LIMIT_MAX_REQUESTS = max(1, int(os.getenv("RENDER_RATE_LIMIT_MAX_REQ
 
 _rate_limit_lock = Lock()
 _rate_limit_hits: dict[str, deque[float]] = {}
+
+# 去重：同一張圖 + 同一 prompt 在短時間內重複請求（例如使用者狂按），直接回上次結果，不重打 Replicate 燒錢。
+RENDER_DEDUP_TTL_SECONDS = max(0, int(os.getenv("RENDER_DEDUP_TTL_SECONDS", "600")))
+_dedup_lock = Lock()
+_dedup_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _dedup_key(image: str, prompt: str, strength: float) -> str:
+    h = hashlib.sha256()
+    h.update(image.encode("utf-8", "ignore"))
+    h.update(b"|")
+    h.update(prompt.encode("utf-8", "ignore"))
+    h.update(f"|{strength}".encode("utf-8"))
+    return h.hexdigest()
+
+
+def _dedup_get(key: str):
+    if RENDER_DEDUP_TTL_SECONDS <= 0:
+        return None
+    now = time.time()
+    with _dedup_lock:
+        entry = _dedup_cache.get(key)
+        if entry and now - entry[0] <= RENDER_DEDUP_TTL_SECONDS:
+            return entry[1]
+        if entry:
+            _dedup_cache.pop(key, None)
+    return None
+
+
+def _dedup_set(key: str, result: dict):
+    if RENDER_DEDUP_TTL_SECONDS <= 0:
+        return
+    now = time.time()
+    with _dedup_lock:
+        # 清過期 + 限制總量，避免記憶體無限成長
+        for k in [k for k, (ts, _) in _dedup_cache.items() if now - ts > RENDER_DEDUP_TTL_SECONDS]:
+            _dedup_cache.pop(k, None)
+        if len(_dedup_cache) > 200:
+            for k in sorted(_dedup_cache, key=lambda k: _dedup_cache[k][0])[:50]:
+                _dedup_cache.pop(k, None)
+        _dedup_cache[key] = (now, result)
 
 
 def require_api_key(x_api_key: str | None = Header(default=None)):
@@ -111,14 +153,23 @@ def health():
             "window_seconds": RENDER_RATE_LIMIT_WINDOW_SECONDS,
             "max_requests": RENDER_RATE_LIMIT_MAX_REQUESTS,
         },
+        "dedup": {
+            "enabled": RENDER_DEDUP_TTL_SECONDS > 0,
+            "ttl_seconds": RENDER_DEDUP_TTL_SECONDS,
+        },
     }
 
 
 @app.post("/render")
 async def render(req: RenderRequest, _=Depends(require_api_key), __=Depends(enforce_render_rate_limit)):
+    # 同圖同 prompt 短時間內重複 → 直接回上次結果，不重打 Replicate
+    key = _dedup_key(req.image, req.prompt, req.strength)
+    cached = _dedup_get(key)
+    if cached is not None:
+        return {**cached, "deduped": True}
     try:
         result = call_replicate_render(req.image, req.prompt)
-        return {
+        response = {
             "status": "completed",
             "afterImageUrl": result["afterImageUrl"],
             "replicateTempUrl": result.get("replicateTempUrl"),
@@ -126,6 +177,8 @@ async def render(req: RenderRequest, _=Depends(require_api_key), __=Depends(enfo
             "model": result["model"],
             "error": None,
         }
+        _dedup_set(key, response)  # 只快取成功結果
+        return response
     except Exception as e:
         return {
             "status": "failed",
