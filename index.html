@@ -71,6 +71,11 @@
 (function(){
     var intro = document.getElementById('brand-intro');
     if (!intro) return;
+    // 同一個瀏覽器分頁 session 只播一次；之後重整直接跳過（demo/開發一直重整不用每次等 3.4 秒）
+    try {
+        if (sessionStorage.getItem('introShown')) { intro.style.display = 'none'; return; }
+        sessionStorage.setItem('introShown', '1');
+    } catch (_) {}
     var DUR = 3400;
     setTimeout(function(){
         intro.classList.add('done');
@@ -96,10 +101,10 @@
     document.addEventListener('mouseleave', function(){ if(glow) glow.style.opacity = '0'; });
 })();
 </script>
-<script defer src="js/config.js?v=20260709-212029"></script>
-<script defer src="config.local.js?v=20260709-212029" onerror="void 0"></script>
-<script defer src="js/data.js?v=20260709-212029"></script>
-<script defer src="js/api.js?v=20260709-212029"></script>
-<script defer src="js/router.js?v=20260709-212029"></script>
+<script defer src="js/config.js?v=20260710-000408"></script>
+<script defer src="config.local.js?v=20260710-000408" onerror="void 0"></script>
+<script defer src="js/data.js?v=20260710-000408"></script>
+<script defer src="js/api.js?v=20260710-000408"></script>
+<script defer src="js/router.js?v=20260710-000408"></script>
 </body>
 </html>

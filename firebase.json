@@ -4,7 +4,19 @@
     "ignore": [
       "firebase.json",
       "**/.*",
-      "**/node_modules/**"
+      "**/node_modules/**",
+      "**/*.md",
+      "**/*.bak*",
+      "**/*.log",
+      "**/*.drawio",
+      "**/*.py",
+      "deploy.ps1",
+      "frontend_smoke_check.js",
+      "config.local.example.js",
+      "img.png",
+      "img_1.png",
+      "img_2.png",
+      "img_3.png"
     ],
     "headers": [
       {

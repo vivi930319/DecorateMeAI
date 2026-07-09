@@ -1045,7 +1045,11 @@ const Auth = {
         if (!profile?.email || !profile?.name || profile.name === '訪客') return;
         let members = {};
         try { members = JSON.parse(localStorage.getItem(this._membersKey) || '{}'); } catch (_) {}
-        members[this._email(profile.email)] = { ...(members[this._email(profile.email)] || {}), ...profile };
+        // 不把密碼明碼存進 localStorage（登入一律走 API 驗證，本機不需要留密碼）；順便清掉舊資料殘留的密碼
+        const existing = { ...(members[this._email(profile.email)] || {}) };
+        delete existing.password;
+        const { password, ...safe } = profile;
+        members[this._email(profile.email)] = { ...existing, ...safe };
         localStorage.setItem(this._membersKey, JSON.stringify(members));
     },
     getUser()  { return sessionStorage.getItem('beautyUser') || ''; },
