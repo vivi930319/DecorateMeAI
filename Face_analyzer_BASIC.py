@@ -3,6 +3,7 @@ import numpy as np
 import mediapipe as mp
 import json
 import os
+import logging
 import uuid
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
@@ -60,6 +61,12 @@ _face_mesh = None
 _COL = "face_jobs_basic"
 
 MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1024"))
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(8 * 1024 * 1024)))  # 上傳大小上限（預設 8MB），避免超大檔先塞滿記憶體
+
+
+def _reject_if_too_large(contents: bytes):
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"上傳檔案過大，上限 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
 INSIGHT_DET_SIZE = int(os.getenv("INSIGHT_DET_SIZE", "384"))
 INSIGHT_ALLOWED_MODULES = [
     module.strip()
@@ -152,6 +159,7 @@ async def analyze(
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=400, detail="上傳檔案是空的")
+    _reject_if_too_large(contents)
     if brightness_mode not in {"none", "auto", "manual"}:
         raise HTTPException(status_code=400, detail="brightness_mode 必須為 none / auto / manual")
     if not (0.1 <= brightness_level <= 5.0):
@@ -164,8 +172,9 @@ async def analyze(
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logging.exception("臉部分析失敗")
+        raise HTTPException(status_code=500, detail="臉部分析服務發生錯誤，請稍後再試")
 
 
 def _detect_pose(contents: bytes):
@@ -215,14 +224,16 @@ async def detect_pose(file: UploadFile = File(...)):
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=400, detail="上傳檔案是空的")
+    _reject_if_too_large(contents)
     try:
         return _detect_pose(contents)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logging.exception("臉部分析失敗")
+        raise HTTPException(status_code=500, detail="臉部分析服務發生錯誤，請稍後再試")
 
 
 def _now_iso():
@@ -296,10 +307,11 @@ def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.
             "status": "completed", "stage": "done", "progress": 100,
             "completedAt": _now_iso(), "result": result, "error": None,
         })
-    except Exception as e:
+    except Exception:
+        logging.exception("臉部分析 job 失敗 job_id=%s", job_id)
         job_store.patch(_COL, job_id, {
             "status": "failed", "stage": "failed",
-            "completedAt": _now_iso(), "error": {"message": str(e)},
+            "completedAt": _now_iso(), "error": {"message": "臉部分析失敗，請稍後再試"},
         })
 
 
@@ -314,6 +326,7 @@ async def create_basic_job(
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=400, detail={"error": {"message": "上傳檔案是空的"}})
+    _reject_if_too_large(contents)
     if brightness_mode not in {"none", "auto", "manual"}:
         raise HTTPException(status_code=400, detail={"error": {"message": "brightness_mode 必須為 none / auto / manual"}})
     if not (0.1 <= brightness_level <= 5.0):

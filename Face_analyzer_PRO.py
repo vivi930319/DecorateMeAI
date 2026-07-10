@@ -1,5 +1,6 @@
 import json
 import os
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -8,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import job_store
-from Face_analyzer_BASIC import FaceAnalyzer
+from Face_analyzer_BASIC import FaceAnalyzer, _reject_if_too_large
 from dev_server_utils import get_cors_origins, run_dev_server
 
 
@@ -47,6 +48,7 @@ async def _read_image(file: UploadFile, label: str) -> bytes:
     contents = await file.read()
     if not contents:
         raise ValueError(f"{label}照片是空的")
+    _reject_if_too_large(contents)
     return contents
 
 
@@ -186,10 +188,11 @@ def _run_pro_job(job_id, front_bytes, angle_bytes):
             "status": "completed", "stage": "done", "progress": 100,
             "completedAt": _now_iso(), "result": result, "error": None,
         })
-    except Exception as e:
+    except Exception:
+        logging.exception("PRO 臉部分析 job 失敗 job_id=%s", job_id)
         job_store.patch(_COL, job_id, {
             "status": "failed", "stage": "failed",
-            "completedAt": _now_iso(), "error": {"message": str(e)},
+            "completedAt": _now_iso(), "error": {"message": "臉部分析失敗，請稍後再試"},
         })
 
 
@@ -251,8 +254,9 @@ async def analyze_pro(
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logging.exception("PRO 臉部分析失敗")
+        raise HTTPException(status_code=500, detail="臉部分析服務發生錯誤，請稍後再試")
 
 
 @app.post("/v1/face/jobs/pro")

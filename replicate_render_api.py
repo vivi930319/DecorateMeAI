@@ -1,6 +1,7 @@
 import os
 import time
 import hashlib
+import logging
 from collections import deque
 from threading import Lock
 
@@ -179,9 +180,10 @@ async def render(req: RenderRequest, _=Depends(require_api_key), __=Depends(enfo
         }
         _dedup_set(key, response)  # 只快取成功結果
         return response
-    except Exception as e:
+    except Exception:
+        logging.exception("渲染失敗")
         return {
             "status": "failed",
             "afterImageUrl": None,
-            "error": str(e),
+            "error": "渲染服務發生錯誤，請稍後再試",
         }
