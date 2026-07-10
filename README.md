@@ -32,17 +32,28 @@ flowchart TB
 
 ---
 
-## 模組與分工（分支對照）
+## 模組與分支
 
 本 repo 以分支劃分模組，各模組獨立開發與部署：
 
-| 模組 | 分支 | 技術 | 負責 |
-|------|------|------|------|
-| 網頁前端 | `dev_makeup` | 原生 JavaScript、Firebase Hosting | isach |
-| 臉部分析 + AI 渲染後端 | `Isa` | Python、FastAPI、InsightFace、MediaPipe、Replicate、Cloud Run | isach |
-| 會員 / 商品 / 推薦 資料庫 | `lavien` | Flask、PostgreSQL、Redis、OTP | lavien |
-| Ollama 文字建議服務 | `Amy` | FastAPI、Ollama | amy |
-| iOS App | `dev` | SwiftUI | Fafa |
+| 模組 | 分支 | 技術 |
+|------|------|------|
+| 網頁前端 | `dev_makeup` | 原生 JavaScript、Firebase Hosting |
+| 臉部分析 + AI 渲染後端 | `Isa` | Python、FastAPI、InsightFace、MediaPipe、Replicate、Cloud Run |
+| 會員 / 商品 / 推薦 資料庫 | `lavien` | Flask、PostgreSQL、Redis、OTP |
+| Ollama 文字建議服務 | `Amy` | FastAPI、Ollama |
+| iOS App | `dev` | SwiftUI |
+
+## 團隊分工
+
+| 負責人 | 工作 |
+|--------|------|
+| 陳語宸 | 網頁前端、臉部分析、後台管理、版本控制、細節處理、流程更新 |
+| 謝佳璇 | AI 渲染 |
+| 江欣晏 | 商品爬蟲、推薦演算法 |
+| 呂佩慈 | 資料庫、推薦演算法 |
+| 陳昀捷 | 前端前置設計、資料收集 |
+| 林語喬 | 前端前置設計、資料收集、iOS 同步 |
 
 ---
 
