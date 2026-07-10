@@ -73,6 +73,24 @@ flowchart TB
 
 ---
 
+## 專案結構
+
+```
+Face_analyzer_BASIC.py       BASIC 臉部分析服務（FastAPI）
+Face_analyzer_PRO.py         PRO 臉部分析服務
+replicate_render_api.py      AI 渲染服務（FastAPI）
+replicate_render.py          Replicate 呼叫 + GCS 上傳
+Ollama_suggestion.py         妝容文字建議
+analysis_package.py          分析結果資料結構
+job_store.py                 非同步 job（Firestore）
+dev_server_utils.py          CORS / 本機開發工具
+Dockerfile, Dockerfile.render, docker-compose.yml   容器化與部署
+requirements.txt, requirements.render.txt           依賴
+tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓練資料，非服務本體）
+```
+
+---
+
 ## 臉部分析怎麼做
 
 1. 上傳圖縮到最長邊 1024px。
