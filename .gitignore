@@ -20,12 +20,8 @@
 !replicate_render_api.py
 !requirements.render.txt
 !Dockerfile.render
-!select_basic_usable_images.py
-!auto_label_basic_dataset.py
-!batch_basic_classify.py
-!organize_basic_results.py
-!make_review_sheets.py
-!apply_review_decisions.py
+!tools/
+!tools/*.py
 !setup.bat
 !start_backend_local.bat
 !start_full_stack_local.bat

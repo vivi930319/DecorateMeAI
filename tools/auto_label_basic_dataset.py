@@ -3,6 +3,8 @@ import csv
 import json
 from pathlib import Path
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 移到 tools/ 後仍能匯入根目錄的 Face_analyzer_BASIC
 from Face_analyzer_BASIC import FaceAnalyzer
 
 
