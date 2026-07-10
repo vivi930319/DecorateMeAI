@@ -14,11 +14,13 @@ Decorate Me 是一套 AI 美妝系統：使用者上傳一張自拍，系統分�
 
 ```mermaid
 flowchart LR
+  classDef n fill:#ffffff,stroke:#000000,color:#000000;
   FE["網頁前端 (Firebase Hosting)"]
   FE -->|X-API-Key| FA["臉部分析 (Cloud Run)"]
   FE -->|X-API-Key| RD["AI 渲染 (Cloud Run)"]
   FE -->|X-API-Key| OL["Ollama 文字建議"]
   FE -->|session cookie| DB["會員 / 商品資料庫"]
+  class FE,FA,RD,OL,DB n;
 ```
 
 ---
@@ -60,6 +62,35 @@ deploy.ps1            部署腳本（自動戳版本號後 firebase deploy）
 - 商品推薦與收藏、購物車
 - 會員中心（等級、點數、簽到、任務、主題）
 - 後台管理（會員權限、商品、即時檢視收藏與點數）
+
+---
+
+## 後台管理（Admin）
+
+僅 `role: admin` 的帳號可進入管理中台（非管理員自動導回首頁）。所有讀寫都走管理員 session cookie。
+
+功能：
+
+- **會員清單**：`GET /api/members`（僅 admin 可讀，匿名 401、非 admin 403）
+- **即時檢視**：逐會員顯示妝容收藏數與點數；切回分頁自動刷新（3 秒節流）
+- **會員管理**：改角色 / 會員等級 / 停權 / 功能權限（`PATCH /api/members/{email}`）
+- **等級連動**：選 VIP / PRO 會員時，自動勾選「PRO 分析」「渲染不限次數」權限
+- **商品管理**：新增 / 編輯商品（`POST` / `PATCH /api/products`）
+- **韌性**：搜尋 200ms debounce；session 過期（401）時自動重登並重試
+
+流程：
+
+```mermaid
+flowchart TB
+  classDef n fill:#ffffff,stroke:#000000,color:#000000;
+  A["管理員登入 (role=admin)"] --> B["種 session cookie"]
+  B --> C["GET /api/members 讀會員清單"]
+  C --> D["即時：GET saved-looks / points"]
+  C --> E["編輯：PATCH member（權限 / 等級 / 停權）"]
+  C --> F["商品：POST / PATCH products"]
+  C -.401 過期.-> G["自動重登 → 重試"]
+  class A,B,C,D,E,F,G n;
+```
 
 ---
 
