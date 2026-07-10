@@ -15,6 +15,7 @@ Decorate Me 是一套 AI 美妝系統：使用者上傳一張自拍，系統分�
 
 ```mermaid
 flowchart TB
+  classDef n fill:#ffffff,stroke:#000000,color:#000000;
   U["使用者瀏覽器 / App"]
   FE["前端 (Firebase Hosting)"]
   subgraph BE["本後端 (Cloud Run)"]
@@ -38,6 +39,8 @@ flowchart TB
   FP --> FS
   RD --> REP
   RD --> GCS
+  class U,FE,FB,FP,RD,OLL,MDB,REP,GCS,FS n;
+  style BE fill:#ffffff,stroke:#000000,color:#000000;
 ```
 
 ---
