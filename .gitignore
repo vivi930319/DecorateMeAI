@@ -12,8 +12,9 @@ Thumbs.db
 # Firebase 本機快取
 .firebase/
 
-# 文件檔一律不進 git（只留程式碼）
+# 文件檔一律不進 git（只留程式碼）；但 README.md 放行當專案門面
 *.md
+!README.md
 *.docx
 *.pdf
 *.drawio
