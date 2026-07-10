@@ -156,9 +156,3 @@ gcloud run deploy replicate-render --image <image> --region asia-east1
 - `Isa`（本分支）：臉部分析與 AI 渲染後端（Python）
 - `dev_makeup`：網頁前端
 - `dev`：iOS App（SwiftUI）
-
----
-
-## 團隊
-
-畢業專題「Decorate Me」。本分支（後端）由 isach 維護。
