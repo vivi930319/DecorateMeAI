@@ -87,9 +87,3 @@ python dev_server.py     # 或 firebase emulators / live server
 - `dev_makeup`（本分支）：網頁前端
 - `Isa`：臉部分析與 AI 渲染後端（Python）
 - `dev`：iOS App（SwiftUI）
-
----
-
-## 團隊
-
-畢業專題「Decorate Me」。本分支（前端）由 isach 維護。
