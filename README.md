@@ -49,7 +49,7 @@ flowchart TB
 
 | 分類 | 使用 |
 |------|------|
-| 語言 / 框架 | Python 3.11、FastAPI、Uvicorn |
+| 語言 / 框架 | Python 3.10（BASIC / PRO / suggestion）、Python 3.11（render）、FastAPI、Uvicorn |
 | 電腦視覺 | InsightFace（buffalo_l）、MediaPipe FaceMesh、OpenCV、NumPy |
 | AI 渲染 | Replicate（black-forest-labs/flux-kontext-pro） |
 | 儲存 | Google Cloud Storage（渲染圖）、Firestore（分析 job） |
