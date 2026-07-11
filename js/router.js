@@ -385,6 +385,13 @@ function resetCurrentBeautySession(){
     if (typeof AnalysisDraft !== "undefined" && AnalysisDraft.clear) AnalysisDraft.clear();
 }
 
+// 妝容收藏的 localStorage key 依「登入帳號」分開，避免同一瀏覽器不同帳號互相看到對方的收藏
+function looksKey(){
+    const p = (typeof Auth !== 'undefined' && Auth.getProfile) ? Auth.getProfile() : null;
+    const em = (p && p.email) ? String(p.email).trim().toLowerCase() : 'guest';
+    return 'beautySuggestions_' + em;
+}
+
 function buildCurrentLookRecord(){
     const style = STYLES.find(s => s.id === Router.selectedStyleId) || STYLES[0];
     const pkg = Router.analysisPackage || {};
@@ -430,11 +437,13 @@ function saveCurrentLook(){
         promptGuestAuth('收藏妝容對比圖');
         return null;
     }
-    const record = Router.pendingLook || buildCurrentLookRecord();
+    // 收藏當下重建，確保拿到最新的渲染圖與臉部分析；只有現在抓不到渲染圖時才退回先前的快照
+    const fresh = buildCurrentLookRecord();
+    const record = fresh.renderedImage ? fresh : (Router.pendingLook || fresh);
     const stored = { ...record, timestamp: new Date().toISOString() };
-    const records = JSON.parse(localStorage.getItem('beautySuggestions') || '[]');
+    const records = JSON.parse(localStorage.getItem(looksKey()) || '[]');
     records.unshift(stored);
-    localStorage.setItem('beautySuggestions', JSON.stringify(records.slice(0, 20)));
+    localStorage.setItem(looksKey(), JSON.stringify(records.slice(0, 20)));
     Router.pendingLook = null;
     Router.pendingLookSaved = true;
     // 盡力同步到後端（跨裝置持久化）；只有渲染後永久網址存在才送，失敗不影響本機收藏
@@ -446,17 +455,17 @@ function saveCurrentLook(){
             beforeImageUrl: stored.beforeImage || null,
             afterImageUrl: stored.renderedImage || null,
             analysisSummary: {
-                faceShape: a.faceShape || null,
-                eyeShape: a.eyeShape || null,
-                skinSeason: (a.skinTone && a.skinTone.season) || null
+                faceShape: a.faceShape || a['臉型'] || null,
+                eyeShape: a.eyeShape || a['眼型'] || null,
+                skinSeason: (a.skinTone && a.skinTone.season) || (a['膚色'] && a['膚色']['四季型']) || null
             }
         }).then(r => {
             // 把後端配發的 id 寫回本機該筆，之後刪除才能連動後端
             if (r && r.ok && r.look && r.look.id != null) {
                 try {
-                    const recs = JSON.parse(localStorage.getItem('beautySuggestions') || '[]');
+                    const recs = JSON.parse(localStorage.getItem(looksKey()) || '[]');
                     const hit = recs.find(x => x.timestamp === stored.timestamp);
-                    if (hit) { hit.remoteId = r.look.id; localStorage.setItem('beautySuggestions', JSON.stringify(recs)); }
+                    if (hit) { hit.remoteId = r.look.id; localStorage.setItem(looksKey(), JSON.stringify(recs)); }
                 } catch (_) {}
                 if (typeof showToast === 'function') showToast('已同步到雲端資料庫');
             } else if (r && r.skipped) {
@@ -2549,37 +2558,70 @@ const PageInit = {
         const suggestionEl = document.getElementById('profileSuggestionCount');
         const pointEl = document.getElementById('profilePointCount');
         const suggestions = (() => {
-            try { return JSON.parse(localStorage.getItem('beautySuggestions') || '[]'); } catch (_) { return []; }
+            try { return JSON.parse(localStorage.getItem(looksKey()) || '[]'); } catch (_) { return []; }
         })();
         if (favEl) { favEl.textContent = ALL_PRODUCTS.filter(p => Fav.has(p.id)).length; favEl.classList.add('num-pop'); }
         if (anEl) { anEl.textContent = History.list().length; anEl.classList.add('num-pop'); anEl.style.animationDelay='.1s'; }
         if (suggestionEl) { suggestionEl.textContent = suggestions.length; suggestionEl.classList.add('num-pop'); suggestionEl.style.animationDelay='.16s'; }
         if (pointEl) { pointEl.textContent = MemberRewards.getPoints(profile.email); pointEl.classList.add('num-pop'); pointEl.style.animationDelay='.2s'; }
+        if (pointEl && !isGuest() && profile.email && Api.getMemberPoints) {
+            Api.getMemberPoints(profile.email).then(r => {
+                if (!r || !r.ok || r.balance == null) return;
+                pointEl.textContent = r.balance;
+                if (r.lifetime != null && typeof MemberRewards !== 'undefined') {
+                    // 讓會員等級進度也能吃到資料庫的 lifetime；保留 localStorage 只是為了既有 MemberTier 介面。
+                    const all = MemberRewards._load(MemberRewards._lifetimeKey, {});
+                    all[String(profile.email).trim().toLowerCase()] = Number(r.lifetime) || 0;
+                    MemberRewards._save(MemberRewards._lifetimeKey, all);
+                }
+            }).catch(() => {});
+        }
 
         const checkinCard = document.getElementById('profileCheckinCard');
         if (checkinCard) {
-            const status = MemberRewards.checkinStatus(profile.email);
-            const nextMilestone = MemberRewards.nextStreakMilestone(status.streak);
-            const streakLine = status.streak > 0
-                ? `目前連續簽到 <b>${status.streak}</b> 天${nextMilestone ? `，再簽 ${nextMilestone - status.streak} 天可拿額外 ${MemberRewards._streakBonusTable[nextMilestone]} 點` : '，已達最高獎勵天數'}`
-                : '今天開始簽到就能累積連續天數';
-            checkinCard.innerHTML = `<div class="member-action-card">
-                <div>
-                    <b>${status.checkedToday ? '今天已完成打卡' : '今天還沒打卡'}</b>
-                    <p>每日打卡可獲得 10 點；連續簽到 3 / 7 / 14 / 30 天另有加碼獎勵。</p>
-                    <p class="checkin-streak">${streakLine}</p>
-                </div>
-                <button class="btn-gold btn-sm" id="dailyCheckinBtn" ${status.checkedToday || isGuest() ? 'disabled' : ''}>${status.checkedToday ? '已打卡' : '打卡 +10'}</button>
-            </div>`;
-            const btn = document.getElementById('dailyCheckinBtn');
-            if (btn) btn.onclick = () => {
-                const result = MemberRewards.checkin(profile.email);
-                if (!result.ok) { showAlert(result.message, { type:'error' }); return; }
-                showToast(result.bonus
-                    ? `打卡成功！連續 ${result.streak} 天，獲得 ${result.points} 點（含連續簽到獎勵 ${result.bonus} 點）`
-                    : `打卡成功，獲得 ${result.points} 點`);
-                PageInit.profile();
+            const paintCheckin = (status, remote) => {
+                const nextMilestone = MemberRewards.nextStreakMilestone(Number(status.streak) || 0);
+                const streakLine = (Number(status.streak) || 0) > 0
+                    ? `目前連續簽到 <b>${Number(status.streak) || 0}</b> 天${nextMilestone ? `，再簽 ${nextMilestone - (Number(status.streak) || 0)} 天可拿額外 ${MemberRewards._streakBonusTable[nextMilestone]} 點` : '，已達最高獎勵天數'}`
+                    : '今天開始簽到就能累積連續天數';
+                checkinCard.innerHTML = `<div class="member-action-card">
+                    <div>
+                        <b>${status.checkedToday ? '今天已完成打卡' : '今天還沒打卡'}</b>
+                        <p>每日打卡可獲得 10 點；連續簽到 3 / 7 / 14 / 30 天另有加碼獎勵。</p>
+                        <p class="checkin-streak">${streakLine}${remote ? '（資料庫同步）' : ''}</p>
+                    </div>
+                    <button class="btn-gold btn-sm" id="dailyCheckinBtn" ${status.checkedToday || isGuest() ? 'disabled' : ''}>${status.checkedToday ? '已打卡' : '打卡 +10'}</button>
+                </div>`;
+                const btn = document.getElementById('dailyCheckinBtn');
+                if (btn) btn.onclick = async () => {
+                    btn.disabled = true;
+                    if (!isGuest() && Api.checkInMember) {
+                        const remoteResult = await Api.checkInMember(profile.email).catch(() => null);
+                        if (remoteResult?.ok) {
+                            const gained = remoteResult.awarded ?? remoteResult.points ?? 0;
+                            showToast(`打卡成功，獲得 ${gained} 點`);
+                            PageInit.profile();
+                            return;
+                        }
+                    }
+                    const result = MemberRewards.checkin(profile.email);
+                    if (!result.ok) { showAlert(result.message, { type:'error' }); btn.disabled = false; return; }
+                    showToast(result.bonus
+                        ? `打卡成功！連續 ${result.streak} 天，獲得 ${result.points} 點（含連續簽到獎勵 ${result.bonus} 點）`
+                        : `打卡成功，獲得 ${result.points} 點`);
+                    PageInit.profile();
+                };
             };
+            paintCheckin(MemberRewards.checkinStatus(profile.email), false);
+            if (!isGuest() && profile.email && Api.getCheckinStatus) {
+                Api.getCheckinStatus(profile.email).then(r => {
+                    if (!r || !r.ok) return;
+                    paintCheckin({
+                        checkedToday: !!r.checkedToday,
+                        streak: Number(r.streak) || 0
+                    }, true);
+                }).catch(() => {});
+            }
         }
 
         const taskCenter = document.getElementById('profileTaskCenter');
@@ -2587,30 +2629,54 @@ const PageInit = {
             if (isGuest() || typeof Tasks === 'undefined') {
                 taskCenter.innerHTML = '<div class="empty-state compact">登入會員後即可查看任務中心</div>';
             } else {
-                const tasks = Tasks.status(profile.email);
-                const groups = [...new Set(tasks.map(t => t.group))];
-                taskCenter.innerHTML = groups.map(group => `
-                    <div class="task-group">
-                        <h4>${escapeHtml(group)}</h4>
-                        ${tasks.filter(t => t.group === group).map(t => `
-                            <div class="member-action-card task-row">
-                                <div>
-                                    <b>${escapeHtml(t.title)}</b>
-                                    <p>獎勵 ${t.reward} 點</p>
+                const paintTasks = (tasks, remote) => {
+                    const normalized = tasks.map(t => ({
+                        id: t.id || t.taskId,
+                        group: t.group || (t.daily ? '每日任務' : '任務'),
+                        title: t.title || t.name || t.taskId || '任務',
+                        reward: t.reward ?? 0,
+                        done: t.done !== false,
+                        claimed: !!t.claimed
+                    })).filter(t => t.id);
+                    const groups = [...new Set(normalized.map(t => t.group))];
+                    taskCenter.innerHTML = groups.map(group => `
+                        <div class="task-group">
+                            <h4>${escapeHtml(group)}${remote ? ' <span style="font-size:12px;color:#7A4A42;">DB</span>' : ''}</h4>
+                            ${normalized.filter(t => t.group === group).map(t => `
+                                <div class="member-action-card task-row">
+                                    <div>
+                                        <b>${escapeHtml(t.title)}</b>
+                                        <p>獎勵 ${t.reward} 點</p>
+                                    </div>
+                                    <button class="btn-gold btn-sm" data-task-id="${escapeHtml(t.id)}" data-task-remote="${remote ? '1' : '0'}" ${(!t.done || t.claimed) ? 'disabled' : ''}>${t.claimed ? '已領取' : (t.done ? '領取獎勵' : '尚未完成')}</button>
                                 </div>
-                                <button class="btn-gold btn-sm" data-task-id="${t.id}" ${(!t.done || t.claimed) ? 'disabled' : ''}>${t.claimed ? '已領取' : (t.done ? '領取獎勵' : '尚未完成')}</button>
-                            </div>
-                        `).join('')}
-                    </div>
-                `).join('');
-                taskCenter.querySelectorAll('[data-task-id]').forEach(btn => {
-                    btn.onclick = () => {
-                        const result = Tasks.claim(profile.email, btn.dataset.taskId);
-                        if (!result.ok) { showAlert(result.message || '尚未完成這個任務。', { type: 'error' }); return; }
-                        showToast(`任務完成，獲得 ${result.reward} 點`);
-                        PageInit.profile();
-                    };
-                });
+                            `).join('')}
+                        </div>
+                    `).join('');
+                    taskCenter.querySelectorAll('[data-task-id]').forEach(btn => {
+                        btn.onclick = async () => {
+                            btn.disabled = true;
+                            if (btn.dataset.taskRemote === '1' && Api.claimMemberTask) {
+                                const result = await Api.claimMemberTask(profile.email, btn.dataset.taskId).catch(() => null);
+                                if (!result?.ok) { showAlert(result?.error || '任務領取失敗。', { type: 'error' }); btn.disabled = false; return; }
+                                showToast(`任務完成，獲得 ${result.awarded ?? result.reward ?? 0} 點`);
+                                PageInit.profile();
+                                return;
+                            }
+                            const result = Tasks.claim(profile.email, btn.dataset.taskId);
+                            if (!result.ok) { showAlert(result.message || '尚未完成這個任務。', { type: 'error' }); btn.disabled = false; return; }
+                            showToast(`任務完成，獲得 ${result.reward} 點`);
+                            PageInit.profile();
+                        };
+                    });
+                };
+                paintTasks(Tasks.status(profile.email), false);
+                if (profile.email && Api.listMemberTasks) {
+                    Api.listMemberTasks(profile.email).then(r => {
+                        if (!r || !r.ok || !r.tasks.length) return;
+                        paintTasks(r.tasks, true);
+                    }).catch(() => {});
+                }
             }
         }
 
@@ -2652,11 +2718,26 @@ const PageInit = {
                 </article>`;
             }).join('')}</div>`;
             themeShop.querySelectorAll('[data-theme-id]').forEach(btn => {
-                btn.onclick = () => {
+                btn.onclick = async () => {
                     const id = btn.dataset.themeId;
                     if (btn.dataset.themeAction === 'redeem') {
+                        btn.disabled = true;
+                        if (!isGuest() && Api.redeemMemberTheme) {
+                            const remote = await Api.redeemMemberTheme(profile.email, id).catch(() => null);
+                            if (remote?.ok) {
+                                MemberRewards.setActiveTheme(profile.email, id);
+                                showToast('已兌換並套用主題');
+                                PageInit.profile();
+                                return;
+                            }
+                            if (remote?.error) {
+                                showAlert(remote.error, { type:'error' });
+                                btn.disabled = false;
+                                return;
+                            }
+                        }
                         const result = MemberRewards.redeemTheme(profile.email, id);
-                        if (!result.ok) { showAlert(result.message, { type:'error' }); return; }
+                        if (!result.ok) { showAlert(result.message, { type:'error' }); btn.disabled = false; return; }
                         MemberRewards.setActiveTheme(profile.email, id);
                         showToast('已兌換並套用主題');
                     } else {
@@ -2670,12 +2751,23 @@ const PageInit = {
 
         const ledgerEl = document.getElementById('profilePointLedger');
         if (ledgerEl) {
-            const rows = MemberRewards.ledger(profile.email);
-            ledgerEl.innerHTML = rows.length ? `<div class="point-ledger">${rows.slice(0, 8).map(row => `<div>
-                <span>${escapeHtml(row.reason)}</span>
-                <time>${new Date(row.createdAt).toLocaleString('zh-TW')}</time>
-                <b class="${row.delta >= 0 ? 'plus' : 'minus'}">${row.delta >= 0 ? '+' : ''}${row.delta}</b>
-            </div>`).join('')}</div>` : '<div class="empty-state compact">尚無點數紀錄</div>';
+            const paintLedger = (rows) => {
+                ledgerEl.innerHTML = rows.length ? `<div class="point-ledger">${rows.slice(0, 8).map(row => {
+                    const createdAt = row.created_at || row.createdAt || row.time || row.timestamp;
+                    return `<div>
+                        <span>${escapeHtml(row.reason || row.description || '點數異動')}</span>
+                        <time>${createdAt ? new Date(createdAt).toLocaleString('zh-TW') : ''}</time>
+                        <b class="${Number(row.delta) >= 0 ? 'plus' : 'minus'}">${Number(row.delta) >= 0 ? '+' : ''}${Number(row.delta) || 0}</b>
+                    </div>`;
+                }).join('')}</div>` : '<div class="empty-state compact">尚無點數紀錄</div>';
+            };
+            paintLedger(MemberRewards.ledger(profile.email));
+            if (!isGuest() && profile.email && Api.getMemberPoints) {
+                Api.getMemberPoints(profile.email).then(r => {
+                    if (!r || !r.ok || !Array.isArray(r.transactions)) return;
+                    paintLedger(r.transactions);
+                }).catch(() => {});
+            }
         }
         const paintSavedLooks = (list) => {
             const area = document.getElementById('profileSuggestionArea');
@@ -2711,9 +2803,9 @@ const PageInit = {
                     showConfirm("確定要刪除這個收藏的妝容嗎？此動作無法復原。", {
                         title: "刪除妝容對比圖", type: "error", okText: "刪除", cancelText: "保留",
                         onOk: function(){
-                            var recs = []; try { recs = JSON.parse(localStorage.getItem("beautySuggestions") || "[]"); } catch(_){}
+                            var recs = []; try { recs = JSON.parse(localStorage.getItem(looksKey()) || "[]"); } catch(_){}
                             var removed = recs.splice(idx, 1)[0];
-                            localStorage.setItem("beautySuggestions", JSON.stringify(recs));
+                            localStorage.setItem(looksKey(), JSON.stringify(recs));
                             // 若該筆已同步到後端，連動刪除（盡力而為，失敗不影響本機）
                             var em = (typeof Auth !== 'undefined' && Auth.getProfile()) ? Auth.getProfile().email : null;
                             if (em && removed && removed.remoteId != null) { Api.deleteSavedLook(em, removed.remoteId); }
@@ -2733,10 +2825,15 @@ const PageInit = {
                 Api.listSavedLooks(__em).then(r => {
                     if (!r || !r.ok) return;
                     const remote = r.looks.map(mapRemoteSavedLook);
-                    let localOnly = [];
-                    try { localOnly = JSON.parse(localStorage.getItem('beautySuggestions') || '[]').filter(x => x.remoteId == null); } catch (_) {}
-                    const merged = remote.concat(localOnly).sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
-                    localStorage.setItem('beautySuggestions', JSON.stringify(merged.slice(0, 20)));
+                    let localAll = [];
+                    try { localAll = JSON.parse(localStorage.getItem(looksKey()) || '[]'); } catch (_) {}
+                    // 本機已同步的筆（有 remoteId）資訊較完整（含完整臉部分析與風格），優先保留，不被後端摘要版覆蓋
+                    const localByRemote = {};
+                    localAll.forEach(x => { if (x.remoteId != null) localByRemote[x.remoteId] = x; });
+                    const fromRemote = remote.map(rm => (rm.remoteId != null && localByRemote[rm.remoteId]) ? localByRemote[rm.remoteId] : rm);
+                    const localOnly = localAll.filter(x => x.remoteId == null);
+                    const merged = fromRemote.concat(localOnly).sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
+                    localStorage.setItem(looksKey(), JSON.stringify(merged.slice(0, 20)));
                     if (Router.currentPage === 'profile') paintSavedLooks(merged);
                 });
             }
@@ -2920,7 +3017,7 @@ const PageInit = {
                             <b>${escapeHtml(member.name || member.email.split('@')[0])}${perm.vipRequested && member.level !== 'VIP會員' ? ' <span class="admin-fail warn">申請升級中</span>' : ''}</b>
                             <span>${escapeHtml(member.email)}</span>
                             <span class="admin-look-count" data-look-email="${escapeHtml(member.email)}" style="margin-top:4px;font-size:12px;color:#7A4A42;cursor:pointer;text-decoration:underline dotted;" title="點開看這位會員的妝容收藏（從資料庫即時抓）">妝容收藏：${lookCountLabel(member.email)}</span>
-                            <span style="margin-top:2px;font-size:12px;color:#7A4A42;" title="會員目前點數餘額（從資料庫即時抓）">點數：${pointsLabel(member.email)}</span>
+                            <span style="margin-top:2px;font-size:12px;color:#7A4A42;" title="會員目前點數餘額">點數：${member.points != null ? member.points : pointsLabel(member.email)}</span>
                         </div>
                     </td>
                     <td>
@@ -3409,8 +3506,22 @@ async function doLoginAction() {
             showAlert('無法連線到會員資料庫，請稍後再試', { type: 'error' });
             return;
         }
-        // 後端對「未註冊」與「密碼錯」回一樣的錯誤（防帳號枚舉），前端無法區分；
-        // 一律提供「用剛才輸入的帳密直接去註冊」捷徑，已註冊者選「重新輸入」即可。
+        // 後端有回 code 就精準分流：未註冊 → 引導註冊；密碼錯 → 重新輸入 / 忘記密碼
+        if (err.code === 'USER_NOT_FOUND') {
+            showConfirm('此帳號尚未註冊。要用剛才輸入的資料直接去註冊嗎？', {
+                title: '尚未註冊', type: 'error', okText: '去註冊', cancelText: '取消',
+                onOk: function(){ Router.prefillRegister = { email: email, password: password }; showRegister(); }
+            });
+            return;
+        }
+        if (err.code === 'WRONG_PASSWORD') {
+            showConfirm('密碼錯誤。請重新輸入，或前往「忘記密碼」重設。', {
+                title: '密碼錯誤', type: 'error', okText: '重新輸入', cancelText: '忘記密碼',
+                onCancel: function(){ if (typeof showForgotPassword === 'function') showForgotPassword(); }
+            });
+            return;
+        }
+        // 後端還沒區分（回統一錯誤）→ 退回原本：一律提供去註冊捷徑，已註冊者選「重新輸入」
         showConfirm((err.message || '帳號或密碼錯誤') + '。還沒有帳號嗎？可以用剛才輸入的資料直接去註冊。', {
             title: '登入失敗',
             type: 'error',
@@ -3470,14 +3581,34 @@ async function doVerifyOTP() {
     const pending = Router.pendingRegister;
     if (!pending) { showAlert('註冊資料已過期，請重新註冊', { type:'error', onOk: showRegister }); return; }
     if (!(await verifyOtpWithOptionalBypass(pending.email, code))) return;
+
+    // 以後端為準：驗證碼過了之後，一定要用後端 login 拿到 session 才算真的登入。
+    // 假的／不存在的 email 驗不過、或後端沒把帳號設為已驗證，login 就會失敗、進不了 app，
+    // 不再像以前那樣「前端自己 setProfile 直接進去」而繞過後端的帳號驗證。
+    let member = {};
+    try {
+        const data = await Api.login(pending.email, pending.password);
+        member = data.member || {};
+    } catch (err) {
+        if (err.networkFailure) {
+            showAlert('無法連線到會員資料庫，請稍後再試', { type:'error' });
+            return;
+        }
+        showAlert('驗證碼正確，但帳號登入未通過，請確認帳號已完成驗證後重新登入', { type:'error', onOk: showLogin });
+        return;
+    }
+
     Auth.setProfile({
-        name: pending.name,
-        phone: pending.phone,
-        email: pending.email,
-        age: pending.age,
-        level: pending.level,
+        ...member,
+        name: member.name || pending.name,
+        phone: member.phone_number || pending.phone,
+        email: member.email || pending.email,
+        age: member.age || pending.age,
+        level: member.level || pending.level,
+        role: member.role || 'member',
+        status: member.status || 'active',
         avatar: pending.avatar,
-        password: pending.password
+        renderQuota: member.renderQuota || null
     });
     const referralResult = (typeof Referral !== 'undefined' && pending.referralCode)
         ? Referral.applyReferral(pending.email, pending.referralCode)

@@ -473,7 +473,7 @@ const Api = {
         }
     },
 
-    // 會員點數：GET /api/members/{email}/points → { balance, transactions[] }。後台顯示用，admin session 可讀任一會員
+    // 會員點數：GET /api/members/{email}/points → { balance, lifetime, transactions[] }。
     async getMemberPoints(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false, balance: null };
@@ -490,9 +490,94 @@ const Api = {
             const earned = txns.length
                 ? txns.reduce((s, t) => s + (Number(t.delta) > 0 ? Number(t.delta) : 0), 0)
                 : null;
-            return { ok: true, balance: data.balance ?? null, earned };
+            return { ok: true, balance: data.balance ?? null, lifetime: data.lifetime ?? earned, earned, transactions: txns };
         } catch (_) {
             return { ok: false, balance: null };
+        }
+    },
+
+    async getCheckinStatus(email) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/check-in`, {
+                method: 'GET',
+                credentials: 'include',
+                cache: 'no-store'
+            });
+            if (!res.ok) return { ok: false, status: res.status };
+            const data = await res.json().catch(() => ({}));
+            return { ok: true, ...data };
+        } catch (_) {
+            return { ok: false };
+        }
+    },
+
+    async checkInMember(email) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/check-in`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+            return { ok: true, ...data };
+        } catch (_) {
+            return { ok: false };
+        }
+    },
+
+    async listMemberTasks(email) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false, tasks: [] };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/tasks`, {
+                method: 'GET',
+                credentials: 'include',
+                cache: 'no-store'
+            });
+            if (!res.ok) return { ok: false, status: res.status, tasks: [] };
+            const data = await res.json().catch(() => ({}));
+            return { ok: true, tasks: Array.isArray(data.tasks) ? data.tasks : [] };
+        } catch (_) {
+            return { ok: false, tasks: [] };
+        }
+    },
+
+    async claimMemberTask(email, taskId) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email || !taskId) return { ok: false };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/tasks/${encodeURIComponent(taskId)}/claim`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+            return { ok: true, ...data };
+        } catch (_) {
+            return { ok: false };
+        }
+    },
+
+    async redeemMemberTheme(email, themeId) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email || !themeId) return { ok: false };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/theme-shop/${encodeURIComponent(themeId)}/redeem`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+            return { ok: true, ...data };
+        } catch (_) {
+            return { ok: false };
         }
     },
 
@@ -589,28 +674,32 @@ const Api = {
         const url = this.config.url('product', 'recommendPath');
         if (!url) return { ok: false, products: [] };
         try {
+            const skinLab = this._labToUpperKeys(faceAnalysis?.skinTone?.lab);
+            const lipLab = this._labToUpperKeys(faceAnalysis?.lipLab);
             const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
+                    lab:        skinLab || lipLab || null,   // 後端新格式：頂層要色彩資料（lab / hex / hsv / vector 其一）
                     faceShape:  faceAnalysis?.faceShape  || null,
                     eyeShape:   faceAnalysis?.eyeShape   || null,
                     skinTone: {
                         season:  faceAnalysis?.skinTone?.season || null,
                         level:   faceAnalysis?.skinTone?.level  || null,
-                        lab:     this._labToUpperKeys(faceAnalysis?.skinTone?.lab),
+                        lab:     skinLab,
                     },
-                    lipLab:     this._labToUpperKeys(faceAnalysis?.lipLab),
+                    lipLab:     lipLab,
                     style:      styleId || null,
                 })
             });
             if (!res.ok) return { ok: false, status: res.status, products: [] };
             const data = await res.json();
+            const list = data.recommendations || data.products || [];  // 後端回 recommendations；相容舊 products
             return {
                 ok: true,
                 ...data,
-                products: Array.isArray(data.products)
-                    ? data.products.map(item => this._normalizeProduct(item)).filter(Boolean)
+                products: Array.isArray(list)
+                    ? list.map(item => this._normalizeProduct(item)).filter(Boolean)
                     : []
             };
         } catch (_) {
@@ -644,6 +733,7 @@ const Api = {
             const err = new Error(detail?.error?.message || '帳號或密碼錯誤');
             err.networkFailure = false;
             err.status = res.status;
+            err.code = detail?.error?.code || null;  // 未註冊 USER_NOT_FOUND / 密碼錯 WRONG_PASSWORD（後端支援時前端據此分流）
             throw err;
         }
         // 暫存帳密（sessionStorage，關分頁即清）供 session 掉時背景自動重登用
