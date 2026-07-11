@@ -1098,10 +1098,14 @@ function buildRenderPrompt(faceAnalysis, styleId, suggestion = '', ollamaRenderP
     const makeupInstruction = String(ollamaRenderPromptEn || '').trim() || 'Apply natural everyday makeup.';
 
     const identityLock = [
+        `Create a photorealistic camera photo edit, not AI art.`,
+        `Keep the original photo quality, lens perspective, lighting, shadows, skin texture, pores, fine lines, and natural facial asymmetry.`,
         `Do not change this person's identity or appearance.`,
-        `Keep face shape, facial structure, eye shape, nose, lips, skin tone, skin texture, pores, wrinkles, and hair completely identical to the original photo.`,
+        `Keep face shape, facial structure, eye shape, nose, lips, skin tone, skin texture, pores, fine lines, wrinkles, and hair completely identical to the original photo.`,
+        `Do not smooth, airbrush, whiten, reshape, slim the face, enlarge eyes, alter age, alter ethnicity, or beautify facial features beyond applying makeup.`,
         `Keep the exact same pose, posture, body position, head angle, hand position, gesture, and action as the original photo — do not let the person move, turn, or change stance.`,
         `Keep clothing, background, lighting, camera angle, camera framing, and expression completely identical to the original photo.`,
+        `Avoid plastic skin, porcelain skin, doll-like face, CGI, 3D render, illustration, painting, glamour retouch, studio portrait, or beauty filter effects.`,
         `This must be the exact same person in the exact same pose, only wearing makeup — nothing else about the photo should change.`,
     ].join(' ');
 
