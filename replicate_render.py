@@ -19,9 +19,9 @@ load_dotenv()
 REPLICATE_MODEL = "black-forest-labs/flux-kontext-pro"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
-# guidance 越高，模型越會嚴格照 prompt 做（包含「保留原本人物/姿勢」的指令），但太高可能出現偽影；
-# 3.5 測完還是偏容易失真，再調高到 4.5，可用環境變數覆蓋方便之後再微調不用改程式碼。
-RENDER_GUIDANCE = float(os.getenv("RENDER_GUIDANCE", "4.5"))
+# guidance 越高越會硬照 prompt 改圖，但太高會讓膚質塑膠、臉變 AI。妝容編輯優先保留真人照片質感，
+# 所以預設收斂到 3.0；若 Cloud Run env 設了 RENDER_GUIDANCE，仍可覆蓋。
+RENDER_GUIDANCE = float(os.getenv("RENDER_GUIDANCE", "3.0"))
 # Replicate 回傳的 afterImageUrl 只是暫存網址（幾天內會失效），收藏功能需要永久網址才能長期使用。
 # bucket 已經存在且 allUsers 有 objectViewer 權限（公開可讀），不需要額外簽名 URL。
 GCS_BUCKET_NAME = os.getenv("GCS_RENDER_BUCKET", "decorate-me-renders")
@@ -197,11 +197,14 @@ def build_render_prompt(frontend_package: dict[str, Any], face_analysis: dict[st
     ollama_line = f"Makeup reference (translated from advisor): {suggestion[:300].strip()}." if suggestion else ""
     parts = [
         "This is a makeup-only edit on the exact person in the input photo.",
+        "Keep the output photorealistic, natural, and camera-like, with the same image quality as the input photo.",
+        "Do not make the person look like AI art, a beauty filter, a doll, an illustration, a painting, CGI, a 3D render, or a studio-generated portrait.",
         face_desc,
         f"The ONLY change allowed is adding this makeup: {makeup_detail or 'natural everyday makeup'}.",
         ollama_line,
         "Do not change anything else in the image.",
-        "Keep this person's face shape, facial structure, eye shape, nose, lips, skin tone, skin texture, pores, wrinkles, and hair completely identical to the original photo.",
+        "Keep this person's face shape, facial structure, eye shape, nose, lips, skin tone, skin texture, pores, fine lines, wrinkles, facial asymmetry, and hair completely identical to the original photo.",
+        "Do not smooth, airbrush, whiten, reshape, slim, enlarge eyes, alter age, alter ethnicity, or beautify facial features beyond applying visible makeup.",
         "Keep the exact same pose, posture, body position, head angle, hand position, gesture, and action as the original photo — do not let the person move, turn, or change stance.",
         "Keep clothing, background, lighting, camera angle, camera framing, and expression completely identical to the original photo.",
         "This must look like the same person in the same moment, only wearing makeup — not a different person, not a different pose, not a different photo.",
@@ -216,7 +219,7 @@ def call_replicate_render(image_data_url: str, prompt: str) -> dict[str, Any]:
             "prompt": prompt,
             "input_image": image_data_url,
             "output_format": "jpg",
-            "output_quality": 90,
+            "output_quality": 95,
             "guidance": RENDER_GUIDANCE,
         },
     )

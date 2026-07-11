@@ -132,7 +132,7 @@ tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓
 | `REPLICATE_API_TOKEN` | Replicate token |
 | `CORS_ORIGINS` | 允許的前端網域（逗號分隔） |
 | `MAX_IMAGE_SIZE` | 影像處理縮放上限（預設 1024） |
-| `RENDER_GUIDANCE` | 渲染 guidance（預設 4.5） |
+| `RENDER_GUIDANCE` | 渲染 guidance（預設 3.0，偏向保留真人照片質感） |
 | `RENDER_RATE_LIMIT_MAX_REQUESTS` / `RENDER_RATE_LIMIT_WINDOW_SECONDS` | 渲染限流 |
 | `RENDER_DEDUP_TTL_SECONDS` | 渲染去重快取有效期（預設 600） |
 
