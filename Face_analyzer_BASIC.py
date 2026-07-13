@@ -650,12 +650,20 @@ class FaceAnalyzer:
 
         left_arch, left_tail   = brow_metrics(46, 55, _L_BROW)
         right_arch, right_tail = brow_metrics(276, 285, _R_BROW)
-        arch_ratio = (left_arch + right_arch) / 2.0
         tail_ratio = (left_tail + right_tail) / 2.0
 
-        if tail_ratio > 0.100:                               return "落尾眉"
-        if arch_ratio < 0.115 and abs(tail_ratio) < 0.080: return "一字眉"
-        if arch_ratio > 0.155 and abs(tail_ratio) < 0.115: return "彎月眉"
+        # 門檻由本專案自己的 194 張人工標註資料校準（tools/calibrate_rule_thresholds.py），
+        # 只用 train set 找切點、val set 驗證：macro accuracy 0.333 -> 0.485。
+        #
+        # 舊版的門檻是「以 CelebA 分位數校正」，但 CelebA 以西方人臉為主，分佈跟本專案的
+        # 亞洲人自拍不同，那組門檻整組落在資料範圍之外（落尾眉需 tail>0.100 但實際最大只有 0.090；
+        # 一字眉需 arch<0.115 但實際最小是 0.138），兩個分支都是永遠不會執行的死碼，
+        # 結果每一個人都掉進 fallback 判成「彎月眉」。詳見 規則式閾值Bug_完整診斷記錄_新手版.md。
+        #
+        # arch_ratio 已棄用：三類的中位數是 0.155/0.161/0.166、類內標準差卻有 0.029，
+        # 分離度僅 0.40（類內雜訊大於類間差距），沒有鑑別力，門檻怎麼調都沒用。
+        if tail_ratio < -0.014: return "一字眉"
+        if tail_ratio >  0.030: return "落尾眉"
         return "彎月眉"
 
     def _eye_side_metrics(self, inner_idx, outer_idx, upper_ids, lower_idx, brow_ids):
@@ -698,18 +706,25 @@ class FaceAnalyzer:
         angle         = (left["angle"] + right["angle"]) / 2.0
         ratio_to_face = eye_width / face_width
 
-        if ratio_to_face < 0.12: return "瞇縫眼"
-        elif angle > 6: return "下垂眼"
-        elif ear > 0.40: return "圓眼"
-        elif ear < 0.20: return "細長眼"
-        elif ear <= 0.24:
-            return "丹鳳眼" if angle < -2 else "細長眼"
-        elif ear <= 0.35:
-            if angle < -1 and ratio_to_face > 0.16: return "桃花眼"
-            elif angle > 3: return "下垂眼"
-            else: return "杏仁眼"
-        else:
-            return "桃花眼" if angle < -1 else "圓眼"
+        # 門檻由本專案自己的 376 張人工標註資料校準（tools/calibrate_rule_thresholds.py）：
+        # 在 train set 上訓練淺決策樹（max_depth 由 train 內部 5-fold CV 選出）再移植成 if-else，
+        # val macro accuracy 0.143 -> 0.371。
+        #
+        # 舊版門檻同樣來自 CelebA，在本專案資料上有三個死碼（瞇縫眼需 ratio<0.12 但實際最小 0.194、
+        # 下垂眼需 angle>6 但實際最大 0.603、圓眼需 ear>0.40 但實際最大 0.392）
+        # 外加一個恆真條件（桃花眼需 ratio>0.16，而所有人都 >0.194），
+        # 導致 96% 的人被判成「桃花眼」。詳見 規則式閾值Bug_完整診斷記錄_新手版.md。
+        #
+        # 誠實的限制：7 個類別只靠 ear / angle / ratio_to_face 三個弱特徵，本來就分不乾淨 ——
+        # 這組規則永遠不會輸出「桃花眼」。眼型請優先採用 CNN（見 basic_roi_shadow 的 hybrid）。
+        if ear <= 0.264:
+            return "瞇縫眼"
+        if ear <= 0.327:
+            if ratio_to_face <= 0.207: return "下垂眼"
+            return "丹鳳眼" if angle <= -6.947 else "細長眼"
+        if ratio_to_face <= 0.229 and ear <= 0.346:
+            return "杏仁眼"
+        return "圓眼"
 
     def get_nose_shape(self):
         nose_width  = self._dist(129, 358)
@@ -721,8 +736,18 @@ class FaceAnalyzer:
         ratio_width = nose_width / face_width
 
         # 正面照只能穩定估鼻翼相對寬窄；鼻樑高度、鷹勾、塌鼻、朝天鼻需要側面或深度資訊。
-        if ratio_width >= 0.325: return "寬鼻"
-        if ratio_width <= 0.205: return "窄鼻"
+        #
+        # 門檻由本專案自己的 156 張人工標註資料校準（tools/calibrate_rule_thresholds.py）：
+        # val macro accuracy 0.354 -> 0.470。舊版的「窄鼻需 <= 0.205」是死碼 ——
+        # 本專案資料的最小值是 0.259，沒有任何一個人達標，於是 98% 的人被判成「標準鼻」。
+        #
+        # 但這組門檻要當心：人工標註的三類，ratio_width 中位數是
+        # 寬鼻 0.310 > 窄鼻 0.291 > 標準鼻 0.283 —— 「窄鼻」的鼻翼比「標準鼻」還寬，
+        # 代表標註者判斷窄鼻時看的並不是鼻翼寬度（可能是鼻頭大小或鼻樑）。
+        # 也就是說這個特徵跟標籤本來就對不上，0.470 是硬擠出來的。
+        # 鼻型請優先採用 CNN（val 0.666），規則式只當 fallback。
+        if ratio_width > 0.300: return "寬鼻"
+        if ratio_width < 0.294: return "窄鼻"
         return "標準鼻"
 
     def get_lip_shape(self):
@@ -945,19 +970,27 @@ class FaceAnalyzer:
             "brightnessEnhancement": self.brightness_info,
         }
 
-        # ROI CNN shadow prediction：不覆蓋上面任何一個規則式結果。
-        # 模型準確率還沒過門檻（見 CNN訓練歷程_BASIC五官分類.md），這裡純粹是為了在真實流量上
-        # 累積「規則式 vs 模型」的對照資料，預設只寫 log、不進 API 回應 ——
-        # 未驗證的結果不該外流到前端，免得哪天有人「順手」拿去顯示。
-        # 整段包 try —— shadow 壞掉不能影響正式分析。
+        # ROI CNN：預設由模型提供五個部位的正式答案，規則式退居 fallback（ROI_MODEL_FIRST）。
+        #
+        # 原因見 規則式閾值Bug_完整診斷記錄_新手版.md：規則式的門檻是從 CelebA（西方人臉）
+        # 抄來的，套在亞洲人自拍上整組落在資料範圍之外，導致每個人都被判成「彎月眉+標準鼻」。
+        # 閾值已用自己的資料重新校準，但校準後仍全面輸給 CNN（brow 0.485 vs 0.589、
+        # nose 0.470 vs 0.666），所以正式答案改由 CNN 提供。
+        #
+        # 整段包 try —— 模型壞掉不能影響正式分析，失敗時五個欄位維持規則式的答案。
         try:
             shadow = basic_roi_shadow.predict(self.frame, self._pts_cache)
             if shadow:
+                # 注意順序：對照 log 必須在覆蓋之前記，否則就變成模型跟自己比對了。
                 basic_roi_shadow.log_comparison(result, shadow)
+                if basic_roi_shadow.MODEL_FIRST:
+                    sources = basic_roi_shadow.apply_model_first(result, shadow)
+                    if sources:
+                        result["分類來源"] = sources
                 if basic_roi_shadow.EXPOSE_IN_RESPONSE:
                     result["模型分類"] = shadow
         except Exception:
-            logging.getLogger(__name__).exception("ROI shadow 預測失敗，忽略")
+            logging.getLogger(__name__).exception("ROI 模型預測失敗，改用規則式結果")
 
         if save_path:
             with open(save_path, "w", encoding="utf-8") as f:

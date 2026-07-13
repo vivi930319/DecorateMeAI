@@ -28,10 +28,21 @@ logger = logging.getLogger(__name__)
 MODEL_DIR = Path(os.getenv("ROI_MODEL_DIR", "models/basic_features_roi"))
 ENABLED = os.getenv("ROI_SHADOW_ENABLED", "1") != "0"
 
-# 預設不把模型預測放進 API 回應：這批模型還沒過準確率門檻，未驗證的結果不該流到前端，
-# 免得哪天有人「順手」拿去顯示。shadow 要的資料走 log 就夠了。
-# 內部驗收想直接從 API 看模型判什麼時，才開 ROI_SHADOW_EXPOSE_RESPONSE=1。
+# 預設不把完整的模型輸出（含各類機率）放進 API 回應，那是除錯用的。
+# 內部驗收想直接從 API 看模型細節時，才開 ROI_SHADOW_EXPOSE_RESPONSE=1。
 EXPOSE_IN_RESPONSE = os.getenv("ROI_SHADOW_EXPOSE_RESPONSE", "0") == "1"
+
+# MODEL_FIRST：讓 CNN 成為使用者看到的正式答案，規則式退居 fallback。
+#
+# 為什麼不做 hybrid（低信心時退回規則式）：實測過了，沒有用。
+# 五個部位的最佳信心門檻掃描結果是「門檻 0.00」——也就是「CNN 再沒信心也比規則式準」。
+# 硬要在 brow/nose 設門檻（0.48 / 0.38），val macro 反而從 0.589->0.505、0.666->0.648 變差。
+# 校準後的規則式仍然全面輸給 CNN，所以「低信心時退回規則式」只會拖累結果。
+# 見 tools/tune_hybrid.py 與 models/basic_features_roi/hybrid_config.json。
+#
+# 誠實的限制：CNN 也還沒達到規格書的 0.70 門檻（0.378~0.666），只是遠優於原本
+# 「每個人都判成彎月眉+標準鼻」的規則式。設 ROI_MODEL_FIRST=0 可退回規則式當正式輸出。
+MODEL_FIRST = os.getenv("ROI_MODEL_FIRST", "1") != "0"
 
 # 模型的部位代號 -> BASIC 輸出用的中文欄位名
 PART_TO_FIELD = {
@@ -129,6 +140,34 @@ def predict(frame_bgr: np.ndarray, points: np.ndarray) -> dict | None:
             logger.exception("ROI shadow：%s 預測失敗", part)
 
     return result if predicted else None
+
+
+def apply_model_first(result: dict, shadow: dict | None) -> dict | None:
+    """把 CNN 的答案寫進正式欄位，並回傳一份「這個欄位最後聽誰的」的來源說明。
+
+    規則式仍然是 fallback：某個部位的模型推論失敗、或模型檔缺失時，那個欄位維持規則式的答案，
+    其他欄位不受影響。這樣即使模型整組掛掉，API 也只是退回舊行為，不會壞掉。
+
+    會就地修改 result。回傳 None 代表沒有任何欄位被模型接手。
+    """
+    if not shadow:
+        return None
+
+    sources: dict[str, dict] = {}
+    for field in PART_TO_FIELD.values():
+        model = shadow.get(field)
+        if not isinstance(model, dict):
+            continue  # 這個部位模型沒跑出來 -> 保留規則式的答案
+        rule_label = result.get(field)
+        result[field] = model["label"]
+        sources[field] = {
+            "final": PROVIDER,
+            "modelLabel": model["label"],
+            "modelConfidence": model["confidence"],
+            "ruleLabel": rule_label,
+        }
+
+    return sources or None
 
 
 def log_comparison(rule_result: dict, shadow: dict | None) -> None:
