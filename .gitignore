@@ -13,6 +13,7 @@
 !prepare_roi_cache.py
 !train_basic_cnn_roi.py
 !predict_basic_roi.py
+!eval_rule_baseline.py
 !CNN訓練歷程_BASIC五官分類.md
 # 模型權重（.onnx / .pt）刻意不入版控：二進位檔每次重訓都會讓 repo 永久肥一份。
 # 部署不受影響（Cloud Build 走 .gcloudignore 從本機上傳）；要重建模型就重跑
@@ -32,6 +33,11 @@
 !replicate_render_api.py
 !requirements.render.txt
 !Dockerfile.render
+!ai_gateway.py
+!ai_gateway_test.py
+!requirements.gateway.txt
+!Dockerfile.gateway
+!cloudbuild.gateway.yaml
 !tools/
 !tools/*.py
 !setup.bat
