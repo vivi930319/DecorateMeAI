@@ -19,7 +19,8 @@ from replicate_render import (
     IMAGE_PROVIDER,
     RENDER_STYLE_PROMPTS,
     REPLICATE_MODEL,
-    build_server_render_prompt,
+    SUGGESTION_SERVICE_URL,
+    build_personalized_render_prompt,
     call_replicate_render,
 )
 
@@ -152,6 +153,10 @@ class RenderRequest(BaseModel):
     image: str
     styleId: str = "natural"
     strength: float = 0.35  # flux-kontext-pro 不用 strength，保留欄位維持前端相容
+    # 臉部分析結果，用來跟建議服務要一段個人化的 renderPromptEn。
+    # 注意這裡收的是「結構化的分析結果」，不是自由文字 prompt —— 前端依然不能決定要下什麼指令，
+    # prompt 一律由後端組（見 replicate_render.build_personalized_render_prompt）。
+    faceAnalysis: dict | None = None
 
 
 def _validate_render_request(req: RenderRequest) -> None:
@@ -175,9 +180,14 @@ def _validate_render_request(req: RenderRequest) -> None:
         )
 
 
-def _server_render_prompt(req: RenderRequest) -> str:
+def _server_render_prompt(req: RenderRequest) -> tuple[str, str]:
+    """回傳 (prompt, promptSource)。
+
+    優先跟建議服務要個人化的 renderPromptEn；拿不到就退回 styleId 白名單的固定 prompt。
+    無論走哪一條，prompt 都是後端組的 —— 前端送進來的只有 styleId 與臉部分析結果。
+    """
     try:
-        return build_server_render_prompt(req.styleId)
+        return build_personalized_render_prompt(req.styleId, req.faceAnalysis)
     except ValueError:
         raise HTTPException(
             status_code=422,
@@ -269,8 +279,13 @@ def health():
             "max_image_chars": MAX_RENDER_IMAGE_CHARS,
         },
         "render_prompt_policy": {
+            # 前端永遠不能送自由文字 prompt —— renderApiKey 是明文公開的，
+            # 開放的話任何人都能用它生成任意圖片、燒我們的 Replicate 額度。
             "client_prompt_accepted": False,
             "allowed_style_ids": sorted(RENDER_STYLE_PROMPTS),
+            # prompt 由後端組：優先跟建議服務要個人化的 renderPromptEn，拿不到就退回 styleId 白名單。
+            "personalized_prompt_enabled": bool(SUGGESTION_SERVICE_URL),
+            "fallback": "style_allowlist",
         },
         "async_jobs": {
             "enabled": True,
@@ -287,7 +302,7 @@ def health():
 @app.post("/render")
 async def render(req: RenderRequest, _=Depends(require_api_key), __=Depends(enforce_render_rate_limit)):
     _validate_render_request(req)
-    prompt = _server_render_prompt(req)
+    prompt, prompt_source = _server_render_prompt(req)
     # 同圖同後端產生的 prompt 短時間內重複 → 直接回上次結果，不重打 Replicate
     key = _dedup_key(req.image, prompt, req.strength)
     cached = _dedup_get(key)
@@ -302,9 +317,10 @@ async def render(req: RenderRequest, _=Depends(require_api_key), __=Depends(enfo
             "isPermanent": result.get("isPermanent", False),
             "model": result["model"],
             # 回傳實際送給模型的 prompt，讓前端可以顯示「這次到底下了什麼指令」。
-            # 這是後端依 styleId 從白名單組出來的，不含使用者輸入，公開沒有風險 ——
-            # 而且看不到它的話，渲染結果不如預期時根本無從判斷是 prompt 的問題還是模型的問題。
+            # prompt 一律由後端組（Ollama 個人化，或退回 styleId 白名單），不含使用者自由輸入。
+            # 看不到它的話，渲染結果不如預期時根本無從判斷是 prompt 的問題還是模型的問題。
             "renderPrompt": prompt,
+            "promptSource": prompt_source,  # 'ollama' 或 'style_allowlist'（建議服務掛掉時）
             "error": None,
         }
         _dedup_set(key, response)  # 只快取成功結果
@@ -392,7 +408,7 @@ async def create_render_job(req: RenderRequest, _=Depends(require_api_key), __=D
     """
     _cleanup_render_jobs()
     _validate_render_request(req)
-    prompt = _server_render_prompt(req)
+    prompt, prompt_source = _server_render_prompt(req)
     job_id = uuid.uuid4().hex
     result_token = uuid.uuid4().hex
     now = time.time()
@@ -419,6 +435,7 @@ async def create_render_job(req: RenderRequest, _=Depends(require_api_key), __=D
         "progress": 1,
         "afterImageUrl": None,
         "renderPrompt": prompt,  # 一開始就給，前端等待期間就能顯示這次下了什麼指令
+        "promptSource": prompt_source,
         "error": None,
         "createdAt": now,
     }

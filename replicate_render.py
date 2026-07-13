@@ -1,6 +1,7 @@
 import argparse
 import base64
 import json
+import logging
 import mimetypes
 import os
 import uuid
@@ -293,6 +294,79 @@ def build_server_render_prompt(style_id: str) -> str:
     if style_prompt is None:
         raise ValueError(f"Unsupported render style: {normalized_style_id}")
     return build_render_prompt({"style": style_prompt}, {}, "")
+
+
+# ─── Ollama 個人化渲染指令 ──────────────────────────────────────────────────
+#
+# 白名單的 styleId prompt 是固定的：每個選 Soft Baddie 的人，送給模型的指令一模一樣，
+# 跟他的臉型、膚色都無關。Ollama 的建議服務其實會針對個人產出一段 renderPromptEn
+# （細到眼影暈染方向、眼線形狀），但一直沒有人用它。
+#
+# 這裡由 render 服務**自己**去跟建議服務要那段 prompt，而不是讓前端傳進來 ——
+# renderApiKey 是明文寫在前端網頁裡的，一旦開放前端送任意 prompt，任何人都能拿它
+# 生成任意圖片、燒我們的 Replicate 額度。styleId 白名單是目前唯一的濫用防線，不能拆。
+#
+# 建議服務不可用時（它跑在組員的 Mac 上、走 Cloudflare tunnel，網址一重啟就換），
+# 一律靜默退回固定的 styleId prompt —— 渲染絕不能因為建議服務掛掉而失敗。
+
+SUGGESTION_SERVICE_URL = os.getenv("SUGGESTION_SERVICE_URL", "").rstrip("/")
+SUGGESTION_SERVICE_API_KEY = os.getenv("SUGGESTION_SERVICE_API_KEY", "")
+SUGGESTION_SERVICE_TIMEOUT = int(os.getenv("SUGGESTION_SERVICE_TIMEOUT", "90"))
+
+# styleId -> 建議服務認得的風格名稱。必須跟前端 data.js 的 STYLES 對得起來，
+# 否則建議服務會退回它的預設風格，產出的 prompt 就跟使用者選的風格不符。
+STYLE_ID_TO_NAME = {
+    "natural": "日常自然妝",
+    "softBaddie": "Soft Baddie",
+    "richGirl": "千金",
+    "hongKong": "港風",
+    "koreanClean": "韓系亞裔",
+    "yandere": "病嬌",
+    "japaneseClear": "日雜清透",
+    "mensPlain": "男士白開水",
+}
+
+
+def fetch_ollama_render_prompt(style_id: str, face_analysis: dict[str, Any] | None) -> str | None:
+    """跟建議服務要一段個人化的英文渲染指令。拿不到就回 None（呼叫端退回 styleId prompt）。"""
+    if not SUGGESTION_SERVICE_URL:
+        return None
+
+    headers = {"Content-Type": "application/json"}
+    if SUGGESTION_SERVICE_API_KEY:
+        headers["X-API-Key"] = SUGGESTION_SERVICE_API_KEY
+
+    try:
+        response = requests.post(
+            f"{SUGGESTION_SERVICE_URL}/suggest",
+            json={
+                "faceAnalysis": face_analysis or {},
+                "style": STYLE_ID_TO_NAME.get(style_id, style_id),
+            },
+            headers=headers,
+            timeout=SUGGESTION_SERVICE_TIMEOUT,
+        )
+        response.raise_for_status()
+        prompt = (response.json().get("renderPromptEn") or "").strip()
+    except Exception:
+        logging.exception("建議服務取 renderPromptEn 失敗，改用 styleId 的固定 prompt")
+        return None
+
+    if not prompt:
+        logging.warning("建議服務沒有回 renderPromptEn，改用 styleId 的固定 prompt")
+        return None
+    return prompt
+
+
+def build_personalized_render_prompt(style_id: str, face_analysis: dict[str, Any] | None) -> tuple[str, str]:
+    """回傳 (prompt, 來源)。來源是 'ollama' 或 'style_allowlist'，會回給前端顯示。"""
+    ollama_prompt = fetch_ollama_render_prompt(style_id, face_analysis)
+    if not ollama_prompt:
+        return build_server_render_prompt(style_id), "style_allowlist"
+
+    # Ollama 只負責「要上什麼妝」，identity lock 一律由我們自己疊上去 ——
+    # 不能讓外部模型決定「可不可以改變這個人的長相」。
+    return build_render_prompt({"renderPrompt": None, "style": ollama_prompt}, {}, ""), "ollama"
 
 
 def resolve_image_model() -> str:

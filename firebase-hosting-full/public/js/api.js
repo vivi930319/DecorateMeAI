@@ -239,7 +239,9 @@ const Api = {
         return res.json();
     },
 
-    async renderMakeup({ imageDataUrl, styleId, strength = 0.45 }) {
+    // faceAnalysis 會一起送出去，讓 render 服務去跟建議服務要一段「針對這張臉」的渲染指令。
+    // 送的是結構化的分析結果，不是自由文字 prompt —— 後端不接受前端指定 prompt（防注入）。
+    async renderMakeup({ imageDataUrl, styleId, strength = 0.45, faceAnalysis = null }) {
         const runtimeConfig = getRuntimeApiConfig();
         const gatewayUrl = getAiGatewayUrl(runtimeConfig);
         const serviceConfig = {
@@ -260,7 +262,7 @@ const Api = {
             res = await fetch(url, {
                 method: 'POST',
                 headers,
-                body: JSON.stringify({ image: imageDataUrl, styleId, strength }),
+                body: JSON.stringify({ image: imageDataUrl, styleId, strength, faceAnalysis }),
             });
         } catch (err) {
             throw new Error('無法連線到渲染服務：' + err.message);

@@ -2290,11 +2290,20 @@ const PageInit = {
         // 渲染的 prompt 是後端依 styleId 從白名單組的（前端送不了 prompt），Ollama 的建議不會進到圖裡。
         // 這裡把後端實際送給模型的 prompt 秀出來，渲染結果不如預期時才知道要怪 prompt 還是怪模型。
         const promptPreviewEl = document.getElementById('comparePromptPreview');
-        const showRenderPrompt = (text) => {
+        const showRenderPrompt = (text, source) => {
             if (!promptPreviewEl) return;
-            promptPreviewEl.textContent = text || '尚未渲染';
+            if (!text) { promptPreviewEl.textContent = '尚未渲染'; return; }
+            // 標出這次的指令是 Ollama 針對這張臉生的，還是建議服務掛掉時退回的固定風格指令 ——
+            // 兩者的渲染結果會差很多，不標的話根本分不出來。
+            const label = source === 'ollama'
+                ? '［Ollama 個人化指令］\n\n'
+                : (source === 'style_allowlist' ? '［固定風格指令：建議服務沒回應，已退回白名單］\n\n' : '');
+            promptPreviewEl.textContent = label + text;
         };
-        showRenderPrompt(Router.analysisPackage?.render?.renderPrompt);
+        showRenderPrompt(
+            Router.analysisPackage?.render?.renderPrompt,
+            Router.analysisPackage?.render?.promptSource,
+        );
 
         const showAfter = () => {
             stage.classList.remove('before');
@@ -2371,7 +2380,12 @@ const PageInit = {
 
                 try {
                     renderStatus.textContent = 'Replicate 生成中，約需 30–60 秒...';
-                    const result = await Api.renderMakeup({ imageDataUrl, styleId, strength: 0.35 });
+                    const result = await Api.renderMakeup({
+                        imageDataUrl,
+                        styleId,
+                        strength: 0.35,
+                        faceAnalysis: pkg?.faceAnalysis || null,
+                    });
                     refreshRenderQuota();
                     if (!result.renderQuota && renderQuotaEl) {
                         renderQuotaEl.textContent = '妝容渲染完成！剩餘次數稍後更新。';
@@ -2385,12 +2399,13 @@ const PageInit = {
                             replicateTempUrl: result.replicateTempUrl || null,
                             savedImageId: result.savedImageId || null,
                             renderPrompt: result.renderPrompt || null,
+                            promptSource: result.promptSource || null,
                             styleId,
                             error: null
                         }
                     });
                     AnalysisDraft.save(Router.analysisPackage);
-                    showRenderPrompt(result.renderPrompt);
+                    showRenderPrompt(result.renderPrompt, result.promptSource);
                     setCompareImage('after');
                     renderStatus.textContent = '渲染完成！';
                     setTimeout(() => { renderStatus.style.display = 'none'; }, 3000);
