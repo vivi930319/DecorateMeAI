@@ -165,8 +165,77 @@ def evaluate(model, loader, device, n_classes):
     }
 
 
-def train_one(part, rois, labels, identities, classes, split_name, split_fn, args, device):
-    train_idx, val_idx = split_fn(labels, identities, args.val_ratio, args.seed)
+def split_kfold_by_identity(labels, identities, n_folds, seed):
+    """按 identity 分組的 k-fold：每個 identity 的所有照片整組落在同一個 fold 的 val。
+
+    跟 split_by_identity 有一個重要差異：identity 是「全域」指派到 fold，不是在每個類別內
+    各自指派。split_by_identity 在類別內分組，所以一個標註矛盾的身分（同部位被標成兩類）
+    可能一半照片進 train、一半進 val —— 這是隱性的身分洩漏。這裡先按 identity 分組、
+    用該身分的多數類做分層平衡，就不會發生。
+
+    identity = -1（聚類失敗）的樣本一律留在 train，永遠不進任何 fold 的 val
+    （沿用單次切分的政策：不確定身分的樣本不能拿來驗證）。
+    """
+    rng = random.Random(seed)
+    id_to_rows = defaultdict(list)
+    for i, ident in enumerate(identities):
+        if int(ident) >= 0:
+            id_to_rows[int(ident)].append(i)
+
+    ids = list(id_to_rows)
+    rng.shuffle(ids)
+    ids.sort(key=lambda d: -len(id_to_rows[d]))  # 大身分先放，貪婪平衡才有效；同大小維持洗牌順序
+
+    fold_val = [[] for _ in range(n_folds)]
+    fold_class_counts = [Counter() for _ in range(n_folds)]
+    for ident in ids:
+        rows = id_to_rows[ident]
+        dominant = Counter(int(labels[i]) for i in rows).most_common(1)[0][0]
+        k = min(range(n_folds),
+                key=lambda f: (fold_class_counts[f][dominant], sum(fold_class_counts[f].values())))
+        fold_val[k].extend(rows)
+        for i in rows:
+            fold_class_counts[k][int(labels[i])] += 1
+
+    all_idx = set(range(len(labels)))
+    return [(sorted(all_idx - set(val)), sorted(val)) for val in fold_val]
+
+
+# 眼型 7 類在每類 30~64 張的規模下分不乾淨（CNN macro 僅 0.378，
+# 「杏仁/桃花/丹鳳/細長」的視覺差異本來就細微）。先併成 3 大類把準確率做起來，
+# 之後資料補足再細分。分組依據是混淆矩陣：杏仁/桃花跟圓眼互相混、丹鳳/瞇縫跟細長眼互相混。
+EYE_MERGE_MAP = {
+    "杏仁眼": "圓眼",
+    "桃花眼": "圓眼",
+    "丹鳳眼": "細長眼",
+    "瞇縫眼": "細長眼",
+    # 圓眼、細長眼、下垂眼 維持原名
+}
+
+
+def apply_label_merge(labels, classes, merge_map):
+    """把類別名稱依 merge_map 重新映射，回傳 (new_labels, new_classes)。"""
+    merged_names = sorted({merge_map.get(name, name) for name in classes})
+    name_to_idx = {name: i for i, name in enumerate(merged_names)}
+    new_labels = np.array(
+        [name_to_idx[merge_map.get(classes[l], classes[l])] for l in labels], dtype=np.int64)
+    return new_labels, merged_names
+
+
+def find_conflict_identities(labels, identities):
+    """回傳「同一身分在這個部位被標成多個類別」的 identity 集合。
+
+    同一個人的眉型不會在兩張照片之間改變，所以這些是標註矛盾 ——
+    模型在這種樣本上學不到一致的決策邊界（正確標籤本身互相打架）。
+    """
+    seen = defaultdict(set)
+    for label, ident in zip(labels, identities):
+        if int(ident) >= 0:
+            seen[int(ident)].add(int(label))
+    return {ident for ident, labs in seen.items() if len(labs) > 1}
+
+
+def train_one(part, rois, labels, identities, classes, split_name, train_idx, val_idx, args, device):
     n_classes = len(classes)
 
     n_val_ids = len(set(int(identities[i]) for i in val_idx if identities[i] >= 0))
@@ -270,7 +339,57 @@ def parse_args():
     p.add_argument("--parts", nargs="*", default=list(PARTS))
     p.add_argument("--skip-random", action="store_true",
                    help="跳過隨機切分對照組，只跑按人切分")
+    p.add_argument("--cv", type=int, default=0, metavar="N",
+                   help="改跑 N-fold 按人分組交叉驗證（只做評估，不匯出 ONNX）。"
+                        "單次 25%% 切分的 val 只有 43~105 張、分數雜訊 ±0.1，"
+                        "CV 讓每張圖都輪流當過考題，數字才穩得住")
+    p.add_argument("--merge-eye", action="store_true",
+                   help="眼型 7 類合併為 3 類（杏仁/桃花->圓眼、丹鳳/瞇縫->細長眼）")
+    p.add_argument("--drop-conflicts", action="store_true",
+                   help="剔除標註矛盾的身分（同一人同部位被標成多個類別）的所有照片")
     return p.parse_args()
+
+
+def run_cv(part, rois, labels, identities, classes, args, device):
+    """N-fold 按人分組交叉驗證。回傳可寫進 summary 的結果 dict。"""
+    folds = split_kfold_by_identity(labels, identities, args.cv, args.seed)
+    n_classes = len(classes)
+    fold_macros = []
+    agg_confusion = np.zeros((n_classes, n_classes), dtype=np.int64)
+
+    for k, (train_idx, val_idx) in enumerate(folds, 1):
+        result, _ = train_one(part, rois, labels, identities, classes,
+                              f"cv {k}/{args.cv}", train_idx, val_idx, args, device)
+        fold_macros.append(result["best"]["macro_accuracy"])
+        agg_confusion += np.array(result["best"]["confusion_matrix"], dtype=np.int64)
+
+    # 聚合混淆矩陣：每張（有 identity 的）圖恰好在某一個 fold 當過一次考題，
+    # 所以聚合後的 per-class recall 是「整個資料集」的成績，不再受單一 val set 的運氣影響。
+    per_class_recall = [
+        float(agg_confusion[i][i] / agg_confusion[i].sum()) if agg_confusion[i].sum() else None
+        for i in range(n_classes)
+    ]
+    valid = [r for r in per_class_recall if r is not None]
+    pooled_macro = float(np.mean(valid)) if valid else 0.0
+
+    print(f"\n  >> {part} CV{args.cv}：各 fold macro = "
+          + ", ".join(f"{m:.3f}" for m in fold_macros))
+    print(f"     平均 {np.mean(fold_macros):.3f} ± {np.std(fold_macros):.3f}"
+          f"　聚合(pooled) {pooled_macro:.3f}")
+
+    return {
+        "classes": classes,
+        "n_folds": args.cv,
+        "fold_macro_accuracies": fold_macros,
+        "mean_macro": float(np.mean(fold_macros)),
+        "std_macro": float(np.std(fold_macros)),
+        "pooled_macro": pooled_macro,
+        "pooled_per_class_recall": per_class_recall,
+        "pooled_confusion_matrix": agg_confusion.tolist(),
+        "merge_eye": bool(args.merge_eye),
+        "drop_conflicts": bool(args.drop_conflicts),
+        "epochs": args.epochs,
+    }
 
 
 def main():
@@ -287,8 +406,29 @@ def main():
 
     for part in args.parts:
         rois, labels, identities, classes = build_part_data(part, all_rois, records)
+
+        if args.merge_eye and part == "eye_shape":
+            labels, classes = apply_label_merge(labels, classes, EYE_MERGE_MAP)
+
+        if args.drop_conflicts:
+            conflicts = find_conflict_identities(labels, identities)
+            keep = [i for i, ident in enumerate(identities) if int(ident) not in conflicts]
+            dropped = len(labels) - len(keep)
+            if dropped:
+                print(f"  剔除 {len(conflicts)} 個標註矛盾的身分，共 {dropped} 張")
+                rois, labels, identities = rois[keep], labels[keep], identities[keep]
+
         print(f"\n===== {part} =====")
         print(f"  {len(labels)} 張, {len(classes)} 類: {classes}")
+
+        if args.cv:
+            # 不同實驗（合併類別/剔除矛盾）各自存檔，免得互相覆蓋、事後對不出哪個數字是哪個實驗的
+            tag = ("_merged" if (args.merge_eye and part == "eye_shape") else "") + \
+                  ("_noconflict" if args.drop_conflicts else "")
+            summary[part] = {"cv": run_cv(part, rois, labels, identities, classes, args, device)}
+            (OUT_DIR / f"{part}_cv{tag}_metrics.json").write_text(
+                json.dumps(summary[part], ensure_ascii=False, indent=2), encoding="utf-8")
+            continue
 
         splits = [("identity", split_by_identity)]
         if not args.skip_random:
@@ -296,8 +436,9 @@ def main():
 
         part_result = {}
         for split_name, split_fn in splits:
+            train_idx, val_idx = split_fn(labels, identities, args.val_ratio, args.seed)
             result, state = train_one(part, rois, labels, identities, classes,
-                                      split_name, split_fn, args, device)
+                                      split_name, train_idx, val_idx, args, device)
             part_result[split_name] = result
             if split_name == "identity":
                 onnx_path = export_onnx(state, part, classes, device)
@@ -315,10 +456,26 @@ def main():
         (OUT_DIR / f"{part}_metrics.json").write_text(
             json.dumps(part_result, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    (OUT_DIR / "training_summary.json").write_text(
+    # CV 是評估用，寫到獨立檔案 —— training_summary.json 是單次切分的正式結果，
+    # eval_rule_baseline.py / tune_hybrid.py 都讀它，覆蓋掉會讓對照表拿不到 CNN 分數。
+    if args.cv:
+        cv_tag = ("_merged" if args.merge_eye else "") + ("_noconflict" if args.drop_conflicts else "")
+        summary_name = f"cv_summary{cv_tag}.json"
+    else:
+        summary_name = "training_summary.json"
+    (OUT_DIR / summary_name).write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print("\n\n========== 總結（macro accuracy）==========")
+    if args.cv:
+        print(f"{'部位':12s} {'CV 平均':>10s} {'±std':>8s} {'聚合':>8s}   各 fold")
+        for part, result in summary.items():
+            cv = result["cv"]
+            folds_s = ", ".join(f"{m:.3f}" for m in cv["fold_macro_accuracies"])
+            print(f"{part:12s} {cv['mean_macro']:>10.3f} {cv['std_macro']:>8.3f} "
+                  f"{cv['pooled_macro']:>8.3f}   [{folds_s}]")
+        return
+
     header = f"{'部位':12s} {'隨機切分(虛高)':>16s} {'按人切分(可信)':>16s} {'洩漏':>8s}"
     print(header)
     for part, result in summary.items():
