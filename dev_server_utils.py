@@ -8,6 +8,10 @@ from urllib.request import urlopen
 
 def get_cors_origins():
     value = os.getenv("CORS_ORIGINS", "*").strip()
+    require_explicit = os.getenv("REQUIRE_EXPLICIT_CORS", "0") == "1"
+    is_production = os.getenv("APP_ENV", "").strip().lower() in {"prod", "production"}
+    if (require_explicit or is_production) and (not value or value == "*"):
+        raise RuntimeError("CORS_ORIGINS must be set explicitly in production.")
     if not value or value == "*":
         return ["*"]
     return [origin.strip().rstrip("/") for origin in value.split(",") if origin.strip()]

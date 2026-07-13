@@ -49,6 +49,9 @@ RENDER_JOBS_COLLECTION = os.getenv("RENDER_JOBS_COLLECTION", "render_jobs")
 RENDER_ESTIMATED_SECONDS = max(10, int(os.getenv("RENDER_ESTIMATED_SECONDS", "90")))
 MAX_RENDER_IMAGE_CHARS = int(os.getenv("MAX_RENDER_IMAGE_CHARS", str(12 * 1024 * 1024)))
 MAX_RENDER_PROMPT_CHARS = int(os.getenv("MAX_RENDER_PROMPT_CHARS", "4000"))
+RENDER_JOB_TIMEOUT_SECONDS = max(60, int(os.getenv("RENDER_JOB_TIMEOUT_SECONDS", "600")))
+RENDER_JOB_RETENTION_SECONDS = max(60, int(os.getenv("RENDER_JOB_RETENTION_SECONDS", "3600")))
+RENDER_JOB_MAX_COUNT = max(1, int(os.getenv("RENDER_JOB_MAX_COUNT", "200")))
 
 
 def _dedup_key(image: str, prompt: str, strength: float) -> str:
@@ -193,8 +196,49 @@ def _storage_configured() -> bool:
         return False
 
 
+def _cleanup_render_jobs() -> None:
+    now = time.time()
+    jobs = job_store.all_jobs(RENDER_JOBS_COLLECTION)
+    to_delete = []
+    for job in jobs:
+        job_id = job.get("jobId")
+        status = job.get("status")
+        if not job_id:
+            continue
+        if status in {"queued", "running"}:
+            anchor = float(job.get("startedAt") or job.get("createdAt") or now)
+            if now - anchor > RENDER_JOB_TIMEOUT_SECONDS:
+                job_store.patch(
+                    RENDER_JOBS_COLLECTION,
+                    job_id,
+                    {
+                        "status": "failed",
+                        "progress": int(job.get("progress") or 0),
+                        "afterImageUrl": None,
+                        "error": f"Render job timed out after {RENDER_JOB_TIMEOUT_SECONDS} seconds.",
+                        "finishedAt": now,
+                    },
+                )
+        elif status in {"completed", "failed"}:
+            finished_at = float(job.get("finishedAt") or job.get("createdAt") or now)
+            if now - finished_at > RENDER_JOB_RETENTION_SECONDS:
+                to_delete.append(job_id)
+
+    for job_id in to_delete:
+        job_store.delete(RENDER_JOBS_COLLECTION, job_id)
+
+    remaining = job_store.all_jobs(RENDER_JOBS_COLLECTION)
+    if len(remaining) > RENDER_JOB_MAX_COUNT:
+        ordered = sorted(remaining, key=lambda item: float(item.get("createdAt") or 0))
+        for job in ordered[: len(remaining) - RENDER_JOB_MAX_COUNT]:
+            job_id = job.get("jobId")
+            if job_id:
+                job_store.delete(RENDER_JOBS_COLLECTION, job_id)
+
+
 @app.get("/health")
 def health():
+    _cleanup_render_jobs()
     return {
         "status": "ok",
         "service": "replicate-render",
@@ -223,6 +267,9 @@ def health():
             "submit": "POST /render/jobs",
             "poll": "GET /render/jobs/{job_id}",
             "estimated_seconds": RENDER_ESTIMATED_SECONDS,
+            "timeout_seconds": RENDER_JOB_TIMEOUT_SECONDS,
+            "retention_seconds": RENDER_JOB_RETENTION_SECONDS,
+            "max_count": RENDER_JOB_MAX_COUNT,
         },
     }
 
@@ -327,6 +374,7 @@ async def create_render_job(req: RenderRequest, _=Depends(require_api_key), __=D
 
     注意：這需要 Cloud Run 開 --no-cpu-throttling，否則回應送出後 CPU 會被節流，背景 thread 形同停住。
     """
+    _cleanup_render_jobs()
     _validate_render_request(req)
     job_id = uuid.uuid4().hex
     result_token = uuid.uuid4().hex

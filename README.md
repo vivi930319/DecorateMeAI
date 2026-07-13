@@ -118,9 +118,10 @@ tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓
 
 - 所有端點需帶 `X-API-Key`（環境變數設定；未設時為本機開發模式）。
 - 非同步 job 建立時會回 `resultToken`；輪詢或取結果需帶 `X-Job-Token: <resultToken>`（或 `?result_token=`），避免只靠 jobId 被猜到結果。
-- CORS 限定前端網域，非 `*`。
+- CORS 限定前端網域，非 `*`；正式環境可用 `APP_ENV=production` 或 `REQUIRE_EXPLICIT_CORS=1` 強制檢查。
 - 渲染服務有每 IP + email 的固定時間窗限流（預設每小時 10 次，超量回 429）。
 - 渲染服務限制 base64 圖片與 prompt 大小，避免超大 JSON body 造成記憶體壓力。
+- 渲染非同步 job 有 timeout、retention 與最大數量限制，避免背景 thread 中斷後 job 永遠卡住或資料無限累積。
 - 渲染服務對相同圖片與 prompt 做去重快取，避免重複呼叫 Replicate。
 - 金鑰走環境變數，不寫進程式；`.env` 不進版控。
 
@@ -135,12 +136,15 @@ tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓
 | `SUGGESTION_API_KEY` | Ollama 建議服務的 X-API-Key |
 | `REPLICATE_API_TOKEN` | Replicate token |
 | `CORS_ORIGINS` | 允許的前端網域（逗號分隔） |
+| `APP_ENV` / `REQUIRE_EXPLICIT_CORS` | 正式環境強制要求明確 CORS 設定 |
 | `MAX_IMAGE_SIZE` | 影像處理縮放上限（預設 1024） |
 | `MAX_RENDER_IMAGE_CHARS` / `MAX_RENDER_IMAGE_BYTES` | 渲染輸入圖大小上限 |
 | `MAX_RENDER_PROMPT_CHARS` | 渲染 prompt 長度上限 |
+| `RENDER_JOB_TIMEOUT_SECONDS` / `RENDER_JOB_RETENTION_SECONDS` / `RENDER_JOB_MAX_COUNT` | 渲染 job 逾時、保留時間與數量上限 |
 | `RENDER_GUIDANCE` | 渲染 guidance（預設 3.0，偏向保留真人照片質感） |
 | `RENDER_RATE_LIMIT_MAX_REQUESTS` / `RENDER_RATE_LIMIT_WINDOW_SECONDS` | 渲染限流 |
 | `RENDER_DEDUP_TTL_SECONDS` | 渲染去重快取有效期（預設 600） |
+| `ROI_SHADOW_EXPOSE_RESPONSE` | 內部驗收時才把 ROI shadow 模型分類欄位回傳；預設只寫 log |
 
 ---
 

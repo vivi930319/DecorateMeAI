@@ -7,6 +7,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+from threading import Lock
 from fastapi import BackgroundTasks, FastAPI, UploadFile, HTTPException, File, Form, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, JSONResponse
@@ -28,12 +29,14 @@ logging.basicConfig(
 async def _lifespan(_app):
     # 預熱模型，避免第一個請求額外承擔模型初始化時間。
     _get_insight()
-    _get_face_mesh()
+    with _face_mesh_lock:
+        _get_face_mesh()
     yield
     global _face_mesh
-    if _face_mesh is not None:
-        _face_mesh.close()
-        _face_mesh = None
+    with _face_mesh_lock:
+        if _face_mesh is not None:
+            _face_mesh.close()
+            _face_mesh = None
 
 
 app = FastAPI(title="Face Analyzer BASIC", lifespan=_lifespan)
@@ -67,6 +70,7 @@ import job_store
 
 _insight_app = None
 _face_mesh = None
+_face_mesh_lock = Lock()
 _COL = "face_jobs_basic"
 
 MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1024"))
@@ -135,6 +139,11 @@ def _get_face_mesh():
             min_detection_confidence=0.5
         )
     return _face_mesh
+
+
+def _process_face_mesh(rgb: np.ndarray):
+    with _face_mesh_lock:
+        return _get_face_mesh().process(rgb)
 
 @app.get("/", include_in_schema=False)
 async def root_redirect():
@@ -462,8 +471,7 @@ class FaceAnalyzer:
 
         # Step 2：MediaPipe FaceMesh
         mp_face_mesh = mp.solutions.face_mesh
-        face_mesh = _get_face_mesh()
-        results = face_mesh.process(rgb)
+        results = _process_face_mesh(rgb)
 
         if not results.multi_face_landmarks:
             raise ValueError("沒偵測到人臉")
@@ -943,8 +951,9 @@ class FaceAnalyzer:
         try:
             shadow = basic_roi_shadow.predict(self.frame, self._pts_cache)
             if shadow:
-                result["模型分類"] = shadow
                 basic_roi_shadow.log_comparison(result, shadow)
+                if basic_roi_shadow.EXPOSE_IN_RESPONSE:
+                    result["模型分類"] = shadow
         except Exception:
             logging.getLogger(__name__).exception("ROI shadow 預測失敗，忽略")
 
