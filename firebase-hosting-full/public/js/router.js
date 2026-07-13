@@ -669,6 +669,11 @@ compare: `
         <h3>目前風格</h3>
         <p id="compareStyleName">尚未選擇風格</p>
         <div class="analysis-tags" id="compareStyleTags"></div>
+        <section class="compare-ollama" id="compareOllamaPanel" aria-live="polite">
+            <span class="compare-ollama-kicker">OLLAMA RESPONSE</span>
+            <h4>Ollama 妝容建議</h4>
+            <p id="compareOllamaSuggestion">尚未產生妝容建議</p>
+        </section>
         <button class="btn-outline" id="compareGoStyleBtn">選擇風格</button>
         <button class="btn-gold" id="compareRenderBtn" style="margin-top:12px;">生成妝容</button>
         <div id="compareRenderStatus" style="font-size:12px;color:#888;margin-top:6px;display:none;"></div>
@@ -2261,6 +2266,8 @@ const PageInit = {
         const style = STYLES.find(s => s.id === Router.selectedStyleId);
         const nameEl = document.getElementById('compareStyleName');
         const tagsEl = document.getElementById('compareStyleTags');
+        const ollamaPanel = document.getElementById('compareOllamaPanel');
+        const ollamaSuggestionEl = document.getElementById('compareOllamaSuggestion');
         const stage = document.getElementById('compareStage');
         const holdBtn = document.getElementById('compareHoldBtn');
         Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
@@ -2268,6 +2275,12 @@ const PageInit = {
 
         nameEl.textContent = style ? style.name : '尚未選擇風格';
         tagsEl.innerHTML = style ? style.tags.map(t => `<span class="analysis-tag">${t}</span>`).join('') : '';
+        const storedSuggestion = Router.analysisPackage?.generativeText?.suggestion || '';
+        const ollamaSuggestion = typeof splitOllamaTwoPartSuggestion === 'function'
+            ? splitOllamaTwoPartSuggestion(storedSuggestion).suggestion
+            : String(storedSuggestion).trim();
+        if (ollamaSuggestionEl) ollamaSuggestionEl.textContent = ollamaSuggestion || '尚未產生妝容建議';
+        if (ollamaPanel) ollamaPanel.classList.toggle('is-empty', !ollamaSuggestion);
 
         const showAfter = () => {
             stage.classList.remove('before');

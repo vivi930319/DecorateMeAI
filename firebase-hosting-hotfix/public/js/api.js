@@ -14,7 +14,7 @@ const PRODUCTION_AI_GATEWAY_URL = 'https://ai-gateway-258021445391.asia-east1.ru
 function getAiGatewayUrl(runtimeConfig = RuntimeApiConfig) {
     const configured = String(runtimeConfig.aiGatewayUrl || '').trim().replace(/\/$/, '');
     if (configured) return configured;
-    if (typeof window === 'undefined') return '';
+    if (typeof window === 'undefined' || !window.location) return '';
     const productionHosts = new Set(['decorate-me.web.app', 'decorate-me.firebaseapp.com']);
     return productionHosts.has(window.location.hostname) ? PRODUCTION_AI_GATEWAY_URL : '';
 }
