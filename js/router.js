@@ -2284,20 +2284,43 @@ const PageInit = {
             stage.classList.remove('before');
             stage.classList.add('after');
             setCompareImage('after');
-            holdBtn.textContent = '查看渲染前';
         };
         const showBefore = () => {
             stage.classList.remove('after');
             stage.classList.add('before');
             setCompareImage('before');
-            holdBtn.textContent = '查看渲染後';
         };
-        // 改成按下切換（不用長按），目前顯示哪一張就切去另一張
-        showBefore();
-        holdBtn.onclick = () => {
-            if (stage.classList.contains('after')) showBefore();
-            else showAfter();
+
+        // iOS 式長按對比：放開時停在「基準」那張，按住時看另一張。
+        // 基準在渲染完成後會變成妝後圖（成果），所以實際體感是「按住看原圖、放開回成果」。
+        // 按鈕文字固定不動——狀態是暫態的，跟著改只會閃爍。
+        const hasAfterImage = () => {
+            const render = (Router.analysisPackage || {}).render || {};
+            return !!(render.afterImageUrl || render.afterImageDataUrl
+                || render.makeupOutput?.imageUrl || render.makeupOutput?.imageDataUrl);
         };
+        const showBaseline = () => { Router.compareBaseline === 'after' ? showAfter() : showBefore(); };
+        const pressHold = (e) => {
+            if (e && e.preventDefault) e.preventDefault();
+            // 還沒渲染就按住只會看到空白，讓人以為壞掉——直接講清楚
+            if (!hasAfterImage()) { showToast('還沒有妝後圖，請先按「生成妝容」'); return; }
+            Router.compareBaseline === 'after' ? showBefore() : showAfter();
+        };
+        const releaseHold = () => showBaseline();
+
+        Router.compareBaseline = hasAfterImage() ? 'after' : 'before';
+        showBaseline();
+        holdBtn.textContent = '按住對比';
+        holdBtn.style.touchAction = 'none';      // 不讓瀏覽器把長按當成捲動／縮放手勢
+        holdBtn.style.userSelect = 'none';       // 長按不要選取到按鈕文字
+        holdBtn.onpointerdown = pressHold;
+        holdBtn.onpointerup = releaseHold;
+        holdBtn.onpointerleave = releaseHold;    // 手指滑出按鈕就當放開，不然會卡在對比狀態
+        holdBtn.onpointercancel = releaseHold;
+        holdBtn.oncontextmenu = (e) => e.preventDefault();  // 手機長按預設會跳系統選單
+        // 鍵盤操作：按住空白鍵／Enter 看另一張，放開回基準
+        holdBtn.onkeydown = (e) => { if (e.key === ' ' || e.key === 'Enter') pressHold(e); };
+        holdBtn.onkeyup = (e) => { if (e.key === ' ' || e.key === 'Enter') releaseHold(); };
         document.getElementById('compareGoStyleBtn').onclick = () => Router.go('style');
 
         const renderBtn = document.getElementById('compareRenderBtn');
@@ -2426,7 +2449,8 @@ const PageInit = {
                         }
                     });
                     AnalysisDraft.save(Router.analysisPackage);
-                    setCompareImage('after');
+                    Router.compareBaseline = 'after';  // 渲染完成後，基準改成成果圖：按住看原圖、放開回成果
+                    showAfter();
                     renderStatus.textContent = '渲染完成！';
                     setTimeout(() => { renderStatus.style.display = 'none'; }, 3000);
                     showToast('妝容渲染完成');
