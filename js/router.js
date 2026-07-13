@@ -670,6 +670,10 @@ compare: `
         <p id="compareStyleName">尚未選擇風格</p>
         <div class="analysis-tags" id="compareStyleTags"></div>
         <button class="btn-outline" id="compareGoStyleBtn">選擇風格</button>
+        <div style="margin-top:12px;">
+            <div style="font-size:11px;color:#999;margin-bottom:4px;letter-spacing:.05em;">可編輯英文渲染指令</div>
+            <textarea id="comparePromptInput" rows="8" placeholder="在這裡調整妝容指令，例如：Create a subtle soft glam makeup look while keeping the same male identity and hairstyle exactly unchanged." style="width:100%;padding:10px 12px;border-radius:10px;border:1px solid #e8d5c8;background:rgba(255,248,244,0.9);color:#7a6060;line-height:1.6;resize:vertical;font-size:12px;"></textarea>
+        </div>
         <button class="btn-gold" id="compareRenderBtn" style="margin-top:12px;">生成妝容</button>
         <div id="compareRenderStatus" style="font-size:12px;color:#888;margin-top:6px;display:none;"></div>
         <button class="btn-outline" id="compareSaveLookBtn" style="margin-top:8px;">收藏妝容對比圖</button>
@@ -851,6 +855,12 @@ const Router = {
             showAlert('此帳號目前沒有使用此功能的權限，請聯繫管理員', { type: 'error' });
             return;
         }
+        // 一進分析頁就先把 face 服務叫醒（不等它回來）。使用者接下來還要選照片、對鏡頭，
+        // 這幾十秒剛好夠 Cloud Run 冷啟動跑完，等他按下分析時容器已經是熱的。
+        if (page === 'analysis' && typeof Api !== 'undefined' && Api.warmFaceServices) {
+            Api.warmFaceServices();
+        }
+
         // 訪客攔截：收藏 / 分析紀錄 需登入
         if ((page === "favorites" || page === "history") && isGuest()) {
             promptGuestAuth(page === "favorites" ? "收藏" : "分析紀錄");
@@ -2293,6 +2303,12 @@ const PageInit = {
         const renderBtn = document.getElementById('compareRenderBtn');
         const renderStatus = document.getElementById('compareRenderStatus');
         const renderQuotaEl = document.getElementById('compareRenderQuota');
+        const promptInputEl = document.getElementById('comparePromptInput');
+        const draftPrompt =
+            Router.analysisPackage?.generativeText?.userRenderPrompt
+            || Router.analysisPackage?.generativeText?.ollamaRenderPromptEn
+            || '';
+        if (promptInputEl) promptInputEl.value = draftPrompt;
         const refreshRenderQuota = () => {
             if (!renderQuotaEl) return;
             const quotaProfile = Auth.getProfile();
@@ -2325,7 +2341,7 @@ const PageInit = {
                     showAlert('你目前的方案無法使用 AI 妝容渲染。', { type: 'error' });
                     return;
                 }
-                const pkg = Router.analysisPackage;
+                let pkg = Router.analysisPackage;
                 const imageDataUrl = pkg?.images?.front?.compressedDataUrl || pkg?.images?.front?.dataUrl || '';
                 if (!imageDataUrl) { showAlert('尚未上傳照片，請先完成臉部分析。', { type: 'error' }); return; }
                 const currentRenderApiKey = window.DECORATE_ME_CONFIG?.renderApiKey || '';
@@ -2335,8 +2351,24 @@ const PageInit = {
                     showAlert('目前頁面沒有載到 renderApiKey，請重新整理頁面後再試；若還是一樣，表示部署環境沒有載入正確的 render 設定檔。', { type: 'error' });
                     return;
                 }
-                const prompt = buildRenderPrompt(pkg?.faceAnalysis, Router.selectedStyleId, pkg?.generativeText?.suggestion || '', pkg?.generativeText?.ollamaRenderPromptEn || '');
+                const userRenderPrompt = String(promptInputEl?.value || '').trim();
+                const prompt = buildRenderPrompt(
+                    pkg?.faceAnalysis,
+                    Router.selectedStyleId,
+                    pkg?.generativeText?.suggestion || '',
+                    pkg?.generativeText?.ollamaRenderPromptEn || '',
+                    userRenderPrompt
+                );
                 if (!prompt) { showAlert('尚未產生妝容建議，請先在風格頁按「確認風格」。', { type: 'error' }); return; }
+
+                Router.analysisPackage = AnalysisPackage.update(pkg, {
+                    generativeText: {
+                        ...(pkg?.generativeText || {}),
+                        userRenderPrompt: userRenderPrompt || null
+                    }
+                });
+                pkg = Router.analysisPackage;
+                AnalysisDraft.save(Router.analysisPackage);
 
                 // 顯示送出的英文 prompt 讓用戶確認
                 const promptPreviewEl = document.getElementById('comparePromptPreview');
@@ -2345,11 +2377,39 @@ const PageInit = {
                 renderBtn.disabled = true;
                 renderBtn.textContent = '渲染中...';
                 renderStatus.style.display = 'block';
-                renderStatus.textContent = '正在生成妝容...';
+                renderStatus.innerHTML = `
+                    <div style="margin-bottom:8px;font-weight:600;">AI 正在上妝… <span id="renderProgressPct">1%</span></div>
+                    <div style="height:8px;background:rgba(0,0,0,.08);border-radius:999px;overflow:hidden;">
+                        <div id="renderProgressBar" style="height:100%;width:1%;border-radius:999px;background:linear-gradient(90deg,#f7b2c9,#c9748f);"></div>
+                    </div>
+                    <div id="renderProgressHint" style="margin-top:8px;font-size:12px;opacity:.7;">生成中，約需 60–150 秒，請不要關閉頁面</div>
+                `;
+                const barEl = document.getElementById('renderProgressBar');
+                const pctEl = document.getElementById('renderProgressPct');
+                const hintEl = document.getElementById('renderProgressHint');
+
+                // 後端每 2 秒才回一次進度，直接套上去會一格一格跳。這裡每 40ms 往目標值推進 1，
+                // 把數字補成連續的 1→100，而且只准往前、不准倒退。
+                let shownProgress = 1;
+                let targetProgress = 1;
+                const progressTick = setInterval(() => {
+                    if (shownProgress >= targetProgress) return;
+                    shownProgress = Math.min(targetProgress, shownProgress + 1);
+                    if (barEl) barEl.style.width = shownProgress + '%';
+                    if (pctEl) pctEl.textContent = shownProgress + '%';
+                }, 40);
 
                 try {
-                    renderStatus.textContent = 'Replicate 生成中，約需 30–60 秒...';
-                    const result = await Api.renderMakeup({ imageDataUrl, prompt, strength: 0.35 });
+                    const result = await Api.renderMakeupAsync({
+                        imageDataUrl,
+                        prompt,
+                        strength: 0.35,
+                        onProgress: (p) => { targetProgress = Math.max(targetProgress, p); }
+                    });
+                    targetProgress = 100;
+                    if (hintEl) hintEl.textContent = '完成！正在載入妝後圖…';
+                    // 讓進度條有時間跑完最後那段，不然數字會停在 80 幾就整個消失
+                    await new Promise(resolve => setTimeout(resolve, 800));
                     refreshRenderQuota();
                     if (!result.renderQuota && renderQuotaEl) {
                         renderQuotaEl.textContent = '妝容渲染完成！剩餘次數稍後更新。';
@@ -2374,6 +2434,7 @@ const PageInit = {
                     renderStatus.textContent = '渲染失敗：' + err.message;
                     showAlert('妝容生成失敗：' + err.message, { type: 'error' });
                 } finally {
+                    clearInterval(progressTick);
                     renderBtn.disabled = false;
                     renderBtn.textContent = '生成妝容';
                 }

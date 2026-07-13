@@ -14,10 +14,12 @@ function getRuntimeApiConfig() {
 
 const RuntimeApiConfig = getRuntimeApiConfig();
 
+// 所有服務的 baseUrl 與金鑰一律由 config.local.js（window.DECORATE_ME_CONFIG）在執行時注入，
+// 這裡不寫死任何網址或金鑰，避免機密進版控外洩；未注入時為空字串，url() 會回空、不對外呼叫。
 const ApiConfig = {
     services: {
         faceBasic: {
-            baseUrl: RuntimeApiConfig.faceBasicUrl || 'http://127.0.0.1:8001',
+            baseUrl: RuntimeApiConfig.faceBasicUrl || '',
             apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/basic',
             posePath: '/v1/face/pose',
@@ -26,7 +28,7 @@ const ApiConfig = {
             jobResultPath: '/v1/face/jobs/{jobId}/result'
         },
         facePro: {
-            baseUrl: RuntimeApiConfig.faceProUrl || 'http://127.0.0.1:8002',
+            baseUrl: RuntimeApiConfig.faceProUrl || '',
             apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/pro',
             jobPath: '/v1/face/jobs/pro',
@@ -34,7 +36,7 @@ const ApiConfig = {
             jobResultPath: '/v1/face/jobs/{jobId}/result'
         },
         textSuggestion: {
-            baseUrl: RuntimeApiConfig.textSuggestionUrl || 'http://127.0.0.1:8010',
+            baseUrl: RuntimeApiConfig.textSuggestionUrl || '',
             apiKey: RuntimeApiConfig.textSuggestionApiKey || '',
             suggestPath: '/suggest'
         },
@@ -74,6 +76,34 @@ const ApiConfig = {
 // ═══ API 串接層 ═══
 const Api = {
     config: ApiConfig,
+
+    async _warmRenderService(baseUrl, apiKey) {
+        if (!baseUrl) return;
+        const headers = {};
+        if (apiKey) headers['X-API-Key'] = apiKey;
+        try {
+            await fetch(`${baseUrl}/health`, {
+                method: 'GET',
+                headers,
+                cache: 'no-store',
+            });
+        } catch (_) {
+            // Ignore warm-up failures and let the real render request surface the actionable error.
+        }
+    },
+
+    // face-basic / face-pro 的 min-instances 是 0，閒置後容器會縮到零，下一個人按分析就得等冷啟動
+    // （mediapipe 載模型特別久）。趁使用者還在選照片、還沒按下按鈕的空檔先打一發 /health 把容器叫醒，
+    // 等他真的送出時通常已經是熱的。故意不 await，純背景預熱，失敗也無所謂。
+    warmFaceServices() {
+        const runtime = getRuntimeApiConfig();
+        const apiKey = runtime.faceApiKey || this.config.services.faceBasic.apiKey || '';
+        const targets = [
+            runtime.faceBasicUrl || this.config.services.faceBasic.baseUrl,
+            runtime.faceProUrl || this.config.services.facePro.baseUrl,
+        ];
+        targets.filter(Boolean).forEach(baseUrl => { this._warmRenderService(baseUrl, apiKey); });
+    },
 
     // 臉部分析服務的 X-API-Key（faceBasic/facePro 共用同一把）；沒設定時回空物件、不影響本機。
     _faceHeaders(service) {
@@ -202,11 +232,20 @@ const Api = {
         if (profile.role) headers['X-User-Role'] = profile.role;
         let res;
         try {
-            res = await fetch(url, {
+            await this._warmRenderService(serviceConfig.baseUrl, apiKey);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            const requestInit = {
                 method: 'POST',
                 headers,
                 body: JSON.stringify({ image: imageDataUrl, prompt, strength }),
-            });
+            };
+            try {
+                res = await fetch(url, requestInit);
+            } catch (firstErr) {
+                // Cloud Run cold start or transient network hiccups can cause the first browser fetch to fail.
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                res = await fetch(url, requestInit);
+            }
         } catch (err) {
             throw new Error('無法連線到渲染服務：' + err.message);
         }
@@ -228,6 +267,93 @@ const Api = {
             Auth.setProfile({ ...current, renderQuota: data.renderQuota });
         }
         return data;
+    },
+
+    // 非同步渲染：gpt-image-2 要跑 50~150 秒，同步等會撞 Cloud Run 逾時（實測一堆 504）。
+    // 改成送出後拿 jobId、每 2 秒輪詢一次，onProgress 會被餵 1~100 的進度給進度條用。
+    async renderMakeupAsync({ imageDataUrl, prompt, strength = 0.35, onProgress = null }) {
+        const runtimeConfig = getRuntimeApiConfig();
+        const baseUrl = runtimeConfig.renderUrl || this.config.services.render.baseUrl || '';
+        const apiKey = runtimeConfig.renderApiKey || this.config.services.render.apiKey || '';
+        if (!baseUrl) throw new Error('renderUrl 未設定，請聯繫渲染端組員提供 Cloud Run URL');
+
+        const headers = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['X-API-Key'] = apiKey;
+        const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
+        if (profile.email) headers['X-User-Email'] = profile.email;
+        if (profile.role) headers['X-User-Role'] = profile.role;
+
+        const emit = (p) => { if (typeof onProgress === 'function') onProgress(p); };
+
+        let submitRes;
+        try {
+            await this._warmRenderService(baseUrl, apiKey);
+            const requestInit = {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ image: imageDataUrl, prompt, strength }),
+            };
+            try {
+                submitRes = await fetch(`${baseUrl}/render/jobs`, requestInit);
+            } catch (firstErr) {
+                // 冷啟動或瞬斷時第一次 fetch 可能直接失敗，重試一次
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                submitRes = await fetch(`${baseUrl}/render/jobs`, requestInit);
+            }
+        } catch (err) {
+            throw new Error('無法連線到渲染服務：' + err.message);
+        }
+
+        const submitted = await submitRes.json().catch(() => ({}));
+        if (!submitRes.ok) {
+            if (submitRes.status === 401) {
+                throw new Error('Render API 金鑰驗證失敗。請重新整理頁面後再試。');
+            }
+            throw new Error(submitted?.error?.message || submitted?.error || `Render API HTTP ${submitRes.status}`);
+        }
+
+        const jobId = submitted.jobId;
+        if (!jobId) throw new Error(submitted?.error?.message || '渲染服務沒有回傳 jobId');
+        emit(submitted.progress || 1);
+
+        // 快取命中時後端會直接回 completed，不用輪詢
+        if (submitted.status === 'completed' && submitted.afterImageUrl) {
+            emit(100);
+            return submitted;
+        }
+
+        const pollUrl = `${baseUrl}/render/jobs/${jobId}`;
+        const deadline = Date.now() + 5 * 60 * 1000;  // 5 分鐘保險絲，正常 150 秒內一定結束
+        while (Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            let job;
+            try {
+                const pollRes = await fetch(pollUrl, { method: 'GET', headers, cache: 'no-store' });
+                job = await pollRes.json().catch(() => ({}));
+                if (!pollRes.ok) {
+                    // 輪詢途中的暫時性錯誤不該直接判死，繼續等下一輪
+                    if (pollRes.status === 404) throw new Error('渲染工作不存在或已過期');
+                    continue;
+                }
+            } catch (err) {
+                if (err.message === '渲染工作不存在或已過期') throw err;
+                continue;  // 網路瞬斷，下一輪再試
+            }
+
+            emit(job.progress || 0);
+            if (job.status === 'completed' && job.afterImageUrl) {
+                emit(100);
+                if (job.renderQuota && Auth.getProfile) {
+                    const current = Auth.getProfile() || {};
+                    Auth.setProfile({ ...current, renderQuota: job.renderQuota });
+                }
+                return job;
+            }
+            if (job.status === 'failed') {
+                throw new Error(job?.error?.message || job?.error || '妝容渲染失敗');
+            }
+        }
+        throw new Error('渲染逾時（超過 5 分鐘）。請稍後再試一次。');
     },
 
     // 我們的分析結果 LAB 欄位是小寫 {L,a,b}，但 product 服務要求大寫 {L,A,B}，不轉換的話永遠會被判定缺欄位
@@ -1093,15 +1219,22 @@ function splitOllamaTwoPartSuggestion(rawText) {
     return { suggestion, leakedEnglishPart };
 }
 
-function buildRenderPrompt(faceAnalysis, styleId, suggestion = '', ollamaRenderPromptEn = '') {
+function buildRenderPrompt(faceAnalysis, styleId, suggestion = '', ollamaRenderPromptEn = '', userCustomPrompt = '') {
     // 只剩兩塊：Ollama 自己生成的妝容指令 + 我們固定的「不要改人物」鎖定句
-    const makeupInstruction = String(ollamaRenderPromptEn || '').trim() || 'Apply natural everyday makeup.';
+    const customInstruction = String(userCustomPrompt || '').trim();
+    const makeupInstruction = customInstruction || String(ollamaRenderPromptEn || '').trim() || 'Apply natural everyday makeup.';
+
+    // 使用者自己寫的 prompt 通常已經自帶身分鎖，再疊一段 identityLock 會讓「不要改」的句子
+    // 壓過妝容指令，gpt-image-2 就乾脆輸出近乎原圖（妝完全上不去）。自訂時原封不動送出。
+    if (customInstruction) return customInstruction;
 
     const identityLock = [
         `Create a photorealistic camera photo edit, not AI art.`,
         `Keep the original photo quality, lens perspective, lighting, shadows, skin texture, pores, fine lines, and natural facial asymmetry.`,
         `Do not change this person's identity or appearance.`,
         `Keep face shape, facial structure, eye shape, nose, lips, skin tone, skin texture, pores, fine lines, wrinkles, and hair completely identical to the original photo.`,
+        `Preserve the subject's original gender and biological sex characteristics; do not feminize or masculinize the face, and keep any facial hair, brow thickness, and jawline unchanged.`,
+        `Keep the original hairstyle, hair length, and hairline exactly identical; do not add, lengthen, shorten, or restyle the hair.`,
         `Do not smooth, airbrush, whiten, reshape, slim the face, enlarge eyes, alter age, alter ethnicity, or beautify facial features beyond applying makeup.`,
         `Keep the exact same pose, posture, body position, head angle, hand position, gesture, and action as the original photo — do not let the person move, turn, or change stance.`,
         `Keep clothing, background, lighting, camera angle, camera framing, and expression completely identical to the original photo.`,
