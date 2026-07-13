@@ -659,7 +659,7 @@ products: `<div id="productsArea"></div>`,
 favorites: `<div class="page-header"><span class="eyebrow">Wishlist</span><h1>我的收藏</h1><div class="divider"></div></div><div id="favArea"></div>`,
 history: `<div class="page-header"><span class="eyebrow">Archive</span><h1>分析紀錄</h1><div class="divider"></div></div><div id="historyArea"></div>`,
 compare: `
-<div class="page-header"><h1>妝容對比圖</h1><div class="divider"></div><p>保留 iOS 端的前後對比流程：選擇風格後可按下切換渲染前 / 渲染後效果。</p></div>
+<div class="page-header"><h1>妝容對比圖</h1><div class="divider"></div></div>
 <div class="compare-layout">
     <div class="compare-preview" id="comparePreview">
         <div class="ph compare-stage before" id="compareStage"></div>
