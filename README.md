@@ -19,20 +19,22 @@ flowchart TB
   U["使用者瀏覽器 / App"]
   FE["前端 (Firebase Hosting)"]
   subgraph BE["本後端 (Cloud Run)"]
+    GW["ai-gateway 會員驗證 / API 代理"]
     FB["face-basic 臉部分析"]
     FP["face-pro 臉部分析"]
     RD["replicate-render 渲染"]
   end
   OLL["Ollama 文字建議"]
   MDB["會員 / 商品資料庫"]
-  REP["Replicate flux-kontext-pro"]
+  REP["Replicate openai/gpt-image-2"]
   GCS["GCS 渲染圖儲存"]
   FS["Firestore 分析 job"]
 
   U --> FE
-  FE -->|X-API-Key| FB
-  FE -->|X-API-Key| FP
-  FE -->|X-API-Key| RD
+  FE -->|會員登入 + X-API-Key| GW
+  GW -->|Cloud Run IAM ID token| FB
+  GW -->|Cloud Run IAM ID token| FP
+  GW -->|Cloud Run IAM ID token| RD
   FE -->|X-API-Key| OLL
   FE -->|session cookie| MDB
   FB --> FS
@@ -51,7 +53,7 @@ flowchart TB
 |------|------|
 | 語言 / 框架 | Python 3.10（BASIC / PRO / suggestion）、Python 3.11（render）、FastAPI、Uvicorn |
 | 電腦視覺 | InsightFace（buffalo_l）、MediaPipe FaceMesh、OpenCV、NumPy |
-| AI 渲染 | Replicate（black-forest-labs/flux-kontext-pro） |
+| AI 渲染 | Replicate（openai/gpt-image-2） |
 | 儲存 | Google Cloud Storage（渲染圖）、Firestore（分析 job） |
 | 部署 | Docker、Google Cloud Run（asia-east1） |
 
@@ -84,12 +86,13 @@ Face_analyzer_BASIC.py       BASIC 臉部分析服務（FastAPI）
 Face_analyzer_PRO.py         PRO 臉部分析服務
 replicate_render_api.py      AI 渲染服務（FastAPI）
 replicate_render.py          Replicate 呼叫 + GCS 上傳
+ai_gateway.py                會員 AI token + 私有 Cloud Run 代理
 Ollama_suggestion.py         妝容文字建議
 analysis_package.py          分析結果資料結構
 job_store.py                 非同步 job（Firestore）
 dev_server_utils.py          CORS / 本機開發工具
-Dockerfile, Dockerfile.render, docker-compose.yml   容器化與部署
-requirements.txt, requirements.render.txt           依賴
+Dockerfile, Dockerfile.render, Dockerfile.gateway   容器化與部署
+requirements.txt, requirements.render.txt, requirements.gateway.txt   依賴
 tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓練資料，非服務本體）
 ```
 
@@ -109,14 +112,16 @@ tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓
 ## AI 渲染怎麼做
 
 1. 渲染 prompt = Ollama 生成的妝容指令 ＋ 一組「身分鎖定句」，明確要求臉型、五官、膚色、姿勢、背景、光線都不變，只上妝。
-2. 呼叫 Replicate flux-kontext-pro 生成上妝圖。
+2. 透過 Replicate 呼叫 openai/gpt-image-2 生成上妝圖。
 3. 上傳 GCS 取得永久網址（Replicate 原始網址會過期，不用）。
 
 ---
 
 ## 安全
 
-- 所有端點需帶 `X-API-Key`（環境變數設定；未設時為本機開發模式）。
+- 正式前端只呼叫 AI Gateway；face-basic、face-pro、replicate-render 已啟用 Cloud Run IAM，匿名直連回 `403`。
+- Gateway 代理路徑同時要求 `X-API-Key` 與會員登入後取得的短期 Bearer token；API key 只作第二層防護，不再視為會員身分。
+- Gateway 使用專用服務帳號和 Google 簽署的 ID token 呼叫私有核心服務，session 簽章金鑰存 Secret Manager。
 - 非同步 job 建立時會回 `resultToken`；輪詢或取結果需帶 `X-Job-Token: <resultToken>`（或 `?result_token=`），避免只靠 jobId 被猜到結果。
 - CORS 限定前端網域，非 `*`；正式環境可用 `APP_ENV=production` 或 `REQUIRE_EXPLICIT_CORS=1` 強制檢查。
 - 渲染服務有每 IP + email 的固定時間窗限流（預設每小時 10 次，超量回 429）。
@@ -134,6 +139,12 @@ tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓
 | `FACE_API_KEY` | 臉部分析服務的 X-API-Key |
 | `RENDER_API_KEY` | 渲染服務的 X-API-Key |
 | `SUGGESTION_API_KEY` | Ollama 建議服務的 X-API-Key |
+| `GATEWAY_FACE_API_KEY` / `GATEWAY_RENDER_API_KEY` | Gateway 對瀏覽器驗證的第二層 API key |
+| `UPSTREAM_FACE_API_KEY` / `UPSTREAM_RENDER_API_KEY` | Gateway 呼叫核心服務時使用的應用層 key |
+| `FACE_BASIC_URL` / `FACE_PRO_URL` / `RENDER_URL` | Gateway 的三個私有 Cloud Run 目標 |
+| `MEMBER_DATABASE_URL` | Gateway 重驗會員帳密的後端網址 |
+| `GATEWAY_SESSION_SECRET` | AI access token 簽章金鑰；正式環境由 Secret Manager 掛載 |
+| `GATEWAY_SESSION_TTL_SECONDS` | AI access token 效期，正式環境為 7200 秒 |
 | `REPLICATE_API_TOKEN` | Replicate token |
 | `CORS_ORIGINS` | 允許的前端網域（逗號分隔） |
 | `APP_ENV` / `REQUIRE_EXPLICIT_CORS` | 正式環境強制要求明確 CORS 設定 |

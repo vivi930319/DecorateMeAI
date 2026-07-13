@@ -1,0 +1,6 @@
+fastapi
+google-auth
+httpx
+PyJWT
+requests
+uvicorn[standard]

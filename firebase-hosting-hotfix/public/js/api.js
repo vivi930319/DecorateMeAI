@@ -9,11 +9,23 @@
 
 // ═══ API 設定：所有外部服務都走這裡，不直接連 PostgreSQL 或 Ollama 11434 ═══
 const RuntimeApiConfig = typeof window !== 'undefined' ? (window.DECORATE_ME_CONFIG || {}) : {};
+const PRODUCTION_AI_GATEWAY_URL = 'https://ai-gateway-258021445391.asia-east1.run.app';
+
+function getAiGatewayUrl(runtimeConfig = RuntimeApiConfig) {
+    const configured = String(runtimeConfig.aiGatewayUrl || '').trim().replace(/\/$/, '');
+    if (configured) return configured;
+    if (typeof window === 'undefined') return '';
+    const productionHosts = new Set(['decorate-me.web.app', 'decorate-me.firebaseapp.com']);
+    return productionHosts.has(window.location.hostname) ? PRODUCTION_AI_GATEWAY_URL : '';
+}
+
+const AiGatewayUrl = getAiGatewayUrl();
+try { sessionStorage.removeItem('beautyAuthCreds'); } catch (_) {}
 
 const ApiConfig = {
     services: {
         faceBasic: {
-            baseUrl: RuntimeApiConfig.faceBasicUrl || 'http://127.0.0.1:8001',
+            baseUrl: AiGatewayUrl ? `${AiGatewayUrl}/face-basic` : (RuntimeApiConfig.faceBasicUrl || 'http://127.0.0.1:8001'),
             apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/basic',
             posePath: '/v1/face/pose',
@@ -23,7 +35,7 @@ const ApiConfig = {
             healthPath: '/health'
         },
         facePro: {
-            baseUrl: RuntimeApiConfig.faceProUrl || 'http://127.0.0.1:8002',
+            baseUrl: AiGatewayUrl ? `${AiGatewayUrl}/face-pro` : (RuntimeApiConfig.faceProUrl || 'http://127.0.0.1:8002'),
             apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/pro',
             jobPath: '/v1/face/jobs/pro',
@@ -39,7 +51,7 @@ const ApiConfig = {
             healthPath: '/health'
         },
         render: {
-            baseUrl: RuntimeApiConfig.renderUrl || '',
+            baseUrl: AiGatewayUrl ? `${AiGatewayUrl}/render-service` : (RuntimeApiConfig.renderUrl || ''),
             apiKey: RuntimeApiConfig.renderApiKey || '',
             renderPath: '/render',
             healthPath: '/health'
@@ -50,7 +62,7 @@ const ApiConfig = {
             healthPath: '/health'
         },
         memberDatabase: {
-            baseUrl: RuntimeApiConfig.memberDatabaseUrl || 'https://vegetation-arguments-final-inspiration.trycloudflare.com',
+            baseUrl: RuntimeApiConfig.memberDatabaseUrl || '',
             loginPath: '/api/login',
             registerPath: '/api/register',
             sendOtpPaths: ['/api/send-otp', '/api/register'],
@@ -76,9 +88,35 @@ const ApiConfig = {
 const Api = {
     config: ApiConfig,
 
+    _aiAccessToken() {
+        try { return sessionStorage.getItem('beautyAiAccessToken') || ''; }
+        catch (_) { return ''; }
+    },
+
+    _withAiAccess(headers = {}) {
+        const token = this._aiAccessToken();
+        return token ? { ...headers, Authorization: 'Bearer ' + token } : headers;
+    },
+
+    async _createAiSession(email, password) {
+        const gatewayUrl = getAiGatewayUrl();
+        if (!gatewayUrl) return;
+        const apiKey = this.config.services.faceBasic?.apiKey || this.config.services.render?.apiKey || '';
+        const headers = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['X-API-Key'] = apiKey;
+        const response = await fetch(gatewayUrl + '/auth/login', {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ email, password })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.accessToken) throw new Error('AI 安全工作階段建立失敗，請重新登入。');
+        sessionStorage.setItem('beautyAiAccessToken', data.accessToken);
+    },
+
     _faceHeaders(service) {
         const key = this.config.services[service]?.apiKey;
-        return key ? { 'X-API-Key': key } : {};
+        return this._withAiAccess(key ? { 'X-API-Key': key } : {});
     },
 
     _faceJobHeaders(service, resultToken) {
@@ -98,7 +136,7 @@ const Api = {
         const headers = { 'Content-Type': 'application/json' };
         const key = this.config.services.render?.apiKey;
         if (key) headers['X-API-Key'] = key;
-        return headers;
+        return this._withAiAccess(headers);
     },
 
     // 臉部分析
@@ -338,13 +376,16 @@ const Api = {
     },
 
     async login(email, password) {
+        try { sessionStorage.removeItem('beautyAiAccessToken'); } catch (_) {}
         const res = await fetch(this.config.url('memberDatabase', 'loginPath'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password })
         });
         if (!res.ok) throw new Error('登入 API 連線失敗');
-        return res.json();
+        const data = await res.json();
+        await this._createAiSession(email, password);
+        return data;
     },
 
     async register(payload) {
@@ -733,6 +774,7 @@ const Auth = {
     logout() {
         sessionStorage.removeItem('beautyUser');
         sessionStorage.removeItem('beautyProfile');
+        sessionStorage.removeItem('beautyAiAccessToken');
         location.reload();
     },
 };

@@ -10,13 +10,16 @@
 !.dockerignore
 !Dockerfile
 !Dockerfile.render
+!Dockerfile.gateway
 !requirements.txt
 !requirements.render.txt
+!requirements.gateway.txt
 !Face_analyzer_BASIC.py
 !Face_analyzer_PRO.py
 !Ollama_suggestion.py
 !replicate_render.py
 !replicate_render_api.py
+!ai_gateway.py
 !dev_server_utils.py
 !cloud_start.py
 !job_store.py

@@ -40,6 +40,15 @@
         ]
       },
       {
+        "source": "/js/api.js",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          }
+        ]
+      },
+      {
         "source": "/pages/ai-render.html",
         "headers": [
           {

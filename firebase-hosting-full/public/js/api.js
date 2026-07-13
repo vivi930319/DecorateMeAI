@@ -13,11 +13,23 @@ function getRuntimeApiConfig() {
 }
 
 const RuntimeApiConfig = getRuntimeApiConfig();
+const PRODUCTION_AI_GATEWAY_URL = 'https://ai-gateway-258021445391.asia-east1.run.app';
+
+function getAiGatewayUrl(runtimeConfig = getRuntimeApiConfig()) {
+    const configured = String(runtimeConfig.aiGatewayUrl || '').trim().replace(/\/$/, '');
+    if (configured) return configured;
+    if (typeof window === 'undefined') return '';
+    const productionHosts = new Set(['decorate-me.web.app', 'decorate-me.firebaseapp.com']);
+    return productionHosts.has(window.location.hostname) ? PRODUCTION_AI_GATEWAY_URL : '';
+}
+
+const AiGatewayUrl = getAiGatewayUrl(RuntimeApiConfig);
+try { sessionStorage.removeItem('beautyAuthCreds'); } catch (_) {}
 
 const ApiConfig = {
     services: {
         faceBasic: {
-            baseUrl: RuntimeApiConfig.faceBasicUrl || 'http://127.0.0.1:8001',
+            baseUrl: AiGatewayUrl ? `${AiGatewayUrl}/face-basic` : (RuntimeApiConfig.faceBasicUrl || 'http://127.0.0.1:8001'),
             apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/basic',
             posePath: '/v1/face/pose',
@@ -26,7 +38,7 @@ const ApiConfig = {
             jobResultPath: '/v1/face/jobs/{jobId}/result'
         },
         facePro: {
-            baseUrl: RuntimeApiConfig.faceProUrl || 'http://127.0.0.1:8002',
+            baseUrl: AiGatewayUrl ? `${AiGatewayUrl}/face-pro` : (RuntimeApiConfig.faceProUrl || 'http://127.0.0.1:8002'),
             apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/pro',
             jobPath: '/v1/face/jobs/pro',
@@ -39,7 +51,7 @@ const ApiConfig = {
             suggestPath: '/suggest'
         },
         render: {
-            baseUrl: RuntimeApiConfig.renderUrl || '',
+            baseUrl: AiGatewayUrl ? `${AiGatewayUrl}/render-service` : (RuntimeApiConfig.renderUrl || ''),
             apiKey: RuntimeApiConfig.renderApiKey || '',
             renderPath: '/render'
         },
@@ -75,10 +87,48 @@ const ApiConfig = {
 const Api = {
     config: ApiConfig,
 
+    _aiAccessToken() {
+        try { return sessionStorage.getItem('beautyAiAccessToken') || ''; }
+        catch (_) { return ''; }
+    },
+
+    _withAiAccess(headers = {}) {
+        const token = this._aiAccessToken();
+        return token ? { ...headers, Authorization: 'Bearer ' + token } : headers;
+    },
+
+    async _createAiSession(email, password) {
+        const gatewayUrl = getAiGatewayUrl();
+        if (!gatewayUrl) return;
+        const apiKey = this.config.services.faceBasic?.apiKey || this.config.services.render?.apiKey || '';
+        const headers = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['X-API-Key'] = apiKey;
+        let response;
+        try {
+            response = await fetch(gatewayUrl + '/auth/login', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ email, password })
+            });
+        } catch (_) {
+            const sessionError = new Error('會員登入成功，但 AI 安全工作階段無法建立，請稍後重新登入。');
+            sessionError.networkFailure = false;
+            throw sessionError;
+        }
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.accessToken) {
+            const sessionError = new Error(data?.detail?.error?.message || 'AI 安全工作階段建立失敗，請重新登入。');
+            sessionError.networkFailure = false;
+            sessionError.status = response.status;
+            throw sessionError;
+        }
+        sessionStorage.setItem('beautyAiAccessToken', data.accessToken);
+    },
+
     // 臉部分析服務的 X-API-Key（faceBasic/facePro 共用同一把）；沒設定時回空物件、不影響本機。
     _faceHeaders(service) {
         const key = this.config.services[service]?.apiKey;
-        return key ? { 'X-API-Key': key } : {};
+        return this._withAiAccess(key ? { 'X-API-Key': key } : {});
     },
 
     _faceJobHeaders(service, resultToken) {
@@ -191,21 +241,20 @@ const Api = {
 
     async renderMakeup({ imageDataUrl, styleId, strength = 0.45 }) {
         const runtimeConfig = getRuntimeApiConfig();
+        const gatewayUrl = getAiGatewayUrl(runtimeConfig);
         const serviceConfig = {
             ...(this.config.services.render || {}),
-            baseUrl: runtimeConfig.renderUrl || this.config.services.render.baseUrl || '',
+            baseUrl: gatewayUrl ? `${gatewayUrl}/render-service` : (runtimeConfig.renderUrl || this.config.services.render.baseUrl || ''),
             apiKey: runtimeConfig.renderApiKey || this.config.services.render.apiKey || '',
         };
         const url = serviceConfig.baseUrl && serviceConfig.renderPath
             ? `${serviceConfig.baseUrl}${serviceConfig.renderPath}`
             : '';
         if (!url) throw new Error('renderUrl 未設定，請聯繫渲染端組員提供 Cloud Run URL');
-        const headers = { 'Content-Type': 'application/json' };
+        let headers = { 'Content-Type': 'application/json' };
         const apiKey = serviceConfig.apiKey;
         if (apiKey) headers['X-API-Key'] = apiKey;
-        const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
-        if (profile.email) headers['X-User-Email'] = profile.email;
-        if (profile.role) headers['X-User-Role'] = profile.role;
+        headers = this._withAiAccess(headers);
         let res;
         try {
             res = await fetch(url, {
@@ -219,6 +268,9 @@ const Api = {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
             if (res.status === 401) {
+                if (data?.detail?.error?.code?.startsWith('MEMBER_AUTH_')) {
+                    throw new Error('AI 安全工作階段已過期，請登出後重新登入。');
+                }
                 if (!apiKey) {
                     throw new Error('Render API 需要金鑰，但目前頁面沒有載到 renderApiKey。請重新整理，或檢查 config.local.js / 部署設定。');
                 }
@@ -405,15 +457,11 @@ const Api = {
     },
 
     // ═══ 後台管理：members 讀寫都走管理員 session cookie；若 GET /api/members 失敗，通常是 admin session / CORS / SameSite 設定有問題 ═══
-    // 跨站 session cookie 常在重整後被瀏覽器清掉，導致 admin 請求變 401。
-    // 用登入時暫存的帳密（sessionStorage，關分頁即清）在背景自動重登一次拿新 cookie，使用者無感。
+    // 不保存明文密碼；跨站 session cookie 失效後由使用者重新登入。
     async _reLogin() {
-        let creds = null;
-        try { creds = JSON.parse(sessionStorage.getItem('beautyAuthCreds') || 'null'); } catch (_) {}
-        if (!creds || !creds.email || !creds.password) return false;
-        try { await this.login(creds.email, creds.password); return true; } catch (_) { return false; }
+        return false;
     },
-    // 一般請求包一層：遇到 401 就自動重登再重試一次（login 本身走原生 fetch，不會遞迴）
+    // 保留既有呼叫介面；_reLogin 固定為 false，因此不再以明文密碼背景重登。
     async _fetchWithRelogin(input, init) {
         let res = await fetch(input, init);
         if (res.status === 401 && await this._reLogin()) {
@@ -631,6 +679,7 @@ const Api = {
     },
 
     async login(email, password) {
+        try { sessionStorage.removeItem('beautyAiAccessToken'); } catch (_) {}
         let res;
         const doLogin = (withCreds) => fetch(this.config.url('memberDatabase', 'loginPath'), {
             method: 'POST',
@@ -653,15 +702,17 @@ const Api = {
             // 伺服器有回應，只是明確拒絕（帳密錯誤、帳號停權等）——這不是「連不上」，不能被當成 fallback 條件，否則等於帳密驗證形同虛設
             let detail = null;
             try { detail = await res.json(); } catch (_) {}
-            const err = new Error(detail?.error?.message || '帳號或密碼錯誤');
+            const backendCode = detail?.error?.code || null;
+            const credentialFailure = res.status === 401 || ['USER_NOT_FOUND', 'WRONG_PASSWORD'].includes(backendCode);
+            const err = new Error(credentialFailure ? '帳號或密碼錯誤' : (detail?.error?.message || '登入失敗'));
             err.networkFailure = false;
             err.status = res.status;
-            err.code = detail?.error?.code || null;  // 未註冊 USER_NOT_FOUND / 密碼錯 WRONG_PASSWORD（後端支援時前端據此分流）
+            err.code = credentialFailure ? 'INVALID_CREDENTIALS' : backendCode;
             throw err;
         }
-        // 暫存帳密（sessionStorage，關分頁即清）供 session 掉時背景自動重登用
-        try { sessionStorage.setItem('beautyAuthCreds', JSON.stringify({ email, password })); } catch (_) {}
-        return res.json();
+        const data = await res.json();
+        await this._createAiSession(email, password);
+        return data;
     },
 
     async register(payload) {
@@ -1061,6 +1112,7 @@ const Auth = {
         sessionStorage.removeItem('beautyUser');
         sessionStorage.removeItem('beautyProfile');
         sessionStorage.removeItem('beautyAuthCreds');
+        sessionStorage.removeItem('beautyAiAccessToken');
         location.reload();
     },
 };

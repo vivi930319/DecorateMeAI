@@ -12,6 +12,9 @@
 !replicate_render_api.py
 !requirements.render.txt
 !Dockerfile.render
+!ai_gateway.py
+!requirements.gateway.txt
+!Dockerfile.gateway
 !face_roi.py
 !basic_roi_shadow.py
 
