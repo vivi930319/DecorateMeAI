@@ -11,6 +11,7 @@ except ImportError:
 
 _client = None
 _memory_jobs: dict[str, dict[str, dict]] = {}
+DEFAULT_SCAN_LIMIT = int(os.getenv("JOB_STORE_SCAN_LIMIT", "500"))
 
 
 def _col(collection: str):
@@ -57,8 +58,11 @@ def delete(col: str, job_id: str) -> None:
     collection.document(job_id).delete()
 
 
-def all_jobs(col: str) -> list[dict]:
+def all_jobs(col: str, limit: int | None = None) -> list[dict]:
+    max_items = DEFAULT_SCAN_LIMIT if limit is None else limit
     collection = _col(col)
     if collection is None:
-        return [dict(job) for job in _memory_jobs.get(col, {}).values()]
-    return [d.to_dict() for d in collection.stream() if d.exists]
+        jobs = [dict(job) for job in _memory_jobs.get(col, {}).values()]
+        return jobs[:max_items] if max_items else jobs
+    query = collection.limit(max_items) if max_items else collection
+    return [d.to_dict() for d in query.stream() if d.exists]

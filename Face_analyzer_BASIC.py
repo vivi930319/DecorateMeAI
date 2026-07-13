@@ -945,9 +945,11 @@ class FaceAnalyzer:
             "brightnessEnhancement": self.brightness_info,
         }
 
-        # ROI CNN shadow prediction：只附加欄位，不覆蓋上面任何一個規則式結果。
+        # ROI CNN shadow prediction：不覆蓋上面任何一個規則式結果。
         # 模型準確率還沒過門檻（見 CNN訓練歷程_BASIC五官分類.md），這裡純粹是為了在真實流量上
-        # 累積「規則式 vs 模型」的對照資料。整段包 try —— shadow 壞掉不能影響正式分析。
+        # 累積「規則式 vs 模型」的對照資料，預設只寫 log、不進 API 回應 ——
+        # 未驗證的結果不該外流到前端，免得哪天有人「順手」拿去顯示。
+        # 整段包 try —— shadow 壞掉不能影響正式分析。
         try:
             shadow = basic_roi_shadow.predict(self.frame, self._pts_cache)
             if shadow:

@@ -141,6 +141,7 @@ tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓
 | `MAX_RENDER_IMAGE_CHARS` / `MAX_RENDER_IMAGE_BYTES` | 渲染輸入圖大小上限 |
 | `MAX_RENDER_PROMPT_CHARS` | 渲染 prompt 長度上限 |
 | `RENDER_JOB_TIMEOUT_SECONDS` / `RENDER_JOB_RETENTION_SECONDS` / `RENDER_JOB_MAX_COUNT` | 渲染 job 逾時、保留時間與數量上限 |
+| `JOB_STORE_SCAN_LIMIT` | Firestore job cleanup/stat 單次最多掃描筆數（預設 500） |
 | `RENDER_GUIDANCE` | 渲染 guidance（預設 3.0，偏向保留真人照片質感） |
 | `RENDER_RATE_LIMIT_MAX_REQUESTS` / `RENDER_RATE_LIMIT_WINDOW_SECONDS` | 渲染限流 |
 | `RENDER_DEDUP_TTL_SECONDS` | 渲染去重快取有效期（預設 600） |
