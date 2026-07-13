@@ -267,8 +267,8 @@ log: ROI shadow 對照：一致 3/5　差異 -> 臉型: 規則=圓形臉 模型=
 
 ## 8.6 部署到 Cloud Run（2026-07-13）
 
-已上線：`face-basic` revision **`face-basic-00010-lgm`**，
-image `asia-east1-docker.pkg.dev/decorate-me/beauty-backend/backend:shadow-20260713c`。
+已上線：`face-basic` revision **`face-basic-00015-ttt`**，
+image `asia-east1-docker.pkg.dev/decorate-me/beauty-backend/backend:shadow-20260713d`。
 
 刻意**不覆蓋 `backend:latest`**：`face-basic` 與 `face-pro` 共用同一個 image，而
 `Face_analyzer_PRO.py` 也 import 了 BASIC 的 `FaceAnalyzer`，覆蓋 latest 會讓 PRO 下次部署時
@@ -330,8 +330,40 @@ INFO basic_roi_shadow: ROI shadow 對照：一致 2/5　差異 -> 臉型: 規則
 | 變數 | 預設 | 用途 |
 |---|---|---|
 | `ROI_SHADOW_ENABLED` | `1` | 設 `0` 整個關掉 shadow，不需重新 build |
+| `ROI_SHADOW_EXPOSE_RESPONSE` | `0` | 設 `1` 才把 `模型分類` 放進 API 回應（內部驗收用） |
 | `ROI_MODEL_DIR` | `models/basic_features_roi` | 模型目錄；指到不存在的路徑會靜默停用 |
 | `LOG_LEVEL` | `INFO` | 低於 INFO 時 shadow 對照 log 不會輸出 |
+
+**預設不把模型預測放進 API 回應**：模型還沒過門檻，未驗證的結果不該流到前端，
+免得哪天有人「順手」拿去顯示給使用者看。shadow 要的資料走 log 就夠了。
+線上實測回應欄位只有規則式那幾個，`模型分類` 不出現，但對照 log 照常寫入。
+
+### 部署衝突：Codex 也在部署同一個服務
+
+過程中發現 **Codex 這個工具也在部署 `face-basic`**（Artifact Registry 有 `codex-20260713-185013` tag，
+另外 `9a2e52f` / `87cb835` 兩個 commit、以及 `FACE_API_KEY` 環境變數都來自它）。
+我部署的 `00013` 一度被它的 `00014` 蓋掉，導致 shadow log 一筆都沒有 —— 
+而 API 回應看起來完全正常，光看回應根本發現不了。
+
+> 教訓同 (2)：**「服務有回應」不等於「你部署的東西還在上面」。** 部署後要驗的是
+> 「我要的行為有沒有發生」（log 有沒有進去），不是「服務有沒有活著」。
+
+若之後 shadow 又失效，第一件事是確認 serving revision 用的 image tag：
+
+```
+gcloud run services describe face-basic --region asia-east1 --format="value(status.traffic)"
+gcloud run revisions list --service face-basic --region asia-east1 --limit 3
+```
+
+### 順帶查證：線上分析功能沒有壞
+
+Codex 加的 `FACE_API_KEY` 會擋掉沒帶 `x-api-key` 的請求。確認過前端
+（`decorate-me.web.app/config.local.js` 第 5 行 `faceApiKey`）帶的 key 與後端一致，
+用它打線上 `/analyze` 回 HTTP 200 —— **線上使用者不受影響**。
+
+> 另注意：這把 key 明文放在前端 config（第 5/9/11 行分別是 face / render / textSuggestion 的 key），
+> 任何人打開瀏覽器都看得到。純靜態前端直接呼叫 API 本來就藏不住 key，它只能擋隨機掃 URL 的機器人，
+> 擋不住看過網頁原始碼的人。要真的擋需要 Firebase App Check / 驗 Origin / 配額上限，屬另一個題目。
 
 ### 一個還沒對齊的 gap
 
