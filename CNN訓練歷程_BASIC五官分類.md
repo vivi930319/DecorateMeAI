@@ -677,3 +677,69 @@ eye  : 圓眼 0.53、瞇縫眼 0.45、杏仁眼 0.38、下垂眼 0.34、丹鳳�
    「窄鼻」的鼻翼實測比「標準鼻」寬，標註者看的顯然不是鼻翼寬度。
 4. 所有後續改動一律以 **5-fold CV** 驗收；單次切分已證實會高估（brow +0.08）或
    低估（face −0.06），且方向事前不可知。
+
+---
+
+## 12. 第三輪：DINOv2 frozen encoder 對決（2026-07-14）
+
+### 12.1 為什麼現在做
+
+規格書第 16 節的建議路線本來就是「DINOv2 frozen encoder + SVM/LogReg」——
+自監督預訓練的特徵不需要 fine-tune，小資料下比從頭調整 CNN 更不容易過擬合。
+第一、二輪不做它的理由是**量尺不可信**：單次切分雜訊 ±0.1，換架構只會得到另一組
+不可信的數字。現在 5-fold CV 就位，而且本實驗用**與 CNN 完全相同的 fold**
+（`split_kfold_by_identity(seed=42)` 對同一批資料是確定性的），逐 fold 配對比較，
+運氣成分被扣掉了。
+
+### 12.2 方法（`tools/dinov2_cv_experiment.py`）
+
+```
+原圖 → MediaPipe（同一套 roi_bbox）→ 部位 ROI 重裁成 224x224
+    → DINOv2 ViT-S/14（frozen，torch.hub）→ CLS embedding 384 維，L2 正規化
+    → 每個 fold 訓 LogisticRegression / LinearSVC（class_weight=balanced）
+```
+
+刻意從原圖重裁 224（而不是把快取的 96x96 放大）—— 放大只會得到糊的圖。
+1297 張全部成功，embedding 快取在 `data/roi_cache/dinov2_embeddings.npz`。
+
+### 12.3 結果（同 fold 5-fold CV，macro accuracy）
+
+| 部位 | DINOv2+LogReg | DINOv2+SVM | CNN 基準 | 勝負 |
+|---|---|---|---|---|
+| eye_shape | 0.458 ± 0.053 | **0.471 ± 0.053** | 0.368 ± 0.055 | **DINOv2 +0.103，5/5 fold 全勝** |
+| nose_shape | 0.706 ± 0.068 | **0.713 ± 0.098** | 0.675 ± 0.065 | DINOv2 +0.04，4/5 fold 勝 |
+| brow_shape | 0.534 ± 0.054 | 0.535 ± 0.084 | 0.511 ± 0.046 | DINOv2 +0.02，誤差內 |
+| lip_shape | 0.428 ± 0.047 | 0.444 ± 0.038 | 0.444 ± 0.067 | 平手 |
+| face_shape | 0.469 ± 0.058 | 0.485 ± 0.037 | **0.532 ± 0.067** | **CNN +0.05** |
+
+眼型的逐 fold 配對（同一份考卷）：
+
+```
+fold   CNN     DINOv2+SVM   差
+  1    0.399   0.472      +0.073
+  2    0.305   0.371      +0.066
+  3    0.380   0.525      +0.145
+  4    0.449   0.502      +0.053
+  5    0.309   0.485      +0.175
+```
+
+**五戰五勝、每一場都贏，平均 +0.10** —— 這是整個專案到目前為止最大的單項進步，
+而且發生在最難的部位。規格書的判斷（小資料用 frozen encoder）在眼型上被證實了。
+
+### 12.4 解讀
+
+- **眼型**：fine-tune CNN 在 376 張 / 7 類下明顯過擬合，DINOv2 的凍結特徵好一大截。
+  0.471 離門檻 0.70 還遠，但方向確定：**眼型應改走 DINOv2 路線**。
+- **鼻型**：0.713 名目上首次過門檻，但 ±0.098 的波動下不能宣稱達標；方向偏正（4/5 勝）。
+- **臉型是反例**：CNN 贏 0.05。合理 —— 臉型看的是整體輪廓比例，CNN 的 128 輸入
+  + fine-tune 能學到任務特化的形狀特徵；DINOv2 的通用特徵反而不對口。
+- **結論不是「全面換 DINOv2」**，是**按部位選路線**：eye（可能加 nose）用 DINOv2+SVM，
+  face/lip/brow 維持 CNN。
+
+### 12.5 若要上線 DINOv2，需要處理的事（尚未做，屬部署決策）
+
+1. **依賴重量**：torch + DINOv2 權重（84MB）進 Cloud Run 映像，或轉 ONNX
+   （ViT-S/14 可匯出，onnxruntime CPU 單張約 100~300ms，眼型一個 ROI 可接受）。
+2. **兩套推論路徑並存**：eye 走 DINOv2+SVM、其餘走 MobileNetV3 ONNX，
+   `basic_roi_shadow` 的載入與 fallback 邏輯要擴充。
+3. 上線前先在 shadow log 對照真實流量的一致率，與現行 CNN 比。

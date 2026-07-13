@@ -50,6 +50,11 @@
 詳見 `CNN訓練歷程_BASIC五官分類.md` 11.4/11.5。今後所有方案比較一律用 5-fold CV
 （`train_basic_cnn_roi.py --cv 5`）。
 
+### 第三輪快報（2026-07-14）：③ DINOv2 在眼型上大勝
+
+同 fold 對決：**eye 0.471 vs CNN 0.368（+0.103，5/5 fold 全勝）**、nose 0.713（名目過線）、
+face 反而 CNN 好 0.05。結論是**按部位混搭**而非全面換架構 —— 詳見 ③ 的完整紀錄。
+
 ---
 
 # ① 規則式（MediaPipe 幾何閾值）
@@ -153,51 +158,59 @@ batch size     32
 
 ---
 
-# ③ ______（待填：YOLOv8-cls / DINOv2+SVM / 其他）
+# ③ DINOv2 frozen encoder + 線性分類器
 
 | 項目 | 內容 |
 |---|---|
-| 狀態 | |
-| 架構 | |
-| 輸入 | |
-| 訓練腳本 | |
-| 產出 | |
-| 訓練日期 | |
+| 狀態 | **實驗完成，未上線**（上線需部署決策，見下） |
+| 架構 | DINOv2 ViT-S/14（frozen，不 fine-tune）＋ LogisticRegression / LinearSVC |
+| 輸入 | 部位 ROI 從原圖重裁成 224×224（同一套 `roi_bbox`） |
+| 訓練腳本 | `tools/dinov2_cv_experiment.py` |
+| 產出 | `data/roi_cache/dinov2_embeddings.npz`、`models/basic_features_roi/dinov2_cv_results.json` |
+| 訓練日期 | 2026-07-14 |
 
 ### 為什麼要試這個方案（動機）
 
-> 填寫時請具體回答：**你預期它解決哪一個現有問題？**
-> 如果答案是「換個模型看看會不會比較好」，先停下來 —— 目前分數雜訊是 ±0.1，
-> 換 backbone 的差異會被雜訊淹沒，做了也分不出真假。
+規格書第 16 節的原始建議路線。要解決的具體問題：**eye_shape 在 376 張 / 7 類下
+fine-tune CNN 過擬合**（CV 僅 0.368，全部位最低）。自監督預訓練的凍結特徵不需要
+從小資料學表徵，理論上更穩。做的時機點：5-fold CV 量尺已就位（第二輪），
+可以用**與 CNN 完全相同的 fold** 逐 fold 配對比較，雜訊被扣掉。
 
 ### 訓練設定
 
 ```
-（填寫）
+encoder     DINOv2 ViT-S/14（torch.hub, frozen）→ CLS embedding 384 維，L2 正規化
+分類器       LogisticRegression(C=1, balanced) / LinearSVC(C=1, balanced)
+評估        與 CNN 基準完全相同的按人 5-fold（split_kfold_by_identity, seed=42）
 ```
 
-### 成績（必須用同一個 val set：split_by_identity, seed=42, val_ratio=0.25）
+### 成績（5-fold CV，與 ② 的 CV 修正數字同尺度可比）
 
-| 部位 | macro accuracy | vs 規則式 | vs ROI CNN | 門檻 | 達標？ |
+| 部位 | DINOv2+SVM | vs ROI CNN（CV） | 逐 fold 勝負 | 門檻 | 達標？ |
 |---|---|---|---|---|---|
-| face_shape | | | | 0.70 | |
-| brow_shape | | | | 0.75 | |
-| eye_shape | | | | 0.70 | |
-| nose_shape | | | | 0.70 | |
-| lip_shape | | | | 0.70 | |
+| eye_shape | **0.471 ± 0.053** | **+0.103** | **5/5 全勝** | 0.70 | ✗（但大幅改善） |
+| nose_shape | **0.713 ± 0.098** | +0.038 | 4/5 | 0.70 | 名目過線，波動下不能宣稱 |
+| brow_shape | 0.535 ± 0.084 | +0.024 | — | 0.75 | ✗（誤差內） |
+| lip_shape | 0.444 ± 0.038 | ±0.000 | — | 0.70 | ✗（平手） |
+| face_shape | 0.485 ± 0.037 | **−0.047** | — | 0.70 | ✗（CNN 較好） |
 
 ### 效能
 
 | 項目 | 數值 |
 |---|---|
-| 推論耗時 | |
-| 模型大小 | |
+| 推論耗時 | ViT-S/14 CPU 單張 ROI 約 0.3~0.5s（可轉 ONNX 壓到 ~0.1-0.3s） |
+| 模型大小 | 權重 84MB（vs MobileNetV3 的 6MB） |
 
 ### 結論
 
-- [ ] 優於 ROI CNN，值得取代
-- [ ] 差異在雜訊範圍內（±0.1），無法判定
-- [ ] 較差，放棄
+- [x] **eye_shape：優於 ROI CNN，值得取代**（+0.103、5/5 fold 全勝，非雜訊）
+- [x] nose_shape：方向偏正（+0.038、4/5），可跟著 eye 一起換或再觀察
+- [x] brow / lip：差異在雜訊內，維持 CNN（不值得為此背 84MB 依賴）
+- [x] **face_shape：CNN 較好，維持 CNN**（臉型看整體輪廓，fine-tune 的任務特化特徵對口）
+
+**正確的下一步不是全面換架構，是按部位混搭**：eye（＋可能 nose）走 DINOv2+SVM，
+其餘維持 MobileNetV3。上線需先解決：torch/ONNX 依賴進映像、雙推論路徑的
+fallback 邏輯、shadow log 對照真實流量。
 
 ---
 
