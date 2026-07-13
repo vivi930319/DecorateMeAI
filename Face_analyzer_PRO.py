@@ -4,7 +4,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -172,8 +172,20 @@ def _job_stats():
     return stats
 
 
-def _job_view(job):
-    return {k: v for k, v in job.items() if k != "result"}
+def _job_view(job, include_token=False):
+    hidden = {"result"}
+    if not include_token:
+        hidden.add("resultToken")
+    return {k: v for k, v in job.items() if k not in hidden}
+
+
+def _verify_job_token(job, x_job_token=None, result_token=None):
+    expected = job.get("resultToken")
+    if expected and (x_job_token or result_token) != expected:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"message": "job token 不正確或未提供"}},
+        )
 
 
 def _run_pro_job(job_id, front_bytes, angle_bytes):
@@ -277,29 +289,41 @@ async def create_pro_job(
         raise HTTPException(status_code=400, detail={"error": {"message": str(e)}})
 
     job_id = f"JOB-{uuid.uuid4().hex[:12]}"
+    result_token = uuid.uuid4().hex
     job_data = {
         "jobId": job_id, "analysisPackageId": None, "status": "queued",
         "progress": 0, "stage": "upload", "createdAt": _now_iso(),
         "startedAt": None, "completedAt": None, "error": None, "result": None,
+        "resultToken": result_token,
     }
     job_store.create(_COL, job_id, job_data)
     background_tasks.add_task(_run_pro_job, job_id, front_bytes, angle_bytes)
-    return _job_view(job_data)
+    return _job_view(job_data, include_token=True)
 
 
 @app.get("/v1/face/jobs/{job_id}")
-async def get_pro_job(job_id: str):
+async def get_pro_job(
+    job_id: str,
+    x_job_token: str | None = Header(default=None),
+    result_token: str | None = Query(default=None),
+):
     job = job_store.get(_COL, job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
+    _verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
     return _job_view(job)
 
 
 @app.get("/v1/face/jobs/{job_id}/result")
-async def get_pro_job_result(job_id: str):
+async def get_pro_job_result(
+    job_id: str,
+    x_job_token: str | None = Header(default=None),
+    result_token: str | None = Query(default=None),
+):
     job = job_store.get(_COL, job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
+    _verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
     if job["status"] != "completed":
         raise HTTPException(status_code=409, detail={"error": {"message": "job 尚未完成", "status": job["status"]}})
     return {

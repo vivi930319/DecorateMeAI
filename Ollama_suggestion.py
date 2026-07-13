@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -23,6 +23,15 @@ app.add_middleware(
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma3")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
+SUGGESTION_API_KEY = os.getenv("SUGGESTION_API_KEY", "")
+
+
+def require_api_key(x_api_key: str | None = Header(default=None)):
+    if SUGGESTION_API_KEY and x_api_key != SUGGESTION_API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"code": "FORBIDDEN", "message": "Invalid or missing API key.", "retryable": False}},
+        )
 
 
 # ═══ 妝容知識庫 ═══
@@ -260,11 +269,12 @@ async def health():
             "error": error,
         },
         "fallbackEnabled": False,
+        "api_key_required": bool(SUGGESTION_API_KEY),
     }
 
 
 @app.post("/suggest")
-async def suggest(payload: SuggestRequest):
+async def suggest(payload: SuggestRequest, _=Depends(require_api_key)):
     face_analysis = _extract_face_analysis(payload)
     if not face_analysis:
         raise HTTPException(
@@ -299,7 +309,7 @@ async def suggest(payload: SuggestRequest):
 
 
 @app.post("/suggest/stream")
-async def suggest_stream(payload: SuggestRequest):
+async def suggest_stream(payload: SuggestRequest, _=Depends(require_api_key)):
     face_analysis = _extract_face_analysis(payload)
     if not face_analysis:
         raise HTTPException(

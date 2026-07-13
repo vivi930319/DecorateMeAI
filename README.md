@@ -66,13 +66,14 @@ flowchart TB
 | POST | `/v1/face/analyze/basic` | BASIC 分析（單張正臉），回五官與膚色 |
 | POST | `/v1/face/pose` | 偵測頭部角度（yaw/pitch/roll），引導拍正臉 |
 | POST | `/v1/face/analyze/pro` | PRO 分析（正臉＋側臉） |
-| — | 非同步 jobs API | 建立 job、輪詢進度、取結果（存 Firestore） |
+| — | 非同步 jobs API | 建立 job、輪詢進度、取結果（存 Firestore；建立時回 `resultToken`，輪詢需帶回） |
 
 ### AI 渲染（replicate-render）
 | 方法 | 路徑 | 說明 |
 |------|------|------|
 | GET | `/health` | 健康檢查，回報 api key / 限流 / 去重設定 |
 | POST | `/render` | 傳入原圖與英文 prompt，回渲染後永久網址 |
+| POST/GET | `/render/jobs` | 建立渲染 job、用 `jobId` + `resultToken` 輪詢 |
 
 ---
 
@@ -116,8 +117,10 @@ tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓
 ## 安全
 
 - 所有端點需帶 `X-API-Key`（環境變數設定；未設時為本機開發模式）。
+- 非同步 job 建立時會回 `resultToken`；輪詢或取結果需帶 `X-Job-Token: <resultToken>`（或 `?result_token=`），避免只靠 jobId 被猜到結果。
 - CORS 限定前端網域，非 `*`。
 - 渲染服務有每 IP + email 的固定時間窗限流（預設每小時 10 次，超量回 429）。
+- 渲染服務限制 base64 圖片與 prompt 大小，避免超大 JSON body 造成記憶體壓力。
 - 渲染服務對相同圖片與 prompt 做去重快取，避免重複呼叫 Replicate。
 - 金鑰走環境變數，不寫進程式；`.env` 不進版控。
 
@@ -129,9 +132,12 @@ tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓
 |------|------|
 | `FACE_API_KEY` | 臉部分析服務的 X-API-Key |
 | `RENDER_API_KEY` | 渲染服務的 X-API-Key |
+| `SUGGESTION_API_KEY` | Ollama 建議服務的 X-API-Key |
 | `REPLICATE_API_TOKEN` | Replicate token |
 | `CORS_ORIGINS` | 允許的前端網域（逗號分隔） |
 | `MAX_IMAGE_SIZE` | 影像處理縮放上限（預設 1024） |
+| `MAX_RENDER_IMAGE_CHARS` / `MAX_RENDER_IMAGE_BYTES` | 渲染輸入圖大小上限 |
+| `MAX_RENDER_PROMPT_CHARS` | 渲染 prompt 長度上限 |
 | `RENDER_GUIDANCE` | 渲染 guidance（預設 3.0，偏向保留真人照片質感） |
 | `RENDER_RATE_LIMIT_MAX_REQUESTS` / `RENDER_RATE_LIMIT_WINDOW_SECONDS` | 渲染限流 |
 | `RENDER_DEDUP_TTL_SECONDS` | 渲染去重快取有效期（預設 600） |

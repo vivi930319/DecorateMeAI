@@ -35,6 +35,11 @@ COPY Ollama_suggestion.py .
 COPY dev_server_utils.py .
 COPY cloud_start.py .
 COPY job_store.py .
+COPY face_roi.py .
+COPY basic_roi_shadow.py .
+# ROI CNN shadow 模型（5 個部位各約 6MB）。BASIC 用它產生 shadow prediction，
+# 正式輸出仍是規則式。缺檔時 basic_roi_shadow 會自動停用，不影響服務啟動。
+COPY models/basic_features_roi/ ./models/basic_features_roi/
 # replicate_render.py 尚未交付；預設 backend image 不直接複製不存在檔案
 
 EXPOSE 8080

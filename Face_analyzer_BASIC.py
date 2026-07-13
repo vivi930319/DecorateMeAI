@@ -7,12 +7,21 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-from fastapi import BackgroundTasks, FastAPI, UploadFile, HTTPException, File, Form
+from fastapi import BackgroundTasks, FastAPI, UploadFile, HTTPException, File, Form, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, JSONResponse
 import insightface
 from insightface.app import FaceAnalysis as InsightFaceApp
+import basic_roi_shadow
 from dev_server_utils import get_cors_origins, run_dev_server
+
+# Cloud Run 上 root logger 預設是 WARNING，logger.info 會被整個丟掉。
+# ROI shadow 的「規則式 vs 模型」對照就是 INFO 等級 —— 少了這行，shadow 照樣消耗 CPU，
+# 但比較資料一筆都不會進 Cloud Logging，等於白跑。
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(levelname)s %(name)s: %(message)s",
+)
 
 
 @asynccontextmanager
@@ -295,8 +304,20 @@ def _job_stats():
     return stats
 
 
-def _job_view(job):
-    return {k: v for k, v in job.items() if k != "result"}
+def _job_view(job, include_token=False):
+    hidden = {"result"}
+    if not include_token:
+        hidden.add("resultToken")
+    return {k: v for k, v in job.items() if k not in hidden}
+
+
+def _verify_job_token(job, x_job_token=None, result_token=None):
+    expected = job.get("resultToken")
+    if expected and (x_job_token or result_token) != expected:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"message": "job token 不正確或未提供"}},
+        )
 
 
 def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.0):
@@ -332,29 +353,41 @@ async def create_basic_job(
     if not (0.1 <= brightness_level <= 5.0):
         raise HTTPException(status_code=400, detail={"error": {"message": "brightness_level 必須在 0.1 ~ 5.0 之間"}})
     job_id = f"JOB-{uuid.uuid4().hex[:12]}"
+    result_token = uuid.uuid4().hex
     job_data = {
         "jobId": job_id, "analysisPackageId": None, "status": "queued",
         "progress": 0, "stage": "upload", "createdAt": _now_iso(),
         "startedAt": None, "completedAt": None, "error": None, "result": None,
+        "resultToken": result_token,
     }
     job_store.create(_COL, job_id, job_data)
     background_tasks.add_task(_run_basic_job, job_id, contents, brightness_mode, brightness_level)
-    return _job_view(job_data)
+    return _job_view(job_data, include_token=True)
 
 
 @app.get("/v1/face/jobs/{job_id}")
-async def get_basic_job(job_id: str):
+async def get_basic_job(
+    job_id: str,
+    x_job_token: str | None = Header(default=None),
+    result_token: str | None = Query(default=None),
+):
     job = job_store.get(_COL, job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
+    _verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
     return _job_view(job)
 
 
 @app.get("/v1/face/jobs/{job_id}/result")
-async def get_basic_job_result(job_id: str):
+async def get_basic_job_result(
+    job_id: str,
+    x_job_token: str | None = Header(default=None),
+    result_token: str | None = Query(default=None),
+):
     job = job_store.get(_COL, job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
+    _verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
     if job["status"] != "completed":
         raise HTTPException(status_code=409, detail={"error": {"message": "job 尚未完成", "status": job["status"]}})
     return {
@@ -903,6 +936,18 @@ class FaceAnalyzer:
             "臉部對稱性": self.get_face_symmetry(),
             "brightnessEnhancement": self.brightness_info,
         }
+
+        # ROI CNN shadow prediction：只附加欄位，不覆蓋上面任何一個規則式結果。
+        # 模型準確率還沒過門檻（見 CNN訓練歷程_BASIC五官分類.md），這裡純粹是為了在真實流量上
+        # 累積「規則式 vs 模型」的對照資料。整段包 try —— shadow 壞掉不能影響正式分析。
+        try:
+            shadow = basic_roi_shadow.predict(self.frame, self._pts_cache)
+            if shadow:
+                result["模型分類"] = shadow
+                basic_roi_shadow.log_comparison(result, shadow)
+        except Exception:
+            logging.getLogger(__name__).exception("ROI shadow 預測失敗，忽略")
+
         if save_path:
             with open(save_path, "w", encoding="utf-8") as f:
                 json.dump(result, f, indent=4, ensure_ascii=False)

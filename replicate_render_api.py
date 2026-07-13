@@ -8,7 +8,7 @@ import threading
 from collections import deque
 from threading import Lock
 
-from fastapi import FastAPI, Header, HTTPException, Depends, Request
+from fastapi import FastAPI, Header, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -47,6 +47,8 @@ RENDER_JOBS_COLLECTION = os.getenv("RENDER_JOBS_COLLECTION", "render_jobs")
 # 進度條的預估總秒數。Replicate 轉手 OpenAI 的排隊時間浮動極大（實測 50~150 秒），拿不到真實進度，
 # 這個值只是用來把「已經等了多久」映射成 1~95% 的估算百分比，跑完才跳 100。
 RENDER_ESTIMATED_SECONDS = max(10, int(os.getenv("RENDER_ESTIMATED_SECONDS", "90")))
+MAX_RENDER_IMAGE_CHARS = int(os.getenv("MAX_RENDER_IMAGE_CHARS", str(12 * 1024 * 1024)))
+MAX_RENDER_PROMPT_CHARS = int(os.getenv("MAX_RENDER_PROMPT_CHARS", "4000"))
 
 
 def _dedup_key(image: str, prompt: str, strength: float) -> str:
@@ -141,6 +143,45 @@ class RenderRequest(BaseModel):
     strength: float = 0.35  # flux-kontext-pro 不用 strength，保留欄位維持前端相容
 
 
+def _validate_render_request(req: RenderRequest) -> None:
+    image = req.image or ""
+    prompt = req.prompt or ""
+    if not image.startswith("data:image/") or ";base64," not in image:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "INVALID_IMAGE", "message": "image must be a base64 image data URL.", "retryable": False}},
+        )
+    if len(image) > MAX_RENDER_IMAGE_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "error": {
+                    "code": "IMAGE_TOO_LARGE",
+                    "message": "Render image payload is too large.",
+                    "retryable": False,
+                    "maxImageChars": MAX_RENDER_IMAGE_CHARS,
+                }
+            },
+        )
+    if not prompt.strip():
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "EMPTY_PROMPT", "message": "prompt is required.", "retryable": False}},
+        )
+    if len(prompt) > MAX_RENDER_PROMPT_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "error": {
+                    "code": "PROMPT_TOO_LONG",
+                    "message": "Render prompt is too long.",
+                    "retryable": False,
+                    "maxPromptChars": MAX_RENDER_PROMPT_CHARS,
+                }
+            },
+        )
+
+
 def _storage_configured() -> bool:
     # 輕量檢查：只確認套件裝好、預設憑證能建立 client，不會真的呼叫 GCS API（bucket() 是本地物件，不打網路）
     try:
@@ -173,6 +214,10 @@ def health():
             "enabled": RENDER_DEDUP_TTL_SECONDS > 0,
             "ttl_seconds": RENDER_DEDUP_TTL_SECONDS,
         },
+        "limits": {
+            "max_image_chars": MAX_RENDER_IMAGE_CHARS,
+            "max_prompt_chars": MAX_RENDER_PROMPT_CHARS,
+        },
         "async_jobs": {
             "enabled": True,
             "submit": "POST /render/jobs",
@@ -184,6 +229,7 @@ def health():
 
 @app.post("/render")
 async def render(req: RenderRequest, _=Depends(require_api_key), __=Depends(enforce_render_rate_limit)):
+    _validate_render_request(req)
     # 同圖同 prompt 短時間內重複 → 直接回上次結果，不重打 Replicate
     key = _dedup_key(req.image, req.prompt, req.strength)
     cached = _dedup_get(key)
@@ -228,6 +274,21 @@ def _estimate_progress(job: dict, now: float) -> int:
     return max(1, min(95, int(round(1 + 94 * ratio))))
 
 
+def _job_view(job: dict, include_token: bool = False) -> dict:
+    if include_token:
+        return dict(job)
+    return {k: v for k, v in job.items() if k != "resultToken"}
+
+
+def _verify_job_token(job: dict, x_job_token: str | None = None, result_token: str | None = None) -> None:
+    expected = job.get("resultToken")
+    if expected and (x_job_token or result_token) != expected:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"code": "FORBIDDEN", "message": "Invalid or missing job token.", "retryable": False}},
+        )
+
+
 def _run_render_job(job_id: str, image: str, prompt: str, dedup_key: str) -> None:
     job_store.patch(RENDER_JOBS_COLLECTION, job_id, {"status": "running", "startedAt": time.time()})
     try:
@@ -266,18 +327,29 @@ async def create_render_job(req: RenderRequest, _=Depends(require_api_key), __=D
 
     注意：這需要 Cloud Run 開 --no-cpu-throttling，否則回應送出後 CPU 會被節流，背景 thread 形同停住。
     """
+    _validate_render_request(req)
     job_id = uuid.uuid4().hex
+    result_token = uuid.uuid4().hex
     now = time.time()
     key = _dedup_key(req.image, req.prompt, req.strength)
 
     cached = _dedup_get(key)
     if cached is not None:
-        job = {**cached, "jobId": job_id, "progress": 100, "createdAt": now, "finishedAt": now, "deduped": True}
+        job = {
+            **cached,
+            "jobId": job_id,
+            "progress": 100,
+            "createdAt": now,
+            "finishedAt": now,
+            "deduped": True,
+            "resultToken": result_token,
+        }
         job_store.create(RENDER_JOBS_COLLECTION, job_id, job)
-        return {**job, "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
+        return {**_job_view(job, include_token=True), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
 
     job = {
         "jobId": job_id,
+        "resultToken": result_token,
         "status": "queued",
         "progress": 1,
         "afterImageUrl": None,
@@ -292,11 +364,16 @@ async def create_render_job(req: RenderRequest, _=Depends(require_api_key), __=D
         daemon=True,
     ).start()
 
-    return {**job, "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
+    return {**_job_view(job, include_token=True), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
 
 
 @app.get("/render/jobs/{job_id}")
-async def get_render_job(job_id: str, _=Depends(require_api_key)):
+async def get_render_job(
+    job_id: str,
+    _=Depends(require_api_key),
+    x_job_token: str | None = Header(default=None),
+    result_token: str | None = Query(default=None),
+):
     # 這支會被前端每兩秒打一次，所以不掛 rate limit，否則輪詢自己就會把配額燒光
     job = job_store.get(RENDER_JOBS_COLLECTION, job_id)
     if job is None:
@@ -304,4 +381,6 @@ async def get_render_job(job_id: str, _=Depends(require_api_key)):
             status_code=404,
             detail={"error": {"code": "JOB_NOT_FOUND", "message": "Render job not found or expired.", "retryable": False}},
         )
-    return {**job, "progress": _estimate_progress(job, time.time()), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
+    _verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
+    view = _job_view(job)
+    return {**view, "progress": _estimate_progress(job, time.time()), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}

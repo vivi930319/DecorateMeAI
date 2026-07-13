@@ -68,10 +68,11 @@ def post_image(url, field_name, image_path, extra_files=None):
             handle.close()
 
 
-def wait_for_job(base_url, job_id):
+def wait_for_job(base_url, job_id, result_token=None):
     status_url = f"{base_url}/v1/face/jobs/{job_id}"
+    headers = {"X-Job-Token": result_token} if result_token else None
     for _ in range(120):
-        job = request_json("GET", status_url, timeout=30)
+        job = request_json("GET", status_url, timeout=30, headers=headers)
         if job.get("status") in {"completed", "failed"}:
             return job
         time.sleep(1)
@@ -135,14 +136,16 @@ def test_service(name, base_url, sync_path, job_path, file_field, image_path):
     print(f"[{name}] create async job")
     job = post_image(f"{base_url}{job_path}", file_field, image_path)
     job_id = job["jobId"]
+    result_token = job.get("resultToken")
     print(json.dumps(job, ensure_ascii=False))
 
     print(f"[{name}] poll async job")
-    completed_job = wait_for_job(base_url, job_id)
+    completed_job = wait_for_job(base_url, job_id, result_token=result_token)
     print(json.dumps(completed_job, ensure_ascii=False))
 
     print(f"[{name}] get async result")
-    result = request_json("GET", f"{base_url}/v1/face/jobs/{job_id}/result")
+    headers = {"X-Job-Token": result_token} if result_token else None
+    result = request_json("GET", f"{base_url}/v1/face/jobs/{job_id}/result", headers=headers)
     assert_result_shape(result, name)
     sym_score = (result.get("result") or {}).get("臉部對稱性", {})
     sym_score = sym_score.get("score") if isinstance(sym_score, dict) else None

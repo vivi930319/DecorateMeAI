@@ -34,6 +34,7 @@ GCS_BUCKET_NAME = os.getenv("GCS_RENDER_BUCKET", "decorate-me-renders")
 REPLICATE_HTTP_TIMEOUT_SECONDS = max(60, int(os.getenv("REPLICATE_HTTP_TIMEOUT_SECONDS", "300")))
 OPENAI_HTTP_TIMEOUT_SECONDS = max(60, int(os.getenv("OPENAI_HTTP_TIMEOUT_SECONDS", "300")))
 REPLICATE_OPENAI_QUALITY = os.getenv("REPLICATE_OPENAI_QUALITY", "medium").strip().lower() or "medium"
+MAX_RENDER_IMAGE_BYTES = int(os.getenv("MAX_RENDER_IMAGE_BYTES", str(8 * 1024 * 1024)))
 
 OPENAI_MODEL_ALIASES = {
     "gpt-img2": "gpt-image-1",
@@ -152,7 +153,10 @@ def data_url_to_bytes(data_url: str) -> tuple[bytes, str]:
         raise ValueError("Expected a base64 data URL.")
     header, encoded = data_url.split(",", 1)
     content_type = header[5:].split(";", 1)[0] or "image/png"
-    return base64.b64decode(encoded), content_type
+    image_bytes = base64.b64decode(encoded, validate=True)
+    if len(image_bytes) > MAX_RENDER_IMAGE_BYTES:
+        raise ValueError(f"Render image is too large; limit is {MAX_RENDER_IMAGE_BYTES} bytes.")
+    return image_bytes, content_type
 
 
 def url_to_data_url(url: str) -> str:
