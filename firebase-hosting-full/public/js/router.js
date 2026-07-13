@@ -674,6 +674,10 @@ compare: `
             <h4>Ollama 妝容建議</h4>
             <p id="compareOllamaSuggestion">尚未產生妝容建議</p>
         </section>
+        <details id="comparePromptDetails" style="margin-top:10px;">
+            <summary style="cursor:pointer;font-size:11px;color:#a8876f;letter-spacing:.05em;">實際送出的渲染指令</summary>
+            <div id="comparePromptPreview" style="margin-top:6px;font-size:11px;color:#7a6060;background:rgba(255,248,244,0.85);border:1px solid #e8d5c8;border-radius:8px;padding:10px 12px;line-height:1.6;word-break:break-word;white-space:pre-wrap;">尚未渲染</div>
+        </details>
         <button class="btn-outline" id="compareGoStyleBtn">選擇風格</button>
         <button class="btn-gold" id="compareRenderBtn" style="margin-top:12px;">生成妝容</button>
         <div id="compareRenderStatus" style="font-size:12px;color:#888;margin-top:6px;display:none;"></div>
@@ -2282,6 +2286,16 @@ const PageInit = {
         if (ollamaSuggestionEl) ollamaSuggestionEl.textContent = ollamaSuggestion || '尚未產生妝容建議';
         if (ollamaPanel) ollamaPanel.classList.toggle('is-empty', !ollamaSuggestion);
 
+        // 上面那段是 Ollama 給「人」看的中文建議，跟渲染指令是兩回事：
+        // 渲染的 prompt 是後端依 styleId 從白名單組的（前端送不了 prompt），Ollama 的建議不會進到圖裡。
+        // 這裡把後端實際送給模型的 prompt 秀出來，渲染結果不如預期時才知道要怪 prompt 還是怪模型。
+        const promptPreviewEl = document.getElementById('comparePromptPreview');
+        const showRenderPrompt = (text) => {
+            if (!promptPreviewEl) return;
+            promptPreviewEl.textContent = text || '尚未渲染';
+        };
+        showRenderPrompt(Router.analysisPackage?.render?.renderPrompt);
+
         const showAfter = () => {
             stage.classList.remove('before');
             stage.classList.add('after');
@@ -2370,11 +2384,13 @@ const PageInit = {
                             afterImageUrl: result.afterImageUrl,
                             replicateTempUrl: result.replicateTempUrl || null,
                             savedImageId: result.savedImageId || null,
+                            renderPrompt: result.renderPrompt || null,
                             styleId,
                             error: null
                         }
                     });
                     AnalysisDraft.save(Router.analysisPackage);
+                    showRenderPrompt(result.renderPrompt);
                     setCompareImage('after');
                     renderStatus.textContent = '渲染完成！';
                     setTimeout(() => { renderStatus.style.display = 'none'; }, 3000);

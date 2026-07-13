@@ -301,6 +301,10 @@ async def render(req: RenderRequest, _=Depends(require_api_key), __=Depends(enfo
             "replicateTempUrl": result.get("replicateTempUrl"),
             "isPermanent": result.get("isPermanent", False),
             "model": result["model"],
+            # 回傳實際送給模型的 prompt，讓前端可以顯示「這次到底下了什麼指令」。
+            # 這是後端依 styleId 從白名單組出來的，不含使用者輸入，公開沒有風險 ——
+            # 而且看不到它的話，渲染結果不如預期時根本無從判斷是 prompt 的問題還是模型的問題。
+            "renderPrompt": prompt,
             "error": None,
         }
         _dedup_set(key, response)  # 只快取成功結果
@@ -357,6 +361,7 @@ def _run_render_job(job_id: str, image: str, prompt: str, dedup_key: str) -> Non
             "replicateTempUrl": result.get("replicateTempUrl"),
             "isPermanent": result.get("isPermanent", False),
             "model": result["model"],
+            "renderPrompt": prompt,  # 同 /render：讓前端能顯示實際下給模型的指令
             "error": None,
         }
         job_store.patch(
@@ -413,6 +418,7 @@ async def create_render_job(req: RenderRequest, _=Depends(require_api_key), __=D
         "status": "queued",
         "progress": 1,
         "afterImageUrl": None,
+        "renderPrompt": prompt,  # 一開始就給，前端等待期間就能顯示這次下了什麼指令
         "error": None,
         "createdAt": now,
     }
