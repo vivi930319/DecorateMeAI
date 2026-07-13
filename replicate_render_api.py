@@ -153,10 +153,19 @@ class RenderRequest(BaseModel):
     image: str
     styleId: str = "natural"
     strength: float = 0.35  # flux-kontext-pro 不用 strength，保留欄位維持前端相容
-    # 臉部分析結果，用來跟建議服務要一段個人化的 renderPromptEn。
-    # 注意這裡收的是「結構化的分析結果」，不是自由文字 prompt —— 前端依然不能決定要下什麼指令，
-    # prompt 一律由後端組（見 replicate_render.build_personalized_render_prompt）。
-    faceAnalysis: dict | None = None
+
+    # 全站串接統一走 analysisPackage，渲染也不例外。
+    #
+    # 但這裡只從資料包讀「結構化資料」（faceAnalysis、styleId），
+    # **資料包裡的 generativeText.renderPromptEn 一律忽略** ——
+    # 那是前端送來的，可以被竄改，而 renderApiKey 是明文寫在網頁裡的：
+    # 一旦照著它渲染，任何人都能拿這把 key 送任意 prompt、用我們的 Replicate 額度生成任意圖片。
+    # 要下給模型的 prompt，後端自己去跟建議服務要（build_personalized_render_prompt）。
+    #
+    # 若之後要讓前端送的 prompt 也能被信任，做法是請建議服務對 renderPromptEn 加 HMAC 簽章，
+    # render 這邊驗簽 —— 前端就能送 prompt，但編不出有效簽章。那需要建議服務端配合改程式。
+    analysisPackage: dict | None = None
+    faceAnalysis: dict | None = None  # 舊前端相容：沒送資料包時，單獨給臉部分析也行
 
 
 def _validate_render_request(req: RenderRequest) -> None:
@@ -180,14 +189,31 @@ def _validate_render_request(req: RenderRequest) -> None:
         )
 
 
+def _render_inputs(req: RenderRequest) -> tuple[str, dict | None]:
+    """從請求裡取出組 prompt 需要的兩樣東西：styleId 與 faceAnalysis。
+
+    優先讀 analysisPackage（全站串接統一走資料包），沒有的話才看單獨的欄位。
+    **刻意不讀資料包裡的 generativeText.renderPromptEn** —— 見 RenderRequest 的說明。
+    """
+    package = req.analysisPackage or {}
+    face = req.faceAnalysis or package.get("faceAnalysis")
+
+    style_id = req.styleId
+    if (not style_id or style_id == "natural") and isinstance(package.get("render"), dict):
+        style_id = package["render"].get("styleId") or style_id
+
+    return style_id, face
+
+
 def _server_render_prompt(req: RenderRequest) -> tuple[str, str]:
     """回傳 (prompt, promptSource)。
 
     優先跟建議服務要個人化的 renderPromptEn；拿不到就退回 styleId 白名單的固定 prompt。
-    無論走哪一條，prompt 都是後端組的 —— 前端送進來的只有 styleId 與臉部分析結果。
+    無論走哪一條，prompt 都是後端組的 —— 前端送進來的只有結構化資料，不是指令。
     """
+    style_id, face_analysis = _render_inputs(req)
     try:
-        return build_personalized_render_prompt(req.styleId, req.faceAnalysis)
+        return build_personalized_render_prompt(style_id, face_analysis)
     except ValueError:
         raise HTTPException(
             status_code=422,

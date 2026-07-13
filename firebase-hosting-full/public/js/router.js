@@ -2384,7 +2384,7 @@ const PageInit = {
                         imageDataUrl,
                         styleId,
                         strength: 0.35,
-                        faceAnalysis: pkg?.faceAnalysis || null,
+                        analysisPackage: pkg || null,
                     });
                     refreshRenderQuota();
                     if (!result.renderQuota && renderQuotaEl) {

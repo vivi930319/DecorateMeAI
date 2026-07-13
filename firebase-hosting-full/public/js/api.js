@@ -239,9 +239,12 @@ const Api = {
         return res.json();
     },
 
-    // faceAnalysis 會一起送出去，讓 render 服務去跟建議服務要一段「針對這張臉」的渲染指令。
-    // 送的是結構化的分析結果，不是自由文字 prompt —— 後端不接受前端指定 prompt（防注入）。
-    async renderMakeup({ imageDataUrl, styleId, strength = 0.45, faceAnalysis = null }) {
+    // 跟其他串接一樣送 analysisPackage，render 服務會從裡面讀 faceAnalysis / styleId，
+    // 再去跟建議服務要一段「針對這張臉」的渲染指令。
+    //
+    // 注意：後端會忽略資料包裡的 generativeText.renderPromptEn（那是前端送的、可被竄改，
+    // 而 renderApiKey 明文公開在網頁上）。prompt 一律由後端自己去要。
+    async renderMakeup({ imageDataUrl, styleId, strength = 0.45, analysisPackage = null }) {
         const runtimeConfig = getRuntimeApiConfig();
         const gatewayUrl = getAiGatewayUrl(runtimeConfig);
         const serviceConfig = {
@@ -262,7 +265,16 @@ const Api = {
             res = await fetch(url, {
                 method: 'POST',
                 headers,
-                body: JSON.stringify({ image: imageDataUrl, styleId, strength, faceAnalysis }),
+                // 資料包裡的 images 是 base64 原圖，而圖片已經單獨用 image 送了 ——
+                // 整包再送一次會讓 payload 多一份圖，白白撐大請求（後端也有大小上限）。
+                body: JSON.stringify({
+                    image: imageDataUrl,
+                    styleId,
+                    strength,
+                    analysisPackage: analysisPackage
+                        ? { ...analysisPackage, images: undefined }
+                        : null,
+                }),
             });
         } catch (err) {
             throw new Error('無法連線到渲染服務：' + err.message);
