@@ -418,12 +418,47 @@ GET  /render/jobs/{jobId}  → 輪詢，回 { status, progress, afterImageUrl, .
 | # | 問題 | 影響 | 建議 |
 |---|---|---|---|
 | 1 | **Ollama 被呼叫兩次**（前端一次、render 一次） | 兩次生成內容有細節差異：**畫面顯示的建議 ≠ 實際渲染用的指令** | 做 HMAC 簽章（6.3），讓 Ollama 只生成一次 |
-| 2 | **Ollama 輸出被截斷** | 六段只跑到第五段，「避免事項」「總結與建議」從未出現 | 調高 Ollama 的 `num_predict`（在組員機器上） |
+| 2 | **Ollama 輸出被截斷** | 六段只跑到第五段，「避免事項」「總結與建議」從未出現；最壞抽樣斷在第二段 | **repo 已修（見下方 8.1），但要組員在他們的 Mac 上套用才會生效** |
 | 3 | **組員 Mac 上的 Ollama 版本 ≠ repo** | repo 裡的 `Ollama_suggestion.py` 沒有 `renderPromptEn`，但線上有 | 請組員把版本推回 repo |
 | 4 | **Cloudflare tunnel 網址一重啟就換** | 前端 `config.local.js` 與 render 的 `SUGGESTION_SERVICE_URL` 都要手動更新，否則個人化失效（會靜默退回固定 prompt） | 把 Ollama 搬到固定網址，或改用 Cloudflare 具名 tunnel |
 | 5 | **`fluxPromptEn` 沒有人用** | Ollama 白白生成一段沒人要的內容 | 確認是否還需要，不需要就從 Ollama 的 prompt 拿掉 |
 | 6 | **API key 明文公開在前端** | 任何人都能拿到 `faceApiKey` / `renderApiKey` / `textSuggestionApiKey` | 純靜態前端無解，要靠 Firebase App Check / 驗 Origin / 配額上限 |
 | 7 | **兩份前端分歧** | 線上跑 `firebase-hosting-full/`，OneDrive 的 `web_frontend/` 是另一版（還在送 prompt） | 收斂成一份 |
+
+### 8.1 給組員：修「建議被截斷」的確切改法
+
+**證據**（2026-07-14 對線上服務連打兩次的實測）：
+
+```
+第 1 次：902 字，段落只到「5. 唇妝建議」，斷在「…用唇線膠，模糊唇線」（沒有句號）
+第 2 次：910 字，段落只到「5. 唇妝建議」，斷在「…輕輕塗抹在唇部上」（沒有句號）
+```
+
+每次都在 900 字左右斷在句子中間 → 這是**輸出 token 上限**，不是巧合。
+prompt 要求六段、350~1050 中文字，但模型還沒寫完就被砍了。
+
+**改法**：對 `/api/generate` 的請求加 `options.num_predict`。repo 的 `Ollama_suggestion.py`
+已改好（commit `af2c8c6` 之後），核心就是這一段 —— 你們機器上的版本跟 repo 不同，
+請把同樣的改動套到你們實際在跑的那份：
+
+```python
+OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "4096"))
+
+# 兩個呼叫點（/suggest 與 /suggest/stream）的 json= 都要加 options：
+json={
+    "model": model,
+    "prompt": prompt,
+    "stream": ...,
+    "options": {"num_predict": OLLAMA_NUM_PREDICT},   # ← 新增這行
+},
+```
+
+**驗收**：改完重啟服務，打一次 `/suggest`，確認：
+1. 六個段落全部出現（含「避免事項」「總結與建議」）
+2. 最後一句有句號
+
+**同時請把你們機器上的版本推回 repo**（問題 #3）—— 現在線上會回 `renderPromptEn`/`fluxPromptEn`
+但 repo 裡沒有，repo 不是真相，每次要幫你們改東西都得用猜的。
 
 ---
 

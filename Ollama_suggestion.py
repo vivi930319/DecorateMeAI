@@ -23,6 +23,10 @@ app.add_middleware(
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma3")
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
+# 輸出 token 上限。不設的話模型會用它自己的預設值，實測建議每次都在 900 中文字左右
+# 斷在句子中間 —— 六段只生到第五段，「避免事項」「總結與建議」永遠出不來。
+# prompt 要求 350~1050 中文字，中文一個字約 1~2 token，抓 4096 讓它足夠把六段寫完。
+OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "4096"))
 SUGGESTION_API_KEY = os.getenv("SUGGESTION_API_KEY", "")
 
 
@@ -230,7 +234,12 @@ def build_prompt(payload: SuggestRequest) -> str:
 def call_ollama(prompt: str, model: str) -> str:
     response = requests.post(
         f"{OLLAMA_BASE_URL}/api/generate",
-        json={"model": model, "prompt": prompt, "stream": False},
+        json={
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"num_predict": OLLAMA_NUM_PREDICT},
+        },
         timeout=OLLAMA_TIMEOUT,
     )
     try:
@@ -324,7 +333,12 @@ async def suggest_stream(payload: SuggestRequest, _=Depends(require_api_key)):
         try:
             resp = requests.post(
                 f"{OLLAMA_BASE_URL}/api/generate",
-                json={"model": model, "prompt": prompt, "stream": True},
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "stream": True,
+                    "options": {"num_predict": OLLAMA_NUM_PREDICT},
+                },
                 timeout=OLLAMA_TIMEOUT,
                 stream=True,
             )
