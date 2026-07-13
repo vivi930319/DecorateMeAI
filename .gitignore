@@ -17,6 +17,8 @@
 !CNN訓練歷程_BASIC五官分類.md
 !模型紀錄書_BASIC五官分類.md
 !規則式閾值Bug_完整診斷記錄_新手版.md
+!Ollama與資料包_系統接口全覽.md
+!Ollama渲染指令簽章_端對端密鑰規格書.md
 # 模型權重（.onnx / .pt）刻意不入版控：二進位檔每次重訓都會讓 repo 永久肥一份。
 # 部署不受影響（Cloud Build 走 .gcloudignore 從本機上傳）；要重建模型就重跑
 # tools/build_identity_map.py -> prepare_roi_cache.py -> train_basic_cnn_roi.py。
