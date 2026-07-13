@@ -1902,11 +1902,9 @@ const PageInit = {
                     style: style?.name || '日常自然妝',
                     userNote: style?.tags?.join('、') || ''
                 });
-                // 防呆：Ollama 有時候會把「第二部分」英文渲染指令漏拆、黏在中文建議尾巴，
-                // 這裡先切乾淨，切下來的內容優先當渲染指令用（後端有正確拆出 renderPromptEn 的話，還是以後端的為準）。
-                const { suggestion: cleanSuggestion, leakedEnglishPart } = splitOllamaTwoPartSuggestion(response.suggestion);
+                // 舊版回應若夾帶第二部分英文渲染指令，前端直接移除；正式 prompt 由 render 後端產生。
+                const { suggestion: cleanSuggestion } = splitOllamaTwoPartSuggestion(response.suggestion);
                 const fullText = cleanSuggestion || '';
-                const ollamaRenderPromptEn = response.renderPromptEn || leakedEnglishPart || '';
 
                 fill.style.width = '100%';
                 status.textContent = '建議已產生';
@@ -1921,13 +1919,12 @@ const PageInit = {
                         status: 'completed',
                         error: null,
                         fallbackUsed: false,
-                        ollamaRenderPromptEn: ollamaRenderPromptEn || null,
-                        renderPromptEn: buildRenderPrompt(
-                            pkg?.faceAnalysis || Router.analysisPackage?.faceAnalysis,
-                            Router.selectedStyleId,
-                            fullText,
-                            ollamaRenderPromptEn
-                        )
+                        ollamaRenderPromptEn: null,
+                        renderPromptEn: null
+                    },
+                    render: {
+                        ...(pkg?.render || Router.analysisPackage?.render || {}),
+                        styleId: Router.selectedStyleId
                     },
                     recommendations: {
                         ...(pkg?.recommendations || Router.analysisPackage?.recommendations || {}),
@@ -2337,12 +2334,8 @@ const PageInit = {
                     showAlert('目前頁面沒有載到 renderApiKey，請重新整理頁面後再試；若還是一樣，表示部署環境沒有載入正確的 render 設定檔。', { type: 'error' });
                     return;
                 }
-                const prompt = buildRenderPrompt(pkg?.faceAnalysis, Router.selectedStyleId, pkg?.generativeText?.suggestion || '', pkg?.generativeText?.ollamaRenderPromptEn || '');
-                if (!prompt) { showAlert('尚未產生妝容建議，請先在風格頁按「確認風格」。', { type: 'error' }); return; }
-
-                // 顯示送出的英文 prompt 讓用戶確認
-                const promptPreviewEl = document.getElementById('comparePromptPreview');
-                if (promptPreviewEl) { promptPreviewEl.style.display = 'block'; promptPreviewEl.textContent = prompt; }
+                const styleId = Router.selectedStyleId || pkg?.render?.styleId;
+                if (!styleId) { showAlert('尚未選擇妝容風格，請先回風格頁選擇。', { type: 'error' }); return; }
 
                 renderBtn.disabled = true;
                 renderBtn.textContent = '渲染中...';
@@ -2351,7 +2344,7 @@ const PageInit = {
 
                 try {
                     renderStatus.textContent = 'Replicate 生成中，約需 30–60 秒...';
-                    const result = await Api.renderMakeup({ imageDataUrl, prompt, strength: 0.35 });
+                    const result = await Api.renderMakeup({ imageDataUrl, styleId, strength: 0.35 });
                     refreshRenderQuota();
                     if (!result.renderQuota && renderQuotaEl) {
                         renderQuotaEl.textContent = '妝容渲染完成！剩餘次數稍後更新。';
@@ -2364,6 +2357,7 @@ const PageInit = {
                             afterImageUrl: result.afterImageUrl,
                             replicateTempUrl: result.replicateTempUrl || null,
                             savedImageId: result.savedImageId || null,
+                            styleId,
                             error: null
                         }
                     });

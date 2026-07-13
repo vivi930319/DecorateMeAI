@@ -1586,7 +1586,6 @@ const PageInit = {
                     userNote: style?.tags?.join('、') || ''
                 });
                 const fullText = response.suggestion || '';
-                const renderPromptEn = response.renderPromptEn || '';
 
                 fill.style.width = '100%';
                 status.textContent = '建議已產生';
@@ -1601,10 +1600,11 @@ const PageInit = {
                         status: 'completed',
                         error: null,
                         fallbackUsed: false,
-                        renderPromptEn: renderPromptEn || buildRenderPrompt(
-                            pkg?.faceAnalysis || Router.analysisPackage?.faceAnalysis,
-                            Router.selectedStyleId
-                        )
+                        renderPromptEn: null
+                    },
+                    render: {
+                        ...(pkg?.render || Router.analysisPackage?.render || {}),
+                        styleId: Router.selectedStyleId
                     },
                     recommendations: {
                         ...(pkg?.recommendations || Router.analysisPackage?.recommendations || {}),
@@ -1902,8 +1902,8 @@ const PageInit = {
             const pkg = Router.analysisPackage;
             const imageDataUrl = pkg?.images?.front?.compressedDataUrl || pkg?.images?.front?.dataUrl || '';
             if (!imageDataUrl) { showAlert('尚未上傳照片，請先完成臉部分析。', { type: 'error' }); return false; }
-            const prompt = pkg?.generativeText?.renderPromptEn || buildRenderPrompt(pkg?.faceAnalysis, Router.selectedStyleId);
-            if (!prompt) { showAlert('尚未產生妝容建議，請先在風格頁按「確認風格」。', { type: 'error' }); return false; }
+            const styleId = Router.selectedStyleId || pkg?.render?.styleId;
+            if (!styleId) { showAlert('尚未選擇妝容風格，請先回風格頁選擇。', { type: 'error' }); return false; }
 
             isRenderingCompare = true;
             if (renderBtn) {
@@ -1921,7 +1921,7 @@ const PageInit = {
 
             try {
                 renderStatus.textContent = 'Replicate 生成中，約需 30-60 秒...';
-                const result = await Api.renderMakeup({ imageDataUrl, prompt, strength: 0.45 });
+                const result = await Api.renderMakeup({ imageDataUrl, styleId, strength: 0.45 });
                 Router.analysisPackage = AnalysisPackage.update(pkg, {
                     render: {
                         ...(pkg.render || {}),
@@ -1930,6 +1930,7 @@ const PageInit = {
                         afterImageUrl: result.afterImageUrl,
                         replicateTempUrl: result.replicateTempUrl || null,
                         savedImageId: result.savedImageId || null,
+                        styleId,
                         error: null
                     }
                 });

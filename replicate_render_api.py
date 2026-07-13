@@ -10,11 +10,18 @@ from threading import Lock
 
 from fastapi import FastAPI, Header, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 import job_store
 from dev_server_utils import get_cors_origins
-from replicate_render import call_replicate_render, build_render_prompt, REPLICATE_MODEL, GCS_BUCKET_NAME, IMAGE_PROVIDER
+from replicate_render import (
+    GCS_BUCKET_NAME,
+    IMAGE_PROVIDER,
+    RENDER_STYLE_PROMPTS,
+    REPLICATE_MODEL,
+    build_server_render_prompt,
+    call_replicate_render,
+)
 
 app = FastAPI()
 
@@ -48,7 +55,6 @@ RENDER_JOBS_COLLECTION = os.getenv("RENDER_JOBS_COLLECTION", "render_jobs")
 # 這個值只是用來把「已經等了多久」映射成 1~95% 的估算百分比，跑完才跳 100。
 RENDER_ESTIMATED_SECONDS = max(10, int(os.getenv("RENDER_ESTIMATED_SECONDS", "90")))
 MAX_RENDER_IMAGE_CHARS = int(os.getenv("MAX_RENDER_IMAGE_CHARS", str(12 * 1024 * 1024)))
-MAX_RENDER_PROMPT_CHARS = int(os.getenv("MAX_RENDER_PROMPT_CHARS", "4000"))
 RENDER_JOB_TIMEOUT_SECONDS = max(60, int(os.getenv("RENDER_JOB_TIMEOUT_SECONDS", "600")))
 RENDER_JOB_RETENTION_SECONDS = max(60, int(os.getenv("RENDER_JOB_RETENTION_SECONDS", "3600")))
 RENDER_JOB_MAX_COUNT = max(1, int(os.getenv("RENDER_JOB_MAX_COUNT", "200")))
@@ -141,14 +147,15 @@ def enforce_render_rate_limit(request: Request, x_user_email: str | None = Heade
 
 
 class RenderRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     image: str
-    prompt: str
+    styleId: str = "natural"
     strength: float = 0.35  # flux-kontext-pro 不用 strength，保留欄位維持前端相容
 
 
 def _validate_render_request(req: RenderRequest) -> None:
     image = req.image or ""
-    prompt = req.prompt or ""
     if not image.startswith("data:image/") or ";base64," not in image:
         raise HTTPException(
             status_code=400,
@@ -166,23 +173,23 @@ def _validate_render_request(req: RenderRequest) -> None:
                 }
             },
         )
-    if not prompt.strip():
+
+
+def _server_render_prompt(req: RenderRequest) -> str:
+    try:
+        return build_server_render_prompt(req.styleId)
+    except ValueError:
         raise HTTPException(
-            status_code=400,
-            detail={"error": {"code": "EMPTY_PROMPT", "message": "prompt is required.", "retryable": False}},
-        )
-    if len(prompt) > MAX_RENDER_PROMPT_CHARS:
-        raise HTTPException(
-            status_code=413,
+            status_code=422,
             detail={
                 "error": {
-                    "code": "PROMPT_TOO_LONG",
-                    "message": "Render prompt is too long.",
+                    "code": "INVALID_RENDER_STYLE",
+                    "message": "Unsupported render style.",
                     "retryable": False,
-                    "maxPromptChars": MAX_RENDER_PROMPT_CHARS,
+                    "allowedStyleIds": sorted(RENDER_STYLE_PROMPTS),
                 }
             },
-        )
+        ) from None
 
 
 def _storage_configured() -> bool:
@@ -260,7 +267,10 @@ def health():
         },
         "limits": {
             "max_image_chars": MAX_RENDER_IMAGE_CHARS,
-            "max_prompt_chars": MAX_RENDER_PROMPT_CHARS,
+        },
+        "render_prompt_policy": {
+            "client_prompt_accepted": False,
+            "allowed_style_ids": sorted(RENDER_STYLE_PROMPTS),
         },
         "async_jobs": {
             "enabled": True,
@@ -277,13 +287,14 @@ def health():
 @app.post("/render")
 async def render(req: RenderRequest, _=Depends(require_api_key), __=Depends(enforce_render_rate_limit)):
     _validate_render_request(req)
-    # 同圖同 prompt 短時間內重複 → 直接回上次結果，不重打 Replicate
-    key = _dedup_key(req.image, req.prompt, req.strength)
+    prompt = _server_render_prompt(req)
+    # 同圖同後端產生的 prompt 短時間內重複 → 直接回上次結果，不重打 Replicate
+    key = _dedup_key(req.image, prompt, req.strength)
     cached = _dedup_get(key)
     if cached is not None:
         return {**cached, "deduped": True}
     try:
-        result = call_replicate_render(req.image, req.prompt)
+        result = call_replicate_render(req.image, prompt)
         response = {
             "status": "completed",
             "afterImageUrl": result["afterImageUrl"],
@@ -294,12 +305,12 @@ async def render(req: RenderRequest, _=Depends(require_api_key), __=Depends(enfo
         }
         _dedup_set(key, response)  # 只快取成功結果
         return response
-    except Exception as exc:
+    except Exception:
         logging.exception("渲染失敗")
         return {
             "status": "failed",
             "afterImageUrl": None,
-            "error": f"渲染服務發生錯誤：{exc}",
+            "error": "渲染服務發生錯誤，請稍後再試。",
         }
 
 
@@ -354,7 +365,7 @@ def _run_render_job(job_id: str, image: str, prompt: str, dedup_key: str) -> Non
             {**response, "progress": 100, "finishedAt": time.time()},
         )
         _dedup_set(dedup_key, response)  # 只快取成功結果
-    except Exception as exc:  # noqa: BLE001 — 失敗要寫回 job，不能讓 thread 靜靜死掉
+    except Exception:  # 失敗要寫回 job，不能讓 thread 靜靜死掉
         logging.exception("渲染失敗（job %s）", job_id)
         job_store.patch(
             RENDER_JOBS_COLLECTION,
@@ -362,7 +373,7 @@ def _run_render_job(job_id: str, image: str, prompt: str, dedup_key: str) -> Non
             {
                 "status": "failed",
                 "afterImageUrl": None,
-                "error": f"渲染服務發生錯誤：{exc}",
+                "error": "渲染服務發生錯誤，請稍後再試。",
                 "finishedAt": time.time(),
             },
         )
@@ -376,10 +387,11 @@ async def create_render_job(req: RenderRequest, _=Depends(require_api_key), __=D
     """
     _cleanup_render_jobs()
     _validate_render_request(req)
+    prompt = _server_render_prompt(req)
     job_id = uuid.uuid4().hex
     result_token = uuid.uuid4().hex
     now = time.time()
-    key = _dedup_key(req.image, req.prompt, req.strength)
+    key = _dedup_key(req.image, prompt, req.strength)
 
     cached = _dedup_get(key)
     if cached is not None:
@@ -408,7 +420,7 @@ async def create_render_job(req: RenderRequest, _=Depends(require_api_key), __=D
 
     threading.Thread(
         target=_run_render_job,
-        args=(job_id, req.image, req.prompt, key),
+        args=(job_id, req.image, prompt, key),
         daemon=True,
     ).start()
 

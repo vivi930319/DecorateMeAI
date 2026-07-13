@@ -246,6 +246,18 @@ def compact_face_context(face_analysis: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
+RENDER_STYLE_PROMPTS = {
+    "natural": "natural everyday makeup with a sheer base, softly defined eyes, subtle blush, and a natural lip color",
+    "softBaddie": "soft baddie makeup with a natural matte base, softly smudged earthy eyes, lifted liner, rosy mauve blush, and muted mauve lips",
+    "richGirl": "refined rich girl makeup with a thin luminous base, muted taupe eyeshadow, softly defined brows, restrained highlight, and a nude rose lip",
+    "hongKong": "Hong Kong retro makeup with a natural matte base, defined brows, warm brown smoky eyes, subtle contour, and a brick red lip",
+    "koreanClean": "Korean clean makeup with a sheer dewy base, softly defined straight brows, light neutral eyeshadow, peach pink blush, and a natural MLBB lip",
+    "yandere": "soft yandere-inspired makeup with a natural pale base, delicate downturned liner, restrained rosy under-eye blush, and a blurred berry red lip",
+    "japaneseClear": "Japanese clear makeup with a thin satin base, airy brows, soft peach eyeshadow, translucent pink-orange blush, and a glossy coral lip",
+    "mensPlain": "minimal men's grooming makeup with natural skin texture, light spot concealing, neat original brows, subtle eye definition, and a colorless or low-saturation lip",
+}
+
+
 def build_render_prompt(frontend_package: dict[str, Any], face_analysis: dict[str, Any], suggestion: str) -> str:
     explicit_prompt = first_string(frontend_package, ("renderPrompt", "render_prompt", "imagePrompt", "image_prompt"))
     if explicit_prompt:
@@ -272,6 +284,15 @@ def build_render_prompt(frontend_package: dict[str, Any], face_analysis: dict[st
         "This must look like the same person in the same moment, only wearing makeup — not a different person, not a different pose, not a different photo.",
     ]
     return " ".join(p for p in parts if p)
+
+
+def build_server_render_prompt(style_id: str) -> str:
+    """Build the public render API prompt from an allowlisted style only."""
+    normalized_style_id = (style_id or "natural").strip()
+    style_prompt = RENDER_STYLE_PROMPTS.get(normalized_style_id)
+    if style_prompt is None:
+        raise ValueError(f"Unsupported render style: {normalized_style_id}")
+    return build_render_prompt({"style": style_prompt}, {}, "")
 
 
 def resolve_image_model() -> str:

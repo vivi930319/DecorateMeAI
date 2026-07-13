@@ -292,7 +292,7 @@ const Api = {
         }
     },
 
-    async renderMakeup({ imageDataUrl, prompt, strength = 0.45 }) {
+    async renderMakeup({ imageDataUrl, styleId, strength = 0.45 }) {
         const url = this.config.url('render', 'renderPath');
         if (!url) throw new Error('renderUrl 未設定，請聯繫渲染端組員提供 Cloud Run URL');
         let res;
@@ -300,7 +300,7 @@ const Api = {
             res = await fetch(url, {
                 method: 'POST',
                 headers: this._renderHeaders(),
-                body: JSON.stringify({ image: imageDataUrl, prompt, strength }),
+                body: JSON.stringify({ image: imageDataUrl, styleId, strength }),
             });
         } catch (err) {
             throw new Error('無法連線到渲染服務：' + err.message);
@@ -686,33 +686,6 @@ const AnalysisPackage = {
         };
     }
 };
-
-function buildRenderPrompt(faceAnalysis, styleId) {
-    const styleMap = {
-        softBaddie:     'soft baddie makeup, matte blurred skin, smudged earthy smoky eye, rosy mauve lips',
-        richGirl:       'luxury rich girl makeup, glass skin, muted taupe eyeshadow, nude rosy lip',
-        hongKong:       'Hong Kong retro vintage makeup, defined brows, warm brown smoky eye, brick red lip',
-        koreanClean:    'Korean glass skin no-makeup makeup, dewy sheer base, soft pink blush, MLBB lip',
-        yandere:        'yandere aesthetic makeup, pale ethereal skin, rosy under-eye blush, blood red bitten lip',
-        japaneseClear:  'Japanese magazine fresh makeup, airy veil skin, soft peach eyeshadow, coral lip',
-        mensPlain:      'minimal men grooming look, clean even skin tone, neat natural brows, no-makeup feel',
-    };
-    const eyeMap = {
-        almond:'almond-shaped eyes', round_almond:'round almond eyes', round:'round eyes',
-        peach_blossom:'peach blossom eyes', phoenix:'phoenix eyes', slender_phoenix:'slender phoenix eyes',
-        downturned:'downturned eyes', narrow:'narrow eyes', slender:'slender eyes',
-    };
-    const faceMap = {
-        oval:'oval face', round:'round face', heart:'heart-shaped face', square:'square jawline',
-        oblong:'long face', diamond:'diamond face', trapezoid:'trapezoid face',
-    };
-    const skinMap = {
-        spring:'warm ivory skin', summer:'cool beige skin', autumn:'warm golden brown skin', winter:'cool porcelain skin',
-    };
-    const style = styleMap[styleId] || 'natural everyday makeup';
-    const parts = [faceMap[faceAnalysis?.faceShape], eyeMap[faceAnalysis?.eyeShape], skinMap[faceAnalysis?.skinTone?.season]].filter(Boolean);
-    return `${style}, Asian woman${parts.length ? ' with ' + parts.join(', ') : ''}, photorealistic, soft studio lighting, beauty portrait, high quality`;
-}
 
 const AnalysisDraft = {
     _key: 'beautyAnalysisDraft',

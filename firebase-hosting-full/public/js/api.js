@@ -189,7 +189,7 @@ const Api = {
         return res.json();
     },
 
-    async renderMakeup({ imageDataUrl, prompt, strength = 0.45 }) {
+    async renderMakeup({ imageDataUrl, styleId, strength = 0.45 }) {
         const runtimeConfig = getRuntimeApiConfig();
         const serviceConfig = {
             ...(this.config.services.render || {}),
@@ -211,7 +211,7 @@ const Api = {
             res = await fetch(url, {
                 method: 'POST',
                 headers,
-                body: JSON.stringify({ image: imageDataUrl, prompt, strength }),
+                body: JSON.stringify({ image: imageDataUrl, styleId, strength }),
             });
         } catch (err) {
             throw new Error('無法連線到渲染服務：' + err.message);
@@ -1004,9 +1004,8 @@ const AnalysisPackage = {
     }
 };
 
-// Ollama 有時候會把「第一部分：中文建議」「第二部分：英文渲染指令」黏在同一串文字裡回傳，
-// 後端拆分不穩定，偶爾會漏拆。這裡在前端再做一層保護：只要偵測到「第二部分」標記，
-// 就把它從中文建議裡切掉，切下來的內容轉去當渲染指令用，不會顯示在建議畫面上。
+// 舊版 Ollama 偶爾會把英文渲染指令黏在中文建議後面；正式渲染已改由後端組 prompt，
+// 前端只保留中文建議，偵測到第二部分時直接切掉。
 function splitOllamaTwoPartSuggestion(rawText) {
     const text = String(rawText || '');
     const match = text.match(/(?:^|\n)\s*第[二2]部分[^\n]*\n?/);
@@ -1014,21 +1013,6 @@ function splitOllamaTwoPartSuggestion(rawText) {
     const suggestion = text.slice(0, match.index).trim();
     const leakedEnglishPart = text.slice(match.index + match[0].length).trim();
     return { suggestion, leakedEnglishPart };
-}
-
-function buildRenderPrompt(faceAnalysis, styleId, suggestion = '', ollamaRenderPromptEn = '') {
-    // 只剩兩塊：Ollama 自己生成的妝容指令 + 我們固定的「不要改人物」鎖定句
-    const makeupInstruction = String(ollamaRenderPromptEn || '').trim() || 'Apply natural everyday makeup.';
-
-    const identityLock = [
-        `Do not change this person's identity or appearance.`,
-        `Keep face shape, facial structure, eye shape, nose, lips, skin tone, skin texture, pores, wrinkles, and hair completely identical to the original photo.`,
-        `Keep the exact same pose, posture, body position, head angle, hand position, gesture, and action as the original photo — do not let the person move, turn, or change stance.`,
-        `Keep clothing, background, lighting, camera angle, camera framing, and expression completely identical to the original photo.`,
-        `This must be the exact same person in the exact same pose, only wearing makeup — nothing else about the photo should change.`,
-    ].join(' ');
-
-    return `${makeupInstruction} ${identityLock}`;
 }
 
 const AnalysisDraft = {

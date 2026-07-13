@@ -72,7 +72,7 @@ flowchart TB
 | 方法 | 路徑 | 說明 |
 |------|------|------|
 | GET | `/health` | 健康檢查，回報 api key / 限流 / 去重設定 |
-| POST | `/render` | 傳入原圖與英文 prompt，回渲染後永久網址 |
+| POST | `/render` | 傳入原圖與白名單 `styleId`；英文 prompt 由後端產生，回渲染後永久網址 |
 | POST/GET | `/render/jobs` | 建立渲染 job、用 `jobId` + `resultToken` 輪詢 |
 
 ---
@@ -139,7 +139,6 @@ tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓
 | `APP_ENV` / `REQUIRE_EXPLICIT_CORS` | 正式環境強制要求明確 CORS 設定 |
 | `MAX_IMAGE_SIZE` | 影像處理縮放上限（預設 1024） |
 | `MAX_RENDER_IMAGE_CHARS` / `MAX_RENDER_IMAGE_BYTES` | 渲染輸入圖大小上限 |
-| `MAX_RENDER_PROMPT_CHARS` | 渲染 prompt 長度上限 |
 | `RENDER_JOB_TIMEOUT_SECONDS` / `RENDER_JOB_RETENTION_SECONDS` / `RENDER_JOB_MAX_COUNT` | 渲染 job 逾時、保留時間與數量上限 |
 | `JOB_STORE_SCAN_LIMIT` | Firestore job cleanup/stat 單次最多掃描筆數（預設 500） |
 | `RENDER_GUIDANCE` | 渲染 guidance（預設 3.0，偏向保留真人照片質感） |
