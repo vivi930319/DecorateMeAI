@@ -1,7 +1,10 @@
 import os
 import time
+import math
+import uuid
 import hashlib
 import logging
+import threading
 from collections import deque
 from threading import Lock
 
@@ -9,8 +12,9 @@ from fastapi import FastAPI, Header, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import job_store
 from dev_server_utils import get_cors_origins
-from replicate_render import call_replicate_render, build_render_prompt, REPLICATE_MODEL, GCS_BUCKET_NAME
+from replicate_render import call_replicate_render, build_render_prompt, REPLICATE_MODEL, GCS_BUCKET_NAME, IMAGE_PROVIDER
 
 app = FastAPI()
 
@@ -34,6 +38,15 @@ _rate_limit_hits: dict[str, deque[float]] = {}
 RENDER_DEDUP_TTL_SECONDS = max(0, int(os.getenv("RENDER_DEDUP_TTL_SECONDS", "600")))
 _dedup_lock = Lock()
 _dedup_cache: dict[str, tuple[float, dict]] = {}
+
+# 非同步 job：/render 同步版會被 Cloud Run 的請求逾時砍掉（gpt-image-2 實測 50~150 秒），
+# 所以另開一組 job 端點——送出後立刻回 jobId，前端輪詢進度，不再有 504。
+# job 狀態走 Firestore（不是 process 記憶體），因為這個服務 maxScale=20、concurrency=4，
+# 輪詢的請求很可能被導到另一個 instance，記憶體裡的 job 在那邊根本不存在。
+RENDER_JOBS_COLLECTION = os.getenv("RENDER_JOBS_COLLECTION", "render_jobs")
+# 進度條的預估總秒數。Replicate 轉手 OpenAI 的排隊時間浮動極大（實測 50~150 秒），拿不到真實進度，
+# 這個值只是用來把「已經等了多久」映射成 1~95% 的估算百分比，跑完才跳 100。
+RENDER_ESTIMATED_SECONDS = max(10, int(os.getenv("RENDER_ESTIMATED_SECONDS", "90")))
 
 
 def _dedup_key(image: str, prompt: str, strength: float) -> str:
@@ -144,8 +157,10 @@ def health():
     return {
         "status": "ok",
         "service": "replicate-render",
+        "provider": IMAGE_PROVIDER,
         "model": REPLICATE_MODEL,
         "token_configured": bool(os.getenv("REPLICATE_API_TOKEN")),
+        "openai_api_configured": bool(os.getenv("OPENAI_API_KEY")),
         "storage_configured": _storage_configured(),
         "storage_bucket": GCS_BUCKET_NAME,
         "api_key_required": bool(RENDER_API_KEY),
@@ -157,6 +172,12 @@ def health():
         "dedup": {
             "enabled": RENDER_DEDUP_TTL_SECONDS > 0,
             "ttl_seconds": RENDER_DEDUP_TTL_SECONDS,
+        },
+        "async_jobs": {
+            "enabled": True,
+            "submit": "POST /render/jobs",
+            "poll": "GET /render/jobs/{job_id}",
+            "estimated_seconds": RENDER_ESTIMATED_SECONDS,
         },
     }
 
@@ -180,10 +201,107 @@ async def render(req: RenderRequest, _=Depends(require_api_key), __=Depends(enfo
         }
         _dedup_set(key, response)  # 只快取成功結果
         return response
-    except Exception:
+    except Exception as exc:
         logging.exception("渲染失敗")
         return {
             "status": "failed",
             "afterImageUrl": None,
-            "error": "渲染服務發生錯誤，請稍後再試",
+            "error": f"渲染服務發生錯誤：{exc}",
         }
+
+
+def _estimate_progress(job: dict, now: float) -> int:
+    """把已經等待的秒數映射成 1~95 的估算進度。Replicate 不回報真實進度，這只是給進度條用的體感值。
+
+    用指數曲線而不是線性：前段跑得快（使用者立刻看到動），越接近 95 越慢，
+    這樣就算實際耗時衝到 150 秒也永遠不會提前塞滿、卡在 100% 空轉。
+    """
+    status = job.get("status")
+    if status == "completed":
+        return 100
+    if status == "failed":
+        return int(job.get("progress") or 0)
+
+    created_at = float(job.get("createdAt") or now)
+    elapsed = max(0.0, now - created_at)
+    ratio = 1.0 - math.exp(-elapsed / (RENDER_ESTIMATED_SECONDS * 0.45))
+    return max(1, min(95, int(round(1 + 94 * ratio))))
+
+
+def _run_render_job(job_id: str, image: str, prompt: str, dedup_key: str) -> None:
+    job_store.patch(RENDER_JOBS_COLLECTION, job_id, {"status": "running", "startedAt": time.time()})
+    try:
+        result = call_replicate_render(image, prompt)
+        response = {
+            "status": "completed",
+            "afterImageUrl": result["afterImageUrl"],
+            "replicateTempUrl": result.get("replicateTempUrl"),
+            "isPermanent": result.get("isPermanent", False),
+            "model": result["model"],
+            "error": None,
+        }
+        job_store.patch(
+            RENDER_JOBS_COLLECTION,
+            job_id,
+            {**response, "progress": 100, "finishedAt": time.time()},
+        )
+        _dedup_set(dedup_key, response)  # 只快取成功結果
+    except Exception as exc:  # noqa: BLE001 — 失敗要寫回 job，不能讓 thread 靜靜死掉
+        logging.exception("渲染失敗（job %s）", job_id)
+        job_store.patch(
+            RENDER_JOBS_COLLECTION,
+            job_id,
+            {
+                "status": "failed",
+                "afterImageUrl": None,
+                "error": f"渲染服務發生錯誤：{exc}",
+                "finishedAt": time.time(),
+            },
+        )
+
+
+@app.post("/render/jobs")
+async def create_render_job(req: RenderRequest, _=Depends(require_api_key), __=Depends(enforce_render_rate_limit)):
+    """送出渲染並立刻回 jobId；實際渲染在背景 thread 跑，前端用 GET /render/jobs/{id} 輪詢。
+
+    注意：這需要 Cloud Run 開 --no-cpu-throttling，否則回應送出後 CPU 會被節流，背景 thread 形同停住。
+    """
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    key = _dedup_key(req.image, req.prompt, req.strength)
+
+    cached = _dedup_get(key)
+    if cached is not None:
+        job = {**cached, "jobId": job_id, "progress": 100, "createdAt": now, "finishedAt": now, "deduped": True}
+        job_store.create(RENDER_JOBS_COLLECTION, job_id, job)
+        return {**job, "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
+
+    job = {
+        "jobId": job_id,
+        "status": "queued",
+        "progress": 1,
+        "afterImageUrl": None,
+        "error": None,
+        "createdAt": now,
+    }
+    job_store.create(RENDER_JOBS_COLLECTION, job_id, job)
+
+    threading.Thread(
+        target=_run_render_job,
+        args=(job_id, req.image, req.prompt, key),
+        daemon=True,
+    ).start()
+
+    return {**job, "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
+
+
+@app.get("/render/jobs/{job_id}")
+async def get_render_job(job_id: str, _=Depends(require_api_key)):
+    # 這支會被前端每兩秒打一次，所以不掛 rate limit，否則輪詢自己就會把配額燒光
+    job = job_store.get(RENDER_JOBS_COLLECTION, job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "JOB_NOT_FOUND", "message": "Render job not found or expired.", "retryable": False}},
+        )
+    return {**job, "progress": _estimate_progress(job, time.time()), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}

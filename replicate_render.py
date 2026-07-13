@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 import replicate
 import requests
 from dotenv import load_dotenv
@@ -16,7 +17,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-REPLICATE_MODEL = "black-forest-labs/flux-kontext-pro"
+DEFAULT_REPLICATE_MODEL = "black-forest-labs/flux-kontext-max"
+IMAGE_PROVIDER = os.getenv("IMAGE_PROVIDER", "replicate").strip().lower() or "replicate"
+REPLICATE_MODEL = os.getenv("REPLICATE_MODEL", DEFAULT_REPLICATE_MODEL).strip() or DEFAULT_REPLICATE_MODEL
+OPENAI_IMAGE_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_IMAGE_API_BASE = os.getenv("OPENAI_IMAGE_API_BASE", "https://api.openai.com/v1").rstrip("/")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
 # guidance 越高越會硬照 prompt 改圖，但太高會讓膚質塑膠、臉變 AI。妝容編輯優先保留真人照片質感，
@@ -25,6 +31,34 @@ RENDER_GUIDANCE = float(os.getenv("RENDER_GUIDANCE", "3.0"))
 # Replicate 回傳的 afterImageUrl 只是暫存網址（幾天內會失效），收藏功能需要永久網址才能長期使用。
 # bucket 已經存在且 allUsers 有 objectViewer 權限（公開可讀），不需要額外簽名 URL。
 GCS_BUCKET_NAME = os.getenv("GCS_RENDER_BUCKET", "decorate-me-renders")
+REPLICATE_HTTP_TIMEOUT_SECONDS = max(60, int(os.getenv("REPLICATE_HTTP_TIMEOUT_SECONDS", "300")))
+OPENAI_HTTP_TIMEOUT_SECONDS = max(60, int(os.getenv("OPENAI_HTTP_TIMEOUT_SECONDS", "300")))
+REPLICATE_OPENAI_QUALITY = os.getenv("REPLICATE_OPENAI_QUALITY", "medium").strip().lower() or "medium"
+
+OPENAI_MODEL_ALIASES = {
+    "gpt-img2": "gpt-image-1",
+    "gpt-image": "gpt-image-1",
+}
+REPLICATE_OPENAI_MODELS = {
+    "openai/gpt-image-2",
+}
+
+# gpt-image-2 的 aspect_ratio 預設是 "1:1"。不指定的話，手機拍的直式人像會被硬塞成正方形
+# （臉被裁掉或壓扁），而且妝前妝後兩張圖比例不一致，對比畫面會整個跑掉。
+# 這裡從原圖算出最接近的比例送進去，讓輸出維持在同一個框裡。
+GPT_IMAGE_ASPECT_RATIOS = {
+    "1:1": 1.0,
+    "3:2": 3 / 2,
+    "2:3": 2 / 3,
+    "4:3": 4 / 3,
+    "3:4": 3 / 4,
+    "16:9": 16 / 9,
+    "9:16": 9 / 16,
+}
+# 讀不出原圖尺寸時的退路：交給模型自己判斷，至少比寫死 1:1 安全
+FALLBACK_ASPECT_RATIO = os.getenv("RENDER_FALLBACK_ASPECT_RATIO", "auto").strip() or "auto"
+
+_replicate_client: replicate.Client | None = None
 
 
 def upload_to_permanent_storage(temp_image_url: str) -> str | None:
@@ -45,6 +79,22 @@ def upload_to_permanent_storage(temp_image_url: str) -> str | None:
         return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{blob.name}"
     except Exception as exc:  # noqa: BLE001 — 儲存失敗不該讓渲染整支失敗，記錄後照舊回暫存網址
         print(f"[replicate_render] 上傳永久儲存失敗，fallback 回暫存網址：{exc}")
+        return None
+
+
+def upload_bytes_to_permanent_storage(image_bytes: bytes, content_type: str = "image/png") -> str | None:
+    """把記憶體中的圖片位元組上傳到 GCS，回傳永久公開網址；失敗回 None。"""
+    try:
+        from google.cloud import storage
+
+        ext = mimetypes.guess_extension(content_type) or ".png"
+        client = storage.Client()
+        bucket = client.bucket(GCS_BUCKET_NAME)
+        blob = bucket.blob(f"rendered/{uuid.uuid4().hex}{ext}")
+        blob.upload_from_string(image_bytes, content_type=content_type)
+        return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{blob.name}"
+    except Exception as exc:  # noqa: BLE001
+        print(f"[replicate_render] 上傳 bytes 永久儲存失敗：{exc}")
         return None
 
 
@@ -95,6 +145,14 @@ def file_to_data_url(path: str) -> str:
     content_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
     encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
     return f"data:{content_type};base64,{encoded}"
+
+
+def data_url_to_bytes(data_url: str) -> tuple[bytes, str]:
+    if not data_url.startswith("data:") or ";base64," not in data_url:
+        raise ValueError("Expected a base64 data URL.")
+    header, encoded = data_url.split(",", 1)
+    content_type = header[5:].split(";", 1)[0] or "image/png"
+    return base64.b64decode(encoded), content_type
 
 
 def url_to_data_url(url: str) -> str:
@@ -212,16 +270,134 @@ def build_render_prompt(frontend_package: dict[str, Any], face_analysis: dict[st
     return " ".join(p for p in parts if p)
 
 
+def resolve_image_model() -> str:
+    raw = OPENAI_IMAGE_MODEL if IMAGE_PROVIDER == "openai" and OPENAI_IMAGE_MODEL else REPLICATE_MODEL
+    return OPENAI_MODEL_ALIASES.get(raw, raw)
+
+
+def current_provider() -> str:
+    if IMAGE_PROVIDER not in {"replicate", "openai"}:
+        raise RuntimeError(f"Unsupported IMAGE_PROVIDER: {IMAGE_PROVIDER}. Use 'replicate' or 'openai'.")
+    return IMAGE_PROVIDER
+
+
+def is_replicate_openai_model(model_name: str) -> bool:
+    return model_name in REPLICATE_OPENAI_MODELS
+
+
+def pick_aspect_ratio(image_data_url: str) -> str:
+    """讀出輸入圖的寬高，回傳 gpt-image-2 支援的最接近比例。讀不出來就回退到 FALLBACK_ASPECT_RATIO。"""
+    try:
+        import io
+
+        from PIL import Image
+
+        image_bytes, _ = data_url_to_bytes(image_data_url)
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            width, height = image.size
+
+        if not width or not height:
+            return FALLBACK_ASPECT_RATIO
+
+        target = width / height
+        return min(GPT_IMAGE_ASPECT_RATIOS, key=lambda name: abs(GPT_IMAGE_ASPECT_RATIOS[name] - target))
+    except Exception as exc:  # noqa: BLE001 — 比例判斷失敗不該讓整支渲染掛掉
+        print(f"[replicate_render] 無法判斷輸入圖比例，改用 {FALLBACK_ASPECT_RATIO}：{exc}")
+        return FALLBACK_ASPECT_RATIO
+
+
+def get_replicate_client() -> replicate.Client:
+    global _replicate_client
+    if _replicate_client is None:
+        api_token = os.getenv("REPLICATE_API_TOKEN", "").strip() or None
+        timeout = httpx.Timeout(
+            timeout=REPLICATE_HTTP_TIMEOUT_SECONDS,
+            connect=10.0,
+            read=float(REPLICATE_HTTP_TIMEOUT_SECONDS),
+            write=60.0,
+            pool=60.0,
+        )
+        _replicate_client = replicate.Client(api_token=api_token, timeout=timeout)
+    return _replicate_client
+
+
+def call_openai_render(image_data_url: str, prompt: str) -> dict[str, Any]:
+    model_name = resolve_image_model()
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY 未設定，gpt-img2 / gpt-image-1 無法呼叫。")
+
+    image_bytes, content_type = data_url_to_bytes(image_data_url)
+    files = {
+        "image": ("input.png", image_bytes, content_type),
+    }
+    data = {
+        "model": model_name,
+        "prompt": prompt,
+        "size": "1024x1024",
+        "quality": "high",
+        "response_format": "b64_json",
+    }
+    response = requests.post(
+        f"{OPENAI_IMAGE_API_BASE}/images/edits",
+        headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        data=data,
+        files=files,
+        timeout=OPENAI_HTTP_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    data_items = payload.get("data") or []
+    if not data_items:
+        raise RuntimeError(f"OpenAI images API 沒有回傳 data：{payload}")
+
+    first = data_items[0]
+    b64_json = first.get("b64_json")
+    if not b64_json:
+        raise RuntimeError(f"OpenAI images API 沒有回傳 b64_json：{payload}")
+
+    output_bytes = base64.b64decode(b64_json)
+    permanent_url = upload_bytes_to_permanent_storage(output_bytes, "image/png")
+    if not permanent_url:
+        raise RuntimeError("OpenAI 圖片已生成，但上傳 GCS 失敗，無法提供永久 afterImageUrl。")
+
+    return {
+        "status": "completed",
+        "afterImageUrl": permanent_url,
+        "replicateTempUrl": None,
+        "isPermanent": True,
+        "model": model_name,
+        "provider": "openai",
+    }
+
+
 def call_replicate_render(image_data_url: str, prompt: str) -> dict[str, Any]:
-    output = replicate.run(
-        REPLICATE_MODEL,
-        input={
+    model_name = resolve_image_model()
+    if current_provider() == "openai":
+        return call_openai_render(image_data_url, prompt)
+
+    if is_replicate_openai_model(model_name):
+        replicate_input = {
+            "prompt": prompt,
+            "input_images": [image_data_url],
+            "aspect_ratio": pick_aspect_ratio(image_data_url),
+            "quality": REPLICATE_OPENAI_QUALITY,
+            "number_of_images": 1,
+            "output_format": "jpeg",
+            "background": "opaque",
+            "moderation": "auto",
+        }
+    else:
+        replicate_input = {
             "prompt": prompt,
             "input_image": image_data_url,
             "output_format": "jpg",
             "output_quality": 95,
             "guidance": RENDER_GUIDANCE,
-        },
+        }
+
+    output = get_replicate_client().run(
+        model_name,
+        input=replicate_input,
     )
 
     # replicate SDK 1.x: output.url 是字串屬性；舊版才是 callable
@@ -240,7 +416,8 @@ def call_replicate_render(image_data_url: str, prompt: str) -> dict[str, Any]:
         "afterImageUrl": permanent_url or temp_image_url,
         "replicateTempUrl": temp_image_url,
         "isPermanent": permanent_url is not None,
-        "model": REPLICATE_MODEL,
+        "model": model_name,
+        "provider": "replicate",
     }
 
 
@@ -265,15 +442,15 @@ def render_from_frontend_package(frontend_package: dict[str, Any]) -> dict[str, 
         "renderPrompt": render_prompt,
         "ollamaSuggestion": suggestion,
         "faceAnalysis": face_analysis,
-        "model": REPLICATE_MODEL,
-        "renderBaseUrl": "replicate",
+        "model": render_result["model"],
+        "renderBaseUrl": render_result.get("provider", "replicate"),
         "createdAt": datetime.now(timezone.utc).isoformat(),
     }
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Render makeup from the frontend data package using flux-kontext-pro."
+        description="Render makeup from the frontend data package using the configured Replicate model."
     )
     parser.add_argument("package", help="Path to frontend JSON data package.")
     parser.add_argument("--output", help="Optional path to write the output JSON package.")
