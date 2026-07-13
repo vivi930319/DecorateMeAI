@@ -19,6 +19,10 @@
             <h4>Ollama 妝容建議</h4>
             <p id="compareOllamaSuggestion">尚未產生妝容建議</p>
         </section>
+        <details id="comparePromptDetails" style="margin-top:10px;">
+            <summary style="cursor:pointer;font-size:11px;color:#a8876f;letter-spacing:.05em;">實際送出的渲染指令</summary>
+            <div id="comparePromptPreview" style="margin-top:6px;max-height:260px;overflow-y:auto;font-size:11px;color:#7a6060;background:rgba(255,248,244,0.85);border:1px solid #e8d5c8;border-radius:8px;padding:10px 12px;line-height:1.6;word-break:break-word;white-space:pre-wrap;">尚未渲染</div>
+        </details>
         <button class="btn-outline" id="compareGoStyleBtn">選擇風格</button>
         <button class="btn-gold" id="compareRenderBtn" style="margin-top:12px;">生成妝容</button>
         <div id="compareRenderQuota" style="font-size:11px;color:#a8876f;margin-top:6px;"></div>

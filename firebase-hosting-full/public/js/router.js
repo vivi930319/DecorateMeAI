@@ -1911,9 +1911,14 @@ const PageInit = {
                     style: style?.name || '日常自然妝',
                     userNote: style?.tags?.join('、') || ''
                 });
-                // 舊版回應若夾帶第二部分英文渲染指令，前端直接移除；正式 prompt 由 render 後端產生。
+                // 舊版回應若夾帶第二部分英文渲染指令，前端直接移除（現在 Ollama 已改成放獨立欄位）。
                 const { suggestion: cleanSuggestion } = splitOllamaTwoPartSuggestion(response.suggestion);
                 const fullText = cleanSuggestion || '';
+                // Ollama 產生的英文渲染指令要留在資料包裡 ——
+                // 實際送去渲染的 prompt 仍由 render 後端自己跟 Ollama 要（前端送的不可信，見
+                // Ollama渲染指令簽章_端對端密鑰規格書.md），但資料包本來就該完整記錄 Ollama 的產出，
+                // 而且對比頁要能在渲染前就顯示「Ollama 給的英文指令長什麼樣」。
+                const ollamaRenderPromptEn = response.renderPromptEn || null;
 
                 fill.style.width = '100%';
                 status.textContent = '建議已產生';
@@ -1928,8 +1933,8 @@ const PageInit = {
                         status: 'completed',
                         error: null,
                         fallbackUsed: false,
-                        ollamaRenderPromptEn: null,
-                        renderPromptEn: null
+                        ollamaRenderPromptEn: ollamaRenderPromptEn,
+                        renderPromptEn: ollamaRenderPromptEn
                     },
                     render: {
                         ...(pkg?.render || Router.analysisPackage?.render || {}),
@@ -2292,13 +2297,22 @@ const PageInit = {
         const promptPreviewEl = document.getElementById('comparePromptPreview');
         const showRenderPrompt = (text, source) => {
             if (!promptPreviewEl) return;
-            if (!text) { promptPreviewEl.textContent = '尚未渲染'; return; }
             // 標出這次的指令是 Ollama 針對這張臉生的，還是建議服務掛掉時退回的固定風格指令 ——
             // 兩者的渲染結果會差很多，不標的話根本分不出來。
             const label = source === 'ollama'
-                ? '［Ollama 個人化指令］\n\n'
-                : (source === 'style_allowlist' ? '［固定風格指令：建議服務沒回應，已退回白名單］\n\n' : '');
-            promptPreviewEl.textContent = label + text;
+                ? '［Ollama 個人化指令 — 這次實際送出的］\n\n'
+                : (source === 'style_allowlist'
+                    ? '［固定風格指令：建議服務沒回應，已退回白名單 — 這次實際送出的］\n\n'
+                    : '');
+            if (text) { promptPreviewEl.textContent = label + text; return; }
+
+            // 還沒渲染過：先顯示 Ollama 在建議那一步就產生好的英文指令，讓人現在就看得到內容。
+            // 注意這不等於「實際會送出的」—— 渲染時由後端再跟 Ollama 要一次，
+            // LLM 兩次生成的細節不會完全一樣（要一致得靠 HMAC 簽章，見 Ollama渲染指令簽章_端對端密鑰規格書.md）。
+            const pending = Router.analysisPackage?.generativeText?.renderPromptEn;
+            promptPreviewEl.textContent = pending
+                ? '［Ollama 產生的指令 — 尚未渲染，實際送出時後端會再要一次，細節可能略有不同］\n\n' + pending
+                : '尚未渲染（也還沒拿到 Ollama 的英文指令）';
         };
         showRenderPrompt(
             Router.analysisPackage?.render?.renderPrompt,
