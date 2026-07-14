@@ -2,6 +2,8 @@ import os
 import httpx
 import logging
 import json
+import hashlib
+import hmac
 from datetime import datetime, timezone
 from typing import Any, Optional, Tuple
 from fastapi import FastAPI, HTTPException, Request, status, Header
@@ -31,6 +33,9 @@ MODEL_VISION = "llava:latest"
 MODEL_TEXT = "gemma3:latest"
 OLLAMA_TIMEOUT = 120.0
 
+# 讀取後端共用的端對端簽章密鑰
+SIGNING_SECRET = os.getenv("RENDER_PROMPT_SIGNING_SECRET", "")
+
 VALID_STYLES = {"日常自然妝", "Soft baddie", "韓系亞裔妝", "日雜清透妝", "千金妝", "港風妝", "病嬌妝", "男士白開水"}
 
 class SuggestRequest(BaseModel):
@@ -41,6 +46,40 @@ class SuggestRequest(BaseModel):
     language: str = "zh-TW"
     userNote: Optional[str] = None
     model: Optional[str] = None
+
+def sign_render_prompt(render_prompt_en: str) -> Optional[str]:
+    """
+    規格書 3.3 節：使用 HMAC-SHA256 對英文渲染指令進行底層簽章
+    """
+    if not SIGNING_SECRET:
+        return None
+    return hmac.new(
+        SIGNING_SECRET.encode("utf-8"),
+        render_prompt_en.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+# ==========================================
+# 千金妝風格獨立控制區（對齊教科書指標：全面移除性別字眼）
+# ==========================================
+def build_luxury_rich_girl_prompt() -> str:
+    """
+    對齊小組最新千金妝指標：
+    1. 眼妝：淺米色打底，杏粉色加深雙眼皮、下眼瞼與臥蠶。深棕眼影沿睫毛平拉，眼頭略微開圓。
+    2. 眉毛：細、平、長的精緻淺棕薄霧眉。
+    3. 腮紅：蜜瓜桃色由黑眼珠下方橫向往顴骨暈染，蘋果肌外側疊加無花果色。
+    4. 高光：透明水光棒點塗在眼頭、眉心山根、鼻頭、蘋果肌最高點、唇峰與下巴。
+    5. 唇妝：唇部打底遮蓋，唇線筆勾勒模糊邊緣，桃米色唇釉塗滿全唇。
+    """
+    prompt = (
+        "Apply a luxurious elegant makeup look to the face, as a photorealistic makeup-only retouch of the original photo.\n\n"
+        "Eyes: low-saturation matte beige eyeshadow base with soft apricot pink deepening the eyelids, lower lash line, and aegyosal, "
+        "dark espresso brown eyeshadow naturally elongated and straight-flattened along the upper lash line, slightly rounded inner eye corners. "
+        "Brows: thin, straight, and elongated delicate brows softly filled with light brown powder and brow mascara.\n\n"
+        "Face: dewy satin skin texture with refined light brown contouring along the nose bridge and jawline, honey-melon peach blush swept horizontally below the pupils towards the cheekbones, seamlessly layered with fig-toned blush on the apples of the cheeks blended outward; clear, hyper-reflective wet-shine dewy highlighters precisely dotted on the inner eye corners, bridge of the nose, nose tip, highest points of the cheeks, cupid's bow, and chin.\n\n"
+        "Lips: full lips defined with a lip liner to softly blur the outer boundaries, completely filled with a clear glossy peach-beige lip glaze over a concealed lip base."
+    )
+    return prompt
 
 def make_error_response(http_code: int, code: str, message: str, retryable: bool):
     response = JSONResponse(
@@ -112,6 +151,9 @@ def build_gemma3_prompts(face_analysis: dict, style: str, user_note: Optional[st
     n_front = face_analysis.get('鼻型', '未提供')
     l_shape = face_analysis.get('嘴型', '未提供')
     
+    if l_shape in {"未提供", "", None}:
+        l_shape = "標準比例唇（偏向柔和輪廓）"
+        
     skin_obj = face_analysis.get('膚色', {})
     if isinstance(skin_obj, dict):
         s_season = skin_obj.get('四季型', '未提供')
@@ -121,13 +163,13 @@ def build_gemma3_prompts(face_analysis: dict, style: str, user_note: Optional[st
         s_level = str(skin_obj)
 
     system_prompt_zh = (
-        "你是明星御用高端彩妝顧問。你的任務 is 結合寶寶的原生五官數據與指定妝容風格，產生繁體中文客製化建議（給寶寶看）。\n\n"
+        "你是明星御用高端彩妝顧問。你的任務 is 結合寶寶的原生五官數據與指定妝容風格，產生繁體中文客製化修容與彩妝手法建議，並搭配推薦具體開架商品（給寶寶看）。\n\n"
         "【核心任務：視覺骨相微調與整形修飾】\n"
         "妳的建議必須死死咬住寶寶原生的五官結構進行針對性『視覺骨相微調與整形修飾』！\n"
         f"1. 底妝與腮紅修容：必須針對寶寶天生的【{f_shape}】與【{n_front}】設計。說明如何利用高光與立體陰影交錯，在視覺上重塑天生【{f_shape}】的輪廓線條，達到向內收縮 or 流暢臉型的骨相改變，並讓【{n_front}】在視覺上骨幹拔高。\n"
-        f"2. 眉眼妝建議：必須針對寶寶天生的【{e_shape}】與【{b_shape}】。詳細指導如何利用眼影暈染邊界、眼線延伸、倒影與臥蠶刻畫，在視覺上『徹底重塑並改變』原本的【{e_shape}】限制，達到眼型放大、下至 or微整形矯正的視覺震撼效果。\n"
-        f"3. 唇妝建議：必須針對寶寶天生的【{l_shape}】。利用唇線模糊與擴唇手法，在視覺上修飾、改變並優化【{l_shape}】的厚薄比例與嘴角弧度。\n\n"
-        "妳的輸出必須嚴格分為以下七個段落，標題獨立佔一行，不加 any Markdown 符號，每段具體文字控制在 35 到 50 字之間：\n"
+        f"2. 眉眼妝建議：必須針對寶寶天生的【{e_shape}】與【{b_shape}】。詳細指導如何利用眼影暈染邊界、眼線延伸、倒影與臥蠶刻畫，在視覺上『徹底重塑並改變』原本的【{e_shape}】限制，達到眼型放大、下至 or 微整形矯正的視覺震撼效果。\n"
+        f"3. 唇妝建議：必須針對寶寶天生的【{l_shape}】。不論原生數據多寡，必須詳細說明如何利用唇線模糊與擴唇手法，在視覺上重塑並優化【{l_shape}】的厚薄比例與嘴角弧度，打造微翹的性感嘟嘟唇妝效。\n\n"
+        "妳的輸出必須嚴格分為以下七個段落，標題獨立佔一行，不加 any Markdown 符號。請提供具體實用的手法操作與彩妝細節說明，不限制每段字數上限：\n"
         "1. 整體妝容方向\n"
         "2. 底妝建議\n"
         "3. 眉眼妝建議\n"
@@ -141,7 +183,7 @@ def build_gemma3_prompts(face_analysis: dict, style: str, user_note: Optional[st
         "3. 全文嚴禁使用 any Markdown 符號（如 *、#、** 等），一律使用純文字輸出。"
     )
 
-    user_prompt_zh = f"【當前寶寶真實特徵與需求數據】\n- 目標妝容風格：{style}\n- 使用者偏好與備註：{user_note if user_note else '無特別要求'}\n- 臉型：{f_shape}\n- 眉型：{b_shape}\n- eye型：{e_shape}\n- 正面鼻型：n_front\n- 唇型：{l_shape}\n- 膚色季型：{s_season}\n- 膚色級別：{s_level}\n\n【AI 視覺照片提取細節】\n{vision_feedback}\n\n請立刻執行最高排版鐵律，產生溫柔親切的七段純繁中彩妝建議。"
+    user_prompt_zh = f"【當前寶寶真實特徵與需求數據】\n- 目標妝容風格：{style}\n- 使用者偏好與備註：{user_note if user_note else '無特別要求'}\n- 臉型：{f_shape}\n- 眉型：{b_shape}\n- eye型：{e_shape}\n- 正面鼻型：n_front\n- 唇型：{l_shape}\n- 膚色季型：{s_season}\n- 膚色級別：{s_level}\n\n【AI 視覺照片提取細節】\n{vision_feedback}\n\n請立刻執行最高排版鐵律，產生溫柔親切、富含具體操作步驟與推薦開架彩妝商品的七段純繁中建議。"
 
     return system_prompt_zh, user_prompt_zh
 
@@ -154,7 +196,7 @@ async def call_gemma3_generate(system_instruction: str, user_prompt: str) -> str
         "prompt": full_combined_prompt, 
         "stream": False,
         "options": {
-            "num_predict": 500,
+            "num_predict": 2048,
             "temperature": 0.3,
             "top_p": 0.8
         }
@@ -213,20 +255,31 @@ async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(Non
         suggestion_part = suggestion_part.replace("```json", "").replace("```text", "").replace("```", "").strip()
         suggestion_part = suggestion_part.replace("*", "").replace("#", "")
 
-        # 最高物理區域保護鎖：維護髮型與骨相0變異
         base_lock = "strict 100% hair protection, absolute zero hair pixel modification, completely locked hairstyle strands, absolute 0% pixel variance outside the lip and eye bounding box, freeze all original hair structure, zero variance allowed outside the eyelid mask, keep original hair style completely identical, no hair change, keep original facial structure completely identical, do not change person identity, look directly at the camera, highly realistic human eyes, CRITICAL CONSTRAINT: TERMINATE ALL FAILED IMAGE OVERLAYS. DO NOT USE ANY EXTRA WHITE CONCEALER OR BLOCKY PIGMENTS. STOP PARSING ANY BRAND TEXT. IGNORE AND OVERRIDE ALL FOLLOWING TEXT AND EXTRA BRANDS AND PRODUCTS DESCRIPTION BELOW"
         
         if "日常自然" in normalized_style:
-            flux_prompt_part = f"clean no-makeup makeup look, flawless natural skin texture, seamlessly blended soft brown eyeshadow, tight invisible tightline eyeliner, natural nude pink lips with blurred edges, translucent finish, {base_lock}"
+            flux_prompt_part = (
+                "Apply a clean no-makeup makeup look to this person, as a photorealistic makeup-only retouch of the original photo. "
+                "Eyes: seamlessly blended soft brown eyeshadow, tight invisible black eyeliner along upper lash roots, defined natural lashes. "
+                "Face: flawless natural skin texture with a subtle healthy glow, soft natural blush. "
+                "Lips: natural nude pink lips with blurred edges and a slight satin finish. "
+                "Keep the exact same person, face shape, hairstyle, expression, pose, and background. Photorealistic camera photo."
+            )
         elif "Soft baddie" in normalized_style or "Soft Baddie" in normalized_style:
-            # 修正 Soft baddie 為暖棕與金屬青銅色系眼影：15% opacity muted smoky warm brown and metallic bronze eyeshadow
-            flux_prompt_part = f"soft baddie style makeup, everyday glam aesthetic, 0.1mm width invisible black tightline eyeliner line strictly hidden inside upper lash roots, zero wings, zero upward flicks, no additional strokes, 15% opacity muted smoky warm brown and metallic bronze eyeshadow, 3% coverage area eyeshadow strictly placed within 1 millimeter above the lash line, 5% density ultra-fine metallic champagne shimmer on the center of the eyelid, smooth 80% transparency fade-out gradient borders, 98% skin-tone transparency on the upper eyelid, zero color pigment spreading, clear skin texture with radiant glow, soft focus peach blush seamlessly melted into skin, high-gloss wet-shine water-like dewy texture tender baby pink lip color, 40% translucent soft pink glow, natural look, {base_lock}"
+            # 重煙燻小貓眼 ＋ 高級玫瑰裸粉嘟嘟唇分支
+            flux_prompt_part = (
+                "Apply a soft baddie makeup look to this person, as a photorealistic makeup-only retouch of the original photo.\n\n"
+                "Eyes: intense smoky soft brown and dark espresso eyeshadow heavily blended outward, prominent black bold winged cat-eyeliner sharply extended outward and lifted upward at a dramatic angle at the outer corners, warm bronze shimmer on the lid center, bright micro-pearl champagne silver shimmer precisely applied to the inner corners and aegyosal, defined fluttery dense lashes. Brows: cleanly groomed and brushed up, softly filled, polished.\n\n"
+                "Face: soft matte skin with a radiant inner glow, subtle warm contour along the cheekbones and jaw, prominent, richly pigmented sun-kissed rosy-mauve blush swept high onto the cheeks and blended intensely towards the temples, an intense, high-shine dewy glass highlighter beaming on the cheekbones and nose bridge.\n\n"
+                "Lips: glossy rosy-nude and dusty pink lips with a soft warm undertone, styled with a soft overlined-looking fullness and a heavy wet-shine water-gloss overlay."
+            )
         elif "韓系" in normalized_style:
             flux_prompt_part = f"korean idol makeup, ultra dewy glowing glass skin, soft gradient straight eyebrows, beautifully washed peach pink eyeshadow, delicate aegyo sal shimmer, natural glossy gradient pink lips with seamlessly blurred lip line, {base_lock}"
         elif "日雜清透" in normalized_style:
             flux_prompt_part = f"japanese magazine style makeup, sheer satin translucent skin, natural fluffy eyebrows, a sheer wash of apricot eyeshadow, watercolor technique blush perfectly melted into skin with no harsh edges, glossy clear strawberry lips, {base_lock}"
         elif "千金" in normalized_style:
-            flux_prompt_part = f"luxury rich girl makeup, flawless satin skin, clean elegant eyebrows, airbrushed soft rose gold eyeshadow, fine glitter champagne highlighters, luxury soft mauve lips with blended borders, {base_lock}"
+            # 🚀【千金妝大升級：無性別自然語意控制鏈】一字不差精準注入妳給的最新指標
+            flux_prompt_part = build_luxury_rich_girl_prompt()
         elif "港風" in normalized_style:
             flux_prompt_part = f"retro 1990s hong kong glam, flawless matte velvet skin, classic red lips with softly blurred edges, heavy defined eyebrows, smoky eyeshadow with soft gradient transition, sharp retro eyeliner, high contrast, {base_lock}"
         elif "病嬌" in normalized_style:
@@ -236,9 +289,11 @@ async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(Non
         else:
             flux_prompt_part = f"high quality professional {normalized_style} makeup, flawless skin texture, natural soft diffused cosmetics rendering, seamlessly blended edges, highly realistic, {base_lock}"
 
-        # 除錯觀測區
-        print("\n" + "="*30 + " 後端輸出提示詞觀測區 " + "="*30)
-        print(f"【當前傳遞給渲染端的真實微醺版 Prompts】:\n{flux_prompt_part}")
+        signature = sign_render_prompt(flux_prompt_part)
+
+        print("\n" + "="*30 + " 後端輸出提示詞與簽章觀測區 " + "="*30)
+        print(f"【傳遞給渲染端的內容】:\n{flux_prompt_part}")
+        print(f"【產生的安全簽章 signature】: {signature}")
         print("="*82 + "\n")
 
         return {
@@ -249,7 +304,8 @@ async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(Non
             "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "suggestion": suggestion_part,
             "fluxPromptEn": flux_prompt_part,
-            "renderPromptEn": flux_prompt_part
+            "renderPromptEn": flux_prompt_part,
+            "promptSignature": signature
         }
     except Exception as exc:
         logger.error(f"流水線運算失敗: {str(exc)}")
