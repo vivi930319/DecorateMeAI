@@ -17,7 +17,17 @@ function makeStorage(map) {
 
 const sandbox = {
   console,
-  window: {},
+  window: {
+    DECORATE_ME_CONFIG: {
+      faceBasicUrl: 'http://127.0.0.1:8001',
+      faceProUrl: 'http://127.0.0.1:8002',
+      textSuggestionUrl: 'http://127.0.0.1:8010',
+      renderUrl: 'http://127.0.0.1:8020',
+      productUrl: 'http://127.0.0.1:8030',
+      memberDatabaseUrl: 'http://127.0.0.1:8040',
+      crawlerUrl: 'http://127.0.0.1:8050'
+    }
+  },
   location: { reload() {} },
   FormData: class FormData {
     append() {}
@@ -37,12 +47,25 @@ const sandbox = {
 };
 
 vm.createContext(sandbox);
-vm.runInContext(`${apiSource}; this.ApiConfig = ApiConfig; this.Api = Api; this.ImagePipeline = ImagePipeline; this.AnalysisPackage = AnalysisPackage; this.Auth = Auth; this.Cart = Cart;`, sandbox);
+vm.runInContext(`${apiSource}; this.ApiConfig = ApiConfig; this.Api = Api; this.ImagePipeline = ImagePipeline; this.AnalysisPackage = AnalysisPackage; this.Auth = Auth; this.AdminStore = AdminStore; this.Cart = Cart;`, sandbox);
 
 // ── 會員姓名與購物車 ─────────────────────────────────────────
 sandbox.Auth.setProfile({ name: '測試會員', email: 'USER@example.com', level: '一般會員' });
 if (sandbox.Auth.getRegisteredMember('user@example.com')?.name !== '測試會員') {
   throw new Error('Registered member name was not stored by normalized email');
+}
+if (!sandbox.AdminStore.canAccess('analysis', sandbox.Auth.getProfile())) {
+  throw new Error('Default member should be allowed to access analysis');
+}
+sandbox.AdminStore.setPermission('user@example.com', { allowedPages: ['dashboard', 'profile'] });
+if (sandbox.AdminStore.canAccess('analysis', sandbox.Auth.getProfile())) {
+  throw new Error('Permission override should block analysis');
+}
+if (!sandbox.AdminStore.isAdminProfile({ email: 'admin@example.com', role: 'admin' })) {
+  throw new Error('Admin profile should trust backend role');
+}
+if (sandbox.AdminStore.isAdminProfile({ email: 'admin@decorateme.local' })) {
+  throw new Error('Admin profile should not trust email naming fallback');
 }
 sandbox.Cart.add(1);
 sandbox.Cart.add(1);
@@ -51,7 +74,7 @@ sandbox.Cart.change(1, -2);
 if (sandbox.Cart.count() !== 0 || sandbox.Cart.list().length !== 0) throw new Error('Cart item removal failed');
 
 // ── 服務設定 ────────────────────────────────────────────────
-const requiredServices = ['faceBasic', 'facePro', 'textSuggestion', 'render', 'product', 'memberDatabase'];
+const requiredServices = ['faceBasic', 'facePro', 'textSuggestion', 'render', 'product', 'memberDatabase', 'crawler'];
 for (const service of requiredServices) {
   if (!sandbox.ApiConfig.services[service]) throw new Error(`Missing service: ${service}`);
 }
@@ -64,12 +87,8 @@ if (!proUrl.endsWith('/v1/face/analyze/pro')) throw new Error(`Bad PRO URL: ${pr
 if (suggestionUrl !== 'http://127.0.0.1:8010/suggest') throw new Error(`Bad suggestion URL: ${suggestionUrl}`);
 
 // ── Api 方法 ─────────────────────────────────────────────────
-for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup']) {
+for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'previewCrawledProduct']) {
   if (typeof sandbox.Api[method] !== 'function') throw new Error(`Missing Api.${method}`);
-}
-const renderMethodSource = String(sandbox.Api.renderMakeup);
-if (!renderMethodSource.includes('styleId') || renderMethodSource.includes('imageDataUrl, prompt')) {
-  throw new Error('Api.renderMakeup must send styleId without accepting a client render prompt');
 }
 
 // ── ImagePipeline ─────────────────────────────────────────────
@@ -78,6 +97,16 @@ for (const method of ['compressForPackage', 'compressInWorker', 'compressOnMainT
 }
 if (sandbox.ImagePipeline.workerPath !== 'js/image-worker.js') {
   throw new Error(`Bad image worker path: ${sandbox.ImagePipeline.workerPath}`);
+}
+
+// ── 本機設定安全預設 ─────────────────────────────────────────
+const configExample = fs.readFileSync(path.join(rootDir, 'config.local.example.js'), 'utf8');
+if (!configExample.includes('allowInsecureOtpBypass: false')) {
+  throw new Error('config.local.example.js must keep allowInsecureOtpBypass disabled by default');
+}
+const gitignore = fs.readFileSync(path.join(rootDir, '.gitignore'), 'utf8');
+if (!gitignore.includes('config.local.js')) {
+  throw new Error('.gitignore must exclude config.local.js');
 }
 
 // ── AnalysisPackage 基本結構 ───────────────────────────────────

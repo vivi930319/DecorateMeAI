@@ -13,23 +13,13 @@ function getRuntimeApiConfig() {
 }
 
 const RuntimeApiConfig = getRuntimeApiConfig();
-const PRODUCTION_AI_GATEWAY_URL = 'https://ai-gateway-258021445391.asia-east1.run.app';
 
-function getAiGatewayUrl(runtimeConfig = getRuntimeApiConfig()) {
-    const configured = String(runtimeConfig.aiGatewayUrl || '').trim().replace(/\/$/, '');
-    if (configured) return configured;
-    if (typeof window === 'undefined' || !window.location) return '';
-    const productionHosts = new Set(['decorate-me.web.app', 'decorate-me.firebaseapp.com']);
-    return productionHosts.has(window.location.hostname) ? PRODUCTION_AI_GATEWAY_URL : '';
-}
-
-const AiGatewayUrl = getAiGatewayUrl(RuntimeApiConfig);
-try { sessionStorage.removeItem('beautyAuthCreds'); } catch (_) {}
-
+// 所有服務的 baseUrl 與金鑰一律由 config.local.js（window.DECORATE_ME_CONFIG）在執行時注入，
+// 這裡不寫死任何網址或金鑰，避免機密進版控外洩；未注入時為空字串，url() 會回空、不對外呼叫。
 const ApiConfig = {
     services: {
         faceBasic: {
-            baseUrl: AiGatewayUrl ? `${AiGatewayUrl}/face-basic` : (RuntimeApiConfig.faceBasicUrl || 'http://127.0.0.1:8001'),
+            baseUrl: RuntimeApiConfig.faceBasicUrl || '',
             apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/basic',
             posePath: '/v1/face/pose',
@@ -38,7 +28,7 @@ const ApiConfig = {
             jobResultPath: '/v1/face/jobs/{jobId}/result'
         },
         facePro: {
-            baseUrl: AiGatewayUrl ? `${AiGatewayUrl}/face-pro` : (RuntimeApiConfig.faceProUrl || 'http://127.0.0.1:8002'),
+            baseUrl: RuntimeApiConfig.faceProUrl || '',
             apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/pro',
             jobPath: '/v1/face/jobs/pro',
@@ -46,12 +36,12 @@ const ApiConfig = {
             jobResultPath: '/v1/face/jobs/{jobId}/result'
         },
         textSuggestion: {
-            baseUrl: RuntimeApiConfig.textSuggestionUrl || 'http://127.0.0.1:8010',
+            baseUrl: RuntimeApiConfig.textSuggestionUrl || '',
             apiKey: RuntimeApiConfig.textSuggestionApiKey || '',
             suggestPath: '/suggest'
         },
         render: {
-            baseUrl: AiGatewayUrl ? `${AiGatewayUrl}/render-service` : (RuntimeApiConfig.renderUrl || ''),
+            baseUrl: RuntimeApiConfig.renderUrl || '',
             apiKey: RuntimeApiConfig.renderApiKey || '',
             renderPath: '/render'
         },
@@ -59,6 +49,10 @@ const ApiConfig = {
             baseUrl: RuntimeApiConfig.productUrl || '',
             recommendPath: '/recommend-products',
             listPath: '/api/products'
+        },
+        crawler: {
+            baseUrl: RuntimeApiConfig.crawlerUrl || RuntimeApiConfig.productUrl || '',
+            previewPath: '/api/crawler/product-preview'
         },
         memberDatabase: {
             baseUrl: RuntimeApiConfig.memberDatabaseUrl || '',
@@ -87,50 +81,41 @@ const ApiConfig = {
 const Api = {
     config: ApiConfig,
 
-    _aiAccessToken() {
-        try { return sessionStorage.getItem('beautyAiAccessToken') || ''; }
-        catch (_) { return ''; }
-    },
-
-    _withAiAccess(headers = {}) {
-        const token = this._aiAccessToken();
-        return token ? { ...headers, Authorization: 'Bearer ' + token } : headers;
-    },
-
-    async _createAiSession(email, password) {
-        const gatewayUrl = getAiGatewayUrl();
-        if (!gatewayUrl) return;
-        const apiKey = this.config.services.faceBasic?.apiKey || this.config.services.render?.apiKey || '';
-        const headers = { 'Content-Type': 'application/json' };
+    async _warmRenderService(baseUrl, apiKey) {
+        if (!baseUrl) return;
+        const headers = {};
         if (apiKey) headers['X-API-Key'] = apiKey;
-        let response;
         try {
-            response = await fetch(gatewayUrl + '/auth/login', {
-                method: 'POST',
+            await fetch(`${baseUrl}/health`, {
+                method: 'GET',
                 headers,
-                body: JSON.stringify({ email, password })
+                cache: 'no-store',
             });
         } catch (_) {
-            const sessionError = new Error('會員登入成功，但 AI 安全工作階段無法建立，請稍後重新登入。');
-            sessionError.networkFailure = false;
-            throw sessionError;
+            // Ignore warm-up failures and let the real render request surface the actionable error.
         }
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok || !data.accessToken) {
-            const sessionError = new Error(data?.detail?.error?.message || 'AI 安全工作階段建立失敗，請重新登入。');
-            sessionError.networkFailure = false;
-            sessionError.status = response.status;
-            throw sessionError;
-        }
-        sessionStorage.setItem('beautyAiAccessToken', data.accessToken);
+    },
+
+    // face-basic / face-pro 的 min-instances 是 0，閒置後容器會縮到零，下一個人按分析就得等冷啟動
+    // （mediapipe 載模型特別久）。趁使用者還在選照片、還沒按下按鈕的空檔先打一發 /health 把容器叫醒，
+    // 等他真的送出時通常已經是熱的。故意不 await，純背景預熱，失敗也無所謂。
+    warmFaceServices() {
+        const runtime = getRuntimeApiConfig();
+        const apiKey = runtime.faceApiKey || this.config.services.faceBasic.apiKey || '';
+        const targets = [
+            runtime.faceBasicUrl || this.config.services.faceBasic.baseUrl,
+            runtime.faceProUrl || this.config.services.facePro.baseUrl,
+        ];
+        targets.filter(Boolean).forEach(baseUrl => { this._warmRenderService(baseUrl, apiKey); });
     },
 
     // 臉部分析服務的 X-API-Key（faceBasic/facePro 共用同一把）；沒設定時回空物件、不影響本機。
     _faceHeaders(service) {
         const key = this.config.services[service]?.apiKey;
-        return this._withAiAccess(key ? { 'X-API-Key': key } : {});
+        return key ? { 'X-API-Key': key } : {};
     },
 
+    // 後端建 job 時發 resultToken，之後查詢 job 狀態/結果必須帶 X-Job-Token，否則回 403
     _faceJobHeaders(service, resultToken) {
         const headers = { ...this._faceHeaders(service) };
         if (resultToken) headers['X-Job-Token'] = resultToken;
@@ -239,52 +224,45 @@ const Api = {
         return res.json();
     },
 
-    // 跟其他串接一樣送 analysisPackage，render 服務會從裡面讀 faceAnalysis / styleId，
-    // 再去跟建議服務要一段「針對這張臉」的渲染指令。
-    //
-    // 注意：後端會忽略資料包裡的 generativeText.renderPromptEn（那是前端送的、可被竄改，
-    // 而 renderApiKey 明文公開在網頁上）。prompt 一律由後端自己去要。
-    async renderMakeup({ imageDataUrl, styleId, strength = 0.45, analysisPackage = null }) {
+    async renderMakeup({ imageDataUrl, prompt, strength = 0.45 }) {
         const runtimeConfig = getRuntimeApiConfig();
-        const gatewayUrl = getAiGatewayUrl(runtimeConfig);
         const serviceConfig = {
             ...(this.config.services.render || {}),
-            baseUrl: gatewayUrl ? `${gatewayUrl}/render-service` : (runtimeConfig.renderUrl || this.config.services.render.baseUrl || ''),
+            baseUrl: runtimeConfig.renderUrl || this.config.services.render.baseUrl || '',
             apiKey: runtimeConfig.renderApiKey || this.config.services.render.apiKey || '',
         };
         const url = serviceConfig.baseUrl && serviceConfig.renderPath
             ? `${serviceConfig.baseUrl}${serviceConfig.renderPath}`
             : '';
         if (!url) throw new Error('renderUrl 未設定，請聯繫渲染端組員提供 Cloud Run URL');
-        let headers = { 'Content-Type': 'application/json' };
+        const headers = { 'Content-Type': 'application/json' };
         const apiKey = serviceConfig.apiKey;
         if (apiKey) headers['X-API-Key'] = apiKey;
-        headers = this._withAiAccess(headers);
+        const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
+        if (profile.email) headers['X-User-Email'] = profile.email;
+        if (profile.role) headers['X-User-Role'] = profile.role;
         let res;
         try {
-            res = await fetch(url, {
+            await this._warmRenderService(serviceConfig.baseUrl, apiKey);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            const requestInit = {
                 method: 'POST',
                 headers,
-                // 資料包裡的 images 是 base64 原圖，而圖片已經單獨用 image 送了 ——
-                // 整包再送一次會讓 payload 多一份圖，白白撐大請求（後端也有大小上限）。
-                body: JSON.stringify({
-                    image: imageDataUrl,
-                    styleId,
-                    strength,
-                    analysisPackage: analysisPackage
-                        ? { ...analysisPackage, images: undefined }
-                        : null,
-                }),
-            });
+                body: JSON.stringify({ image: imageDataUrl, prompt, strength }),
+            };
+            try {
+                res = await fetch(url, requestInit);
+            } catch (firstErr) {
+                // Cloud Run cold start or transient network hiccups can cause the first browser fetch to fail.
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                res = await fetch(url, requestInit);
+            }
         } catch (err) {
             throw new Error('無法連線到渲染服務：' + err.message);
         }
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
             if (res.status === 401) {
-                if (data?.detail?.error?.code?.startsWith('MEMBER_AUTH_')) {
-                    throw new Error('AI 安全工作階段已過期，請登出後重新登入。');
-                }
                 if (!apiKey) {
                     throw new Error('Render API 需要金鑰，但目前頁面沒有載到 renderApiKey。請重新整理，或檢查 config.local.js / 部署設定。');
                 }
@@ -300,6 +278,98 @@ const Api = {
             Auth.setProfile({ ...current, renderQuota: data.renderQuota });
         }
         return data;
+    },
+
+    // 非同步渲染：gpt-image-2 要跑 50~150 秒，同步等會撞 Cloud Run 逾時（實測一堆 504）。
+    // 改成送出後拿 jobId、每 2 秒輪詢一次，onProgress 會被餵 1~100 的進度給進度條用。
+    // 2026-07-15 對齊後端新接口：前端只送結構化資料（styleId + analysisPackage），prompt 由後端組
+    // （前端送的 prompt 會被後端忽略——renderApiKey 是明文，信任前端 prompt 等於任何人能用我們額度生任意圖）；
+    // 輪詢必須帶建立 job 時回的 resultToken（X-Job-Token），不帶會被 403 擋到逾時。
+    async renderMakeupAsync({ imageDataUrl, styleId = 'natural', analysisPackage = null, strength = 0.35, onProgress = null }) {
+        const runtimeConfig = getRuntimeApiConfig();
+        const baseUrl = runtimeConfig.renderUrl || this.config.services.render.baseUrl || '';
+        const apiKey = runtimeConfig.renderApiKey || this.config.services.render.apiKey || '';
+        if (!baseUrl) throw new Error('renderUrl 未設定，請聯繫渲染端組員提供 Cloud Run URL');
+
+        const headers = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['X-API-Key'] = apiKey;
+        const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
+        if (profile.email) headers['X-User-Email'] = profile.email;
+        if (profile.role) headers['X-User-Role'] = profile.role;
+
+        const emit = (p) => { if (typeof onProgress === 'function') onProgress(p); };
+
+        let submitRes;
+        try {
+            await this._warmRenderService(baseUrl, apiKey);
+            const requestInit = {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ image: imageDataUrl, styleId, analysisPackage, strength }),
+            };
+            try {
+                submitRes = await fetch(`${baseUrl}/render/jobs`, requestInit);
+            } catch (firstErr) {
+                // 冷啟動或瞬斷時第一次 fetch 可能直接失敗，重試一次
+                await new Promise(resolve => setTimeout(resolve, 1500));
+                submitRes = await fetch(`${baseUrl}/render/jobs`, requestInit);
+            }
+        } catch (err) {
+            throw new Error('無法連線到渲染服務：' + err.message);
+        }
+
+        const submitted = await submitRes.json().catch(() => ({}));
+        if (!submitRes.ok) {
+            if (submitRes.status === 401) {
+                throw new Error('Render API 金鑰驗證失敗。請重新整理頁面後再試。');
+            }
+            throw new Error(submitted?.error?.message || submitted?.error || `Render API HTTP ${submitRes.status}`);
+        }
+
+        const jobId = submitted.jobId;
+        if (!jobId) throw new Error(submitted?.error?.message || '渲染服務沒有回傳 jobId');
+        emit(submitted.progress || 1);
+
+        // 快取命中時後端會直接回 completed，不用輪詢
+        if (submitted.status === 'completed' && submitted.afterImageUrl) {
+            emit(100);
+            return submitted;
+        }
+
+        // 輪詢憑證：只活在這次渲染流程，不落地保存
+        if (submitted.resultToken) headers['X-Job-Token'] = submitted.resultToken;
+        const pollUrl = `${baseUrl}/render/jobs/${jobId}`;
+        const deadline = Date.now() + 5 * 60 * 1000;  // 5 分鐘保險絲，正常 150 秒內一定結束
+        while (Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            let job;
+            try {
+                const pollRes = await fetch(pollUrl, { method: 'GET', headers, cache: 'no-store' });
+                job = await pollRes.json().catch(() => ({}));
+                if (!pollRes.ok) {
+                    // 輪詢途中的暫時性錯誤不該直接判死，繼續等下一輪
+                    if (pollRes.status === 404) throw new Error('渲染工作不存在或已過期');
+                    continue;
+                }
+            } catch (err) {
+                if (err.message === '渲染工作不存在或已過期') throw err;
+                continue;  // 網路瞬斷，下一輪再試
+            }
+
+            emit(job.progress || 0);
+            if (job.status === 'completed' && job.afterImageUrl) {
+                emit(100);
+                if (job.renderQuota && Auth.getProfile) {
+                    const current = Auth.getProfile() || {};
+                    Auth.setProfile({ ...current, renderQuota: job.renderQuota });
+                }
+                return job;
+            }
+            if (job.status === 'failed') {
+                throw new Error(job?.error?.message || job?.error || '妝容渲染失敗');
+            }
+        }
+        throw new Error('渲染逾時（超過 5 分鐘）。請稍後再試一次。');
     },
 
     // 我們的分析結果 LAB 欄位是小寫 {L,a,b}，但 product 服務要求大寫 {L,A,B}，不轉換的話永遠會被判定缺欄位
@@ -363,7 +433,11 @@ const Api = {
             matchReason: product.matchReason || '',
             score: product.score ?? null,
             popularity: product.popularity ?? product.sales ?? product.views ?? product.reviews ?? product.favorite_count ?? product.score ?? 0,
-            salePageId: product.sale_page_id || product.salePageId || null,
+            // 推薦端點的 productUrl 實際上是 sale_page_id slug（不是 http 網址），留下來讓前端能跟商品清單比對補圖
+            salePageId: product.sale_page_id || product.salePageId
+                || ((typeof product.productUrl === 'string' && product.productUrl && !/^https?:/i.test(product.productUrl)) ? product.productUrl : null),
+            sourceUrl: product.sourceUrl || product.source_url
+                || ((typeof product.productUrl === 'string' && /^https?:/i.test(product.productUrl)) ? product.productUrl : ''),
             hex: /^#[0-9a-fA-F]{3,8}$/.test(product.hex || '') ? product.hex : null,
             tags: product.tags || [],
             source: 'product-api'
@@ -470,12 +544,78 @@ const Api = {
         }
     },
 
-    // ═══ 後台管理：members 讀寫都走管理員 session cookie；若 GET /api/members 失敗，通常是 admin session / CORS / SameSite 設定有問題 ═══
-    // 不保存明文密碼；跨站 session cookie 失效後由使用者重新登入。
-    async _reLogin() {
-        return false;
+    async previewCrawledProduct(sourceUrl) {
+        const service = this.config.services.crawler;
+        if (!service?.baseUrl) return { ok: false, code: 'CRAWLER_URL_NOT_CONFIGURED', error: 'crawlerUrl 與 productUrl 都尚未設定' };
+        const url = `${service.baseUrl}${service.previewPath}`;
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeout = controller ? setTimeout(() => controller.abort(), 30000) : null;
+        try {
+            const profile = typeof Auth !== 'undefined' ? (Auth.getProfile() || {}) : {};
+            const res = await this._fetchWithRelogin(url, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: sourceUrl,
+                    source: 'manual_admin_import',
+                    adminId: profile.email || null
+                }),
+                ...(controller ? { signal: controller.signal } : {})
+            });
+            if (timeout) clearTimeout(timeout);
+            const data = await res.json().catch(() => ({}));
+            const payload = data.data || data.product || {};
+            if (!res.ok || data.success === false) {
+                return {
+                    ok: false,
+                    status: res.status,
+                    code: data?.error?.code || data.code || `HTTP_${res.status}`,
+                    error: data?.error?.message || data.message || `HTTP ${res.status}`,
+                    detail: data?.error?.detail || ''
+                };
+            }
+            const imageUrls = Array.isArray(payload.imageUrls)
+                ? payload.imageUrls.filter(Boolean)
+                : [payload.imageUrl || payload.image_url || payload.img].filter(Boolean);
+            return {
+                ok: true,
+                status: data.status || 'ok',
+                message: data.message || '',
+                product: {
+                    sourceUrl: payload.sourceUrl || sourceUrl,
+                    sourceSite: payload.sourceSite || '',
+                    name: payload.productName || payload.name || '',
+                    brand: payload.brand || '',
+                    price: payload.price ?? '',
+                    currency: payload.currency || '',
+                    description: payload.description || payload.desc || '',
+                    imageUrls,
+                    category: payload.category || payload.type || '',
+                    hex: payload.hex || '',
+                    specs: payload.specs || {},
+                    rawText: payload.rawText || '',
+                    missingFields: Array.isArray(payload.missingFields) ? payload.missingFields : []
+                },
+                raw: data
+            };
+        } catch (err) {
+            if (timeout) clearTimeout(timeout);
+            if (err?.name === 'AbortError') return { ok: false, code: 'FETCH_TIMEOUT', error: '爬蟲服務逾時，請稍後重試' };
+            return { ok: false, code: 'NETWORK_ERROR', error: '爬蟲服務連線失敗：' + err.message };
+        }
     },
-    // 保留既有呼叫介面；_reLogin 固定為 false，因此不再以明文密碼背景重登。
+
+    // ═══ 後台管理：members 讀寫都走管理員 session cookie；若 GET /api/members 失敗，通常是 admin session / CORS / SameSite 設定有問題 ═══
+    // 跨站 session cookie 常在重整後被瀏覽器清掉，導致 admin 請求變 401。
+    // 用登入時暫存的帳密（sessionStorage，關分頁即清）在背景自動重登一次拿新 cookie，使用者無感。
+    async _reLogin() {
+        let creds = null;
+        try { creds = JSON.parse(sessionStorage.getItem('beautyAuthCreds') || 'null'); } catch (_) {}
+        if (!creds || !creds.email || !creds.password) return false;
+        try { await this.login(creds.email, creds.password); return true; } catch (_) { return false; }
+    },
+    // 一般請求包一層：遇到 401 就自動重登再重試一次（login 本身走原生 fetch，不會遞迴）
     async _fetchWithRelogin(input, init) {
         let res = await fetch(input, init);
         if (res.status === 401 && await this._reLogin()) {
@@ -541,7 +681,7 @@ const Api = {
         }
     },
 
-    // 會員點數：GET /api/members/{email}/points → { balance, transactions[] }。後台顯示用，admin session 可讀任一會員
+    // 會員點數：GET /api/members/{email}/points → { balance, lifetime, transactions[] }。
     async getMemberPoints(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false, balance: null };
@@ -558,9 +698,94 @@ const Api = {
             const earned = txns.length
                 ? txns.reduce((s, t) => s + (Number(t.delta) > 0 ? Number(t.delta) : 0), 0)
                 : null;
-            return { ok: true, balance: data.balance ?? null, earned };
+            return { ok: true, balance: data.balance ?? null, lifetime: data.lifetime ?? earned, earned, transactions: txns };
         } catch (_) {
             return { ok: false, balance: null };
+        }
+    },
+
+    async getCheckinStatus(email) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/check-in`, {
+                method: 'GET',
+                credentials: 'include',
+                cache: 'no-store'
+            });
+            if (!res.ok) return { ok: false, status: res.status };
+            const data = await res.json().catch(() => ({}));
+            return { ok: true, ...data };
+        } catch (_) {
+            return { ok: false };
+        }
+    },
+
+    async checkInMember(email) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/check-in`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+            return { ok: true, ...data };
+        } catch (_) {
+            return { ok: false };
+        }
+    },
+
+    async listMemberTasks(email) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false, tasks: [] };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/tasks`, {
+                method: 'GET',
+                credentials: 'include',
+                cache: 'no-store'
+            });
+            if (!res.ok) return { ok: false, status: res.status, tasks: [] };
+            const data = await res.json().catch(() => ({}));
+            return { ok: true, tasks: Array.isArray(data.tasks) ? data.tasks : [] };
+        } catch (_) {
+            return { ok: false, tasks: [] };
+        }
+    },
+
+    async claimMemberTask(email, taskId) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email || !taskId) return { ok: false };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/tasks/${encodeURIComponent(taskId)}/claim`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+            return { ok: true, ...data };
+        } catch (_) {
+            return { ok: false };
+        }
+    },
+
+    async redeemMemberTheme(email, themeId) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email || !themeId) return { ok: false };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/theme-shop/${encodeURIComponent(themeId)}/redeem`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+            return { ok: true, ...data };
+        } catch (_) {
+            return { ok: false };
         }
     },
 
@@ -653,33 +878,71 @@ const Api = {
         }
     },
 
-    async recommendProducts(faceAnalysis, styleId) {
+    async deleteRemoteProduct(rawId) {
+        const baseUrl = this.config.services.product.baseUrl;
+        if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
+        if (rawId == null) return { ok: false, error: '找不到這筆商品的資料庫 id' };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/products/${encodeURIComponent(rawId)}`, {
+                method: 'DELETE',
+                credentials: 'include'
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    // LAB 物件（{L,a,b} 或 {L,A,B}）轉成推薦端新規格要的陣列 [L, a, b]
+    _labToArray(lab) {
+        const obj = this._labToUpperKeys(lab);
+        if (!obj) return null;
+        return [obj.L ?? 0, obj.A ?? 0, obj.B ?? 0];
+    },
+
+    // 2026-07-15 起商品推薦端改吃規格書格式：整包 analysisPackage（faceAnalysis 巢狀、lab 用陣列），
+    // 回應也改在 analysisPackage.recommendations.products 底下。詳見「演算法端接口規格書_analysis_package商品推薦_2026-07-13.md」。
+    async recommendProducts(analysisPackage, styleId) {
         const url = this.config.url('product', 'recommendPath');
         if (!url) return { ok: false, products: [] };
         try {
-            const skinLab = this._labToUpperKeys(faceAnalysis?.skinTone?.lab);
-            const lipLab = this._labToUpperKeys(faceAnalysis?.lipLab);
+            // 相容舊呼叫：如果傳進來的已經是 faceAnalysis（沒有 faceAnalysis 子欄位但有 faceShape/skinTone），自己包一層
+            const fa = analysisPackage?.faceAnalysis
+                || ((analysisPackage?.faceShape || analysisPackage?.skinTone) ? analysisPackage : null);
+            const suggestion = analysisPackage?.generativeText?.suggestion || null;
             const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    lab:        skinLab || lipLab || null,   // 後端新格式：頂層要色彩資料（lab / hex / hsv / vector 其一）
-                    faceShape:  faceAnalysis?.faceShape  || null,
-                    eyeShape:   faceAnalysis?.eyeShape   || null,
-                    skinTone: {
-                        season:  faceAnalysis?.skinTone?.season || null,
-                        level:   faceAnalysis?.skinTone?.level  || null,
-                        lab:     skinLab,
+                    analysisPackage: {
+                        id:    analysisPackage?.id || null,
+                        style: styleId || null,
+                        faceAnalysis: {
+                            faceShape: fa?.faceShape || null,
+                            browShape: fa?.browShape || null,
+                            eyeShape:  fa?.eyeShape  || null,
+                            lipShape:  fa?.lipShape  || null,
+                            skinTone: {
+                                season: fa?.skinTone?.season || null,
+                                level:  fa?.skinTone?.level  || null,
+                                lab:    this._labToArray(fa?.skinTone?.lab),
+                            },
+                            lipLab: this._labToArray(fa?.lipLab),
+                        },
+                        ...(suggestion ? { generativeText: { suggestion } } : {}),
                     },
-                    lipLab:     lipLab,
-                    // 新資料庫 2026-07-10 版本只要收到非空 style 會在後端觸發
-                    // "style_bonus is not defined" 500；先送 null 讓色彩推薦可正常回 12 筆。
-                    style:      null,
+                    limit: 12,
                 })
             });
             if (!res.ok) return { ok: false, status: res.status, products: [] };
             const data = await res.json();
-            const list = data.recommendations || data.products || [];  // 後端回 recommendations；相容舊 products
+            const list = data.analysisPackage?.recommendations?.products
+                || data.recommendations?.products
+                || data.recommendations
+                || data.products
+                || [];  // 新格式在 analysisPackage.recommendations.products；相容舊格式
             return {
                 ok: true,
                 ...data,
@@ -693,7 +956,6 @@ const Api = {
     },
 
     async login(email, password) {
-        try { sessionStorage.removeItem('beautyAiAccessToken'); } catch (_) {}
         let res;
         const doLogin = (withCreds) => fetch(this.config.url('memberDatabase', 'loginPath'), {
             method: 'POST',
@@ -716,17 +978,15 @@ const Api = {
             // 伺服器有回應，只是明確拒絕（帳密錯誤、帳號停權等）——這不是「連不上」，不能被當成 fallback 條件，否則等於帳密驗證形同虛設
             let detail = null;
             try { detail = await res.json(); } catch (_) {}
-            const backendCode = detail?.error?.code || null;
-            const credentialFailure = res.status === 401 || ['USER_NOT_FOUND', 'WRONG_PASSWORD'].includes(backendCode);
-            const err = new Error(credentialFailure ? '帳號或密碼錯誤' : (detail?.error?.message || '登入失敗'));
+            const err = new Error(detail?.error?.message || '帳號或密碼錯誤');
             err.networkFailure = false;
             err.status = res.status;
-            err.code = credentialFailure ? 'INVALID_CREDENTIALS' : backendCode;
+            err.code = detail?.error?.code || null;  // 未註冊 USER_NOT_FOUND / 密碼錯 WRONG_PASSWORD（後端支援時前端據此分流）
             throw err;
         }
-        const data = await res.json();
-        await this._createAiSession(email, password);
-        return data;
+        // 暫存帳密（sessionStorage，關分頁即清）供 session 掉時背景自動重登用
+        try { sessionStorage.setItem('beautyAuthCreds', JSON.stringify({ email, password })); } catch (_) {}
+        return res.json();
     },
 
     async register(payload) {
@@ -1069,8 +1329,9 @@ const AnalysisPackage = {
     }
 };
 
-// 舊版 Ollama 偶爾會把英文渲染指令黏在中文建議後面；正式渲染已改由後端組 prompt，
-// 前端只保留中文建議，偵測到第二部分時直接切掉。
+// Ollama 有時候會把「第一部分：中文建議」「第二部分：英文渲染指令」黏在同一串文字裡回傳，
+// 後端拆分不穩定，偶爾會漏拆。這裡在前端再做一層保護：只要偵測到「第二部分」標記，
+// 就把它從中文建議裡切掉，切下來的內容轉去當渲染指令用，不會顯示在建議畫面上。
 function splitOllamaTwoPartSuggestion(rawText) {
     const text = String(rawText || '');
     const match = text.match(/(?:^|\n)\s*第[二2]部分[^\n]*\n?/);
@@ -1078,6 +1339,32 @@ function splitOllamaTwoPartSuggestion(rawText) {
     const suggestion = text.slice(0, match.index).trim();
     const leakedEnglishPart = text.slice(match.index + match[0].length).trim();
     return { suggestion, leakedEnglishPart };
+}
+
+function buildRenderPrompt(faceAnalysis, styleId, suggestion = '', ollamaRenderPromptEn = '', userCustomPrompt = '') {
+    // 只剩兩塊：Ollama 自己生成的妝容指令 + 我們固定的「不要改人物」鎖定句
+    const customInstruction = String(userCustomPrompt || '').trim();
+    const makeupInstruction = customInstruction || String(ollamaRenderPromptEn || '').trim() || 'Apply natural everyday makeup.';
+
+    // 使用者自己寫的 prompt 通常已經自帶身分鎖，再疊一段 identityLock 會讓「不要改」的句子
+    // 壓過妝容指令，gpt-image-2 就乾脆輸出近乎原圖（妝完全上不去）。自訂時原封不動送出。
+    if (customInstruction) return customInstruction;
+
+    const identityLock = [
+        `Create a photorealistic camera photo edit, not AI art.`,
+        `Keep the original photo quality, lens perspective, lighting, shadows, skin texture, pores, fine lines, and natural facial asymmetry.`,
+        `Do not change this person's identity or appearance.`,
+        `Keep face shape, facial structure, eye shape, nose, lips, skin tone, skin texture, pores, fine lines, wrinkles, and hair completely identical to the original photo.`,
+        `Preserve the subject's original gender and biological sex characteristics; do not feminize or masculinize the face, and keep any facial hair, brow thickness, and jawline unchanged.`,
+        `Keep the original hairstyle, hair length, and hairline exactly identical; do not add, lengthen, shorten, or restyle the hair.`,
+        `Do not smooth, airbrush, whiten, reshape, slim the face, enlarge eyes, alter age, alter ethnicity, or beautify facial features beyond applying makeup.`,
+        `Keep the exact same pose, posture, body position, head angle, hand position, gesture, and action as the original photo — do not let the person move, turn, or change stance.`,
+        `Keep clothing, background, lighting, camera angle, camera framing, and expression completely identical to the original photo.`,
+        `Avoid plastic skin, porcelain skin, doll-like face, CGI, 3D render, illustration, painting, glamour retouch, studio portrait, or beauty filter effects.`,
+        `This must be the exact same person in the exact same pose, only wearing makeup — nothing else about the photo should change.`,
+    ].join(' ');
+
+    return `${makeupInstruction} ${identityLock}`;
 }
 
 const AnalysisDraft = {
@@ -1126,7 +1413,6 @@ const Auth = {
         sessionStorage.removeItem('beautyUser');
         sessionStorage.removeItem('beautyProfile');
         sessionStorage.removeItem('beautyAuthCreds');
-        sessionStorage.removeItem('beautyAiAccessToken');
         location.reload();
     },
 };
