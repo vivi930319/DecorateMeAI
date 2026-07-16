@@ -785,6 +785,12 @@ admin: `
     <div class="member-section-head">
         <h2>商品管理</h2>
     </div>
+    <div class="admin-product-search-panel">
+        <label><span>搜尋資料庫商品</span><input id="adminProductSearch" type="search" placeholder="輸入品牌、商品名稱、分類或關鍵字" autocomplete="off"></label>
+        <button class="admin-secondary-button" id="adminProductSearchClearBtn" type="button">清除</button>
+        <a class="admin-secondary-button" id="adminProductGoogleSearch" href="https://www.google.com/search?q=%E5%BD%A9%E5%A6%9D+%E5%95%86%E5%93%81" target="_blank" rel="noopener noreferrer">到 Google 找商品</a>
+        <p id="adminProductSearchStatus" aria-live="polite">輸入關鍵字即可快速篩選資料庫商品。</p>
+    </div>
     <div class="admin-product-grid">
         <form class="admin-product-form" id="adminProductForm">
             <div class="admin-product-form-mode">編輯中：<span id="adminProductEditingLabel"></span></div>
@@ -806,9 +812,10 @@ admin: `
             <label>商品描述<textarea id="adminProductDesc" placeholder="顯示在前台商品詳情頁的說明文字"></textarea></label>
             <label>色號（用逗號分隔 Hex 色碼）<input id="adminProductShades" type="text" placeholder="例如：#3A241C,#C99070,#B5654A"></label>
             <div class="admin-product-form-actions">
-                <button class="btn-gold btn-sm" type="submit" id="adminProductSubmitBtn">新增產品</button>
-                <button class="btn-outline btn-sm" type="button" id="adminProductCancelBtn" style="display:none">切回新增</button>
-                <button class="admin-danger-button compact" type="button" id="adminProductDeleteBtn" style="display:none">刪除此商品</button>
+                <button class="btn-gold btn-sm" type="button" id="adminProductCreateBtn">新增商品</button>
+                <button class="btn-outline btn-sm" type="button" id="adminProductEditBtn" disabled>儲存編輯</button>
+                <button class="admin-danger-button compact" type="button" id="adminProductDeleteBtn" disabled>刪除商品</button>
+                <button class="btn-outline btn-sm" type="button" id="adminProductCancelBtn" style="display:none">取消選取</button>
             </div>
         </form>
         <div class="admin-product-manager">
@@ -3505,7 +3512,8 @@ const PageInit = {
         };
         let editingProductId = null;
         const productForm = document.getElementById('adminProductForm');
-        const submitBtn = document.getElementById('adminProductSubmitBtn');
+        const createBtn = document.getElementById('adminProductCreateBtn');
+        const editBtn = document.getElementById('adminProductEditBtn');
         const cancelBtn = document.getElementById('adminProductCancelBtn');
         const formDeleteBtn = document.getElementById('adminProductDeleteBtn');
         const editingLabel = document.getElementById('adminProductEditingLabel');
@@ -3514,14 +3522,16 @@ const PageInit = {
             editingProductId = null;
             productForm.reset();
             productForm.classList.remove('is-editing');
-            submitBtn.textContent = '新增商品';
+            createBtn.disabled = false;
+            editBtn.disabled = true;
             cancelBtn.style.display = 'none';
-            if (formDeleteBtn) formDeleteBtn.style.display = 'none';
+            if (formDeleteBtn) formDeleteBtn.disabled = true;
         };
 
         // 商品管理：只吃真商品資料庫（/api/products），不再顯示本機 demo 商品
         let dbProducts = null;
         let dbProductsError = '';
+        let productSearchQuery = '';
         const CAT_TO_TYPE = { '底妝':'foundations', '眼影':'eyeshadows', '眼線/睫毛':'eyeliner_mascara', '唇彩':'lipsticks', '腮紅':'blushes', '眉毛彩妝':'eyebrows', '修容':'contouring', '打亮':'highlighters' };
         const TYPE_TO_CAT = Object.fromEntries(Object.entries(CAT_TO_TYPE).map(([cat, type]) => [type, cat]));
 
@@ -3539,9 +3549,10 @@ const PageInit = {
             document.getElementById('adminProductShades').value = product.hex || '';
             productForm.classList.add('is-editing');
             editingLabel.textContent = product.name || id;
-            submitBtn.textContent = '更新商品';
+            createBtn.disabled = true;
+            editBtn.disabled = false;
             cancelBtn.style.display = '';
-            if (formDeleteBtn) formDeleteBtn.style.display = '';
+            if (formDeleteBtn) formDeleteBtn.disabled = false;
             productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
         };
 
@@ -3557,7 +3568,21 @@ const PageInit = {
                 area.innerHTML = `<tr><td colspan="6"><div class="empty-state compact">${escapeHtml(message)}</div></td></tr>`;
                 return;
             }
-            const products = dbProducts;
+            const normalizedQuery = productSearchQuery.trim().toLowerCase();
+            const products = normalizedQuery
+                ? dbProducts.filter(product => [product.name, product.brand, product.cat, product.desc, product.rawId, product.id]
+                    .some(value => String(value || '').toLowerCase().includes(normalizedQuery)))
+                : dbProducts;
+            const searchStatus = document.getElementById('adminProductSearchStatus');
+            if (searchStatus) {
+                searchStatus.textContent = normalizedQuery
+                    ? `找到 ${products.length} 筆符合「${productSearchQuery.trim()}」的資料庫商品。`
+                    : `目前資料庫共有 ${dbProducts.length} 筆商品。`;
+            }
+            if (!products.length) {
+                area.innerHTML = `<tr><td colspan="6"><div class="empty-state compact">資料庫沒有符合「${escapeHtml(productSearchQuery.trim())}」的商品，可使用上方 Google 搜尋找來源頁，再交由爬蟲匯入。</div></td></tr>`;
+                return;
+            }
             area.innerHTML = products.map(product => `<tr class="admin-product-row" data-edit-product="${escapeHtml(product.id)}">
                 <td><div class="admin-product-cell">${phBox('product-thumb', product.name, product.img)}<div class="admin-user"><b>${escapeHtml(product.name)}</b><span>DB id: ${escapeHtml(String(product.rawId ?? product.id))}</span></div></div></td>
                 <td>${escapeHtml(product.cat)}</td>
@@ -3604,6 +3629,23 @@ const PageInit = {
         };
         const productReloadBtn = document.getElementById('adminReloadProductsBtn');
         if (productReloadBtn) productReloadBtn.onclick = loadAdminProducts;
+        const productSearchInput = document.getElementById('adminProductSearch');
+        const productSearchClearBtn = document.getElementById('adminProductSearchClearBtn');
+        const productGoogleSearch = document.getElementById('adminProductGoogleSearch');
+        const updateProductSearch = () => {
+            productSearchQuery = productSearchInput?.value || '';
+            if (productGoogleSearch) {
+                const terms = productSearchQuery.trim() || '彩妝 商品';
+                productGoogleSearch.href = `https://www.google.com/search?q=${encodeURIComponent(`${terms} 彩妝 商品`)}`;
+            }
+            renderProducts();
+        };
+        if (productSearchInput) productSearchInput.oninput = updateProductSearch;
+        if (productSearchClearBtn) productSearchClearBtn.onclick = () => {
+            if (productSearchInput) productSearchInput.value = '';
+            updateProductSearch();
+            productSearchInput?.focus();
+        };
         loadAdminProducts();
 
         const productRowsEl = document.getElementById('adminProductRows');
@@ -3644,6 +3686,12 @@ const PageInit = {
         });
 
         if (cancelBtn) cancelBtn.onclick = () => exitEditMode();
+        if (createBtn) createBtn.onclick = () => {
+            if (!editingProductId) productForm.requestSubmit();
+        };
+        if (editBtn) editBtn.onclick = () => {
+            if (editingProductId) productForm.requestSubmit();
+        };
         if (formDeleteBtn) formDeleteBtn.onclick = () => {
             if (!editingProductId) return;
             const rowDeleteBtn = [...document.querySelectorAll('[data-delete-product]')]
@@ -3681,9 +3729,10 @@ const PageInit = {
             };
             if (brand) payload.brand = brand;
             if (sourceUrl) payload.source_url = sourceUrl;
-            submitBtn.disabled = true;
+            const actionBtn = editingProductId ? editBtn : createBtn;
+            actionBtn.disabled = true;
             const finish = (result, okMsg) => {
-                submitBtn.disabled = false;
+                actionBtn.disabled = false;
                 if (!result.ok) {
                     showAlert(`資料庫寫入失敗：${result.error}${result.status === 401 ? '（管理員 session 沒帶上——請確認已用資料庫的 admin 帳號重新登入）' : ''}`, { type: 'error' });
                     return false;

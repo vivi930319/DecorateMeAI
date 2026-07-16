@@ -129,6 +129,13 @@
                     <button class="admin-secondary-button" id="adminReloadProductsBtn" type="button">重新讀取</button>
                 </div>
 
+                <div class="admin-product-search-panel">
+                    <label><span>搜尋資料庫商品</span><input id="adminProductSearch" type="search" placeholder="輸入品牌、商品名稱、分類或關鍵字" autocomplete="off"></label>
+                    <button class="admin-secondary-button" id="adminProductSearchClearBtn" type="button">清除</button>
+                    <a class="admin-secondary-button" id="adminProductGoogleSearch" href="https://www.google.com/search?q=%E5%BD%A9%E5%A6%9D+%E5%95%86%E5%93%81" target="_blank" rel="noopener noreferrer">到 Google 找商品</a>
+                    <p id="adminProductSearchStatus" aria-live="polite">輸入關鍵字即可快速篩選資料庫商品。</p>
+                </div>
+
                 <div class="admin-product-grid">
                     <form class="admin-product-form" id="adminProductForm">
                         <div class="admin-block-heading"><span>Editor</span><h3>商品資料</h3></div>
@@ -153,9 +160,10 @@
                         <label>商品描述<textarea id="adminProductDesc" placeholder="商品頁顯示內容"></textarea></label>
                         <label>色號<input id="adminProductShades" type="text" placeholder="#3A241C, #C99070"></label>
                         <div class="admin-product-form-actions">
-                            <button class="admin-primary-button" type="submit" id="adminProductSubmitBtn">新增商品</button>
-                            <button class="admin-secondary-button" type="button" id="adminProductCancelBtn" style="display:none">切回新增</button>
-                            <button class="admin-danger-button" type="button" id="adminProductDeleteBtn" style="display:none">刪除此商品</button>
+                            <button class="admin-primary-button" type="button" id="adminProductCreateBtn">新增商品</button>
+                            <button class="admin-secondary-button" type="button" id="adminProductEditBtn" disabled>儲存編輯</button>
+                            <button class="admin-danger-button" type="button" id="adminProductDeleteBtn" disabled>刪除商品</button>
+                            <button class="admin-secondary-button" type="button" id="adminProductCancelBtn" style="display:none">取消選取</button>
                         </div>
                     </form>
 
