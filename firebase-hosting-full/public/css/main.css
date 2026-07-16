@@ -870,9 +870,7 @@ body {
 /* elegant image placeholder · 精品打光產品框 */
 .ph {
     position:relative; overflow:hidden;
-    background:
-        radial-gradient(125% 85% at 50% 16%, rgba(255,252,249,0.78) 0%, transparent 52%),
-        linear-gradient(158deg, #F1D9D2 0%, #E7C2B7 52%, #DCAEA1 100%);
+    background:#fff;
     display:flex; align-items:center; justify-content:center;
 }
 .ph::before { /* 細金內框 */
