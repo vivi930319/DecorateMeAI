@@ -447,7 +447,13 @@ function buildCurrentLookRecord(){
 // 後端 saved_looks 一筆 → 本機妝容記錄格式（供跨裝置拉回時重繪用）
 function mapRemoteSavedLook(L){
     const summary = (L && (L.analysisSummary || L.analysis_summary)) || {};
-    const summaryObj = (summary && typeof summary === 'object') ? summary : {};
+    let summaryObj = (summary && typeof summary === 'object') ? summary : {};
+    if (typeof summary === 'string') {
+        try {
+            const parsed = JSON.parse(summary);
+            summaryObj = (parsed && typeof parsed === 'object') ? parsed : {};
+        } catch (_) {}
+    }
     const nested = (summaryObj.raw && typeof summaryObj.raw === 'object') ? summaryObj.raw : {};
     const source = Object.keys(nested).length ? nested : summaryObj;
     const face = source.faceAnalysis || source['臉部分析'] || source;
