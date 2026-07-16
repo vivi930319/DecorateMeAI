@@ -11,7 +11,7 @@
 ```mermaid
 flowchart TB
   classDef n fill:#ffffff,stroke:#000000,color:#000000;
-  U["使用者（網頁 / iOS）"]
+  U["使用者（網頁）"]
   subgraph C["客戶端"]
     WEB["網頁前端"]
    
