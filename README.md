@@ -24,7 +24,6 @@ flowchart TB
   EXT["Replicate / GCS / Firestore"]
 
   U --> WEB
-  U --> IOS
   WEB --> FACE
   WEB --> OLL
   WEB --> DBS
