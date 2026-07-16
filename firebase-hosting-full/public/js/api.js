@@ -781,6 +781,16 @@ const Api = {
     },
 
     // ═══ 收藏妝容對比圖 saved_looks：跨裝置持久化，走登入 session（本機 localStorage 仍是離線快取，遠端失敗不影響本機） ═══
+    _isStorableImageUrl(value) {
+        const raw = String(value || '').trim();
+        if (!raw || raw.length > 500) return false;
+        try {
+            const url = new URL(raw);
+            return url.protocol === 'https:' || url.protocol === 'http:';
+        } catch (_) {
+            return false;
+        }
+    },
     async listSavedLooks(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false, looks: [] };
@@ -801,14 +811,26 @@ const Api = {
     async createSavedLook(email, payload) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false };
-        // 後端要求 style 與 afterImageUrl 必填；沒有渲染後永久網址就不送，維持本機收藏即可
-        if (!payload?.style || !payload?.afterImageUrl) return { ok: false, skipped: true };
+        // saved_looks 的 before/after 欄位是 String(500) URL；禁止把 File、Blob
+        // 或 data/base64 寫入資料庫。圖片必須先由前端或上傳服務取得 http(s) URL。
+        const beforeImageUrl = String(payload?.beforeImageUrl || '').trim();
+        const afterImageUrl = String(payload?.afterImageUrl || '').trim();
+        if (!payload?.style || !this._isStorableImageUrl(beforeImageUrl) || !this._isStorableImageUrl(afterImageUrl)) {
+            return { ok: false, skipped: true, reason: 'IMAGE_URL_REQUIRED' };
+        }
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify({
+                    style: String(payload.style).slice(0, 120),
+                    beforeImageUrl,
+                    afterImageUrl,
+                    analysisSummary: payload.analysisSummary && typeof payload.analysisSummary === 'object'
+                        ? payload.analysisSummary
+                        : {}
+                })
             });
             if (!res.ok) return { ok: false, status: res.status };
             const look = await res.json().catch(() => ({}));

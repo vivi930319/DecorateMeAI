@@ -3,6 +3,7 @@
 !Face_analyzer_PRO.py
 !Ollama_suggestion.py
 !dev_server_utils.py
+!api_errors.py
 !cloud_start.py
 !Dockerfile
 !requirements.txt

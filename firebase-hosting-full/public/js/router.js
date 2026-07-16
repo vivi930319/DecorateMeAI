@@ -485,7 +485,7 @@ function saveCurrentLook(){
                 } catch (_) {}
                 if (typeof showToast === 'function') showToast('已同步到雲端資料庫');
             } else if (r && r.skipped) {
-                // 沒有渲染後永久網址（例如純文字妝容建議），只存本機、不打擾使用者
+                // before/after 尚未有可持久化的 http(s) URL，只存本機，絕不把 base64 寫進 String(500) 欄位
             } else {
                 if (typeof showToast === 'function') showToast('雲端同步失敗（已存本機）' + (r && r.status ? `：HTTP ${r.status}` : '，請重整後重試'));
             }
