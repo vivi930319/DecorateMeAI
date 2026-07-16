@@ -17,7 +17,17 @@ function makeStorage(map) {
 
 const sandbox = {
   console,
-  window: {},
+  window: {
+    DECORATE_ME_CONFIG: {
+      faceBasicUrl: 'http://127.0.0.1:8001',
+      faceProUrl: 'http://127.0.0.1:8002',
+      textSuggestionUrl: 'http://127.0.0.1:8010',
+      renderUrl: 'http://127.0.0.1:8020',
+      productUrl: 'http://127.0.0.1:8030',
+      memberDatabaseUrl: 'http://127.0.0.1:8040',
+      crawlerUrl: 'http://127.0.0.1:8050'
+    }
+  },
   location: { reload() {} },
   FormData: class FormData {
     append() {}
@@ -64,7 +74,7 @@ sandbox.Cart.change(1, -2);
 if (sandbox.Cart.count() !== 0 || sandbox.Cart.list().length !== 0) throw new Error('Cart item removal failed');
 
 // ── 服務設定 ────────────────────────────────────────────────
-const requiredServices = ['faceBasic', 'facePro', 'textSuggestion', 'render', 'product', 'memberDatabase'];
+const requiredServices = ['faceBasic', 'facePro', 'textSuggestion', 'render', 'product', 'memberDatabase', 'crawler'];
 for (const service of requiredServices) {
   if (!sandbox.ApiConfig.services[service]) throw new Error(`Missing service: ${service}`);
 }
@@ -77,7 +87,7 @@ if (!proUrl.endsWith('/v1/face/analyze/pro')) throw new Error(`Bad PRO URL: ${pr
 if (suggestionUrl !== 'http://127.0.0.1:8010/suggest') throw new Error(`Bad suggestion URL: ${suggestionUrl}`);
 
 // ── Api 方法 ─────────────────────────────────────────────────
-for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup']) {
+for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'previewCrawledProduct']) {
   if (typeof sandbox.Api[method] !== 'function') throw new Error(`Missing Api.${method}`);
 }
 

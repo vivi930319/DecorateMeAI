@@ -67,7 +67,7 @@ deploy.ps1            部署腳本（自動戳版本號後 firebase deploy）
 
 ## 後台管理（Admin）
 
-僅 `role: admin` 的帳號可進入管理中台（非管理員自動導回首頁）。所有讀寫都走管理員 session cookie。
+僅 `role: admin` 的帳號可進入管理中台（非管理員自動導回首頁）。管理員登入後只顯示獨立後台，不載入一般會員導覽；所有讀寫都走管理員 session cookie。
 
 功能：
 
@@ -76,6 +76,7 @@ deploy.ps1            部署腳本（自動戳版本號後 firebase deploy）
 - **會員管理**：改角色 / 會員等級 / 停權 / 功能權限（`PATCH /api/members/{email}`）
 - **等級連動**：選 VIP / PRO 會員時，自動勾選「PRO 分析」「渲染不限次數」權限
 - **商品管理**：新增 / 編輯商品（`POST` / `PATCH /api/products`）
+- **爬蟲匯入**：輸入單一商品網址，呼叫 `POST /api/crawler/product-preview` 取得預覽，再帶入商品表單確認上架
 - **韌性**：搜尋 200ms debounce；session 過期（401）時自動重登並重試
 
 流程：
@@ -88,8 +89,9 @@ flowchart TB
   C --> D["即時：GET saved-looks / points"]
   C --> E["編輯：PATCH member（權限 / 等級 / 停權）"]
   C --> F["商品：POST / PATCH products"]
+  C --> H["爬蟲：POST product-preview → 管理員確認"]
   C -.401 過期.-> G["自動重登 → 重試"]
-  class A,B,C,D,E,F,G n;
+  class A,B,C,D,E,F,G,H n;
 ```
 
 ---

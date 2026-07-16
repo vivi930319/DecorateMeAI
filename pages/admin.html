@@ -1,96 +1,207 @@
-<div class="page-header admin-header">
-    <h1>管理中台</h1>
-    <div class="divider"></div>
+<div class="admin-workspace">
+    <aside class="admin-sidebar" aria-label="管理員功能導覽">
+        <div class="admin-brand">
+            <strong>裝識你的美</strong>
+            <span>ADMIN CONSOLE</span>
+        </div>
+
+        <nav class="admin-section-nav">
+            <button class="active" type="button" data-admin-section="overview">
+                <span class="admin-nav-index">01</span><span>營運總覽</span>
+            </button>
+            <button type="button" data-admin-section="members">
+                <span class="admin-nav-index">02</span><span>會員管理</span>
+            </button>
+            <button type="button" data-admin-section="products">
+                <span class="admin-nav-index">03</span><span>商品管理</span>
+            </button>
+            <button type="button" data-admin-section="crawler">
+                <span class="admin-nav-index">04</span><span>爬蟲匯入</span>
+            </button>
+        </nav>
+
+        <div class="admin-account">
+            <div class="admin-account-avatar" aria-hidden="true">A</div>
+            <div>
+                <strong id="adminProfileName">管理員</strong>
+                <span id="adminProfileEmail">—</span>
+            </div>
+            <button class="admin-logout-button" type="button" onclick="Auth.logout()">登出</button>
+        </div>
+    </aside>
+
+    <div class="admin-stage">
+        <header class="admin-topbar">
+            <div>
+                <span id="adminSectionEyebrow">ADMIN OVERVIEW</span>
+                <h1 id="adminSectionTitle">營運總覽</h1>
+            </div>
+            <div class="admin-topbar-actions">
+                <span class="admin-sync-status" id="adminOverallStatus"><i></i>資料同步中</span>
+                <button class="admin-secondary-button" id="adminRefreshAllBtn" type="button">重新整理</button>
+            </div>
+        </header>
+
+        <main class="admin-content">
+            <section class="admin-view active" data-admin-view="overview">
+                <div class="admin-view-heading">
+                    <div><span>Overview</span><h2>系統與營運狀態</h2></div>
+                    <time id="adminLastSync">尚未同步</time>
+                </div>
+
+                <div class="admin-summary">
+                    <article><span>全部會員</span><b id="adminTotal">—</b><small>資料庫帳號</small></article>
+                    <article><span>啟用中</span><b id="adminActive">—</b><small>可正常使用</small></article>
+                    <article><span>已停權</span><b id="adminSuspended">—</b><small>限制登入使用</small></article>
+                    <article><span>商品總數</span><b id="adminProductTotal">—</b><small>目前上架資料</small></article>
+                </div>
+
+                <div class="admin-overview-grid">
+                    <section class="admin-status-board" aria-labelledby="adminServiceTitle">
+                        <div class="admin-block-heading"><span>Services</span><h3 id="adminServiceTitle">服務連線</h3></div>
+                        <div class="admin-service-row">
+                            <div><strong>會員資料庫</strong><span>會員、角色與權限</span></div>
+                            <b class="pending" id="adminMemberConnection">連線中</b>
+                        </div>
+                        <div class="admin-service-row">
+                            <div><strong>商品資料庫</strong><span>商品清單與上架資料</span></div>
+                            <b class="pending" id="adminProductConnection">連線中</b>
+                        </div>
+                        <div class="admin-service-row">
+                            <div><strong>爬蟲服務</strong><span>網址解析與商品預覽</span></div>
+                            <b class="idle" id="adminCrawlerConnection">待測試</b>
+                        </div>
+                    </section>
+
+                    <section class="admin-quick-actions" aria-labelledby="adminQuickTitle">
+                        <div class="admin-block-heading"><span>Actions</span><h3 id="adminQuickTitle">常用操作</h3></div>
+                        <button type="button" data-admin-jump="members"><span>會員權限與停權</span><b>前往</b></button>
+                        <button type="button" data-admin-jump="products"><span>手動新增商品</span><b>前往</b></button>
+                        <button type="button" data-admin-jump="crawler"><span>從商品網址匯入</span><b>前往</b></button>
+                    </section>
+                </div>
+            </section>
+
+            <section class="admin-view" data-admin-view="members" hidden>
+                <div class="admin-view-heading">
+                    <div><span>Members</span><h2>會員與權限管理</h2></div>
+                </div>
+
+                <div class="admin-actions-row" aria-label="會員篩選">
+                    <button class="admin-tab active" data-admin-filter="all" type="button">全部使用者</button>
+                    <button class="admin-tab" data-admin-filter="active" type="button">啟用中</button>
+                    <button class="admin-tab" data-admin-filter="suspended" type="button">已停權</button>
+                    <button class="admin-tab" data-admin-filter="admin" type="button">管理員</button>
+                </div>
+
+                <div class="admin-main">
+                    <div class="admin-toolbar">
+                        <label class="admin-search">
+                            <span>搜尋會員</span>
+                            <input id="adminSearch" type="search" placeholder="輸入姓名或 Email" autocomplete="off">
+                        </label>
+                        <span class="admin-inline-status" id="adminDbStatus" aria-live="polite"></span>
+                        <button class="admin-secondary-button" id="adminReloadBtn" type="button">重新讀取</button>
+                        <button class="admin-primary-button" id="adminSaveBtn" type="button">儲存權限</button>
+                    </div>
+
+                    <div class="admin-table-wrap">
+                        <table class="admin-table">
+                            <thead>
+                                <tr>
+                                    <th>使用者</th>
+                                    <th>角色</th>
+                                    <th>會員等級</th>
+                                    <th>狀態</th>
+                                    <th>系統判定</th>
+                                    <th>功能權限</th>
+                                </tr>
+                            </thead>
+                            <tbody id="adminUserRows"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <section class="admin-view" data-admin-view="products" hidden>
+                <div class="admin-view-heading">
+                    <div><span>Products</span><h2>商品管理</h2></div>
+                    <button class="admin-secondary-button" id="adminReloadProductsBtn" type="button">重新讀取</button>
+                </div>
+
+                <div class="admin-product-grid">
+                    <form class="admin-product-form" id="adminProductForm">
+                        <div class="admin-block-heading"><span>Editor</span><h3>商品資料</h3></div>
+                        <div class="admin-product-form-mode">編輯中：<span id="adminProductEditingLabel"></span></div>
+                        <label>商品名稱<input id="adminProductName" type="text" placeholder="例如：柔霧粉底液" required></label>
+                        <label>品牌<input id="adminProductBrand" type="text" placeholder="例如：DECORATE ME"></label>
+                        <label>分類
+                            <select id="adminProductCategory">
+                                <option value="底妝">底妝</option>
+                                <option value="眼影">眼影</option>
+                                <option value="眼線/睫毛">眼線/睫毛</option>
+                                <option value="唇彩">唇彩</option>
+                                <option value="腮紅">腮紅</option>
+                                <option value="眉毛彩妝">眉毛彩妝</option>
+                                <option value="修容">修容</option>
+                                <option value="打亮">打亮</option>
+                            </select>
+                        </label>
+                        <label>價格<input id="adminProductPrice" type="text" placeholder="例如：NT$980" required></label>
+                        <label>圖片網址<input id="adminProductImg" type="url" placeholder="https://..."></label>
+                        <label>來源網址<input id="adminProductSourceUrl" type="url" placeholder="https://..."></label>
+                        <label>商品描述<textarea id="adminProductDesc" placeholder="商品頁顯示內容"></textarea></label>
+                        <label>色號<input id="adminProductShades" type="text" placeholder="#3A241C, #C99070"></label>
+                        <div class="admin-product-form-actions">
+                            <button class="admin-primary-button" type="submit" id="adminProductSubmitBtn">新增商品</button>
+                            <button class="admin-secondary-button" type="button" id="adminProductCancelBtn" style="display:none">切回新增</button>
+                            <button class="admin-danger-button" type="button" id="adminProductDeleteBtn" style="display:none">刪除此商品</button>
+                        </div>
+                    </form>
+
+                    <div class="admin-product-manager">
+                        <div class="admin-table-wrap">
+                            <table class="admin-table admin-product-table">
+                                <thead>
+                                    <tr>
+                                        <th>商品</th>
+                                        <th>分類</th>
+                                        <th>價格</th>
+                                        <th>來源</th>
+                                        <th>狀態</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="adminProductRows"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="admin-view" data-admin-view="crawler" hidden>
+                <div class="admin-view-heading">
+                    <div><span>Crawler Import</span><h2>商品網址匯入</h2></div>
+                    <span class="admin-crawler-state idle" id="adminCrawlerState">尚未執行</span>
+                </div>
+
+                <div class="admin-crawler-layout">
+                    <form class="admin-crawler-form" id="adminCrawlerForm">
+                        <div class="admin-block-heading"><span>Source</span><h3>來源網址</h3></div>
+                        <label>商品頁網址
+                            <input id="adminCrawlerUrl" type="url" placeholder="https://example.com/product/123" required autocomplete="off">
+                        </label>
+                        <button class="admin-primary-button" id="adminCrawlerSubmitBtn" type="submit">擷取商品資料</button>
+                        <p class="admin-crawler-message" id="adminCrawlerMessage" aria-live="polite"></p>
+                    </form>
+
+                    <section class="admin-crawler-preview" aria-labelledby="adminCrawlerPreviewTitle">
+                        <div class="admin-block-heading"><span>Preview</span><h3 id="adminCrawlerPreviewTitle">擷取預覽</h3></div>
+                        <div class="admin-crawler-empty" id="adminCrawlerEmpty">尚無擷取結果</div>
+                        <div id="adminCrawlerResult" hidden></div>
+                    </section>
+                </div>
+            </section>
+        </main>
+    </div>
 </div>
-
-<section class="admin-panel">
-    <div class="admin-summary">
-        <div><span>全部會員</span><b id="adminTotal">0</b></div>
-        <div><span>啟用中</span><b id="adminActive">0</b></div>
-        <div><span>已停權</span><b id="adminSuspended">0</b></div>
-        <div><span>管理員</span><b id="adminAdmins">0</b></div>
-    </div>
-
-    <div class="admin-actions-row">
-        <button class="admin-tab active" data-admin-filter="all">全部使用者</button>
-        <button class="admin-tab" data-admin-filter="active">啟用中</button>
-        <button class="admin-tab" data-admin-filter="suspended">已停權</button>
-        <button class="admin-tab" data-admin-filter="admin">管理員</button>
-    </div>
-
-    <div class="admin-main">
-        <div class="admin-toolbar">
-            <label class="admin-search">
-                <span>搜尋</span>
-                <input id="adminSearch" type="search" placeholder="姓名或 Email">
-            </label>
-            <button class="btn-gold btn-sm" id="adminSaveBtn" type="button">儲存權限</button>
-        </div>
-
-        <div class="admin-table-wrap">
-            <table class="admin-table">
-                <thead>
-                    <tr>
-                        <th>使用者</th>
-                        <th>角色</th>
-                        <th>會員等級</th>
-                        <th>狀態</th>
-                        <th>失敗原因</th>
-                        <th>功能權限</th>
-                    </tr>
-                </thead>
-                <tbody id="adminUserRows"></tbody>
-            </table>
-        </div>
-    </div>
-</section>
-
-<section class="admin-products">
-    <div class="member-section-head">
-        <h2>商品管理</h2>
-    </div>
-    <div class="admin-product-grid">
-        <form class="admin-product-form" id="adminProductForm">
-            <div class="admin-product-form-mode">編輯中：<span id="adminProductEditingLabel"></span></div>
-            <label>商品名稱<input id="adminProductName" type="text" placeholder="例如：柔霧粉底液"></label>
-            <label>分類
-                <select id="adminProductCategory">
-                    <option value="底妝">底妝</option>
-                    <option value="眼影">眼影</option>
-                    <option value="眼線/睫毛">眼線/睫毛</option>
-                    <option value="唇彩">唇彩</option>
-                    <option value="腮紅">腮紅</option>
-                    <option value="眉毛彩妝">眉毛彩妝</option>
-                    <option value="修容">修容</option>
-                    <option value="打亮">打亮</option>
-                </select>
-            </label>
-            <label>價格<input id="adminProductPrice" type="text" placeholder="例如：NT$980"></label>
-            <label>圖片網址<input id="adminProductImg" type="text" placeholder="留空則使用預設示意圖"></label>
-            <label>商品描述<textarea id="adminProductDesc" placeholder="顯示在前台商品詳情頁的說明文字"></textarea></label>
-            <label>色號（用逗號分隔 Hex 色碼）<input id="adminProductShades" type="text" placeholder="例如：#3A241C,#C99070,#B5654A"></label>
-            <div class="admin-product-form-actions">
-                <button class="btn-gold btn-sm" type="submit" id="adminProductSubmitBtn">新增產品</button>
-                <button class="btn-outline btn-sm" type="button" id="adminProductCancelBtn" style="display:none">取消編輯</button>
-            </div>
-        </form>
-        <div class="admin-product-manager">
-            <div class="admin-preview-grid" id="adminProductPreview"></div>
-            <div class="admin-table-wrap">
-                <table class="admin-table admin-product-table">
-                    <thead>
-                        <tr>
-                            <th>商品</th>
-                            <th>分類</th>
-                            <th>價格</th>
-                            <th>來源</th>
-                            <th>狀態</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody id="adminProductRows"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</section>

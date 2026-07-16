@@ -11,10 +11,12 @@ Thumbs.db
 
 # Firebase 本機快取
 .firebase/
+.claude/
 
 # 文件檔一律不進 git（只留程式碼）；但 README.md 放行當專案門面
 *.md
 !README.md
+!前端完整交接手冊_搬機版_2026-07-17.md
 *.docx
 *.pdf
 *.drawio

@@ -50,6 +50,10 @@ const ApiConfig = {
             recommendPath: '/recommend-products',
             listPath: '/api/products'
         },
+        crawler: {
+            baseUrl: RuntimeApiConfig.crawlerUrl || RuntimeApiConfig.productUrl || '',
+            previewPath: '/api/crawler/product-preview'
+        },
         memberDatabase: {
             baseUrl: RuntimeApiConfig.memberDatabaseUrl || '',
             loginPath: '/api/login',
@@ -111,6 +115,13 @@ const Api = {
         return key ? { 'X-API-Key': key } : {};
     },
 
+    // 後端建 job 時發 resultToken，之後查詢 job 狀態/結果必須帶 X-Job-Token，否則回 403
+    _faceJobHeaders(service, resultToken) {
+        const headers = { ...this._faceHeaders(service) };
+        if (resultToken) headers['X-Job-Token'] = resultToken;
+        return headers;
+    },
+
     // 臉部分析
     async detectFacePose(file) {
         const fd = new FormData();
@@ -148,9 +159,9 @@ const Api = {
         return res.json();
     },
 
-    async getFaceJob(mode, jobId) {
+    async getFaceJob(mode, jobId, resultToken) {
         const service = mode === 'pro' ? 'facePro' : 'faceBasic';
-        const res = await fetch(this.config.jobUrl(service, 'jobStatusPath', jobId), { cache: 'no-store', headers: this._faceHeaders(service) });
+        const res = await fetch(this.config.jobUrl(service, 'jobStatusPath', jobId), { cache: 'no-store', headers: this._faceJobHeaders(service, resultToken) });
         if (!res.ok) {
             const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
             throw new Error(err.detail?.error?.message || err.detail || '查詢 job 失敗');
@@ -158,9 +169,9 @@ const Api = {
         return res.json();
     },
 
-    async getFaceJobResult(mode, jobId) {
+    async getFaceJobResult(mode, jobId, resultToken) {
         const service = mode === 'pro' ? 'facePro' : 'faceBasic';
-        const res = await fetch(this.config.jobUrl(service, 'jobResultPath', jobId), { cache: 'no-store', headers: this._faceHeaders(service) });
+        const res = await fetch(this.config.jobUrl(service, 'jobResultPath', jobId), { cache: 'no-store', headers: this._faceJobHeaders(service, resultToken) });
         if (!res.ok) {
             const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
             throw new Error(err.detail?.error?.message || err.detail || '取得 job 結果失敗');
@@ -168,12 +179,12 @@ const Api = {
         return res.json();
     },
 
-    async waitForFaceJob(mode, jobId, onProgress) {
+    async waitForFaceJob(mode, jobId, resultToken, onProgress) {
         for (let attempt = 0; attempt < 120; attempt++) {
-            const job = await this.getFaceJob(mode, jobId);
+            const job = await this.getFaceJob(mode, jobId, resultToken);
             if (typeof onProgress === 'function') onProgress(job);
             if (job.status === 'completed') {
-                return this.getFaceJobResult(mode, jobId);
+                return this.getFaceJobResult(mode, jobId, resultToken);
             }
             if (job.status === 'failed') {
                 throw new Error(job.error?.message || '臉部分析 job 失敗');
@@ -271,7 +282,10 @@ const Api = {
 
     // 非同步渲染：gpt-image-2 要跑 50~150 秒，同步等會撞 Cloud Run 逾時（實測一堆 504）。
     // 改成送出後拿 jobId、每 2 秒輪詢一次，onProgress 會被餵 1~100 的進度給進度條用。
-    async renderMakeupAsync({ imageDataUrl, prompt, strength = 0.35, onProgress = null }) {
+    // 2026-07-15 對齊後端新接口：前端只送結構化資料（styleId + analysisPackage），prompt 由後端組
+    // （前端送的 prompt 會被後端忽略——renderApiKey 是明文，信任前端 prompt 等於任何人能用我們額度生任意圖）；
+    // 輪詢必須帶建立 job 時回的 resultToken（X-Job-Token），不帶會被 403 擋到逾時。
+    async renderMakeupAsync({ imageDataUrl, styleId = 'natural', analysisPackage = null, strength = 0.35, onProgress = null }) {
         const runtimeConfig = getRuntimeApiConfig();
         const baseUrl = runtimeConfig.renderUrl || this.config.services.render.baseUrl || '';
         const apiKey = runtimeConfig.renderApiKey || this.config.services.render.apiKey || '';
@@ -291,7 +305,7 @@ const Api = {
             const requestInit = {
                 method: 'POST',
                 headers,
-                body: JSON.stringify({ image: imageDataUrl, prompt, strength }),
+                body: JSON.stringify({ image: imageDataUrl, styleId, analysisPackage, strength }),
             };
             try {
                 submitRes = await fetch(`${baseUrl}/render/jobs`, requestInit);
@@ -322,6 +336,8 @@ const Api = {
             return submitted;
         }
 
+        // 輪詢憑證：只活在這次渲染流程，不落地保存
+        if (submitted.resultToken) headers['X-Job-Token'] = submitted.resultToken;
         const pollUrl = `${baseUrl}/render/jobs/${jobId}`;
         const deadline = Date.now() + 5 * 60 * 1000;  // 5 分鐘保險絲，正常 150 秒內一定結束
         while (Date.now() < deadline) {
@@ -417,7 +433,11 @@ const Api = {
             matchReason: product.matchReason || '',
             score: product.score ?? null,
             popularity: product.popularity ?? product.sales ?? product.views ?? product.reviews ?? product.favorite_count ?? product.score ?? 0,
-            salePageId: product.sale_page_id || product.salePageId || null,
+            // 推薦端點的 productUrl 實際上是 sale_page_id slug（不是 http 網址），留下來讓前端能跟商品清單比對補圖
+            salePageId: product.sale_page_id || product.salePageId
+                || ((typeof product.productUrl === 'string' && product.productUrl && !/^https?:/i.test(product.productUrl)) ? product.productUrl : null),
+            sourceUrl: product.sourceUrl || product.source_url
+                || ((typeof product.productUrl === 'string' && /^https?:/i.test(product.productUrl)) ? product.productUrl : ''),
             hex: /^#[0-9a-fA-F]{3,8}$/.test(product.hex || '') ? product.hex : null,
             tags: product.tags || [],
             source: 'product-api'
@@ -471,7 +491,7 @@ const Api = {
         const baseUrl = this.config.services.product.baseUrl;
         if (!baseUrl) return [];
         try {
-            const res = await fetch(`${baseUrl}/api/recommend/personal`, { credentials: 'include', cache: 'no-store' });
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/recommend/personal`, { credentials: 'include', cache: 'no-store' });
             if (!res.ok) return [];
             const data = await res.json();
             if (!data?.success || !Array.isArray(data.recommendations)) return [];
@@ -492,7 +512,7 @@ const Api = {
         const baseUrl = this.config.services.product.baseUrl;
         if (!baseUrl) return null;
         try {
-            const res = await fetch(`${baseUrl}/api/favorites/toggle`, {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/favorites/toggle`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
@@ -524,22 +544,113 @@ const Api = {
         }
     },
 
-    // ═══ 後台管理：members 讀寫都走管理員 session cookie；若 GET /api/members 失敗，通常是 admin session / CORS / SameSite 設定有問題 ═══
-    // 跨站 session cookie 常在重整後被瀏覽器清掉，導致 admin 請求變 401。
-    // 用登入時暫存的帳密（sessionStorage，關分頁即清）在背景自動重登一次拿新 cookie，使用者無感。
-    async _reLogin() {
-        let creds = null;
-        try { creds = JSON.parse(sessionStorage.getItem('beautyAuthCreds') || 'null'); } catch (_) {}
-        if (!creds || !creds.email || !creds.password) return false;
-        try { await this.login(creds.email, creds.password); return true; } catch (_) { return false; }
-    },
-    // 一般請求包一層：遇到 401 就自動重登再重試一次（login 本身走原生 fetch，不會遞迴）
-    async _fetchWithRelogin(input, init) {
-        let res = await fetch(input, init);
-        if (res.status === 401 && await this._reLogin()) {
-            res = await fetch(input, init);
+    async previewCrawledProduct(sourceUrl) {
+        const service = this.config.services.crawler;
+        if (!service?.baseUrl) return { ok: false, code: 'CRAWLER_URL_NOT_CONFIGURED', error: 'crawlerUrl 與 productUrl 都尚未設定' };
+        const url = `${service.baseUrl}${service.previewPath}`;
+        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timeout = controller ? setTimeout(() => controller.abort(), 30000) : null;
+        try {
+            const profile = typeof Auth !== 'undefined' ? (Auth.getProfile() || {}) : {};
+            const res = await this._fetchWithRelogin(url, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: sourceUrl,
+                    source: 'manual_admin_import',
+                    adminId: profile.email || null
+                }),
+                ...(controller ? { signal: controller.signal } : {})
+            });
+            if (timeout) clearTimeout(timeout);
+            const data = await res.json().catch(() => ({}));
+            const payload = data.data || data.product || {};
+            if (!res.ok || data.success === false) {
+                return {
+                    ok: false,
+                    status: res.status,
+                    code: data?.error?.code || data.code || `HTTP_${res.status}`,
+                    error: data?.error?.message || data.message || `HTTP ${res.status}`,
+                    detail: data?.error?.detail || ''
+                };
+            }
+            const imageUrls = Array.isArray(payload.imageUrls)
+                ? payload.imageUrls.filter(Boolean)
+                : [payload.imageUrl || payload.image_url || payload.img].filter(Boolean);
+            return {
+                ok: true,
+                status: data.status || 'ok',
+                message: data.message || '',
+                product: {
+                    sourceUrl: payload.sourceUrl || sourceUrl,
+                    sourceSite: payload.sourceSite || '',
+                    name: payload.productName || payload.name || '',
+                    brand: payload.brand || '',
+                    price: payload.price ?? '',
+                    currency: payload.currency || '',
+                    description: payload.description || payload.desc || '',
+                    imageUrls,
+                    category: payload.category || payload.type || '',
+                    hex: payload.hex || '',
+                    specs: payload.specs || {},
+                    rawText: payload.rawText || '',
+                    missingFields: Array.isArray(payload.missingFields) ? payload.missingFields : []
+                },
+                raw: data
+            };
+        } catch (err) {
+            if (timeout) clearTimeout(timeout);
+            if (err?.name === 'AbortError') return { ok: false, code: 'FETCH_TIMEOUT', error: '爬蟲服務逾時，請稍後重試' };
+            return { ok: false, code: 'NETWORK_ERROR', error: '爬蟲服務連線失敗：' + err.message };
         }
-        return res;
+    },
+
+    // ═══ 後台管理：members 讀寫都走登入憑證 ═══
+    // 不在瀏覽器保存密碼，也不使用密碼自動重登入。若 session 失效，讓畫面
+    // 顯示登入逾時並由使用者重新登入；若會員後端回傳短期 Bearer token，僅存
+    // 在本分頁的 sessionStorage，不能用來取代 HttpOnly cookie 的後端驗證。
+    _memberTokenKey: 'memberAccessToken',
+    _getMemberAccessToken() {
+        try {
+            const token = sessionStorage.getItem(this._memberTokenKey) || '';
+            return token.length <= 4096 ? token : '';
+        } catch (_) {
+            return '';
+        }
+    },
+    _rememberMemberAccessToken(data) {
+        const token = data?.accessToken
+            || data?.access_token
+            || data?.token
+            || data?.member?.accessToken
+            || data?.member?.access_token
+            || data?.member?.token
+            || '';
+        try {
+            if (typeof token === 'string' && token.length > 0 && token.length <= 4096) {
+                sessionStorage.setItem(this._memberTokenKey, token);
+            } else {
+                sessionStorage.removeItem(this._memberTokenKey);
+            }
+        } catch (_) {}
+    },
+    _memberHeaders(headers = {}) {
+        const token = this._getMemberAccessToken();
+        return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
+    },
+
+    // 保留這個 wrapper 名稱是為了相容既有呼叫點，但不再做 relogin。
+    // 只有送往會員資料庫的請求才附加 Bearer，避免把會員憑證送到商品/爬蟲服務。
+    async _fetchWithRelogin(input, init) {
+        const memberBaseUrl = this.config.services.memberDatabase.baseUrl;
+        const isMemberRequest = typeof input === 'string'
+            && !!memberBaseUrl
+            && input.startsWith(memberBaseUrl);
+        const nextInit = isMemberRequest
+            ? { ...(init || {}), headers: this._memberHeaders(init?.headers || {}) }
+            : init;
+        return fetch(input, nextInit);
     },
 
     async fetchAdminMembers() {
@@ -549,17 +660,18 @@ const Api = {
         const timeout = controller ? setTimeout(() => controller.abort(), 12000) : null;
         const opts = { credentials: 'include', cache: 'no-store', ...(controller ? { signal: controller.signal } : {}) };
         try {
-            let res = await fetch(`${baseUrl}/api/members`, opts);
-            if (res.status === 401 && await this._reLogin()) {
-                res = await fetch(`${baseUrl}/api/members`, opts);
-            }
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members`, opts);
             if (timeout) clearTimeout(timeout);
-            const data = await res.json();
+            const data = await res.json().catch(() => ({}));
             if (!res.ok) {
                 return {
                     ok: false,
                     status: res.status,
-                    error: data?.error?.message || `HTTP ${res.status}`
+                    error: data?.error?.message
+                        || data?.detail?.error?.message
+                        || data?.detail?.message
+                        || data?.message
+                        || `HTTP ${res.status}`
                 };
             }
             return {
@@ -593,6 +705,24 @@ const Api = {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
+            return { ok: true, member: data.member || null };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    async deleteMember(email) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false, error: 'memberDatabaseUrl 或 email 未設定' };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}`, {
+                method: 'DELETE',
+                credentials: 'include'
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+            }
             return { ok: true, member: data.member || null };
         } catch (err) {
             return { ok: false, error: '連線失敗：' + err.message };
@@ -708,6 +838,16 @@ const Api = {
     },
 
     // ═══ 收藏妝容對比圖 saved_looks：跨裝置持久化，走登入 session（本機 localStorage 仍是離線快取，遠端失敗不影響本機） ═══
+    _isStorableImageUrl(value) {
+        const raw = String(value || '').trim();
+        if (!raw || raw.length > 500) return false;
+        try {
+            const url = new URL(raw);
+            return url.protocol === 'https:' || url.protocol === 'http:';
+        } catch (_) {
+            return false;
+        }
+    },
     async listSavedLooks(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false, looks: [] };
@@ -728,14 +868,26 @@ const Api = {
     async createSavedLook(email, payload) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false };
-        // 後端要求 style 與 afterImageUrl 必填；沒有渲染後永久網址就不送，維持本機收藏即可
-        if (!payload?.style || !payload?.afterImageUrl) return { ok: false, skipped: true };
+        // saved_looks 的 before/after 欄位是 String(500) URL；禁止把 File、Blob
+        // 或 data/base64 寫入資料庫。圖片必須先由前端或上傳服務取得 http(s) URL。
+        const beforeImageUrl = String(payload?.beforeImageUrl || '').trim();
+        const afterImageUrl = String(payload?.afterImageUrl || '').trim();
+        if (!payload?.style || !this._isStorableImageUrl(beforeImageUrl) || !this._isStorableImageUrl(afterImageUrl)) {
+            return { ok: false, skipped: true, reason: 'IMAGE_URL_REQUIRED' };
+        }
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify({
+                    style: String(payload.style).slice(0, 120),
+                    beforeImageUrl,
+                    afterImageUrl,
+                    analysisSummary: payload.analysisSummary && typeof payload.analysisSummary === 'object'
+                        ? payload.analysisSummary
+                        : {}
+                })
             });
             if (!res.ok) return { ok: false, status: res.status };
             const look = await res.json().catch(() => ({}));
@@ -796,31 +948,71 @@ const Api = {
         }
     },
 
-    async recommendProducts(faceAnalysis, styleId) {
+    async deleteRemoteProduct(rawId) {
+        const baseUrl = this.config.services.product.baseUrl;
+        if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
+        if (rawId == null) return { ok: false, error: '找不到這筆商品的資料庫 id' };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/products/${encodeURIComponent(rawId)}`, {
+                method: 'DELETE',
+                credentials: 'include'
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    // LAB 物件（{L,a,b} 或 {L,A,B}）轉成推薦端新規格要的陣列 [L, a, b]
+    _labToArray(lab) {
+        const obj = this._labToUpperKeys(lab);
+        if (!obj) return null;
+        return [obj.L ?? 0, obj.A ?? 0, obj.B ?? 0];
+    },
+
+    // 2026-07-15 起商品推薦端改吃規格書格式：整包 analysisPackage（faceAnalysis 巢狀、lab 用陣列），
+    // 回應也改在 analysisPackage.recommendations.products 底下。詳見「演算法端接口規格書_analysis_package商品推薦_2026-07-13.md」。
+    async recommendProducts(analysisPackage, styleId) {
         const url = this.config.url('product', 'recommendPath');
         if (!url) return { ok: false, products: [] };
         try {
-            const skinLab = this._labToUpperKeys(faceAnalysis?.skinTone?.lab);
-            const lipLab = this._labToUpperKeys(faceAnalysis?.lipLab);
+            // 相容舊呼叫：如果傳進來的已經是 faceAnalysis（沒有 faceAnalysis 子欄位但有 faceShape/skinTone），自己包一層
+            const fa = analysisPackage?.faceAnalysis
+                || ((analysisPackage?.faceShape || analysisPackage?.skinTone) ? analysisPackage : null);
+            const suggestion = analysisPackage?.generativeText?.suggestion || null;
             const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    lab:        skinLab || lipLab || null,   // 後端新格式：頂層要色彩資料（lab / hex / hsv / vector 其一）
-                    faceShape:  faceAnalysis?.faceShape  || null,
-                    eyeShape:   faceAnalysis?.eyeShape   || null,
-                    skinTone: {
-                        season:  faceAnalysis?.skinTone?.season || null,
-                        level:   faceAnalysis?.skinTone?.level  || null,
-                        lab:     skinLab,
+                    analysisPackage: {
+                        id:    analysisPackage?.id || null,
+                        style: styleId || null,
+                        faceAnalysis: {
+                            faceShape: fa?.faceShape || null,
+                            browShape: fa?.browShape || null,
+                            eyeShape:  fa?.eyeShape  || null,
+                            lipShape:  fa?.lipShape  || null,
+                            skinTone: {
+                                season: fa?.skinTone?.season || null,
+                                level:  fa?.skinTone?.level  || null,
+                                lab:    this._labToArray(fa?.skinTone?.lab),
+                            },
+                            lipLab: this._labToArray(fa?.lipLab),
+                        },
+                        ...(suggestion ? { generativeText: { suggestion } } : {}),
                     },
-                    lipLab:     lipLab,
-                    style:      styleId || null,
+                    limit: 12,
                 })
             });
             if (!res.ok) return { ok: false, status: res.status, products: [] };
             const data = await res.json();
-            const list = data.recommendations || data.products || [];  // 後端回 recommendations；相容舊 products
+            const list = data.analysisPackage?.recommendations?.products
+                || data.recommendations?.products
+                || data.recommendations
+                || data.products
+                || [];  // 新格式在 analysisPackage.recommendations.products；相容舊格式
             return {
                 ok: true,
                 ...data,
@@ -862,9 +1054,11 @@ const Api = {
             err.code = detail?.error?.code || null;  // 未註冊 USER_NOT_FOUND / 密碼錯 WRONG_PASSWORD（後端支援時前端據此分流）
             throw err;
         }
-        // 暫存帳密（sessionStorage，關分頁即清）供 session 掉時背景自動重登用
-        try { sessionStorage.setItem('beautyAuthCreds', JSON.stringify({ email, password })); } catch (_) {}
-        return res.json();
+        // 清除舊版本可能留下的敏感資料；本版本不保存密碼。
+        try { sessionStorage.removeItem('beautyAuthCreds'); } catch (_) {}
+        const data = await res.json();
+        this._rememberMemberAccessToken(data);
+        return data;
     },
 
     async register(payload) {
@@ -1280,17 +1474,29 @@ const Auth = {
         localStorage.setItem(this._membersKey, JSON.stringify(members));
     },
     getUser()  { return sessionStorage.getItem('beautyUser') || ''; },
-    getProfile() { return JSON.parse(sessionStorage.getItem('beautyProfile') || '{}'); },
+    getProfile() {
+        let profile = {};
+        try { profile = JSON.parse(sessionStorage.getItem('beautyProfile') || '{}') || {}; } catch (_) {}
+        if (Object.prototype.hasOwnProperty.call(profile, 'password')) {
+            const { password, ...safeProfile } = profile;
+            profile = safeProfile;
+            try { sessionStorage.setItem('beautyProfile', JSON.stringify(profile)); } catch (_) {}
+        }
+        return profile;
+    },
     setProfile(profile) {
-        sessionStorage.setItem('beautyProfile', JSON.stringify(profile || {}));
-        if (profile?.name) sessionStorage.setItem('beautyUser', profile.name);
-        this.saveRegisteredMember(profile);
+        const safeProfile = { ...(profile || {}) };
+        delete safeProfile.password;
+        sessionStorage.setItem('beautyProfile', JSON.stringify(safeProfile));
+        if (safeProfile?.name) sessionStorage.setItem('beautyUser', safeProfile.name);
+        this.saveRegisteredMember(safeProfile);
     },
     isLoggedIn() { return !!this.getUser(); },
     logout() {
         sessionStorage.removeItem('beautyUser');
         sessionStorage.removeItem('beautyProfile');
         sessionStorage.removeItem('beautyAuthCreds');
+        sessionStorage.removeItem('memberAccessToken');
         location.reload();
     },
 };

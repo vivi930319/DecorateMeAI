@@ -121,16 +121,16 @@ function svgDataUrl(svg) {
 // 純色塊 + 分類文字的中性佔位圖，不假裝畫出商品照片
 function demoProductImage(product) {
     const palettes = {
-        '底妝': ['#EFE4D8', '#8C5B3A'],
-        '眼影': ['#F3DEDA', '#A94F4D'],
-        '眼線/睫毛': ['#E7DED2', '#3A241C'],
-        '唇彩': ['#F4DEDF', '#B85B4D'],
-        '腮紅': ['#F5DEDC', '#A94F4D'],
-        '眉毛彩妝': ['#EAE0D2', '#6B4430'],
-        '修容': ['#EBDED2', '#6B4430'],
-        '打亮': ['#F6EBD6', '#A78544'],
+        '底妝': ['#FFFFFF', '#8C5B3A'],
+        '眼影': ['#FFFFFF', '#A94F4D'],
+        '眼線/睫毛': ['#FFFFFF', '#3A241C'],
+        '唇彩': ['#FFFFFF', '#B85B4D'],
+        '腮紅': ['#FFFFFF', '#A94F4D'],
+        '眉毛彩妝': ['#FFFFFF', '#6B4430'],
+        '修容': ['#FFFFFF', '#6B4430'],
+        '打亮': ['#FFFFFF', '#A78544'],
     };
-    const [bg, ink] = palettes[product.cat] || ['#EFE4D8', '#8C5B3A'];
+    const [bg, ink] = palettes[product.cat] || ['#FFFFFF', '#8C5B3A'];
     return svgDataUrl(`
         <svg xmlns="http://www.w3.org/2000/svg" width="600" height="760" viewBox="0 0 600 760">
             <rect width="600" height="760" fill="${bg}"/>

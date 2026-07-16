@@ -6,6 +6,8 @@ window.DECORATE_ME_CONFIG = {
     faceApiKey:        '<face 服務的 X-API-Key，需與 Cloud Run 環境變數 FACE_API_KEY 一致>',
     memberDatabaseUrl: 'https://<會員資料庫的-cloudflare-tunnel>.trycloudflare.com',
     productUrl:        'https://<商品服務的-cloudflare-tunnel>.trycloudflare.com',
+    // 爬蟲若與商品服務部署在同一個後端可省略；前端會自動沿用 productUrl。
+    crawlerUrl:        'https://<爬蟲服務的-cloudflare-tunnel>.trycloudflare.com',
     renderUrl:         'https://replicate-render-<專案編號>.asia-east1.run.app',
     renderApiKey:      '<render 服務的 X-API-Key，需與 Cloud Run 環境變數 RENDER_API_KEY 一致>',
     textSuggestionUrl: 'https://<Ollama建議服務的-cloudflare-tunnel>.trycloudflare.com',

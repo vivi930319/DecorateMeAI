@@ -1,0 +1,172 @@
+<style>
+.ai-render-page {
+    display: grid;
+    gap: 20px;
+}
+.ai-render-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr);
+    gap: 20px;
+    align-items: start;
+}
+.ai-render-panel {
+    background: rgba(255,255,255,.74);
+    border: 1px solid rgba(126, 94, 50, .18);
+    border-radius: 8px;
+    padding: 18px;
+    box-shadow: 0 18px 45px rgba(79, 55, 28, .09);
+}
+.ai-render-preview {
+    aspect-ratio: 4 / 5;
+    background: #efe8dc;
+    border: 1px dashed rgba(93, 68, 34, .28);
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    position: relative;
+}
+.ai-render-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #efe8dc;
+}
+.ai-render-empty {
+    text-align: center;
+    color: #766a5b;
+    padding: 20px;
+}
+.ai-render-label {
+    position: absolute;
+    left: 12px;
+    top: 12px;
+    background: rgba(255,255,255,.88);
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 12px;
+}
+.ai-render-controls {
+    display: grid;
+    gap: 14px;
+}
+.ai-render-field label {
+    display: block;
+    font-size: 13px;
+    margin-bottom: 7px;
+    color: #5d513f;
+}
+.ai-render-field input,
+.ai-render-field textarea,
+.ai-render-field select {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid rgba(97, 72, 39, .24);
+    border-radius: 8px;
+    padding: 11px 12px;
+    background: rgba(255,255,255,.92);
+    color: #2d2822;
+    font: inherit;
+}
+.ai-render-field textarea {
+    min-height: 156px;
+    resize: vertical;
+}
+.ai-render-status {
+    min-height: 20px;
+    font-size: 13px;
+    color: #766a5b;
+}
+.ai-render-verify {
+    display: grid;
+    gap: 7px;
+    padding: 12px;
+    border: 1px solid rgba(97, 72, 39, .18);
+    border-radius: 8px;
+    background: rgba(255,255,255,.58);
+    font-size: 13px;
+    color: #5d513f;
+}
+.ai-render-check {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+.ai-render-check b {
+    font-weight: 600;
+}
+.ai-render-check.ok b {
+    color: #4d7b5a;
+}
+.ai-render-check.bad b {
+    color: #a35c52;
+}
+.ai-render-fingerprint {
+    word-break: break-all;
+    color: #8b7865;
+    font-size: 12px;
+}
+.ai-render-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+.ai-render-actions .btn-gold,
+.ai-render-actions .btn-outline {
+    width: 100%;
+}
+@media (max-width: 760px) {
+    .ai-render-grid {
+        grid-template-columns: 1fr;
+    }
+    .ai-render-actions {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+
+<div class="ai-render-page">
+    <div class="page-header">
+        <span class="eyebrow">Replicate Render</span>
+        <h1>AI 渲染妝容</h1>
+        <div class="divider"></div>
+        <p>使用目前分析資料包的照片、臉部 JSON 與 Ollama 渲染 Prompt，獨立執行 Replicate 妝容渲染。</p>
+    </div>
+
+    <section class="ai-render-grid">
+        <div class="ai-render-panel">
+            <div class="ai-render-preview" id="aiRenderPreview">
+                <div class="ai-render-empty">尚未讀取分析資料包</div>
+            </div>
+        </div>
+
+        <div class="ai-render-panel ai-render-controls">
+            <div class="ai-render-field">
+                <label>資料包來源</label>
+                <div id="aiRenderPackageSummary" class="ai-render-status">讀取中...</div>
+            </div>
+
+            <div class="ai-render-field">
+                <label>臉部分析 JSON</label>
+                <textarea id="aiRenderFaceJson" readonly></textarea>
+            </div>
+
+            <div class="ai-render-field">
+                <label for="aiRenderPrompt">Ollama 渲染 Prompt</label>
+                <textarea id="aiRenderPrompt" readonly></textarea>
+            </div>
+
+            <div class="ai-render-field">
+                <label>資料包檢查</label>
+                <div id="aiRenderVerify" class="ai-render-verify"></div>
+            </div>
+
+            <div class="ai-render-status" id="aiRenderStatus"></div>
+
+            <div class="ai-render-actions">
+                <button class="btn-gold" id="aiRenderBtn" type="button">AI 渲染妝容</button>
+                <button class="btn-outline" id="aiRenderRefreshBtn" type="button">重新讀取資料包</button>
+            </div>
+        </div>
+    </section>
+</div>
