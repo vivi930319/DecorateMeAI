@@ -1,0 +1,54 @@
+# 只上傳 API 主程式與 Docker 部署檔，其餘本地檔案一律忽略
+*
+
+!.gitignore
+!.dockerignore
+!.gcloudignore
+!README.md
+!Face_analyzer_BASIC.py
+
+# ROI CNN（BASIC 五官分類）：訓練腳本、共用裁切定義、shadow 推論、訓練歷程
+!face_roi.py
+!basic_roi_shadow.py
+!prepare_roi_cache.py
+!train_basic_cnn_roi.py
+!predict_basic_roi.py
+!eval_rule_baseline.py
+# md 文件一律不上 GitHub（僅 README.md 例外，見上方放行）——
+# 訓練歷程/紀錄書/規格書等文件留在本機與組內流通。
+# 模型權重（.onnx / .pt）刻意不入版控：二進位檔每次重訓都會讓 repo 永久肥一份。
+# 部署不受影響（Cloud Build 走 .gcloudignore 從本機上傳）；要重建模型就重跑
+# tools/build_identity_map.py -> prepare_roi_cache.py -> train_basic_cnn_roi.py。
+!Face_analyzer_PRO.py
+!Ollama_suggestion.py
+!dev_server_utils.py
+!cloud_start.py
+!Dockerfile
+!docker-compose.yml
+!requirements.txt
+!backend_smoke_test.py
+!ollama_suggestion_smoke_test.py
+!analysis_package.py
+!job_store.py
+!api_errors.py
+!replicate_render.py
+!replicate_render_api.py
+!requirements.render.txt
+!Dockerfile.render
+!ai_gateway.py
+!ai_gateway_test.py
+!render_api_test.py
+!api_errors_test.py
+!gcs-lifecycle.json
+!requirements.gateway.txt
+!Dockerfile.gateway
+!cloudbuild.gateway.yaml
+!deploy_render_cloudrun.ps1
+!tools/
+!tools/*.py
+!setup.bat
+!start_backend_local.bat
+!start_full_stack_local.bat
+
+# 本機新手教學文件，不上傳 Git
+local_only_notes/

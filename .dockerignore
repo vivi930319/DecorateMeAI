@@ -1,0 +1,28 @@
+*
+!Face_analyzer_BASIC.py
+!Face_analyzer_PRO.py
+!Ollama_suggestion.py
+!dev_server_utils.py
+!cloud_start.py
+!Dockerfile
+!requirements.txt
+!analysis_package.py
+!job_store.py
+!replicate_render.py
+!replicate_render_api.py
+!requirements.render.txt
+!Dockerfile.render
+!ai_gateway.py
+!requirements.gateway.txt
+!Dockerfile.gateway
+!face_roi.py
+!basic_roi_shadow.py
+
+# ROI CNN shadow 模型。只放推論要用的 .onnx 與類別表；
+# .pt（torch state dict，訓練用）不進映像，那是 30MB 的死重量。
+!models
+models/*
+!models/basic_features_roi
+models/basic_features_roi/*
+!models/basic_features_roi/*.onnx
+!models/basic_features_roi/*_classes.json

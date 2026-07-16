@@ -1,0 +1,38 @@
+# gcloud builds submit 上傳建置來源時用這個檔決定要傳什麼。
+#
+# 這個檔必須存在：沒有它，gcloud 會 fallback 去套用 .gitignore，而 .gitignore 是「* 全擋」的
+# 白名單、且沒放行 models/，於是模型檔不會被上傳，Docker build 會在 COPY models/ 直接失敗。
+#
+# 內容要跟 Dockerfile 的 COPY 清單對得起來。
+
+*
+
+!.dockerignore
+!Dockerfile
+!Dockerfile.render
+!Dockerfile.gateway
+!requirements.txt
+!requirements.render.txt
+!requirements.gateway.txt
+!Face_analyzer_BASIC.py
+!Face_analyzer_PRO.py
+!Ollama_suggestion.py
+!replicate_render.py
+!replicate_render_api.py
+!ai_gateway.py
+!dev_server_utils.py
+!cloud_start.py
+!job_store.py
+!api_errors.py
+!gcs-lifecycle.json
+!analysis_package.py
+!face_roi.py
+!basic_roi_shadow.py
+
+# ROI CNN shadow 模型：只傳推論用的 .onnx 與類別表，.pt 是訓練用的不進映像
+!models
+models/*
+!models/basic_features_roi
+models/basic_features_roi/*
+!models/basic_features_roi/*.onnx
+!models/basic_features_roi/*_classes.json
