@@ -241,26 +241,39 @@ function showToast(msg){
     setTimeout(()=>{ t.classList.remove('show'); t.style.opacity='0'; setTimeout(()=>t.remove(),500); }, 2400);
 }
 
+function lookImageSrc(value){
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw, window.location.href);
+    if (url.protocol === 'http:' || url.protocol === 'https:') return escapeHtml(url.href);
+    if (url.protocol === 'data:' && /^data:image\/(?:png|jpe?g|webp|gif);base64,/i.test(raw)) return escapeHtml(raw);
+  } catch (_) {}
+  return '';
+}
+
 function openLookModal(item){
   if(!item) return;
   var old=document.getElementById('lookModal'); if(old) old.remove();
   var advice=item.advice||{};
   var titles={ base:'底妝建議', brow:'眉型建議', eye:'眼妝建議', blush:'腮紅 & 修容', lip:'唇妝建議' };
   var r=item.analysis||{}; var skin=r['膚色']||{};
-  var rows=Object.keys(advice).map(function(k){ return '<div class="lm-advice"><b>'+(titles[k]||k)+'</b><p>'+advice[k]+'</p></div>'; }).join('');
-  var tags=(item.tags||[]).map(function(t){ return '<span class="analysis-tag">'+t+'</span>'; }).join('');
-  var photo = (item.beforeImage && item.renderedImage)
-    ? '<div class="lm-compare-photo"><figure><img src="'+item.beforeImage+'" alt="渲染前照片"><figcaption>Before</figcaption></figure><figure><img src="'+item.renderedImage+'" alt="渲染後照片"><figcaption>After</figcaption></figure></div>'
-    : (item.renderedImage ? '<img src="'+item.renderedImage+'" alt="">' : '<span>'+(item.style||'Saved Look')+'</span>');
+  var rows=Object.keys(advice).map(function(k){ return '<div class="lm-advice"><b>'+escapeHtml(titles[k]||k)+'</b><p>'+escapeHtml(advice[k])+'</p></div>'; }).join('');
+  var tags=(item.tags||[]).map(function(t){ return '<span class="analysis-tag">'+escapeHtml(t)+'</span>'; }).join('');
+  var beforeSrc = lookImageSrc(item.beforeImage);
+  var afterSrc = lookImageSrc(item.renderedImage);
+  var photo = (beforeSrc && afterSrc)
+    ? '<div class="lm-compare-photo"><figure><img src="'+beforeSrc+'" alt="渲染前照片"><figcaption>Before</figcaption></figure><figure><img src="'+afterSrc+'" alt="渲染後照片"><figcaption>After</figcaption></figure></div>'
+    : (afterSrc ? '<img src="'+afterSrc+'" alt="">' : '<span>'+escapeHtml(item.style||'Saved Look')+'</span>');
   var ts = item.timestamp ? new Date(item.timestamp).toLocaleString('zh-TW') : '';
   var ov=document.createElement('div'); ov.id='lookModal'; ov.className='look-modal';
   ov.innerHTML='<div class="lm-card" role="dialog" aria-modal="true">'
     +'<button class="lm-close" aria-label="關閉">×</button>'
     +'<div class="lm-photo">'+photo+'</div>'
-    +'<div class="lm-body"><div class="lm-kicker">'+(item.title||'Saved Look')+'</div>'
-    +'<h2>'+(item.style||'妝容建議')+'</h2><time>'+ts+'</time>'
+    +'<div class="lm-body"><div class="lm-kicker">'+escapeHtml(item.title||'Saved Look')+'</div>'
+    +'<h2>'+escapeHtml(item.style||'妝容建議')+'</h2><time>'+escapeHtml(ts)+'</time>'
     +(tags?'<div class="analysis-tags" style="margin-top:14px;">'+tags+'</div>':'')
-    +'<div class="lm-summary"><span><em>臉型</em>'+(r['臉型']||'—')+'</span><span><em>眼型</em>'+(r['眼型']||'—')+'</span><span><em>鼻型</em>'+(r['鼻型']||'—')+'</span><span><em>膚色</em>'+(skin['四季型']||skin['膚色分級']||'—')+'</span></div>'
+    +'<div class="lm-summary"><span><em>臉型</em>'+escapeHtml(r['臉型']||'—')+'</span><span><em>眼型</em>'+escapeHtml(r['眼型']||'—')+'</span><span><em>鼻型</em>'+escapeHtml(r['鼻型']||'—')+'</span><span><em>膚色</em>'+escapeHtml(skin['四季型']||skin['膚色分級']||'—')+'</span></div>'
     +(rows?'<div class="lm-advice-grid">'+rows+'</div>':'')
     +'</div></div>';
   document.body.appendChild(ov); void ov.offsetWidth; ov.classList.add('show');
@@ -433,17 +446,39 @@ function buildCurrentLookRecord(){
 
 // 後端 saved_looks 一筆 → 本機妝容記錄格式（供跨裝置拉回時重繪用）
 function mapRemoteSavedLook(L){
-    const a = (L && L.analysisSummary) || {};
+    const summary = (L && (L.analysisSummary || L.analysis_summary)) || {};
+    const summaryObj = (summary && typeof summary === 'object') ? summary : {};
+    const nested = (summaryObj.raw && typeof summaryObj.raw === 'object') ? summaryObj.raw : {};
+    const source = Object.keys(nested).length ? nested : summaryObj;
+    const face = source.faceAnalysis || source['臉部分析'] || source;
+    const skin = source.skinTone || source['膚色'] || {};
+    const pick = (...values) => values.find(value => value !== undefined && value !== null && String(value).trim() !== '') || null;
+    const advice = source.generativeText?.suggestion?.advice
+        || source.generativeText?.advice
+        || source.advice
+        || summaryObj.advice
+        || {};
+    const tags = Array.isArray(source.tags) ? source.tags : (Array.isArray(summaryObj.tags) ? summaryObj.tags : []);
     return {
         kind: 'compare',
         title: '妝容對比圖',
         style: (L && L.style) || '妝容建議',
-        advice: {},
-        analysis: { faceShape: a.faceShape || null, eyeShape: a.eyeShape || null, skinTone: { season: a.skinSeason || null } },
-        beforeImage: (L && L.beforeImageUrl) || '',
-        renderedImage: (L && L.afterImageUrl) || '',
+        advice: advice && typeof advice === 'object' ? advice : {},
+        tags,
+        summary: summaryObj.summary || summaryObj.text || '',
+        analysis: {
+            '臉型': pick(summaryObj.faceShape, summaryObj['臉型'], face.faceShape, face['臉型']),
+            '眼型': pick(summaryObj.eyeShape, summaryObj['眼型'], face.eyeShape, face['眼型']),
+            '鼻型': pick(summaryObj.noseShape, summaryObj['鼻型'], face.noseShape, face['鼻型']),
+            '膚色': {
+                '四季型': pick(summaryObj.skinSeason, summaryObj['四季型'], skin.season, skin['四季型']),
+                '膚色分級': pick(summaryObj.skinTone, summaryObj['膚色分級'], skin.tone, skin['膚色分級'])
+            }
+        },
+        beforeImage: (L && (L.beforeImageUrl || L.before_image_url)) || '',
+        renderedImage: (L && (L.afterImageUrl || L.after_image_url)) || '',
         analysisPackageId: null,
-        timestamp: (L && L.createdAt) || null,
+        timestamp: (L && (L.createdAt || L.created_at)) || null,
         remoteId: (L && L.id != null) ? L.id : null
     };
 }
@@ -731,6 +766,7 @@ admin: `
                         <th>狀態</th>
                         <th>失敗原因</th>
                         <th>功能權限</th>
+                        <th>資料庫操作</th>
                     </tr>
                 </thead>
                 <tbody id="adminUserRows"></tbody>
@@ -2871,23 +2907,30 @@ const PageInit = {
                 area.innerHTML = '<div class="empty-state compact">尚未收藏妝容對比圖</div>';
                 return;
             }
-            area.innerHTML = `<div class="saved-look-grid">${list.slice(0, 6).map((item, index) => `
+            area.innerHTML = `<div class="saved-look-grid">${list.map((item, index) => {
+                const imageSrc = lookImageSrc(item.renderedImage);
+                const styleLabel = escapeHtml(item.style || '妝容對比圖');
+                const summary = escapeHtml(formatSavedAdvice(item));
+                const timestamp = escapeHtml(item.timestamp ? new Date(item.timestamp).toLocaleString('zh-TW') : '');
+                const expired = String(item.renderedImage || '').includes('replicate.delivery')
+                    ? '<span class="saved-look-expire">此圖為舊版臨時網址，可能已失效</span>' : '';
+                return `
                 <article class="saved-look-card reveal-in" data-look="${index}" style="animation-delay:${Math.min(index * 0.04, 0.24)}s">
                     <button class="look-del" data-del="${index}" aria-label="刪除此妝容">×</button>
                     <div class="saved-look-photo">
-                        ${item.renderedImage
-                            ? `<img src="${item.renderedImage}" alt="${item.style || '妝容對比圖'}" onload="this.classList.add('loaded')">${String(item.renderedImage).includes('replicate.delivery') ? '<span class="saved-look-expire">此圖為舊版臨時網址，可能已失效</span>' : ''}`
-                            : `<span>${item.style || 'Saved Look'}</span>`
+                        ${imageSrc
+                            ? `<img src="${imageSrc}" alt="${styleLabel}" onload="this.classList.add('loaded')">${expired}`
+                            : `<span>${styleLabel}</span>`
                         }
                     </div>
                     <div class="saved-look-body">
-                        <div class="saved-look-kicker">Saved Look</div>
-                        <h3>${item.style || '妝容對比圖'}</h3>
-                        <p>${formatSavedAdvice(item)}</p>
-                        <time>${item.timestamp ? new Date(item.timestamp).toLocaleString('zh-TW') : ''}</time>
+                        <div class="saved-look-kicker">${item.remoteId != null ? 'Saved Look · DB' : 'Saved Look · 本機快取'}</div>
+                        <h3>${styleLabel}</h3>
+                        <p>${summary}</p>
+                        <time>${timestamp}</time>
                     </div>
-                </article>
-            `).join('')}</div>`;
+                </article>`;
+            }).join('')}</div>`;
             area.querySelectorAll('.saved-look-card[data-look]').forEach(function(card){ card.style.cursor='pointer'; card.onclick=function(){ openLookModal(list[+card.dataset.look]); }; });
             area.querySelectorAll('.look-del[data-del]').forEach(function(btn){
                 btn.onclick = function(e){
@@ -2897,13 +2940,24 @@ const PageInit = {
                         title: "刪除妝容對比圖", type: "error", okText: "刪除", cancelText: "保留",
                         onOk: function(){
                             var recs = []; try { recs = JSON.parse(localStorage.getItem(looksKey()) || "[]"); } catch(_){}
-                            var removed = recs.splice(idx, 1)[0];
-                            localStorage.setItem(looksKey(), JSON.stringify(recs));
-                            // 若該筆已同步到後端，連動刪除（盡力而為，失敗不影響本機）
+                            var removed = recs[idx];
+                            // 已同步的收藏先刪資料庫，成功後才刪本機快取，避免兩邊狀態不一致
                             var em = (typeof Auth !== 'undefined' && Auth.getProfile()) ? Auth.getProfile().email : null;
-                            if (em && removed && removed.remoteId != null) { Api.deleteSavedLook(em, removed.remoteId); }
-                            showToast("已刪除妝容");
-                            paintSavedLooks(recs);
+                            var deleteRemote = (em && removed && removed.remoteId != null && Api.deleteSavedLook)
+                                ? Api.deleteSavedLook(em, removed.remoteId)
+                                : Promise.resolve({ ok: true });
+                            deleteRemote.then(function(result){
+                                if (!result || !result.ok) {
+                                    showAlert("資料庫刪除失敗，本機收藏尚未刪除。請確認登入狀態與會員資料庫連線後再試。", { type: "error" });
+                                    return;
+                                }
+                                recs.splice(idx, 1);
+                                localStorage.setItem(looksKey(), JSON.stringify(recs));
+                                showToast(removed && removed.remoteId != null ? "妝容已從資料庫與本機刪除" : "已刪除本機收藏（此筆尚未同步資料庫）");
+                                paintSavedLooks(recs);
+                            }).catch(function(){
+                                showAlert("資料庫刪除失敗，本機收藏尚未刪除。請稍後再試。", { type: "error" });
+                            });
                         }
                     });
                 };
@@ -2924,7 +2978,8 @@ const PageInit = {
                     const localByRemote = {};
                     localAll.forEach(x => { if (x.remoteId != null) localByRemote[x.remoteId] = x; });
                     const fromRemote = remote.map(rm => (rm.remoteId != null && localByRemote[rm.remoteId]) ? localByRemote[rm.remoteId] : rm);
-                    const localOnly = localAll.filter(x => x.remoteId == null);
+                    const remoteIds = new Set(remote.map(rm => String(rm.remoteId)));
+                    const localOnly = localAll.filter(x => x.remoteId == null || !remoteIds.has(String(x.remoteId)));
                     const merged = fromRemote.concat(localOnly).sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
                     localStorage.setItem(looksKey(), JSON.stringify(merged.slice(0, 20)));
                     if (Router.currentPage === 'profile') paintSavedLooks(merged);
@@ -3143,7 +3198,7 @@ const PageInit = {
                 const message = dbMembersLoading
                     ? '會員資料庫載入中…'
                     : `會員資料庫目前無法讀取。${escapeHtml(dbMembersError || '請確認 admin session、CORS 與 cookie 設定。')}（已停用 demo 假資料）`;
-                rowsEl.innerHTML = `<tr><td colspan="6"><div class="empty-state compact">${message}</div></td></tr>`;
+                rowsEl.innerHTML = `<tr><td colspan="7"><div class="empty-state compact">${message}</div></td></tr>`;
                 ['adminTotal','adminActive','adminSuspended','adminAdmins'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '—'; });
                 return;
             }
@@ -3170,6 +3225,7 @@ const PageInit = {
             rowsEl.innerHTML = members.map(member => {
                 const perm = member.permission || AdminStore.defaultPermissions();
                 const allowed = new Set(perm.allowedPages || []);
+                const isCurrentAdmin = String(member.email || '').trim().toLowerCase() === String(Auth.getProfile()?.email || '').trim().toLowerCase();
                 return `<tr data-admin-email="${escapeHtml(member.email)}">
                     <td>
                         <div class="admin-user">
@@ -3206,8 +3262,13 @@ const PageInit = {
                             }).join('')}
                         </div>
                     </td>
+                    <td>
+                        <div class="admin-member-actions">
+                            <button class="admin-danger-button compact" data-admin-delete type="button" ${isCurrentAdmin ? 'disabled title="不能刪除目前登入中的管理員帳號"' : ''}>刪除會員</button>
+                        </div>
+                    </td>
                 </tr>`;
-            }).join('') || '<tr><td colspan="6"><div class="empty-state compact">沒有符合條件的使用者</div></td></tr>';
+            }).join('') || '<tr><td colspan="7"><div class="empty-state compact">沒有符合條件的使用者</div></td></tr>';
 
             rowsEl.querySelectorAll('[data-admin-status]').forEach(btn => {
                 btn.onclick = async () => {
@@ -3222,6 +3283,31 @@ const PageInit = {
                     if (target) target.status = nextStatus;
                     showToast(nextStatus === 'suspended' ? '已停權（已寫入資料庫）' : '已恢復啟用（已寫入資料庫）');
                     render();
+                };
+            });
+
+            rowsEl.querySelectorAll('[data-admin-delete]').forEach(btn => {
+                btn.onclick = () => {
+                    const row = btn.closest('[data-admin-email]');
+                    const email = row?.dataset.adminEmail;
+                    if (!email || btn.disabled) return;
+                    showConfirm(`確定要刪除會員「${email}」嗎？會員資料、點數與收藏關聯可能一併移除，此動作無法復原。`, {
+                        title: '刪除會員資料', type: 'error', okText: '刪除會員', cancelText: '保留',
+                        onOk: async () => {
+                            btn.disabled = true;
+                            const result = await Api.deleteMember(email);
+                            if (!result || !result.ok) {
+                                btn.disabled = false;
+                                showAlert(`會員刪除失敗：${result?.error || '請確認會員資料庫連線與管理員權限'}`, { type: 'error' });
+                                return;
+                            }
+                            dbMembers = dbMembers.filter(member => String(member.email).toLowerCase() !== String(email).toLowerCase());
+                            delete looksByEmail[email];
+                            delete pointsByEmail[email];
+                            showToast('會員已從資料庫刪除');
+                            render();
+                        }
+                    });
                 };
             });
 
@@ -3257,19 +3343,29 @@ const PageInit = {
             ]))).then(() => { if (Router.currentPage === 'admin') render(); });
         };
 
-        // 縮圖 modal：只顯示渲染後圖＋風格＋時間，不顯示 before 真人臉照（隱私）
+        // 後台收藏 modal：沿用前台的收藏卡片與妝前／妝後詳情版面，並提供資料庫刪除
         const openMemberLooksModal = (email) => {
             const looks = looksByEmail[email];
             const old = document.getElementById('adminLooksModal'); if (old) old.remove();
             const ov = document.createElement('div'); ov.id = 'adminLooksModal'; ov.className = 'glass-alert';
-            const body = (Array.isArray(looks) && looks.length)
-                ? `<div class="saved-look-grid">${looks.map(L => `
-                    <article class="saved-look-card">
-                        <div class="saved-look-photo">${L.afterImageUrl
-                            ? `<img src="${escapeHtml(L.afterImageUrl)}" alt="${escapeHtml(L.style || '妝容')}" onload="this.classList.add('loaded')">`
-                            : `<span>${escapeHtml(L.style || 'Look')}</span>`}</div>
-                        <div class="saved-look-body"><h3>${escapeHtml(L.style || '妝容')}</h3><time>${L.createdAt ? new Date(L.createdAt).toLocaleString('zh-TW') : ''}</time></div>
-                    </article>`).join('')}</div>`
+            const records = Array.isArray(looks) ? looks.map(mapRemoteSavedLook) : [];
+            const body = records.length
+                ? `<div class="saved-look-grid">${records.map((item, index) => {
+                    const afterSrc = lookImageSrc(item.renderedImage);
+                    const summary = item.summary || '已保存妝容對比圖，可點開查看完整妝前／妝後結果。';
+                    return `<article class="saved-look-card" data-admin-look-index="${index}" style="cursor:pointer;">
+                        <button class="look-del" data-admin-del-look="${index}" aria-label="從資料庫刪除此妝容">×</button>
+                        <div class="saved-look-photo">${afterSrc
+                            ? `<img src="${afterSrc}" alt="${escapeHtml(item.style || '妝容')}" onload="this.classList.add('loaded')">`
+                            : `<span>${escapeHtml(item.style || 'Look')}</span>`}</div>
+                        <div class="saved-look-body">
+                            <div class="saved-look-kicker">Saved Look · DB</div>
+                            <h3>${escapeHtml(item.style || '妝容')}</h3>
+                            <p>${escapeHtml(String(summary).slice(0, 72))}</p>
+                            <time>${escapeHtml(item.timestamp ? new Date(item.timestamp).toLocaleString('zh-TW') : '')}</time>
+                        </div>
+                    </article>`;
+                }).join('')}</div>`
                 : (looks === null
                     ? '<div class="empty-state compact">讀取這位會員的收藏失敗（請確認 admin session 與資料庫連線）</div>'
                     : '<div class="empty-state compact">這位會員目前沒有收藏妝容</div>');
@@ -3283,6 +3379,40 @@ const PageInit = {
             const close = () => { ov.classList.remove('show'); setTimeout(() => ov.remove(), 300); };
             ov.querySelector('.lm-close').onclick = close;
             ov.addEventListener('click', e => { if (e.target === ov) close(); });
+            ov.querySelectorAll('[data-admin-look-index]').forEach(card => {
+                card.onclick = () => {
+                    const index = Number(card.dataset.adminLookIndex);
+                    const item = records[index];
+                    if (!item) return;
+                    ov.remove();
+                    openLookModal(item);
+                };
+            });
+            ov.querySelectorAll('[data-admin-del-look]').forEach(button => {
+                button.onclick = event => {
+                    event.stopPropagation();
+                    const index = Number(button.dataset.adminDelLook);
+                    const target = Array.isArray(looks) ? looks[index] : null;
+                    if (!target || target.id == null) return;
+                    showConfirm('確定要從資料庫刪除這筆會員妝容對比圖嗎？此動作無法復原。', {
+                        title: '刪除資料庫收藏', type: 'error', okText: '刪除', cancelText: '保留',
+                        onOk: async () => {
+                            button.disabled = true;
+                            const result = await Api.deleteSavedLook(email, target.id);
+                            if (!result || !result.ok) {
+                                button.disabled = false;
+                                showAlert('資料庫刪除失敗，這筆妝容仍然保留。請確認 admin session 與資料庫連線。', { type: 'error' });
+                                return;
+                            }
+                            looksByEmail[email] = looks.filter((_, i) => i !== index);
+                            showToast('妝容已從資料庫刪除');
+                            ov.remove();
+                            render();
+                            openMemberLooksModal(email);
+                        }
+                    });
+                };
+            });
         };
 
         // render 為 const，必須等它初始化後才能呼叫 loadAdminMembers（內部會呼叫 render），否則觸發 TDZ「Cannot access 'render' before initialization」

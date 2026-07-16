@@ -1259,6 +1259,7 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .admin-perms { display:flex; flex-wrap:wrap; gap:6px; max-width:520px; }
 .admin-perms label { min-height:30px; display:inline-flex; align-items:center; gap:5px; border:1px solid #d9dee2; border-radius:4px; padding:0 8px; background:#fff; color:#5f6b73; font-size:11px; cursor:pointer; }
 .admin-perms input { accent-color:var(--admin-green); }
+.admin-member-actions { display:flex; align-items:flex-start; min-width:88px; }
 .admin-fail,.admin-source { min-height:28px; display:inline-flex; align-items:center; border:1px solid #d9dee2; border-radius:4px; padding:0 8px; background:#f7f8f9; color:#65717a; font-size:11px; white-space:nowrap; }
 .admin-fail.ok { color:var(--admin-green); border-color:#b8d8ce; background:#f2faf7; }
 .admin-fail.warn { color:var(--admin-red); border-color:#e4b6b9; background:#fff6f6; }

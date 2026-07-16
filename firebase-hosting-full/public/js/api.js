@@ -711,6 +711,24 @@ const Api = {
         }
     },
 
+    async deleteMember(email) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false, error: 'memberDatabaseUrl 或 email 未設定' };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}`, {
+                method: 'DELETE',
+                credentials: 'include'
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+            }
+            return { ok: true, member: data.member || null };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
     // 會員點數：GET /api/members/{email}/points → { balance, lifetime, transactions[] }。
     async getMemberPoints(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
