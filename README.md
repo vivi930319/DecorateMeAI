@@ -1,6 +1,6 @@
 # Decorate Me — AI 美妝分析與妝容推薦系統
 
-畢業專題。使用者上傳一張自拍，系統分析五官與膚色、生成個人化妝容建議，用 AI 把妝容渲染回同一張臉，並推薦對應的彩妝商品。提供網頁版與 iOS App。
+畢業專題。使用者上傳一張自拍，系統分析五官與膚色、生成個人化妝容建議，用 AI 把妝容渲染回同一張臉，並推薦對應的彩妝商品。
 
 - 網頁版：[decorate-me.web.app](https://decorate-me.web.app)
 
@@ -14,7 +14,7 @@ flowchart TB
   U["使用者（網頁 / iOS）"]
   subgraph C["客戶端"]
     WEB["網頁前端"]
-    IOS["iOS App"]
+   
   end
   subgraph S["後端服務"]
     FACE["臉部分析 + AI 渲染<br/>Python / FastAPI"]
