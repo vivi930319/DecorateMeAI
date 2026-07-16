@@ -3375,7 +3375,7 @@ const PageInit = {
                 : (looks === null
                     ? '<div class="empty-state compact">讀取這位會員的收藏失敗（請確認 admin session 與資料庫連線）</div>'
                     : '<div class="empty-state compact">這位會員目前沒有收藏妝容</div>');
-            ov.innerHTML = `<div class="ga-card" role="dialog" aria-modal="true" style="max-width:640px;width:92%;max-height:82vh;overflow:auto;">
+            ov.innerHTML = `<div class="ga-card admin-looks-dialog" role="dialog" aria-modal="true">
                 <button class="lm-close" aria-label="關閉">×</button>
                 <h3 class="ga-title">妝容收藏（資料庫即時）</h3>
                 <p class="ga-sub">${escapeHtml(email)}</p>

@@ -1967,6 +1967,60 @@ body {
     box-shadow:none;
 }
 
+/* 後台會員收藏：放大卡片，避免三欄壓縮成直排文字 */
+.admin-looks-dialog {
+    width:min(1100px,96vw) !important;
+    max-width:min(1100px,96vw) !important;
+    max-height:90vh !important;
+    overflow:auto;
+    padding:38px 30px 32px !important;
+    text-align:center;
+}
+.admin-looks-dialog .saved-look-grid {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:20px;
+    margin-top:24px;
+    text-align:left;
+}
+.admin-looks-dialog .saved-look-card {
+    grid-template-columns:minmax(150px,.78fr) minmax(0,1fr);
+    gap:18px;
+    min-height:238px;
+    padding:16px;
+}
+.admin-looks-dialog .saved-look-photo {
+    min-height:204px;
+    border-radius:10px;
+}
+.admin-looks-dialog .saved-look-body h3 {
+    font-size:21px;
+    line-height:1.45;
+}
+.admin-looks-dialog .saved-look-body p {
+    font-size:14px;
+    line-height:1.8;
+}
+.admin-looks-dialog .saved-look-body time {
+    font-size:11px;
+}
+@media (max-width:760px) {
+    .admin-looks-dialog {
+        width:96vw !important;
+        max-width:96vw !important;
+        padding:32px 16px 24px !important;
+    }
+    .admin-looks-dialog .saved-look-grid {
+        grid-template-columns:1fr;
+    }
+    .admin-looks-dialog .saved-look-card {
+        grid-template-columns:1fr;
+        min-height:0;
+    }
+    .admin-looks-dialog .saved-look-photo {
+        min-height:260px;
+    }
+}
+
 /* 收藏妝容詳情彈窗 · 降低透明度提升可讀性 */
 .look-modal {
     background:rgba(43,31,33,0.58);
