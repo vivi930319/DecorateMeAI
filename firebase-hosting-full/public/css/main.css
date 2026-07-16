@@ -1244,7 +1244,7 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .admin-inline-status { align-self:center; max-width:360px; color:var(--admin-muted); font-size:11px; line-height:1.5; }
 .admin-inline-status.error { color:var(--admin-red); }
 .admin-inline-status.ok { color:var(--admin-green); }
-.admin-table-wrap { overflow:auto; border:1px solid var(--admin-line); border-radius:6px; background:#fff; -webkit-overflow-scrolling:touch; }
+.admin-table-wrap { max-width:100%; overflow:auto; border:1px solid var(--admin-line); border-radius:6px; background:#fff; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; touch-action:pan-x pan-y; }
 .admin-table { width:100%; min-width:900px; border-collapse:collapse; }
 .admin-table th { height:46px; padding:0 16px; background:#f5f7f8; color:#647078; font:600 11px/1 "Noto Sans TC",sans-serif; text-align:left; white-space:nowrap; }
 .admin-table td { padding:15px 16px; border-top:1px solid #e4e8ea; color:#344049; font-size:12px; vertical-align:top; }
@@ -1314,30 +1314,32 @@ body.admin-mode .main-content * { letter-spacing:0; }
     .admin-product-grid { grid-template-columns:310px minmax(0,1fr); }
 }
 @media (max-width:900px) {
-    .admin-workspace { grid-template-columns:1fr; }
-    .admin-sidebar { position:relative; height:auto; padding:16px; }
+    .admin-workspace { grid-template-columns:1fr; width:100%; min-width:0; overflow-x:clip; }
+    .admin-sidebar { position:relative; width:100%; height:auto; min-width:0; padding:16px; overflow:hidden; }
     .admin-brand { padding:0 4px 14px; }
-    .admin-section-nav { display:flex; gap:7px; margin-top:14px; overflow-x:auto; scrollbar-width:none; }
-    .admin-section-nav button { width:auto; min-width:122px; }
+    .admin-section-nav { display:flex; gap:7px; margin-top:14px; max-width:100%; overflow-x:auto; overflow-y:hidden; padding-bottom:4px; scrollbar-width:none; -webkit-overflow-scrolling:touch; overscroll-behavior-inline:contain; touch-action:pan-x; }
+    .admin-section-nav button { width:auto; min-width:122px; flex:0 0 auto; }
     .admin-account { display:none; }
-    .admin-topbar { position:relative; min-height:78px; padding:15px 20px; }
-    .admin-content { padding:24px 20px 44px; }
+    .admin-stage,.admin-topbar,.admin-content,.admin-view { width:100%; min-width:0; max-width:100%; }
+    .admin-topbar { position:sticky; min-height:78px; padding:15px 20px; }
+    .admin-content { padding:24px 20px 44px; overflow-x:hidden; }
     .admin-product-grid,.admin-crawler-layout { grid-template-columns:1fr; }
     .admin-overview-grid { grid-template-columns:1fr; }
 }
 @media (max-width:640px) {
     .admin-topbar { align-items:flex-start; flex-direction:column; gap:13px; }
-    .admin-topbar-actions { width:100%; justify-content:space-between; }
+    .admin-topbar-actions { width:100%; min-width:0; display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
+    .admin-sync-status { width:100%; justify-content:center; }
     .admin-content { padding:20px 14px 40px; }
-    .admin-summary { grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
-    .admin-summary article { min-height:112px; padding:15px; }
+    .admin-summary { width:100%; min-width:0; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+    .admin-summary article { min-width:0; min-height:112px; padding:15px; overflow:hidden; }
     .admin-summary article b { font-size:27px; }
     .admin-toolbar { align-items:stretch; flex-direction:column; }
     .admin-search { width:100%; }
     .admin-inline-status { max-width:none; }
     .admin-primary-button,.admin-secondary-button { width:100%; }
     .admin-product-form-actions,.admin-crawler-result-actions { flex-direction:column; }
-    .admin-preview-grid { grid-template-columns:repeat(2,minmax(0,1fr)); padding:10px; }
+    .admin-preview-grid { width:100%; min-width:0; grid-template-columns:repeat(2,minmax(0,1fr)); padding:10px; }
     .admin-product-form,.admin-crawler-form,.admin-crawler-preview,.admin-status-board,.admin-quick-actions { padding:17px; }
     .admin-crawler-product { grid-template-columns:1fr; }
     .admin-crawler-image { max-width:260px; }

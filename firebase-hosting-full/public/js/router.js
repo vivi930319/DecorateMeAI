@@ -3079,7 +3079,7 @@ const PageInit = {
         })();
         const classifyMemberLoadError = (result) => {
             if (result?.status === 401 || result?.status === 403) {
-                return '請確認目前登入的是 admin 帳號，且 members API 已啟用 session 驗證';
+                return '請重新登入 admin 帳號；若仍失敗，請確認會員 API 的 Bearer token／session 驗證';
             }
             if (/credentials|cors|failed to fetch|networkerror|load failed/i.test(String(result?.error || ''))) {
                 return '請確認後端已回 Access-Control-Allow-Credentials，且 cookie 為 SameSite=None; Secure';

@@ -491,7 +491,7 @@ const Api = {
         const baseUrl = this.config.services.product.baseUrl;
         if (!baseUrl) return [];
         try {
-            const res = await fetch(`${baseUrl}/api/recommend/personal`, { credentials: 'include', cache: 'no-store' });
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/recommend/personal`, { credentials: 'include', cache: 'no-store' });
             if (!res.ok) return [];
             const data = await res.json();
             if (!data?.success || !Array.isArray(data.recommendations)) return [];
@@ -512,7 +512,7 @@ const Api = {
         const baseUrl = this.config.services.product.baseUrl;
         if (!baseUrl) return null;
         try {
-            const res = await fetch(`${baseUrl}/api/favorites/toggle`, {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/favorites/toggle`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
@@ -606,13 +606,51 @@ const Api = {
         }
     },
 
-    // ═══ 後台管理：members 讀寫都走管理員 session cookie ═══
+    // ═══ 後台管理：members 讀寫都走登入憑證 ═══
     // 不在瀏覽器保存密碼，也不使用密碼自動重登入。若 session 失效，讓畫面
-    // 顯示登入逾時並由使用者重新登入；真正的長期登入應由 HttpOnly cookie/refresh
-    // token 由會員後端負責，而不是把密碼交給 JavaScript。
+    // 顯示登入逾時並由使用者重新登入；若會員後端回傳短期 Bearer token，僅存
+    // 在本分頁的 sessionStorage，不能用來取代 HttpOnly cookie 的後端驗證。
+    _memberTokenKey: 'memberAccessToken',
+    _getMemberAccessToken() {
+        try {
+            const token = sessionStorage.getItem(this._memberTokenKey) || '';
+            return token.length <= 4096 ? token : '';
+        } catch (_) {
+            return '';
+        }
+    },
+    _rememberMemberAccessToken(data) {
+        const token = data?.accessToken
+            || data?.access_token
+            || data?.token
+            || data?.member?.accessToken
+            || data?.member?.access_token
+            || data?.member?.token
+            || '';
+        try {
+            if (typeof token === 'string' && token.length > 0 && token.length <= 4096) {
+                sessionStorage.setItem(this._memberTokenKey, token);
+            } else {
+                sessionStorage.removeItem(this._memberTokenKey);
+            }
+        } catch (_) {}
+    },
+    _memberHeaders(headers = {}) {
+        const token = this._getMemberAccessToken();
+        return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
+    },
+
     // 保留這個 wrapper 名稱是為了相容既有呼叫點，但不再做 relogin。
+    // 只有送往會員資料庫的請求才附加 Bearer，避免把會員憑證送到商品/爬蟲服務。
     async _fetchWithRelogin(input, init) {
-        return fetch(input, init);
+        const memberBaseUrl = this.config.services.memberDatabase.baseUrl;
+        const isMemberRequest = typeof input === 'string'
+            && !!memberBaseUrl
+            && input.startsWith(memberBaseUrl);
+        const nextInit = isMemberRequest
+            ? { ...(init || {}), headers: this._memberHeaders(init?.headers || {}) }
+            : init;
+        return fetch(input, nextInit);
     },
 
     async fetchAdminMembers() {
@@ -622,17 +660,18 @@ const Api = {
         const timeout = controller ? setTimeout(() => controller.abort(), 12000) : null;
         const opts = { credentials: 'include', cache: 'no-store', ...(controller ? { signal: controller.signal } : {}) };
         try {
-            let res = await fetch(`${baseUrl}/api/members`, opts);
-            if (res.status === 401 && await this._reLogin()) {
-                res = await fetch(`${baseUrl}/api/members`, opts);
-            }
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members`, opts);
             if (timeout) clearTimeout(timeout);
-            const data = await res.json();
+            const data = await res.json().catch(() => ({}));
             if (!res.ok) {
                 return {
                     ok: false,
                     status: res.status,
-                    error: data?.error?.message || `HTTP ${res.status}`
+                    error: data?.error?.message
+                        || data?.detail?.error?.message
+                        || data?.detail?.message
+                        || data?.message
+                        || `HTTP ${res.status}`
                 };
             }
             return {
@@ -999,7 +1038,9 @@ const Api = {
         }
         // 清除舊版本可能留下的敏感資料；本版本不保存密碼。
         try { sessionStorage.removeItem('beautyAuthCreds'); } catch (_) {}
-        return res.json();
+        const data = await res.json();
+        this._rememberMemberAccessToken(data);
+        return data;
     },
 
     async register(payload) {
@@ -1437,6 +1478,7 @@ const Auth = {
         sessionStorage.removeItem('beautyUser');
         sessionStorage.removeItem('beautyProfile');
         sessionStorage.removeItem('beautyAuthCreds');
+        sessionStorage.removeItem('memberAccessToken');
         location.reload();
     },
 };
