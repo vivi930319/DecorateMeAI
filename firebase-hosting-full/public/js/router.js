@@ -523,10 +523,9 @@ function showChangePassword(){
         if (!oldP || !n1 || !n2) { showAlert("請完整填寫三個欄位"); return; }
         if (n1.length < 6) { showAlert("新密碼至少 6 碼"); return; }
         if (n1 !== n2) { showAlert("兩次輸入的新密碼不一致", { type:"error" }); return; }
-        var profile = Auth.getProfile() || {};
-        if (profile.password && profile.password !== oldP) { showAlert("目前密碼不正確", { type:"error" }); return; }
-        Auth.setProfile(Object.assign({}, profile, { password: n1 }));
-        close(function(){ showAlert("密碼已更新", { type:"success" }); });
+        // 不再用前端本機資料模擬改密碼，也不把新密碼寫入 sessionStorage。
+        // 正式改密碼必須由會員後端提供驗證 old password 的 API。
+        close(function(){ showAlert("目前尚未接上會員端改密碼 API，請使用忘記密碼流程。", { type:"error" }); });
     };
     setTimeout(function(){ var i = ov.querySelector("#cpOld"); if (i) i.focus(); }, 80);
 }

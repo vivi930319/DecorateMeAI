@@ -3,6 +3,7 @@ import time
 import math
 import uuid
 import hashlib
+import json
 import logging
 import threading
 from collections import deque
@@ -10,18 +11,22 @@ from threading import Lock
 
 from fastapi import FastAPI, Header, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from api_errors import error_payload, install_api_error_handling
 import job_store
 from dev_server_utils import get_cors_origins
 from replicate_render import (
     GCS_BUCKET_NAME,
+    GCS_RENDER_RETENTION_DAYS,
     IMAGE_PROVIDER,
     RENDER_STYLE_PROMPTS,
     REPLICATE_MODEL,
     SUGGESTION_SERVICE_URL,
     build_personalized_render_prompt,
     call_replicate_render,
+    data_url_to_bytes,
+    delete_permanent_storage_url,
 )
 
 app = FastAPI()
@@ -32,20 +37,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+install_api_error_handling(app, "replicate-render")
 
 # 每次渲染都真的花 Replicate 錢，加 API key 擋掉直接掃到 Cloud Run URL 的濫用。
 # 正式環境務必用環境變數設定 RENDER_API_KEY；沒設定時（本機開發）不擋，但會在 /health 標明。
 RENDER_API_KEY = os.getenv("RENDER_API_KEY", "")
 RENDER_RATE_LIMIT_WINDOW_SECONDS = max(1, int(os.getenv("RENDER_RATE_LIMIT_WINDOW_SECONDS", "3600")))
 RENDER_RATE_LIMIT_MAX_REQUESTS = max(1, int(os.getenv("RENDER_RATE_LIMIT_MAX_REQUESTS", "10")))
+RENDER_QUOTA_WINDOW_SECONDS = max(60, int(os.getenv("RENDER_QUOTA_WINDOW_SECONDS", "86400")))
+RENDER_QUOTA_MAX_REQUESTS = max(1, int(os.getenv("RENDER_QUOTA_MAX_REQUESTS", "30")))
+RENDER_LIMIT_MAX_KEYS = max(100, int(os.getenv("RENDER_LIMIT_MAX_KEYS", "10000")))
+TRUST_FORWARDED_FOR = os.getenv("TRUST_FORWARDED_FOR", "0").strip().lower() in {"1", "true", "yes"}
 
 _rate_limit_lock = Lock()
 _rate_limit_hits: dict[str, deque[float]] = {}
+_quota_lock = Lock()
+_quota_hits: dict[str, deque[float]] = {}
 
 # 去重：同一張圖 + 同一 prompt 在短時間內重複請求（例如使用者狂按），直接回上次結果，不重打 Replicate 燒錢。
 RENDER_DEDUP_TTL_SECONDS = max(0, int(os.getenv("RENDER_DEDUP_TTL_SECONDS", "600")))
 _dedup_lock = Lock()
 _dedup_cache: dict[str, tuple[float, dict]] = {}
+_dedup_inflight: set[str] = set()
 
 # 非同步 job：/render 同步版會被 Cloud Run 的請求逾時砍掉（gpt-image-2 實測 50~150 秒），
 # 所以另開一組 job 端點——送出後立刻回 jobId，前端輪詢進度，不再有 504。
@@ -59,6 +72,8 @@ MAX_RENDER_IMAGE_CHARS = int(os.getenv("MAX_RENDER_IMAGE_CHARS", str(12 * 1024 *
 RENDER_JOB_TIMEOUT_SECONDS = max(60, int(os.getenv("RENDER_JOB_TIMEOUT_SECONDS", "600")))
 RENDER_JOB_RETENTION_SECONDS = max(60, int(os.getenv("RENDER_JOB_RETENTION_SECONDS", "3600")))
 RENDER_JOB_MAX_COUNT = max(1, int(os.getenv("RENDER_JOB_MAX_COUNT", "200")))
+MAX_ANALYSIS_PACKAGE_CHARS = max(1024, int(os.getenv("MAX_ANALYSIS_PACKAGE_CHARS", str(64 * 1024))))
+RENDER_DURABLE_DEDUP_ENABLED = os.getenv("RENDER_DURABLE_DEDUP_ENABLED", "1").strip().lower() in {"1", "true", "yes"}
 
 
 def _dedup_key(image: str, prompt: str, strength: float) -> str:
@@ -97,6 +112,33 @@ def _dedup_set(key: str, result: dict):
         _dedup_cache[key] = (now, result)
 
 
+def _dedup_claim(key: str) -> bool:
+    with _dedup_lock:
+        if key in _dedup_inflight:
+            return False
+        _dedup_inflight.add(key)
+        return True
+
+
+def _dedup_release(key: str) -> None:
+    with _dedup_lock:
+        _dedup_inflight.discard(key)
+
+
+def _prune_limit_buckets(buckets: dict[str, deque[float]], now: float, window_seconds: int) -> None:
+    window_start = now - window_seconds
+    for key in list(buckets):
+        bucket = buckets[key]
+        while bucket and bucket[0] <= window_start:
+            bucket.popleft()
+        if not bucket:
+            buckets.pop(key, None)
+    if len(buckets) > RENDER_LIMIT_MAX_KEYS:
+        oldest_keys = sorted(buckets, key=lambda key: buckets[key][0])[: len(buckets) - RENDER_LIMIT_MAX_KEYS]
+        for key in oldest_keys:
+            buckets.pop(key, None)
+
+
 def require_api_key(x_api_key: str | None = Header(default=None)):
     if RENDER_API_KEY and x_api_key != RENDER_API_KEY:
         raise HTTPException(
@@ -106,9 +148,10 @@ def require_api_key(x_api_key: str | None = Header(default=None)):
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    if TRUST_FORWARDED_FOR:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
     if request.client and request.client.host:
         return request.client.host
     return "unknown"
@@ -120,29 +163,79 @@ def _rate_limit_key(request: Request, x_user_email: str | None) -> str:
     return f"{ip}|{email}" if email else ip
 
 
+def _raise_limit_error(code: str, message: str, retry_after: int, *, window: int, maximum: int) -> None:
+    raise HTTPException(
+        status_code=429,
+        headers={"Retry-After": str(retry_after)},
+        detail=error_payload(
+            code,
+            message,
+            retryable=True,
+            windowSeconds=window,
+            maxRequests=maximum,
+            retryAfterSeconds=retry_after,
+        ),
+    )
+
+
 def enforce_render_rate_limit(request: Request, x_user_email: str | None = Header(default=None)):
     now = time.time()
     window_start = now - RENDER_RATE_LIMIT_WINDOW_SECONDS
     key = _rate_limit_key(request, x_user_email)
 
     with _rate_limit_lock:
+        _prune_limit_buckets(_rate_limit_hits, now, RENDER_RATE_LIMIT_WINDOW_SECONDS)
         bucket = _rate_limit_hits.setdefault(key, deque())
         while bucket and bucket[0] <= window_start:
             bucket.popleft()
         if len(bucket) >= RENDER_RATE_LIMIT_MAX_REQUESTS:
             retry_after = max(1, int(bucket[0] + RENDER_RATE_LIMIT_WINDOW_SECONDS - now))
-            raise HTTPException(
-                status_code=429,
-                detail={
-                    "error": {
-                        "code": "RATE_LIMITED",
-                        "message": f"Render quota exceeded. Try again in {retry_after} seconds.",
-                        "retryable": True,
-                        "windowSeconds": RENDER_RATE_LIMIT_WINDOW_SECONDS,
-                        "maxRequests": RENDER_RATE_LIMIT_MAX_REQUESTS,
-                        "retryAfterSeconds": retry_after,
-                    }
-                },
+            _raise_limit_error(
+                "RATE_LIMITED",
+                f"Render rate limit exceeded. Try again in {retry_after} seconds.",
+                retry_after,
+                window=RENDER_RATE_LIMIT_WINDOW_SECONDS,
+                maximum=RENDER_RATE_LIMIT_MAX_REQUESTS,
+            )
+        bucket.append(now)
+
+
+def enforce_render_quota(request: Request, x_user_email: str | None = None) -> None:
+    """Reserve one provider call for the configured user/IP quota."""
+    now = time.time()
+    key = _rate_limit_key(request, x_user_email)
+    durable_result = job_store.consume_window_quota(
+        "render_quota_counters",
+        key,
+        RENDER_QUOTA_WINDOW_SECONDS,
+        RENDER_QUOTA_MAX_REQUESTS,
+        now=now,
+    )
+    if durable_result is not None:
+        allowed, _count, retry_after = durable_result
+        if not allowed:
+            _raise_limit_error(
+                "QUOTA_EXCEEDED",
+                f"Render daily quota exceeded. Try again in {retry_after} seconds.",
+                retry_after,
+                window=RENDER_QUOTA_WINDOW_SECONDS,
+                maximum=RENDER_QUOTA_MAX_REQUESTS,
+            )
+        return
+    window_start = now - RENDER_QUOTA_WINDOW_SECONDS
+    with _quota_lock:
+        _prune_limit_buckets(_quota_hits, now, RENDER_QUOTA_WINDOW_SECONDS)
+        bucket = _quota_hits.setdefault(key, deque())
+        while bucket and bucket[0] <= window_start:
+            bucket.popleft()
+        if len(bucket) >= RENDER_QUOTA_MAX_REQUESTS:
+            retry_after = max(1, int(bucket[0] + RENDER_QUOTA_WINDOW_SECONDS - now))
+            _raise_limit_error(
+                "QUOTA_EXCEEDED",
+                f"Render daily quota exceeded. Try again in {retry_after} seconds.",
+                retry_after,
+                window=RENDER_QUOTA_WINDOW_SECONDS,
+                maximum=RENDER_QUOTA_MAX_REQUESTS,
             )
         bucket.append(now)
 
@@ -150,9 +243,9 @@ def enforce_render_rate_limit(request: Request, x_user_email: str | None = Heade
 class RenderRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    image: str
-    styleId: str = "natural"
-    strength: float = 0.35  # flux-kontext-pro 不用 strength，保留欄位維持前端相容
+    image: str = Field(min_length=32, max_length=MAX_RENDER_IMAGE_CHARS)
+    styleId: str = Field(default="natural", min_length=1, max_length=64)
+    strength: float = Field(default=0.35, ge=0, le=1)  # flux-kontext-pro 不用 strength，保留欄位維持前端相容
 
     # 全站串接統一走 analysisPackage，渲染也不例外。
     #
@@ -187,6 +280,35 @@ def _validate_render_request(req: RenderRequest) -> None:
                 }
             },
         )
+    try:
+        data_url_to_bytes(image)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=error_payload("INVALID_IMAGE", str(exc), retryable=False),
+        ) from None
+    for field_name, value in (
+        ("analysisPackage", req.analysisPackage),
+        ("faceAnalysis", req.faceAnalysis),
+    ):
+        if value is not None:
+            try:
+                encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=400,
+                    detail=error_payload("INVALID_ANALYSIS_PACKAGE", f"{field_name} must be JSON data.", retryable=False),
+                ) from None
+            if len(encoded) > MAX_ANALYSIS_PACKAGE_CHARS:
+                raise HTTPException(
+                    status_code=413,
+                    detail=error_payload(
+                        "ANALYSIS_PACKAGE_TOO_LARGE",
+                        f"{field_name} is too large.",
+                        retryable=False,
+                        maxChars=MAX_ANALYSIS_PACKAGE_CHARS,
+                    ),
+                )
 
 
 def _render_inputs(req: RenderRequest) -> tuple[str, dict | None]:
@@ -212,20 +334,64 @@ def _server_render_prompt(req: RenderRequest) -> tuple[str, str]:
     無論走哪一條，prompt 都是後端組的 —— 前端送進來的只有結構化資料，不是指令。
     """
     style_id, face_analysis = _render_inputs(req)
+    if not isinstance(style_id, str) or style_id not in RENDER_STYLE_PROMPTS:
+        raise HTTPException(
+            status_code=422,
+            detail=error_payload(
+                "INVALID_RENDER_STYLE",
+                "Unsupported render style.",
+                retryable=False,
+                allowedStyleIds=sorted(RENDER_STYLE_PROMPTS),
+            ),
+        )
+    if face_analysis is not None and not isinstance(face_analysis, dict):
+        raise HTTPException(
+            status_code=400,
+            detail=error_payload("INVALID_FACE_ANALYSIS", "faceAnalysis must be an object.", retryable=False),
+        )
     try:
         return build_personalized_render_prompt(style_id, face_analysis)
     except ValueError:
         raise HTTPException(
             status_code=422,
-            detail={
-                "error": {
-                    "code": "INVALID_RENDER_STYLE",
-                    "message": "Unsupported render style.",
-                    "retryable": False,
-                    "allowedStyleIds": sorted(RENDER_STYLE_PROMPTS),
-                }
-            },
+            detail=error_payload("INVALID_RENDER_STYLE", "Unsupported render style.", retryable=False),
         ) from None
+
+
+def _durable_dedup_job(key: str) -> dict | None:
+    if not RENDER_DURABLE_DEDUP_ENABLED:
+        return None
+    try:
+        matches = job_store.find_by_field(RENDER_JOBS_COLLECTION, "dedupKey", key, limit=5)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("durable dedup lookup unavailable: %s", exc)
+        return None
+    for job in matches:
+        if job.get("status") in {"queued", "running"}:
+            raise HTTPException(
+                status_code=409,
+                detail=error_payload(
+                    "DUPLICATE_IN_PROGRESS",
+                    "An identical render is already in progress. Continue polling the original job.",
+                    retryable=True,
+                ),
+            )
+        if job.get("status") == "completed" and job.get("afterImageUrl"):
+            return job
+    return None
+
+
+def _response_from_completed_job(job: dict) -> dict:
+    return {
+        "status": "completed",
+        "afterImageUrl": job.get("afterImageUrl"),
+        "replicateTempUrl": job.get("replicateTempUrl"),
+        "isPermanent": job.get("isPermanent", False),
+        "model": job.get("model"),
+        "renderPrompt": job.get("renderPrompt"),
+        "promptSource": job.get("promptSource"),
+        "error": None,
+    }
 
 
 def _storage_configured() -> bool:
@@ -239,6 +405,19 @@ def _storage_configured() -> bool:
         return False
 
 
+def _epoch(value, fallback: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _delete_job_artifact(job: dict) -> None:
+    url = job.get("afterImageUrl")
+    if url and job.get("isPermanent"):
+        delete_permanent_storage_url(url)
+
+
 def _cleanup_render_jobs() -> None:
     now = time.time()
     jobs = job_store.all_jobs(RENDER_JOBS_COLLECTION)
@@ -249,22 +428,31 @@ def _cleanup_render_jobs() -> None:
         if not job_id:
             continue
         if status in {"queued", "running"}:
-            anchor = float(job.get("startedAt") or job.get("createdAt") or now)
+            anchor = _epoch(job.get("startedAt") or job.get("createdAt"), now)
             if now - anchor > RENDER_JOB_TIMEOUT_SECONDS:
-                job_store.patch(
+                did_timeout = job_store.patch_if_status(
                     RENDER_JOBS_COLLECTION,
                     job_id,
+                    {"queued", "running"},
                     {
                         "status": "failed",
                         "progress": int(job.get("progress") or 0),
                         "afterImageUrl": None,
-                        "error": f"Render job timed out after {RENDER_JOB_TIMEOUT_SECONDS} seconds.",
+                        "error": {
+                            "code": "RENDER_TIMEOUT",
+                            "message": f"Render job timed out after {RENDER_JOB_TIMEOUT_SECONDS} seconds.",
+                            "retryable": True,
+                        },
                         "finishedAt": now,
+                        "updatedAt": now,
                     },
                 )
+                if did_timeout:
+                    logging.warning("render job timed out job_id=%s", job_id)
         elif status in {"completed", "failed"}:
-            finished_at = float(job.get("finishedAt") or job.get("createdAt") or now)
+            finished_at = _epoch(job.get("finishedAt") or job.get("createdAt"), now)
             if now - finished_at > RENDER_JOB_RETENTION_SECONDS:
+                _delete_job_artifact(job)
                 to_delete.append(job_id)
 
     for job_id in to_delete:
@@ -276,6 +464,7 @@ def _cleanup_render_jobs() -> None:
         for job in ordered[: len(remaining) - RENDER_JOB_MAX_COUNT]:
             job_id = job.get("jobId")
             if job_id:
+                _delete_job_artifact(job)
                 job_store.delete(RENDER_JOBS_COLLECTION, job_id)
 
 
@@ -291,18 +480,27 @@ def health():
         "openai_api_configured": bool(os.getenv("OPENAI_API_KEY")),
         "storage_configured": _storage_configured(),
         "storage_bucket": GCS_BUCKET_NAME,
+        "storage_retention_days": GCS_RENDER_RETENTION_DAYS,
         "api_key_required": bool(RENDER_API_KEY),
         "rate_limit": {
             "enabled": True,
             "window_seconds": RENDER_RATE_LIMIT_WINDOW_SECONDS,
             "max_requests": RENDER_RATE_LIMIT_MAX_REQUESTS,
         },
+        "quota": {
+            "enabled": True,
+            "window_seconds": RENDER_QUOTA_WINDOW_SECONDS,
+            "max_requests": RENDER_QUOTA_MAX_REQUESTS,
+            "key": "email+ip when supplied; otherwise ip",
+        },
         "dedup": {
             "enabled": RENDER_DEDUP_TTL_SECONDS > 0,
             "ttl_seconds": RENDER_DEDUP_TTL_SECONDS,
+            "durable_enabled": RENDER_DURABLE_DEDUP_ENABLED,
         },
         "limits": {
             "max_image_chars": MAX_RENDER_IMAGE_CHARS,
+            "max_analysis_package_chars": MAX_ANALYSIS_PACKAGE_CHARS,
         },
         "render_prompt_policy": {
             # 前端永遠不能送自由文字 prompt —— renderApiKey 是明文公開的，
@@ -317,6 +515,7 @@ def health():
             "enabled": True,
             "submit": "POST /render/jobs",
             "poll": "GET /render/jobs/{job_id}",
+            "delete": "DELETE /render/jobs/{job_id}",
             "estimated_seconds": RENDER_ESTIMATED_SECONDS,
             "timeout_seconds": RENDER_JOB_TIMEOUT_SECONDS,
             "retention_seconds": RENDER_JOB_RETENTION_SECONDS,
@@ -326,7 +525,13 @@ def health():
 
 
 @app.post("/render")
-async def render(req: RenderRequest, _=Depends(require_api_key), __=Depends(enforce_render_rate_limit)):
+async def render(
+    req: RenderRequest,
+    request: Request,
+    x_user_email: str | None = Header(default=None),
+    _=Depends(require_api_key),
+    __=Depends(enforce_render_rate_limit),
+):
     _validate_render_request(req)
     prompt, prompt_source = _server_render_prompt(req)
     # 同圖同後端產生的 prompt 短時間內重複 → 直接回上次結果，不重打 Replicate
@@ -334,7 +539,22 @@ async def render(req: RenderRequest, _=Depends(require_api_key), __=Depends(enfo
     cached = _dedup_get(key)
     if cached is not None:
         return {**cached, "deduped": True}
+    durable = _durable_dedup_job(key)
+    if durable is not None:
+        response = _response_from_completed_job(durable)
+        _dedup_set(key, response)
+        return {**response, "deduped": True}
+    if not _dedup_claim(key):
+        raise HTTPException(
+            status_code=409,
+            detail=error_payload(
+                "DUPLICATE_IN_PROGRESS",
+                "An identical render is already in progress. Please wait for it to finish.",
+                retryable=True,
+            ),
+        )
     try:
+        enforce_render_quota(request, x_user_email)
         result = call_replicate_render(req.image, prompt)
         response = {
             "status": "completed",
@@ -351,13 +571,16 @@ async def render(req: RenderRequest, _=Depends(require_api_key), __=Depends(enfo
         }
         _dedup_set(key, response)  # 只快取成功結果
         return response
-    except Exception:
-        logging.exception("渲染失敗")
-        return {
-            "status": "failed",
-            "afterImageUrl": None,
-            "error": "渲染服務發生錯誤，請稍後再試。",
-        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logging.exception("render provider failed")
+        raise HTTPException(
+            status_code=502,
+            detail=error_payload("RENDER_PROVIDER_ERROR", "渲染服務暫時無法完成，請稍後再試。", retryable=True),
+        ) from exc
+    finally:
+        _dedup_release(key)
 
 
 def _estimate_progress(job: dict, now: float) -> int:
@@ -380,8 +603,8 @@ def _estimate_progress(job: dict, now: float) -> int:
 
 def _job_view(job: dict, include_token: bool = False) -> dict:
     if include_token:
-        return dict(job)
-    return {k: v for k, v in job.items() if k != "resultToken"}
+        return {k: v for k, v in job.items() if k != "dedupKey"}
+    return {k: v for k, v in job.items() if k not in {"resultToken", "dedupKey"}}
 
 
 def _verify_job_token(job: dict, x_job_token: str | None = None, result_token: str | None = None) -> None:
@@ -393,8 +616,16 @@ def _verify_job_token(job: dict, x_job_token: str | None = None, result_token: s
         )
 
 
-def _run_render_job(job_id: str, image: str, prompt: str, dedup_key: str) -> None:
-    job_store.patch(RENDER_JOBS_COLLECTION, job_id, {"status": "running", "startedAt": time.time()})
+def _run_render_job(job_id: str, image: str, prompt: str, prompt_source: str, dedup_key: str) -> None:
+    now = time.time()
+    if not job_store.patch_if_status(
+        RENDER_JOBS_COLLECTION,
+        job_id,
+        {"queued"},
+        {"status": "running", "startedAt": now, "updatedAt": now},
+    ):
+        _dedup_release(dedup_key)
+        return
     try:
         result = call_replicate_render(image, prompt)
         response = {
@@ -404,30 +635,50 @@ def _run_render_job(job_id: str, image: str, prompt: str, dedup_key: str) -> Non
             "isPermanent": result.get("isPermanent", False),
             "model": result["model"],
             "renderPrompt": prompt,  # 同 /render：讓前端能顯示實際下給模型的指令
+            "promptSource": prompt_source,
             "error": None,
         }
-        job_store.patch(
+        did_complete = job_store.patch_if_status(
             RENDER_JOBS_COLLECTION,
             job_id,
-            {**response, "progress": 100, "finishedAt": time.time()},
+            {"running"},
+            {**response, "progress": 100, "finishedAt": time.time(), "updatedAt": time.time()},
         )
-        _dedup_set(dedup_key, response)  # 只快取成功結果
+        if did_complete:
+            _dedup_set(dedup_key, response)  # 只快取成功結果
+        else:
+            # cleanup 可能已把 job 標成 timeout，避免 late result 留下永久圖片。
+            delete_permanent_storage_url(response.get("afterImageUrl"))
     except Exception:  # 失敗要寫回 job，不能讓 thread 靜靜死掉
         logging.exception("渲染失敗（job %s）", job_id)
-        job_store.patch(
+        job_store.patch_if_status(
             RENDER_JOBS_COLLECTION,
             job_id,
+            {"running"},
             {
                 "status": "failed",
                 "afterImageUrl": None,
-                "error": "渲染服務發生錯誤，請稍後再試。",
+                "error": {
+                    "code": "RENDER_PROVIDER_ERROR",
+                    "message": "渲染服務暫時無法完成，請稍後再試。",
+                    "retryable": True,
+                },
                 "finishedAt": time.time(),
+                "updatedAt": time.time(),
             },
         )
+    finally:
+        _dedup_release(dedup_key)
 
 
 @app.post("/render/jobs")
-async def create_render_job(req: RenderRequest, _=Depends(require_api_key), __=Depends(enforce_render_rate_limit)):
+async def create_render_job(
+    req: RenderRequest,
+    request: Request,
+    x_user_email: str | None = Header(default=None),
+    _=Depends(require_api_key),
+    __=Depends(enforce_render_rate_limit),
+):
     """送出渲染並立刻回 jobId；實際渲染在背景 thread 跑，前端用 GET /render/jobs/{id} 輪詢。
 
     注意：這需要 Cloud Run 開 --no-cpu-throttling，否則回應送出後 CPU 會被節流，背景 thread 形同停住。
@@ -454,6 +705,37 @@ async def create_render_job(req: RenderRequest, _=Depends(require_api_key), __=D
         job_store.create(RENDER_JOBS_COLLECTION, job_id, job)
         return {**_job_view(job, include_token=True), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
 
+    durable = _durable_dedup_job(key)
+    if durable is not None:
+        job = {
+            **_response_from_completed_job(durable),
+            "jobId": job_id,
+            "progress": 100,
+            "createdAt": now,
+            "finishedAt": now,
+            "updatedAt": now,
+            "deduped": True,
+            "dedupKey": key,
+            "resultToken": result_token,
+        }
+        job_store.create(RENDER_JOBS_COLLECTION, job_id, job)
+        return {**_job_view(job, include_token=True), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
+
+    if not _dedup_claim(key):
+        raise HTTPException(
+            status_code=409,
+            detail=error_payload(
+                "DUPLICATE_IN_PROGRESS",
+                "An identical render is already in progress. Continue polling the original job.",
+                retryable=True,
+            ),
+        )
+    try:
+        enforce_render_quota(request, x_user_email)
+    except Exception:
+        _dedup_release(key)
+        raise
+
     job = {
         "jobId": job_id,
         "resultToken": result_token,
@@ -464,14 +746,20 @@ async def create_render_job(req: RenderRequest, _=Depends(require_api_key), __=D
         "promptSource": prompt_source,
         "error": None,
         "createdAt": now,
+        "updatedAt": now,
+        "dedupKey": key,
     }
-    job_store.create(RENDER_JOBS_COLLECTION, job_id, job)
+    try:
+        job_store.create(RENDER_JOBS_COLLECTION, job_id, job)
 
-    threading.Thread(
-        target=_run_render_job,
-        args=(job_id, req.image, prompt, key),
-        daemon=True,
-    ).start()
+        threading.Thread(
+            target=_run_render_job,
+            args=(job_id, req.image, prompt, prompt_source, key),
+            daemon=True,
+        ).start()
+    except Exception:
+        _dedup_release(key)
+        raise
 
     return {**_job_view(job, include_token=True), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
 
@@ -493,3 +781,28 @@ async def get_render_job(
     _verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
     view = _job_view(job)
     return {**view, "progress": _estimate_progress(job, time.time()), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
+
+
+@app.delete("/render/jobs/{job_id}")
+async def delete_render_job(
+    job_id: str,
+    _=Depends(require_api_key),
+    x_job_token: str | None = Header(default=None),
+    result_token: str | None = Query(default=None),
+):
+    """Explicitly delete a finished render job and its GCS artifact."""
+    job = job_store.get(RENDER_JOBS_COLLECTION, job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=error_payload("JOB_NOT_FOUND", "Render job not found or expired.", retryable=False),
+        )
+    _verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
+    if job.get("status") in {"queued", "running"}:
+        raise HTTPException(
+            status_code=409,
+            detail=error_payload("JOB_IN_PROGRESS", "A running render job cannot be deleted yet.", retryable=True),
+        )
+    _delete_job_artifact(job)
+    job_store.delete(RENDER_JOBS_COLLECTION, job_id)
+    return {"status": "deleted", "jobId": job_id}

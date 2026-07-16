@@ -8,6 +8,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from api_errors import error_payload, install_api_error_handling
 import job_store
 from Face_analyzer_BASIC import FaceAnalyzer, _reject_if_too_large
 from dev_server_utils import get_cors_origins, run_dev_server
@@ -37,11 +38,14 @@ async def _api_key_guard(request, call_next):
     if (FACE_API_KEY and request.method != "OPTIONS"
             and request.url.path not in _API_KEY_OPEN_PATHS):
         if request.headers.get("x-api-key") != FACE_API_KEY:
-            return JSONResponse(
+            raise HTTPException(
                 status_code=401,
-                content={"error": {"code": "FORBIDDEN", "message": "Invalid or missing API key.", "retryable": False}},
+                detail=error_payload("FORBIDDEN", "Invalid or missing API key.", retryable=False),
             )
     return await call_next(request)
+
+
+install_api_error_handling(app, "face-analyzer-pro")
 
 
 async def _read_image(file: UploadFile, label: str) -> bytes:
@@ -144,10 +148,15 @@ def _cleanup_jobs():
             anchor = job.get("startedAt") or job.get("createdAt")
             age = _seconds_since(anchor, now)
             if age is not None and age > FACE_JOB_TIMEOUT_SECONDS:
-                job_store.patch(_COL, job_id, {
+                job_store.patch_if_status(_COL, job_id, {"queued", "processing"}, {
                     "status": "failed", "stage": "timeout",
                     "completedAt": _now_iso(),
-                    "error": {"message": f"臉部分析逾時，已超過 {FACE_JOB_TIMEOUT_SECONDS} 秒"},
+                    "updatedAt": _now_iso(),
+                    "error": {
+                        "code": "FACE_ANALYSIS_TIMEOUT",
+                        "message": f"臉部分析逾時，已超過 {FACE_JOB_TIMEOUT_SECONDS} 秒",
+                        "retryable": True,
+                    },
                 })
         elif status in {"completed", "failed"}:
             age = _seconds_since(job.get("completedAt"), now)
@@ -189,22 +198,29 @@ def _verify_job_token(job, x_job_token=None, result_token=None):
 
 
 def _run_pro_job(job_id, front_bytes, angle_bytes):
-    job_store.patch(_COL, job_id, {"status": "processing", "stage": "front_analysis", "progress": 30, "startedAt": _now_iso()})
+    if not job_store.patch_if_status(
+        _COL,
+        job_id,
+        {"queued"},
+        {"status": "processing", "stage": "front_analysis", "progress": 30, "startedAt": _now_iso(), "updatedAt": _now_iso()},
+    ):
+        return
     try:
         front_result = FaceAnalyzer(front_bytes).export_json()
-        job_store.patch(_COL, job_id, {"stage": "side_analysis", "progress": 65})
+        job_store.patch_if_status(_COL, job_id, {"processing"}, {"stage": "side_analysis", "progress": 65, "updatedAt": _now_iso()})
         side_bytes = angle_bytes.get("side")
         side_result = _analyze_side_supplementary(side_bytes) if side_bytes else None
         result = _merge_basic_and_pro(front_result, side_result=side_result)
-        job_store.patch(_COL, job_id, {
+        job_store.patch_if_status(_COL, job_id, {"processing"}, {
             "status": "completed", "stage": "done", "progress": 100,
-            "completedAt": _now_iso(), "result": result, "error": None,
+            "completedAt": _now_iso(), "updatedAt": _now_iso(), "result": result, "error": None,
         })
     except Exception:
         logging.exception("PRO 臉部分析 job 失敗 job_id=%s", job_id)
-        job_store.patch(_COL, job_id, {
+        job_store.patch_if_status(_COL, job_id, {"processing"}, {
             "status": "failed", "stage": "failed",
-            "completedAt": _now_iso(), "error": {"message": "臉部分析失敗，請稍後再試"},
+            "completedAt": _now_iso(), "updatedAt": _now_iso(),
+            "error": {"code": "FACE_ANALYSIS_ERROR", "message": "臉部分析失敗，請稍後再試", "retryable": True},
         })
 
 
@@ -266,6 +282,8 @@ async def analyze_pro(
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception:
         logging.exception("PRO 臉部分析失敗")
         raise HTTPException(status_code=500, detail="臉部分析服務發生錯誤，請稍後再試")
@@ -293,7 +311,7 @@ async def create_pro_job(
     job_data = {
         "jobId": job_id, "analysisPackageId": None, "status": "queued",
         "progress": 0, "stage": "upload", "createdAt": _now_iso(),
-        "startedAt": None, "completedAt": None, "error": None, "result": None,
+        "startedAt": None, "completedAt": None, "updatedAt": _now_iso(), "error": None, "result": None,
         "resultToken": result_token,
     }
     job_store.create(_COL, job_id, job_data)

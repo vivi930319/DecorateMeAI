@@ -1,5 +1,7 @@
 import argparse
 import base64
+import binascii
+import io
 import json
 import logging
 import mimetypes
@@ -8,6 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 import httpx
 import replicate
@@ -32,10 +35,13 @@ RENDER_GUIDANCE = float(os.getenv("RENDER_GUIDANCE", "3.0"))
 # Replicate 回傳的 afterImageUrl 只是暫存網址（幾天內會失效），收藏功能需要永久網址才能長期使用。
 # bucket 已經存在且 allUsers 有 objectViewer 權限（公開可讀），不需要額外簽名 URL。
 GCS_BUCKET_NAME = os.getenv("GCS_RENDER_BUCKET", "decorate-me-renders")
+GCS_RENDER_RETENTION_DAYS = max(1, int(os.getenv("GCS_RENDER_RETENTION_DAYS", "30")))
+GCS_RENDER_PREFIX = "rendered/"
 REPLICATE_HTTP_TIMEOUT_SECONDS = max(60, int(os.getenv("REPLICATE_HTTP_TIMEOUT_SECONDS", "300")))
 OPENAI_HTTP_TIMEOUT_SECONDS = max(60, int(os.getenv("OPENAI_HTTP_TIMEOUT_SECONDS", "300")))
 REPLICATE_OPENAI_QUALITY = os.getenv("REPLICATE_OPENAI_QUALITY", "medium").strip().lower() or "medium"
 MAX_RENDER_IMAGE_BYTES = int(os.getenv("MAX_RENDER_IMAGE_BYTES", str(8 * 1024 * 1024)))
+MAX_RENDER_IMAGE_PIXELS = max(1, int(os.getenv("MAX_RENDER_IMAGE_PIXELS", "16000000")))
 
 OPENAI_MODEL_ALIASES = {
     "gpt-img2": "gpt-image-1",
@@ -70,17 +76,25 @@ def upload_to_permanent_storage(temp_image_url: str) -> str | None:
 
         response = requests.get(temp_image_url, timeout=60)
         response.raise_for_status()
+        if len(response.content) > MAX_RENDER_IMAGE_BYTES:
+            raise ValueError(f"Rendered image is too large; limit is {MAX_RENDER_IMAGE_BYTES} bytes.")
         content_type = response.headers.get("content-type", "image/jpeg").split(";")[0]
+        if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+            raise ValueError(f"Unsupported rendered image content type: {content_type}")
         ext = mimetypes.guess_extension(content_type) or ".jpg"
 
         client = storage.Client()
         bucket = client.bucket(GCS_BUCKET_NAME)
-        blob = bucket.blob(f"rendered/{uuid.uuid4().hex}{ext}")
+        blob = bucket.blob(f"{GCS_RENDER_PREFIX}{uuid.uuid4().hex}{ext}")
+        blob.metadata = {
+            "retentionDays": str(GCS_RENDER_RETENTION_DAYS),
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
         blob.upload_from_string(response.content, content_type=content_type)
 
         return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{blob.name}"
     except Exception as exc:  # noqa: BLE001 — 儲存失敗不該讓渲染整支失敗，記錄後照舊回暫存網址
-        print(f"[replicate_render] 上傳永久儲存失敗，fallback 回暫存網址：{exc}")
+        logging.getLogger(__name__).exception("GCS upload failed; falling back to provider URL")
         return None
 
 
@@ -92,12 +106,40 @@ def upload_bytes_to_permanent_storage(image_bytes: bytes, content_type: str = "i
         ext = mimetypes.guess_extension(content_type) or ".png"
         client = storage.Client()
         bucket = client.bucket(GCS_BUCKET_NAME)
-        blob = bucket.blob(f"rendered/{uuid.uuid4().hex}{ext}")
+        blob = bucket.blob(f"{GCS_RENDER_PREFIX}{uuid.uuid4().hex}{ext}")
+        blob.metadata = {
+            "retentionDays": str(GCS_RENDER_RETENTION_DAYS),
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+        }
         blob.upload_from_string(image_bytes, content_type=content_type)
         return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{blob.name}"
     except Exception as exc:  # noqa: BLE001
-        print(f"[replicate_render] 上傳 bytes 永久儲存失敗：{exc}")
+        logging.getLogger(__name__).exception("GCS byte upload failed")
         return None
+
+
+def delete_permanent_storage_url(url: str | None) -> bool:
+    """Delete only objects created by this service in its configured bucket."""
+    if not url:
+        return False
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.netloc != "storage.googleapis.com":
+        return False
+    parts = [unquote(part) for part in parsed.path.split("/") if part]
+    if len(parts) < 2 or parts[0] != GCS_BUCKET_NAME:
+        return False
+    blob_name = "/".join(parts[1:])
+    if not blob_name.startswith(GCS_RENDER_PREFIX):
+        return False
+    try:
+        from google.cloud import storage
+
+        storage.Client().bucket(GCS_BUCKET_NAME).blob(blob_name).delete()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        # Deletion is best effort: GCS lifecycle remains the final safety net.
+        logging.getLogger(__name__).warning("GCS object deletion failed: %s", exc)
+        return False
 
 
 IMAGE_DATA_URL_KEYS = ("imageDataUrl", "image_data_url", "image")
@@ -153,19 +195,44 @@ def data_url_to_bytes(data_url: str) -> tuple[bytes, str]:
     if not data_url.startswith("data:") or ";base64," not in data_url:
         raise ValueError("Expected a base64 data URL.")
     header, encoded = data_url.split(",", 1)
-    content_type = header[5:].split(";", 1)[0] or "image/png"
-    image_bytes = base64.b64decode(encoded, validate=True)
+    content_type = (header[5:].split(";", 1)[0] or "image/png").lower()
+    if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise ValueError("Only JPEG, PNG, and WebP images are supported.")
+    try:
+        image_bytes = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("Image data URL contains invalid base64.") from exc
     if len(image_bytes) > MAX_RENDER_IMAGE_BYTES:
         raise ValueError(f"Render image is too large; limit is {MAX_RENDER_IMAGE_BYTES} bytes.")
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            image.verify()
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            width, height = image.size
+            detected_type = Image.MIME.get(image.format)
+        if width <= 0 or height <= 0 or width * height > MAX_RENDER_IMAGE_PIXELS:
+            raise ValueError(f"Render image dimensions exceed the {MAX_RENDER_IMAGE_PIXELS} pixel limit.")
+        if detected_type and detected_type != content_type:
+            raise ValueError("Image content type does not match its encoded image format.")
+    except ValueError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("Image data is not a valid JPEG, PNG, or WebP file.") from exc
     return image_bytes, content_type
 
 
 def url_to_data_url(url: str) -> str:
     response = requests.get(url, timeout=60)
     response.raise_for_status()
+    if len(response.content) > MAX_RENDER_IMAGE_BYTES:
+        raise ValueError(f"Downloaded image is too large; limit is {MAX_RENDER_IMAGE_BYTES} bytes.")
     content_type = response.headers.get("content-type", "image/jpeg").split(";")[0]
     encoded = base64.b64encode(response.content).decode("ascii")
-    return f"data:{content_type};base64,{encoded}"
+    data_url = f"data:{content_type};base64,{encoded}"
+    data_url_to_bytes(data_url)
+    return data_url
 
 
 def image_from_frontend_package(frontend_package: dict[str, Any]) -> str:

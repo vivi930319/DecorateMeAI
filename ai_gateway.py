@@ -15,6 +15,7 @@ import httpx
 import jwt
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from api_errors import install_api_error_handling
 from fastapi.responses import JSONResponse, Response
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import id_token
@@ -275,10 +276,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=get_cors_origins(),
     allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Accept", "Authorization", "Content-Type", "X-API-Key", "X-Job-Token"],
     max_age=3600,
 )
+install_api_error_handling(app, "ai-gateway")
 
 
 @app.get("/health")
@@ -333,7 +335,7 @@ async def login(body: LoginRequest, request: Request):
     return {"accessToken": access_token, "expiresAt": expires_at, "tokenType": "Bearer"}
 
 
-@app.api_route("/{service}/{path:path}", methods=["GET", "POST"])
+@app.api_route("/{service}/{path:path}", methods=["GET", "POST", "DELETE"])
 async def proxy(service: str, path: str, request: Request):
     upstream = UPSTREAMS.get(service)
     if upstream is None or not is_path_allowed(upstream, path):

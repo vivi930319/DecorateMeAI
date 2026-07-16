@@ -23,6 +23,8 @@
 !dev_server_utils.py
 !cloud_start.py
 !job_store.py
+!api_errors.py
+!gcs-lifecycle.json
 !analysis_package.py
 !face_roi.py
 !basic_roi_shadow.py

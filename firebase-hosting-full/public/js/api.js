@@ -606,22 +606,13 @@ const Api = {
         }
     },
 
-    // ═══ 後台管理：members 讀寫都走管理員 session cookie；若 GET /api/members 失敗，通常是 admin session / CORS / SameSite 設定有問題 ═══
-    // 跨站 session cookie 常在重整後被瀏覽器清掉，導致 admin 請求變 401。
-    // 用登入時暫存的帳密（sessionStorage，關分頁即清）在背景自動重登一次拿新 cookie，使用者無感。
-    async _reLogin() {
-        let creds = null;
-        try { creds = JSON.parse(sessionStorage.getItem('beautyAuthCreds') || 'null'); } catch (_) {}
-        if (!creds || !creds.email || !creds.password) return false;
-        try { await this.login(creds.email, creds.password); return true; } catch (_) { return false; }
-    },
-    // 一般請求包一層：遇到 401 就自動重登再重試一次（login 本身走原生 fetch，不會遞迴）
+    // ═══ 後台管理：members 讀寫都走管理員 session cookie ═══
+    // 不在瀏覽器保存密碼，也不使用密碼自動重登入。若 session 失效，讓畫面
+    // 顯示登入逾時並由使用者重新登入；真正的長期登入應由 HttpOnly cookie/refresh
+    // token 由會員後端負責，而不是把密碼交給 JavaScript。
+    // 保留這個 wrapper 名稱是為了相容既有呼叫點，但不再做 relogin。
     async _fetchWithRelogin(input, init) {
-        let res = await fetch(input, init);
-        if (res.status === 401 && await this._reLogin()) {
-            res = await fetch(input, init);
-        }
-        return res;
+        return fetch(input, init);
     },
 
     async fetchAdminMembers() {
@@ -984,8 +975,8 @@ const Api = {
             err.code = detail?.error?.code || null;  // 未註冊 USER_NOT_FOUND / 密碼錯 WRONG_PASSWORD（後端支援時前端據此分流）
             throw err;
         }
-        // 暫存帳密（sessionStorage，關分頁即清）供 session 掉時背景自動重登用
-        try { sessionStorage.setItem('beautyAuthCreds', JSON.stringify({ email, password })); } catch (_) {}
+        // 清除舊版本可能留下的敏感資料；本版本不保存密碼。
+        try { sessionStorage.removeItem('beautyAuthCreds'); } catch (_) {}
         return res.json();
     },
 
@@ -1402,11 +1393,22 @@ const Auth = {
         localStorage.setItem(this._membersKey, JSON.stringify(members));
     },
     getUser()  { return sessionStorage.getItem('beautyUser') || ''; },
-    getProfile() { return JSON.parse(sessionStorage.getItem('beautyProfile') || '{}'); },
+    getProfile() {
+        let profile = {};
+        try { profile = JSON.parse(sessionStorage.getItem('beautyProfile') || '{}') || {}; } catch (_) {}
+        if (Object.prototype.hasOwnProperty.call(profile, 'password')) {
+            const { password, ...safeProfile } = profile;
+            profile = safeProfile;
+            try { sessionStorage.setItem('beautyProfile', JSON.stringify(profile)); } catch (_) {}
+        }
+        return profile;
+    },
     setProfile(profile) {
-        sessionStorage.setItem('beautyProfile', JSON.stringify(profile || {}));
-        if (profile?.name) sessionStorage.setItem('beautyUser', profile.name);
-        this.saveRegisteredMember(profile);
+        const safeProfile = { ...(profile || {}) };
+        delete safeProfile.password;
+        sessionStorage.setItem('beautyProfile', JSON.stringify(safeProfile));
+        if (safeProfile?.name) sessionStorage.setItem('beautyUser', safeProfile.name);
+        this.saveRegisteredMember(safeProfile);
     },
     isLoggedIn() { return !!this.getUser(); },
     logout() {

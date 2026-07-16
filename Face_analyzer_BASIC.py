@@ -14,6 +14,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 import insightface
 from insightface.app import FaceAnalysis as InsightFaceApp
 import basic_roi_shadow
+from api_errors import error_payload, install_api_error_handling
 from dev_server_utils import get_cors_origins, run_dev_server
 
 # Cloud Run 上 root logger 預設是 WARNING，logger.info 會被整個丟掉。
@@ -60,11 +61,14 @@ async def _api_key_guard(request, call_next):
     if (FACE_API_KEY and request.method != "OPTIONS"
             and request.url.path not in _API_KEY_OPEN_PATHS):
         if request.headers.get("x-api-key") != FACE_API_KEY:
-            return JSONResponse(
+            raise HTTPException(
                 status_code=401,
-                content={"error": {"code": "FORBIDDEN", "message": "Invalid or missing API key.", "retryable": False}},
+                detail=error_payload("FORBIDDEN", "Invalid or missing API key.", retryable=False),
             )
     return await call_next(request)
+
+
+install_api_error_handling(app, "face-analyzer-basic")
 
 import job_store
 
@@ -75,11 +79,35 @@ _COL = "face_jobs_basic"
 
 MAX_IMAGE_SIZE = int(os.getenv("MAX_IMAGE_SIZE", "1024"))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(8 * 1024 * 1024)))  # 上傳大小上限（預設 8MB），避免超大檔先塞滿記憶體
+MAX_IMAGE_PIXELS = max(1, int(os.getenv("MAX_IMAGE_PIXELS", "16000000")))
 
 
 def _reject_if_too_large(contents: bytes):
     if len(contents) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=f"上傳檔案過大，上限 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB")
+        raise HTTPException(
+            status_code=413,
+            detail=error_payload(
+                "PAYLOAD_TOO_LARGE",
+                f"上傳檔案過大，上限 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+                retryable=False,
+            ),
+        )
+    frame = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(
+            status_code=400,
+            detail=error_payload("INVALID_IMAGE", "上傳檔案不是有效的圖片。", retryable=False),
+        )
+    height, width = frame.shape[:2]
+    if height <= 0 or width <= 0 or height * width > MAX_IMAGE_PIXELS:
+        raise HTTPException(
+            status_code=413,
+            detail=error_payload(
+                "IMAGE_DIMENSIONS_TOO_LARGE",
+                f"圖片像素數超過上限 {MAX_IMAGE_PIXELS}。",
+                retryable=False,
+            ),
+        )
 INSIGHT_DET_SIZE = int(os.getenv("INSIGHT_DET_SIZE", "384"))
 INSIGHT_ALLOWED_MODULES = [
     module.strip()
@@ -285,10 +313,15 @@ def _cleanup_jobs():
             anchor = job.get("startedAt") or job.get("createdAt")
             age = _seconds_since(anchor, now)
             if age is not None and age > FACE_JOB_TIMEOUT_SECONDS:
-                job_store.patch(_COL, job_id, {
+                job_store.patch_if_status(_COL, job_id, {"queued", "processing"}, {
                     "status": "failed", "stage": "timeout",
                     "completedAt": _now_iso(),
-                    "error": {"message": f"臉部分析逾時，已超過 {FACE_JOB_TIMEOUT_SECONDS} 秒"},
+                    "updatedAt": _now_iso(),
+                    "error": {
+                        "code": "FACE_ANALYSIS_TIMEOUT",
+                        "message": f"臉部分析逾時，已超過 {FACE_JOB_TIMEOUT_SECONDS} 秒",
+                        "retryable": True,
+                    },
                 })
         elif status in {"completed", "failed"}:
             age = _seconds_since(job.get("completedAt"), now)
@@ -330,18 +363,25 @@ def _verify_job_token(job, x_job_token=None, result_token=None):
 
 
 def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.0):
-    job_store.patch(_COL, job_id, {"status": "processing", "stage": "face_analysis", "progress": 35, "startedAt": _now_iso()})
+    if not job_store.patch_if_status(
+        _COL,
+        job_id,
+        {"queued"},
+        {"status": "processing", "stage": "face_analysis", "progress": 35, "startedAt": _now_iso(), "updatedAt": _now_iso()},
+    ):
+        return
     try:
         result = FaceAnalyzer(contents, brightness_mode=brightness_mode, brightness_level=brightness_level).export_json()
-        job_store.patch(_COL, job_id, {
+        job_store.patch_if_status(_COL, job_id, {"processing"}, {
             "status": "completed", "stage": "done", "progress": 100,
-            "completedAt": _now_iso(), "result": result, "error": None,
+            "completedAt": _now_iso(), "updatedAt": _now_iso(), "result": result, "error": None,
         })
     except Exception:
         logging.exception("臉部分析 job 失敗 job_id=%s", job_id)
-        job_store.patch(_COL, job_id, {
+        job_store.patch_if_status(_COL, job_id, {"processing"}, {
             "status": "failed", "stage": "failed",
-            "completedAt": _now_iso(), "error": {"message": "臉部分析失敗，請稍後再試"},
+            "completedAt": _now_iso(), "updatedAt": _now_iso(),
+            "error": {"code": "FACE_ANALYSIS_ERROR", "message": "臉部分析失敗，請稍後再試", "retryable": True},
         })
 
 
@@ -366,7 +406,7 @@ async def create_basic_job(
     job_data = {
         "jobId": job_id, "analysisPackageId": None, "status": "queued",
         "progress": 0, "stage": "upload", "createdAt": _now_iso(),
-        "startedAt": None, "completedAt": None, "error": None, "result": None,
+        "startedAt": None, "completedAt": None, "updatedAt": _now_iso(), "error": None, "result": None,
         "resultToken": result_token,
     }
     job_store.create(_COL, job_id, job_data)

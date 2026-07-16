@@ -9,6 +9,7 @@ COPY requirements.gateway.txt .
 RUN pip install --no-cache-dir -r requirements.gateway.txt
 
 COPY dev_server_utils.py .
+COPY api_errors.py .
 COPY ai_gateway.py .
 
 EXPOSE 8080

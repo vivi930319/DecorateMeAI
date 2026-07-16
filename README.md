@@ -76,6 +76,7 @@ flowchart TB
 | GET | `/health` | 健康檢查，回報 api key / 限流 / 去重設定 |
 | POST | `/render` | 傳入原圖與白名單 `styleId`；英文 prompt 由後端產生，回渲染後永久網址 |
 | POST/GET | `/render/jobs` | 建立渲染 job、用 `jobId` + `resultToken` 輪詢 |
+| DELETE | `/render/jobs/{job_id}` | 以 job token 刪除已完成 job 與對應 GCS 圖片 |
 
 ---
 
@@ -125,9 +126,14 @@ tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓
 - 非同步 job 建立時會回 `resultToken`；輪詢或取結果需帶 `X-Job-Token: <resultToken>`（或 `?result_token=`），避免只靠 jobId 被猜到結果。
 - CORS 限定前端網域，非 `*`；正式環境可用 `APP_ENV=production` 或 `REQUIRE_EXPLICIT_CORS=1` 強制檢查。
 - 渲染服務有每 IP + email 的固定時間窗限流（預設每小時 10 次，超量回 429）。
+- 渲染服務另有每日 provider quota（預設 30 次）；有 Firestore 時使用固定窗口原子計數，跨 Cloud Run instance 仍能共同計數，開發環境才退回程序內 fallback。
+- 相同圖片、後端 prompt 與 strength 的請求會做並發鎖與 Firestore 去重；重複進行中回 `409 DUPLICATE_IN_PROGRESS`，避免多次扣 Replicate 額度。
 - 渲染服務限制 base64 圖片與 prompt 大小，避免超大 JSON body 造成記憶體壓力。
-- 渲染非同步 job 有 timeout、retention 與最大數量限制，避免背景 thread 中斷後 job 永遠卡住或資料無限累積。
+- 渲染非同步 job 有 timeout、retention、最大數量與 guarded status transition；背景 worker 遺失或逾時會回寫可重試的錯誤，不會被晚到的 worker 覆蓋。
 - 渲染服務對相同圖片與 prompt 做去重快取，避免重複呼叫 Replicate。
+- GCS 圖片只寫入 `rendered/` 前綴，服務提供刪除 endpoint；`gcs-lifecycle.json` 預設 30 天自動刪除，部署時可用 `-GcsBucketName` 套用。
+- API 錯誤統一為 `{ "error": { "code", "message", "retryable" } }`，並回傳 `X-Request-ID`；請求只記錄 method/path/status/duration，不記錄密碼、圖片或 token。
+- 前端不再把密碼寫入 `sessionStorage`；舊版 `beautyAuthCreds` 會在登入、登出或讀取 profile 時清除。登入逾時需重新登入，Bearer token / HttpOnly session 仍由會員後端負責。
 - 金鑰走環境變數，不寫進程式；`.env` 不進版控。
 
 ---
@@ -154,7 +160,13 @@ tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓
 | `JOB_STORE_SCAN_LIMIT` | Firestore job cleanup/stat 單次最多掃描筆數（預設 500） |
 | `RENDER_GUIDANCE` | 渲染 guidance（預設 3.0，偏向保留真人照片質感） |
 | `RENDER_RATE_LIMIT_MAX_REQUESTS` / `RENDER_RATE_LIMIT_WINDOW_SECONDS` | 渲染限流 |
+| `RENDER_QUOTA_MAX_REQUESTS` / `RENDER_QUOTA_WINDOW_SECONDS` | 渲染 provider 額度；預設每日 30 次 |
+| `RENDER_LIMIT_MAX_KEYS` | 限流與 quota 程序內 key 上限，避免記憶體無限成長 |
 | `RENDER_DEDUP_TTL_SECONDS` | 渲染去重快取有效期（預設 600） |
+| `RENDER_DURABLE_DEDUP_ENABLED` | 是否查 Firestore 做跨 instance 去重（預設開啟） |
+| `GCS_RENDER_BUCKET` / `GCS_RENDER_RETENTION_DAYS` | 渲染圖片 bucket 與保留天數（預設 30 天；仍需套用 GCS lifecycle） |
+| `MAX_RENDER_IMAGE_PIXELS` / `MAX_IMAGE_PIXELS` | 渲染與臉部分析的影像像素上限（預設 16MP） |
+| `MAX_ANALYSIS_PACKAGE_CHARS` | analysisPackage / faceAnalysis JSON 大小上限 |
 | `ROI_SHADOW_EXPOSE_RESPONSE` | 內部驗收時才把 ROI shadow 模型分類欄位回傳；預設只寫 log |
 
 ---
@@ -169,6 +181,9 @@ uvicorn Face_analyzer_BASIC:app --port 8001
 # 渲染服務：Docker build 後部署 Cloud Run
 docker build -f Dockerfile.render -t replicate-render .
 gcloud run deploy replicate-render --image <image> --region asia-east1
+
+# 套用 GCS 30 天生命週期（部署腳本也可用 -GcsBucketName 執行）
+gcloud storage buckets update gs://<GCS_RENDER_BUCKET> --lifecycle-file=gcs-lifecycle.json
 ```
 
 ---
