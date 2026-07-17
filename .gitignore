@@ -50,5 +50,15 @@
 !start_backend_local.bat
 !start_full_stack_local.bat
 
+# 搬機與交接文件／前端無秘密設定範本
+!專案交接手冊_搬機版_2026-07-17.md
+!給爬蟲端與資料庫端_商品搜尋管理與推薦演算法整合規格書_2026-07-17.md
+!firebase-hosting-full/
+!firebase-hosting-full/前端交接手冊_搬機版_2026-07-17.md
+!firebase-hosting-full/public/
+!firebase-hosting-full/public/config.local.example.js
+firebase-hosting-full/public/.gitignore
+firebase-hosting-full/public/README.md
+
 # 本機新手教學文件，不上傳 Git
 local_only_notes/
