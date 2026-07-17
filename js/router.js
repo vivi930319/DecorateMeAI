@@ -3175,11 +3175,20 @@ const PageInit = {
                 dbMembersError = result?.error || '未知錯誤';
                 const hint = classifyMemberLoadError(result);
                 setDbStatus(`會員資料庫讀取失敗：${dbMembersError}。${hint}`, false);
-                // 401 = admin session 已過期（跨站 cookie 常被瀏覽器清掉）。直接提供一鍵重登，不用讓使用者卡在看不懂的錯誤
+                // 401 = 後端已拒絕目前的管理員憑證。清除前端殘留狀態再登入，
+                // 避免畫面仍顯示已登入、API 卻持續使用失效 token/session。
                 if (result?.status === 401) {
-                    showConfirm('管理員登入已過期（session 失效，跨站 cookie 被瀏覽器清除所致）。請重新登入後再回到管理中台。', {
+                    showConfirm('管理員登入憑證已失效或未正確帶入。請重新登入，成功後會自動回到管理中心。', {
                         title: '登入已過期', type: 'error', okText: '重新登入', cancelText: '稍後',
-                        onOk: function(){ showLogin(); }
+                        onOk: function(){
+                            if (typeof Auth.clearSession === 'function') Auth.clearSession();
+                            else {
+                                sessionStorage.removeItem('beautyUser');
+                                sessionStorage.removeItem('beautyProfile');
+                                sessionStorage.removeItem('memberAccessToken');
+                            }
+                            showLogin();
+                        }
                     });
                 }
             }

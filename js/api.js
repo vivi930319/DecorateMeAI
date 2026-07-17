@@ -1492,11 +1492,14 @@ const Auth = {
         this.saveRegisteredMember(safeProfile);
     },
     isLoggedIn() { return !!this.getUser(); },
-    logout() {
+    clearSession() {
         sessionStorage.removeItem('beautyUser');
         sessionStorage.removeItem('beautyProfile');
         sessionStorage.removeItem('beautyAuthCreds');
         sessionStorage.removeItem('memberAccessToken');
+    },
+    logout() {
+        this.clearSession();
         location.reload();
     },
 };
