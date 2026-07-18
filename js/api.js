@@ -444,10 +444,14 @@ const Api = {
             shadeName: product.shadeName || product.shade_name || null,
             imageUrls: Array.isArray(product.imageUrls) ? product.imageUrls : [],
             status: product.status || 'active',
-            reviewStatus: product.reviewStatus || product.review_status || 'pending',
+            reviewStatus: product.reviewStatus ?? product.review_status ?? null,
             inStock: product.inStock ?? product.in_stock ?? true,
-            recommendationReady: !!(product.recommendationReady ?? product.recommendation_ready),
-            dataQualityScore: Number(product.dataQualityScore ?? product.data_quality_score ?? 0),
+            recommendationReady: (product.recommendationReady ?? product.recommendation_ready) == null
+                ? null
+                : !!(product.recommendationReady ?? product.recommendation_ready),
+            dataQualityScore: (product.dataQualityScore ?? product.data_quality_score) == null
+                ? null
+                : Number(product.dataQualityScore ?? product.data_quality_score),
             version: Number(product.version || 1),
             currency: product.currency || 'TWD',
             styleTags: product.styleTags || product.style_tags || [],

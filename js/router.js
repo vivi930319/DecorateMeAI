@@ -3557,6 +3557,7 @@ const PageInit = {
         const TYPE_TO_CAT = Object.fromEntries(Object.entries(CAT_TO_TYPE).map(([cat, type]) => [type, cat]));
         const splitTags = value => String(value || '').split(',').map(tag => tag.trim()).filter(Boolean);
         const joinTags = value => Array.isArray(value) ? value.join(', ') : '';
+        const PRODUCT_STATUS_LABELS = { active: '上架中', draft: '草稿', inactive: '已停用', deleted: '已刪除' };
 
         const enterEditMode = (id) => {
             const product = (dbProducts || []).find(p => String(p.id) === String(id));
@@ -3617,7 +3618,7 @@ const PageInit = {
                 <td>${escapeHtml(product.cat)}</td>
                 <td>${escapeHtml(product.price)}</td>
                 <td><span class="admin-source">商品資料庫</span></td>
-                <td><span class="admin-fail ${product.status === 'active' ? 'ok' : ''}">${escapeHtml(product.status)}</span><br><small>${product.reviewStatus === 'approved' ? '已審核' : '待審核'} · ${product.recommendationReady ? '可推薦' : '不可推薦'} · 品質 ${escapeHtml(product.dataQualityScore)}</small></td>
+                <td><span class="admin-fail ${product.status === 'active' ? 'ok' : ''}">${escapeHtml(PRODUCT_STATUS_LABELS[product.status] || product.status)}</span><br><small>${product.reviewStatus == null ? '審核狀態未提供' : (product.reviewStatus === 'approved' ? '已審核' : product.reviewStatus === 'rejected' ? '已退回' : '待審核')} · ${product.recommendationReady == null ? '推薦資格尚未計算' : (product.recommendationReady ? '可推薦' : '不可推薦')} · ${product.dataQualityScore == null ? '品質分數尚未提供' : `品質 ${escapeHtml(product.dataQualityScore)}`}</small></td>
                 <td><div class="admin-product-actions">
                     <button class="admin-secondary-button compact" type="button" data-edit-btn="${escapeHtml(product.id)}">編輯</button>
                     <button class="admin-danger-button compact" type="button" data-delete-product="${escapeHtml(product.id)}">刪除</button>
