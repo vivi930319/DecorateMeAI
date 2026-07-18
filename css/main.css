@@ -1155,7 +1155,7 @@ body[data-member-theme="noir"] .member-id { background:#2F2629; }
 @media (max-width:760px){ .member-wrap{ grid-template-columns:1fr; } .member-stats{ grid-template-columns:1fr; } .saved-look-card{ grid-template-columns:1fr; } .saved-look-photo{ min-height:180px; } .member-action-card{ flex-direction:column; align-items:stretch; } .theme-shop-grid{ grid-template-columns:1fr; } }
 
 /* ═══════════════ Admin console ═══════════════ */
-body.admin-mode { margin:0; background:#f3f5f7; color:#20272d; font-family:"Noto Sans TC", Arial, sans-serif; }
+body.admin-mode { margin:0; overflow-y:auto; overscroll-behavior-y:auto; background:#f3f5f7; color:#20272d; font-family:"Noto Sans TC", Arial, sans-serif; }
 body.admin-mode .topbar,
 body.admin-mode .cursor-glow { display:none !important; }
 body.admin-mode .app-shell { background:#f3f5f7; }
@@ -1181,7 +1181,7 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .admin-account span { margin-top:3px; color:#87949d; font-size:10px; }
 .admin-logout-button { grid-column:1/-1; min-height:36px; margin-top:5px; border:1px solid #3a464e; border-radius:4px; background:transparent; color:#aab4bc; font:500 12px/1 "Noto Sans TC",sans-serif; cursor:pointer; }
 .admin-logout-button:hover { color:#fff; border-color:#64717a; }
-.admin-stage { min-width:0; }
+.admin-stage { min-width:0; min-height:100vh; overflow:visible; }
 .admin-topbar { position:sticky; top:0; z-index:8; min-height:88px; display:flex; align-items:center; justify-content:space-between; gap:24px; padding:18px 34px; border-bottom:1px solid var(--admin-line); background:rgba(255,255,255,.96); }
 .admin-topbar > div:first-child span,.admin-view-heading span,.admin-block-heading span { display:block; color:#7a858e; font:600 10px/1.2 Jost,sans-serif; text-transform:uppercase; }
 .admin-topbar h1 { margin:6px 0 0; color:var(--admin-ink); font:600 22px/1.25 "Noto Sans TC",sans-serif; }
@@ -1244,7 +1244,7 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .admin-inline-status { align-self:center; max-width:360px; color:var(--admin-muted); font-size:11px; line-height:1.5; }
 .admin-inline-status.error { color:var(--admin-red); }
 .admin-inline-status.ok { color:var(--admin-green); }
-.admin-table-wrap { max-width:100%; overflow:auto; border:1px solid var(--admin-line); border-radius:6px; background:#fff; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; touch-action:pan-x pan-y; }
+.admin-table-wrap { max-width:100%; overflow:auto; border:1px solid var(--admin-line); border-radius:6px; background:#fff; -webkit-overflow-scrolling:touch; overscroll-behavior-x:contain; overscroll-behavior-y:auto; touch-action:pan-x pan-y; }
 .admin-table { width:100%; min-width:900px; border-collapse:collapse; }
 .admin-table th { height:46px; padding:0 16px; background:#f5f7f8; color:#647078; font:600 11px/1 "Noto Sans TC",sans-serif; text-align:left; white-space:nowrap; }
 .admin-table td { padding:15px 16px; border-top:1px solid #e4e8ea; color:#344049; font-size:12px; vertical-align:top; }
