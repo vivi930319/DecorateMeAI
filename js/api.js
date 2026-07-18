@@ -440,6 +440,25 @@ const Api = {
                 || ((typeof product.productUrl === 'string' && /^https?:/i.test(product.productUrl)) ? product.productUrl : ''),
             hex: /^#[0-9a-fA-F]{3,8}$/.test(product.hex || '') ? product.hex : null,
             tags: product.tags || [],
+            sku: product.sku || null,
+            shadeName: product.shadeName || product.shade_name || null,
+            imageUrls: Array.isArray(product.imageUrls) ? product.imageUrls : [],
+            status: product.status || 'active',
+            reviewStatus: product.reviewStatus || product.review_status || 'pending',
+            inStock: product.inStock ?? product.in_stock ?? true,
+            recommendationReady: !!(product.recommendationReady ?? product.recommendation_ready),
+            dataQualityScore: Number(product.dataQualityScore ?? product.data_quality_score ?? 0),
+            version: Number(product.version || 1),
+            currency: product.currency || 'TWD',
+            styleTags: product.styleTags || product.style_tags || [],
+            finishTags: product.finishTags || product.finish_tags || [],
+            seasonTags: product.seasonTags || product.season_tags || [],
+            occasionTags: product.occasionTags || product.occasion_tags || [],
+            featureTags: product.featureTags || product.feature_tags || [],
+            avoidTags: product.avoidTags || product.avoid_tags || [],
+            coverage: product.coverage || null,
+            undertone: product.undertone || null,
+            texture: product.texture || null,
             source: 'product-api'
         };
     },
@@ -525,19 +544,50 @@ const Api = {
         }
     },
 
-    async listProducts() {
+    _adminProductKeyName: 'decorateMeAdminApiKey',
+    getAdminProductKey() {
+        try { return sessionStorage.getItem(this._adminProductKeyName) || ''; } catch (_) { return ''; }
+    },
+    setAdminProductKey(value) {
+        try {
+            const key = String(value || '').trim();
+            if (key) sessionStorage.setItem(this._adminProductKeyName, key);
+            else sessionStorage.removeItem(this._adminProductKeyName);
+        } catch (_) {}
+    },
+    _adminProductHeaders(headers = {}) {
+        const key = this.getAdminProductKey();
+        return key ? { ...headers, Authorization: `Bearer ${key}` } : this._memberHeaders(headers);
+    },
+    _productApiError(data, status) {
+        const error = data?.detail?.error || data?.error || {};
+        return {
+            status,
+            code: error.code || `HTTP_${status}`,
+            error: error.message || data?.message || `HTTP ${status}`,
+            details: error.details || {},
+            retryable: !!error.retryable
+        };
+    },
+
+    async listProducts(params = {}) {
         const url = this.config.url('product', 'listPath');
         if (!url) return { ok: false, products: [] };
         try {
-            const res = await fetch(url, { cache: 'no-store' });
+            const query = new URLSearchParams();
+            Object.entries(params || {}).forEach(([key, value]) => {
+                if (value !== '' && value != null) query.set(key, String(value));
+            });
+            const res = await fetch(`${url}${query.size ? `?${query}` : ''}`, { cache: 'no-store' });
             if (!res.ok) return { ok: false, status: res.status, products: [] };
             const data = await res.json();
+            const list = Array.isArray(data.items) ? data.items : (Array.isArray(data.products) ? data.products : []);
             return {
                 ok: true,
                 ...data,
-                products: Array.isArray(data.products)
-                    ? data.products.map(item => this._normalizeProduct(item)).filter(Boolean)
-                    : []
+                products: list.map(item => this._normalizeProduct(item)).filter(Boolean),
+                total: Number(data.total ?? list.length),
+                nextCursor: data.nextCursor ?? null
             };
         } catch (_) {
             return { ok: false, products: [] };
@@ -552,15 +602,11 @@ const Api = {
         const timeout = controller ? setTimeout(() => controller.abort(), 30000) : null;
         try {
             const profile = typeof Auth !== 'undefined' ? (Auth.getProfile() || {}) : {};
-            const res = await this._fetchWithRelogin(url, {
+            const res = await fetch(url, {
                 method: 'POST',
                 credentials: 'include',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    url: sourceUrl,
-                    source: 'manual_admin_import',
-                    adminId: profile.email || null
-                }),
+                headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ url: sourceUrl }),
                 ...(controller ? { signal: controller.signal } : {})
             });
             if (timeout) clearTimeout(timeout);
@@ -570,9 +616,8 @@ const Api = {
                 return {
                     ok: false,
                     status: res.status,
-                    code: data?.error?.code || data.code || `HTTP_${res.status}`,
-                    error: data?.error?.message || data.message || `HTTP ${res.status}`,
-                    detail: data?.error?.detail || ''
+                    ...this._productApiError(data, res.status),
+                    detail: data?.detail?.error?.details || data?.error?.detail || ''
                 };
             }
             const imageUrls = Array.isArray(payload.imageUrls)
@@ -595,7 +640,8 @@ const Api = {
                     hex: payload.hex || '',
                     specs: payload.specs || {},
                     rawText: payload.rawText || '',
-                    missingFields: Array.isArray(payload.missingFields) ? payload.missingFields : []
+                    missingFields: Array.isArray(payload.missingFields) ? payload.missingFields : [],
+                    warnings: Array.isArray(payload.warnings) ? payload.warnings : []
                 },
                 raw: data
             };
@@ -911,19 +957,21 @@ const Api = {
         }
     },
 
-    async patchRemoteProduct(rawId, payload) {
+    async patchRemoteProduct(rawId, payload, version) {
         const baseUrl = this.config.services.product.baseUrl;
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
         if (rawId == null) return { ok: false, error: '找不到這筆商品的資料庫 id' };
         try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/products/${encodeURIComponent(rawId)}`, {
+            const headers = this._adminProductHeaders({ 'Content-Type': 'application/json' });
+            if (version != null) headers['If-Match'] = String(version);
+            const res = await fetch(`${baseUrl}/api/products/${encodeURIComponent(rawId)}`, {
                 method: 'PATCH',
                 credentials: 'include',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify(payload)
             });
             const data = await res.json().catch(() => ({}));
-            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
             return { ok: true, product: data.product || data };
         } catch (err) {
             return { ok: false, error: '連線失敗：' + err.message };
@@ -934,14 +982,14 @@ const Api = {
         const baseUrl = this.config.services.product.baseUrl;
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
         try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/products`, {
+            const res = await fetch(`${baseUrl}/api/products`, {
                 method: 'POST',
                 credentials: 'include',
-                headers: { 'Content-Type': 'application/json' },
+                headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify(payload)
             });
             const data = await res.json().catch(() => ({}));
-            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
             return { ok: true, product: data.product || data };
         } catch (err) {
             return { ok: false, error: '連線失敗：' + err.message };
@@ -953,16 +1001,49 @@ const Api = {
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
         if (rawId == null) return { ok: false, error: '找不到這筆商品的資料庫 id' };
         try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/products/${encodeURIComponent(rawId)}`, {
+            const res = await fetch(`${baseUrl}/api/products/${encodeURIComponent(rawId)}`, {
                 method: 'DELETE',
-                credentials: 'include'
+                credentials: 'include',
+                headers: this._adminProductHeaders()
             });
             const data = await res.json().catch(() => ({}));
-            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
             return { ok: true };
         } catch (err) {
             return { ok: false, error: '連線失敗：' + err.message };
         }
+    },
+
+    async searchProductPreview(query) {
+        const baseUrl = this.config.services.crawler.baseUrl;
+        if (!baseUrl) return { ok: false, error: 'crawlerUrl 未設定' };
+        try {
+            const res = await fetch(`${baseUrl}/api/crawler/search-preview`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ q: String(query || '').trim() })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 404 || res.status === 405) {
+                return { ok: true, fallback: true, googleUrl: `https://www.google.com/search?q=${encodeURIComponent(String(query || '').trim())}` };
+            }
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
+            return { ok: true, googleUrl: data.googleUrl || data.google_url || '' };
+        } catch (err) { return { ok: false, error: '連線失敗：' + err.message }; }
+    },
+
+    async listProductAuditLogs(limit = 100) {
+        const baseUrl = this.config.services.product.baseUrl;
+        if (!baseUrl) return { ok: false, logs: [] };
+        try {
+            const res = await fetch(`${baseUrl}/api/admin/product-audit-logs?limit=${encodeURIComponent(limit)}`, {
+                headers: this._adminProductHeaders(), credentials: 'include', cache: 'no-store'
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, logs: [], ...this._productApiError(data, res.status) };
+            return { ok: true, logs: data.items || data.logs || [] };
+        } catch (err) { return { ok: false, logs: [], error: '連線失敗：' + err.message }; }
     },
 
     // LAB 物件（{L,a,b} 或 {L,A,B}）轉成推薦端新規格要的陣列 [L, a, b]
@@ -1498,6 +1579,7 @@ const Auth = {
         sessionStorage.removeItem('beautyAuthCreds');
         sessionStorage.removeItem('memberAccessToken');
     },
+
     logout() {
         this.clearSession();
         location.reload();

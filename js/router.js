@@ -159,14 +159,17 @@ function getProductCatalog(){
 // 優先比對 salePageId（推薦回應的 productUrl slug == 清單的 sale_page_id），再退而比對完整商品名稱。
 function fillRecommendedImages(list) {
     const catalog = Array.isArray(Router?.generalProductCatalog) ? Router.generalProductCatalog : [];
-    if (!catalog.length) return list;
-    return list.map(p => {
-        if (!p || p.img) return p;
-        const hit = catalog.find(g => g?.img && (
+    return (Array.isArray(list) ? list : []).map((raw, index) => {
+        const p = (raw && typeof raw === 'object') ? raw : {};
+        const hit = catalog.find(g => (
+            (p.rawId != null && g.rawId != null && String(p.rawId) === String(g.rawId)) ||
             (p.salePageId && g.salePageId && p.salePageId === g.salePageId) ||
             (p.name && g.name && p.name === g.name)
         ));
-        return hit ? { ...p, img: hit.img } : p;
+        const stableId = p.id || hit?.id || (p.rawId != null ? `recommended-${p.rawId}` : `recommended-${index}-${String(p.name || 'product').slice(0, 24)}`);
+        return hit
+            ? { ...hit, ...p, id: stableId, img: p.img || hit.img, sourceUrl: p.sourceUrl || hit.sourceUrl }
+            : { ...p, id: stableId };
     });
 }
 
@@ -2213,7 +2216,14 @@ const PageInit = {
             const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
             const catalog = [...recommended, ...apiCatalog];
             const p = catalog.find(x => String(x.id) === String(id));
-            if (!p) return;
+            if (!p) {
+                showAlert('這筆推薦商品的識別資料不完整，已重新載入商品清單，請稍後再試。', { type: 'error' });
+                Router.generalProductCatalog = null;
+                loadGeneralProductCatalog(() => {
+                    if (Router.currentPage === 'products') renderShop(Router.shopFilter || 'all');
+                });
+                return;
+            }
             const area = document.getElementById('productsArea');
             // 這批商品每一筆本身就是一個獨立色號（不是一個商品配多組色號），色票只顯示這支商品自己的真實顏色。
             // 商品清單 API 沒有 hex，只有單品詳情 API（/api/product/{type}/{id}）才有，先用清單裡有的，沒有就非同步補抓。
@@ -3541,8 +3551,12 @@ const PageInit = {
         let dbProducts = null;
         let dbProductsError = '';
         let productSearchQuery = '';
+        let productSearchTimer = null;
+        let productResultTotal = 0;
         const CAT_TO_TYPE = { '底妝':'foundations', '眼影':'eyeshadows', '眼線/睫毛':'eyeliner_mascara', '唇彩':'lipsticks', '腮紅':'blushes', '眉毛彩妝':'eyebrows', '修容':'contouring', '打亮':'highlighters' };
         const TYPE_TO_CAT = Object.fromEntries(Object.entries(CAT_TO_TYPE).map(([cat, type]) => [type, cat]));
+        const splitTags = value => String(value || '').split(',').map(tag => tag.trim()).filter(Boolean);
+        const joinTags = value => Array.isArray(value) ? value.join(', ') : '';
 
         const enterEditMode = (id) => {
             const product = (dbProducts || []).find(p => String(p.id) === String(id));
@@ -3550,12 +3564,21 @@ const PageInit = {
             editingProductId = id;
             document.getElementById('adminProductName').value = product.name || '';
             document.getElementById('adminProductBrand').value = product.brand || '';
+            document.getElementById('adminProductSku').value = product.sku || '';
+            document.getElementById('adminProductShadeName').value = product.shadeName || '';
             document.getElementById('adminProductCategory').value = product.cat || '底妝';
             document.getElementById('adminProductPrice').value = product.price || '';
             document.getElementById('adminProductImg').value = product.img || '';
             document.getElementById('adminProductSourceUrl').value = product.sourceUrl || '';
             document.getElementById('adminProductDesc').value = product.desc || '';
             document.getElementById('adminProductShades').value = product.hex || '';
+            document.getElementById('adminProductStatus').value = product.status || 'active';
+            document.getElementById('adminProductReviewStatus').value = product.reviewStatus || 'pending';
+            document.getElementById('adminProductInStock').checked = product.inStock !== false;
+            document.getElementById('adminProductStyleTags').value = joinTags(product.styleTags);
+            document.getElementById('adminProductFinishTags').value = joinTags(product.finishTags);
+            document.getElementById('adminProductSeasonTags').value = joinTags(product.seasonTags);
+            document.getElementById('adminProductOccasionTags').value = joinTags(product.occasionTags);
             productForm.classList.add('is-editing');
             editingLabel.textContent = product.name || id;
             createBtn.disabled = true;
@@ -3578,26 +3601,23 @@ const PageInit = {
                 return;
             }
             const normalizedQuery = productSearchQuery.trim().toLowerCase();
-            const products = normalizedQuery
-                ? dbProducts.filter(product => [product.name, product.brand, product.cat, product.desc, product.rawId, product.id]
-                    .some(value => String(value || '').toLowerCase().includes(normalizedQuery)))
-                : dbProducts;
+            const products = dbProducts;
             const searchStatus = document.getElementById('adminProductSearchStatus');
             if (searchStatus) {
                 searchStatus.textContent = normalizedQuery
-                    ? `找到 ${products.length} 筆符合「${productSearchQuery.trim()}」的資料庫商品。`
-                    : `目前資料庫共有 ${dbProducts.length} 筆商品。`;
+                    ? `找到 ${productResultTotal} 筆符合「${productSearchQuery.trim()}」的資料庫商品。`
+                    : `目前條件共有 ${productResultTotal} 筆商品。`;
             }
             if (!products.length) {
                 area.innerHTML = `<tr><td colspan="6"><div class="empty-state compact">資料庫沒有符合「${escapeHtml(productSearchQuery.trim())}」的商品，可使用上方 Google 搜尋找來源頁，再交由爬蟲匯入。</div></td></tr>`;
                 return;
             }
             area.innerHTML = products.map(product => `<tr class="admin-product-row" data-edit-product="${escapeHtml(product.id)}">
-                <td><div class="admin-product-cell">${phBox('product-thumb', product.name, product.img)}<div class="admin-user"><b>${escapeHtml(product.name)}</b><span>DB id: ${escapeHtml(String(product.rawId ?? product.id))}</span></div></div></td>
+                <td><div class="admin-product-cell">${phBox('product-thumb', product.name, product.img)}<div class="admin-user"><b>${escapeHtml(product.name)}</b><span>${escapeHtml(product.brand || '未填品牌')} · ${escapeHtml(product.shadeName || '未填色號')}</span><span>DB id: ${escapeHtml(String(product.rawId ?? product.id))} · v${escapeHtml(product.version)}</span></div></div></td>
                 <td>${escapeHtml(product.cat)}</td>
                 <td>${escapeHtml(product.price)}</td>
                 <td><span class="admin-source">商品資料庫</span></td>
-                <td><span class="admin-fail ok">已上架</span></td>
+                <td><span class="admin-fail ${product.status === 'active' ? 'ok' : ''}">${escapeHtml(product.status)}</span><br><small>${product.reviewStatus === 'approved' ? '已審核' : '待審核'} · ${product.recommendationReady ? '可推薦' : '不可推薦'} · 品質 ${escapeHtml(product.dataQualityScore)}</small></td>
                 <td><div class="admin-product-actions">
                     <button class="admin-secondary-button compact" type="button" data-edit-btn="${escapeHtml(product.id)}">編輯</button>
                     <button class="admin-danger-button compact" type="button" data-delete-product="${escapeHtml(product.id)}">刪除</button>
@@ -3614,14 +3634,21 @@ const PageInit = {
             setConnectionStatus('adminProductConnection', '連線中', 'pending');
             updateOverallStatus();
             renderProducts();
-            return Api.listProducts().then(rec => {
+            const params = {
+                q: productSearchQuery.trim(),
+                type: document.getElementById('adminProductTypeFilter')?.value || '',
+                status: document.getElementById('adminProductStatusFilter')?.value ?? 'active',
+                limit: 200
+            };
+            return Api.listProducts(params).then(rec => {
                 if (rec?.ok) {
                     dbProducts = rec.products || [];
+                    productResultTotal = Number(rec.total ?? dbProducts.length);
                     dbProductsError = '';
                     productConnectionState = 'ok';
                     setConnectionStatus('adminProductConnection', '正常', 'ok');
                     const total = document.getElementById('adminProductTotal');
-                    if (total) total.textContent = String(dbProducts.length);
+                    if (total) total.textContent = String(productResultTotal);
                 } else {
                     dbProducts = [];
                     dbProductsError = rec?.status ? `商品資料庫讀取失敗（HTTP ${rec.status}）` : '商品資料庫無法連線';
@@ -3647,14 +3674,51 @@ const PageInit = {
                 const terms = productSearchQuery.trim() || '彩妝 商品';
                 productGoogleSearch.href = `https://www.google.com/search?q=${encodeURIComponent(`${terms} 彩妝 商品`)}`;
             }
-            renderProducts();
+            clearTimeout(productSearchTimer);
+            productSearchTimer = setTimeout(loadAdminProducts, 250);
         };
         if (productSearchInput) productSearchInput.oninput = updateProductSearch;
+        ['adminProductTypeFilter', 'adminProductStatusFilter'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.onchange = loadAdminProducts;
+        });
         if (productSearchClearBtn) productSearchClearBtn.onclick = () => {
             if (productSearchInput) productSearchInput.value = '';
+            const type = document.getElementById('adminProductTypeFilter'); if (type) type.value = '';
+            const status = document.getElementById('adminProductStatusFilter'); if (status) status.value = 'active';
             updateProductSearch();
             productSearchInput?.focus();
         };
+        if (productGoogleSearch) productGoogleSearch.onclick = async event => {
+            event.preventDefault();
+            const terms = productSearchInput?.value.trim() || '彩妝 商品';
+            const result = await Api.searchProductPreview(terms);
+            if (result.ok && /^https:\/\//i.test(result.googleUrl || '')) window.open(result.googleUrl, '_blank', 'noopener,noreferrer');
+            else showAlert(`Google 搜尋引導失敗：${result.error || '未取得搜尋網址'}`, { type: 'error' });
+        };
+
+        const adminKeyInput = document.getElementById('adminProductApiKey');
+        const adminKeyStatus = document.getElementById('adminProductApiKeyStatus');
+        if (adminKeyInput) adminKeyInput.value = Api.getAdminProductKey();
+        const loadProductAuditLogs = async () => {
+            const rows = document.getElementById('adminProductAuditRows');
+            if (!rows) return;
+            rows.innerHTML = '<tr><td colspan="4">讀取中…</td></tr>';
+            const result = await Api.listProductAuditLogs(100);
+            if (!result.ok) {
+                rows.innerHTML = `<tr><td colspan="4">${escapeHtml(result.error || '無法讀取稽核紀錄')}</td></tr>`;
+                return;
+            }
+            rows.innerHTML = result.logs.length ? result.logs.map(log => `<tr><td>${escapeHtml(log.createdAt || log.created_at || log.timestamp || '—')}</td><td>${escapeHtml(log.action || log.operation || '—')}</td><td>${escapeHtml(log.productId || log.product_id || '—')}</td><td>${escapeHtml(log.adminEmail || log.actor || '—')}</td></tr>`).join('') : '<tr><td colspan="4">尚無操作紀錄</td></tr>';
+        };
+        const adminKeySave = document.getElementById('adminProductApiKeySave');
+        if (adminKeySave) adminKeySave.onclick = () => {
+            Api.setAdminProductKey(adminKeyInput?.value || '');
+            if (adminKeyStatus) adminKeyStatus.textContent = Api.getAdminProductKey() ? '管理憑證已套用，只保存在本分頁。' : '管理憑證已清除。';
+            if (Api.getAdminProductKey()) loadProductAuditLogs();
+        };
+        const auditReload = document.getElementById('adminProductAuditReload');
+        if (auditReload) auditReload.onclick = loadProductAuditLogs;
         loadAdminProducts();
 
         const productRowsEl = document.getElementById('adminProductRows');
@@ -3665,25 +3729,26 @@ const PageInit = {
                 const id = deleteTrigger.dataset.deleteProduct;
                 const product = (dbProducts || []).find(p => String(p.id) === String(id));
                 if (!product) return;
-                showConfirm(`確定要刪除「${product.name || '這項商品'}」嗎？刪除後前台商品推薦也會看不到這筆資料。`, {
-                    title: '刪除商品',
+                showConfirm(`確定要停用「${product.name || '這項商品'}」嗎？資料會保留在資料庫與稽核紀錄，但不再出現在上架商品及推薦結果。`, {
+                    title: '停用商品',
                     type: 'error',
-                    okText: '刪除',
+                    okText: '確認停用',
                     cancelText: '保留',
                     onOk: async () => {
                         deleteTrigger.disabled = true;
-                        deleteTrigger.textContent = '刪除中';
+                        deleteTrigger.textContent = '停用中';
                         const result = await Api.deleteRemoteProduct(product.rawId ?? product.id);
                         if (!result.ok) {
                             deleteTrigger.disabled = false;
                             deleteTrigger.textContent = '刪除';
-                            showAlert(`商品刪除失敗：${result.error || '未知錯誤'}${result.status === 401 ? '（管理員 session 沒帶上——請重新登入管理員帳號）' : ''}`, { type: 'error' });
+                            showAlert(`商品停用失敗：${result.error || '未知錯誤'}${result.status === 401 ? '（請重新套用 Admin API Key）' : ''}`, { type: 'error' });
                             return;
                         }
                         if (String(editingProductId) === String(product.id)) exitEditMode();
                         Router.generalProductCatalog = null;
-                        showToast('商品已刪除');
+                        showToast('商品已停用並保留稽核紀錄');
                         loadAdminProducts();
+                        loadProductAuditLogs();
                     }
                 });
                 return;
@@ -3712,6 +3777,8 @@ const PageInit = {
             e.preventDefault();
             const name = document.getElementById('adminProductName')?.value.trim();
             const brand = document.getElementById('adminProductBrand')?.value.trim();
+            const sku = document.getElementById('adminProductSku')?.value.trim();
+            const shadeName = document.getElementById('adminProductShadeName')?.value.trim();
             const cat = document.getElementById('adminProductCategory')?.value;
             const price = document.getElementById('adminProductPrice')?.value.trim();
             const img = document.getElementById('adminProductImg')?.value.trim();
@@ -3720,8 +3787,8 @@ const PageInit = {
             const shadesRaw = document.getElementById('adminProductShades')?.value.trim();
             const shadesInput = shadesRaw ? shadesRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
             const shades = shadesInput.filter(c => /^#[0-9a-fA-F]{3,8}$/.test(c));
-            if (!name || !cat || !price) {
-                showAlert('請完整填寫商品名稱、分類與價格', { type:'error' });
+            if (!name || !brand || !cat || !price || !img || !sourceUrl) {
+                showAlert('請完整填寫商品名稱、品牌、分類、價格、圖片網址與來源網址', { type:'error' });
                 return;
             }
             if (shades.length !== shadesInput.length) {
@@ -3730,30 +3797,52 @@ const PageInit = {
             }
             // 全部走真商品資料庫，不再寫 localStorage demo
             const payload = {
-                name, price,
+                name, brand, price: Number(price),
                 type: CAT_TO_TYPE[cat] || 'foundations',
-                image_url: img || '',
+                imageUrl: img,
+                imageUrls: [img],
+                image_url: img,
                 description: desc || '',
-                hex: shades[0] || null
+                sourceUrl,
+                source_url: sourceUrl,
+                sku: sku || null,
+                shadeName: shadeName || null,
+                hex: shades[0] || null,
+                status: document.getElementById('adminProductStatus')?.value || 'active',
+                reviewStatus: document.getElementById('adminProductReviewStatus')?.value || 'approved',
+                inStock: document.getElementById('adminProductInStock')?.checked !== false,
+                currency: 'TWD',
+                styleTags: splitTags(document.getElementById('adminProductStyleTags')?.value),
+                finishTags: splitTags(document.getElementById('adminProductFinishTags')?.value),
+                seasonTags: splitTags(document.getElementById('adminProductSeasonTags')?.value),
+                occasionTags: splitTags(document.getElementById('adminProductOccasionTags')?.value)
             };
-            if (brand) payload.brand = brand;
-            if (sourceUrl) payload.source_url = sourceUrl;
             const actionBtn = editingProductId ? editBtn : createBtn;
             actionBtn.disabled = true;
             const finish = (result, okMsg) => {
                 actionBtn.disabled = false;
                 if (!result.ok) {
-                    showAlert(`資料庫寫入失敗：${result.error}${result.status === 401 ? '（管理員 session 沒帶上——請確認已用資料庫的 admin 帳號重新登入）' : ''}`, { type: 'error' });
+                    if (result.code === 'VERSION_CONFLICT') {
+                        showAlert('這筆商品已被其他人更新，系統會重新載入最新版本，請確認後再編輯。', { type: 'error' });
+                        exitEditMode();
+                        loadAdminProducts();
+                    } else if (result.code === 'PRODUCT_ALREADY_EXISTS') {
+                        showAlert('資料庫已有相同來源／SKU／色號的商品，請改用編輯功能。', { type: 'error' });
+                    } else {
+                        showAlert(`資料庫寫入失敗：${result.error}${result.status === 401 ? '（請重新套用 Admin API Key）' : ''}`, { type: 'error' });
+                    }
                     return false;
                 }
                 showToast(okMsg);
                 Router.generalProductCatalog = null; // 讓商品頁下次重抓最新清單
                 loadAdminProducts();
+                loadProductAuditLogs();
                 return true;
             };
             if (editingProductId) {
                 const target = (dbProducts || []).find(p => String(p.id) === String(editingProductId));
-                Api.patchRemoteProduct(target?.rawId, payload).then(result => {
+                delete payload.type;
+                Api.patchRemoteProduct(target?.rawId, payload, target?.version).then(result => {
                     if (finish(result, '產品已更新並寫入資料庫')) exitEditMode();
                 });
             } else {

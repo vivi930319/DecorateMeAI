@@ -131,9 +131,17 @@
 
                 <div class="admin-product-search-panel">
                     <label><span>搜尋資料庫商品</span><input id="adminProductSearch" type="search" placeholder="輸入品牌、商品名稱、分類或關鍵字" autocomplete="off"></label>
+                    <label><span>商品類型</span><select id="adminProductTypeFilter"><option value="">全部類型</option><option value="foundations">底妝</option><option value="lipsticks">唇彩</option><option value="blushes">腮紅</option><option value="eyeshadows">眼影</option><option value="eyeliner_mascara">眼線/睫毛</option><option value="eyebrows">眉毛彩妝</option><option value="contouring">修容</option><option value="highlighters">打亮</option></select></label>
+                    <label><span>商品狀態</span><select id="adminProductStatusFilter"><option value="active">上架中</option><option value="draft">草稿</option><option value="inactive">已停用</option><option value="deleted">已刪除</option><option value="">全部狀態</option></select></label>
                     <button class="admin-secondary-button" id="adminProductSearchClearBtn" type="button">清除</button>
                     <a class="admin-secondary-button" id="adminProductGoogleSearch" href="https://www.google.com/search?q=%E5%BD%A9%E5%A6%9D+%E5%95%86%E5%93%81" target="_blank" rel="noopener noreferrer">到 Google 找商品</a>
                     <p id="adminProductSearchStatus" aria-live="polite">輸入關鍵字即可快速篩選資料庫商品。</p>
+                </div>
+
+                <div class="admin-product-search-panel">
+                    <label><span>本次工作階段 Admin API Key</span><input id="adminProductApiKey" type="password" placeholder="只保存在目前分頁，不寫入 Git" autocomplete="off"></label>
+                    <button class="admin-secondary-button" id="adminProductApiKeySave" type="button">套用管理憑證</button>
+                    <p id="adminProductApiKeyStatus" aria-live="polite">新增、編輯、停用、預覽與稽核紀錄需要管理憑證。</p>
                 </div>
 
                 <div class="admin-product-grid">
@@ -141,7 +149,9 @@
                         <div class="admin-block-heading"><span>Editor</span><h3>商品資料</h3></div>
                         <div class="admin-product-form-mode">編輯中：<span id="adminProductEditingLabel"></span></div>
                         <label>商品名稱<input id="adminProductName" type="text" placeholder="例如：柔霧粉底液" required></label>
-                        <label>品牌<input id="adminProductBrand" type="text" placeholder="例如：DECORATE ME"></label>
+                        <label>品牌<input id="adminProductBrand" type="text" placeholder="例如：DECORATE ME" required></label>
+                        <label>SKU<input id="adminProductSku" type="text" placeholder="品牌內部商品編號（選填）"></label>
+                        <label>色號名稱<input id="adminProductShadeName" type="text" placeholder="例如：Ruby Woo"></label>
                         <label>分類
                             <select id="adminProductCategory">
                                 <option value="底妝">底妝</option>
@@ -154,11 +164,18 @@
                                 <option value="打亮">打亮</option>
                             </select>
                         </label>
-                        <label>價格<input id="adminProductPrice" type="text" placeholder="例如：NT$980" required></label>
-                        <label>圖片網址<input id="adminProductImg" type="url" placeholder="https://..."></label>
-                        <label>來源網址<input id="adminProductSourceUrl" type="url" placeholder="https://..."></label>
+                        <label>價格<input id="adminProductPrice" type="number" min="0" step="1" placeholder="980" required></label>
+                        <label>圖片網址<input id="adminProductImg" type="url" placeholder="https://..." required></label>
+                        <label>來源網址<input id="adminProductSourceUrl" type="url" placeholder="https://..." required></label>
                         <label>商品描述<textarea id="adminProductDesc" placeholder="商品頁顯示內容"></textarea></label>
-                        <label>色號<input id="adminProductShades" type="text" placeholder="#3A241C, #C99070"></label>
+                        <label>色碼<input id="adminProductShades" type="text" placeholder="#3A241C"></label>
+                        <label>狀態<select id="adminProductStatus"><option value="active">上架中</option><option value="draft">草稿</option><option value="inactive">停用</option></select></label>
+                        <label>審核<select id="adminProductReviewStatus"><option value="approved">已核准</option><option value="pending">待審核</option><option value="rejected">退回</option></select></label>
+                        <label><input id="adminProductInStock" type="checkbox" checked> 有庫存</label>
+                        <label>風格標籤<input id="adminProductStyleTags" type="text" placeholder="clean, elegant（逗號分隔）"></label>
+                        <label>妝效標籤<input id="adminProductFinishTags" type="text" placeholder="matte, dewy（逗號分隔）"></label>
+                        <label>季節標籤<input id="adminProductSeasonTags" type="text" placeholder="spring, summer（逗號分隔）"></label>
+                        <label>場合標籤<input id="adminProductOccasionTags" type="text" placeholder="daily, party（逗號分隔）"></label>
                         <div class="admin-product-form-actions">
                             <button class="admin-primary-button" type="button" id="adminProductCreateBtn">新增商品</button>
                             <button class="admin-secondary-button" type="button" id="adminProductEditBtn" disabled>儲存編輯</button>
@@ -185,6 +202,11 @@
                         </div>
                     </div>
                 </div>
+
+                <section class="admin-main" style="margin-top:24px">
+                    <div class="admin-toolbar"><div class="admin-block-heading"><span>Audit</span><h3>商品操作紀錄</h3></div><button class="admin-secondary-button" id="adminProductAuditReload" type="button">讀取紀錄</button></div>
+                    <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>時間</th><th>操作</th><th>商品 ID</th><th>操作者</th></tr></thead><tbody id="adminProductAuditRows"><tr><td colspan="4">套用管理憑證後可讀取</td></tr></tbody></table></div>
+                </section>
             </section>
 
             <section class="admin-view" data-admin-view="crawler" hidden>
