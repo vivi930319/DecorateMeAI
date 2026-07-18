@@ -121,23 +121,6 @@ function getProductPopularity(product) {
     return Number(product?.popularity || product?.sales || product?.views || product?.reviews || product?.score || 0);
 }
 
-// 後端 /api/products 一次只回一頁（帶 total / nextCursor），這裡自動把所有頁串接抓完，
-// 抓齊之後才一次寫進 Router.generalProductCatalog，前端畫面不會停在「還有一批載入中」。
-async function fetchAllProducts() {
-    const all = [];
-    let cursor = null;
-    let ok = true;
-    let guard = 0;
-    do {
-        const rec = await Api.listProducts(cursor ? { limit: 200, cursor } : { limit: 200 });
-        if (!rec || !rec.ok) { ok = !!(all.length); break; }
-        if (rec.products?.length) all.push(...rec.products);
-        cursor = rec.nextCursor || null;
-        guard += 1;
-    } while (cursor && guard < 50); // guard 避免後端行為異常造成無限迴圈
-    return { ok, products: all };
-}
-
 function loadGeneralProductCatalog(onDone) {
     if (Array.isArray(Router?.generalProductCatalog) && Router.generalProductCatalog.length) {
         if (typeof onDone === 'function') onDone();
@@ -145,7 +128,7 @@ function loadGeneralProductCatalog(onDone) {
     }
     if (Router?.generalProductLoading) return;
     Router.generalProductLoading = true;
-    fetchAllProducts()
+    Api.listProducts()
         .then(rec => {
             Router.generalProductCatalog = rec?.products?.length ? rec.products : [];
             Router.generalProductError = !(rec && rec.ok); // 區分「載入失敗」與「真的沒商品」
