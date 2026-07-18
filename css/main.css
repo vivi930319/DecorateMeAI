@@ -1271,6 +1271,9 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .admin-product-search-panel p { grid-column:1/-1; min-height:18px; margin:0; color:var(--admin-muted); font-size:11px; line-height:1.5; }
 .admin-product-form,.admin-crawler-form,.admin-crawler-preview { border:1px solid var(--admin-line); border-radius:6px; background:#fff; padding:22px; }
 .admin-product-form { display:grid; gap:15px; }
+.admin-product-form .admin-checkbox-field { min-height:42px; display:flex; align-items:center; gap:10px; cursor:pointer; }
+.admin-product-form .admin-checkbox-field input[type="checkbox"] { width:18px; height:18px; flex:0 0 18px; margin:0; padding:0; accent-color:var(--gold-deep); box-shadow:none; }
+.admin-product-form .admin-checkbox-field span { color:var(--admin-ink); font-size:13px; font-weight:600; }
 .admin-product-form.is-editing { border-color:#a65f24; box-shadow:0 0 0 3px rgba(166,95,36,.08); }
 .admin-product-form-mode { display:none; min-height:34px; align-items:center; border-left:3px solid var(--admin-amber); padding-left:10px; color:var(--admin-amber); font-size:11px; }
 .admin-product-form.is-editing .admin-product-form-mode { display:flex; }
