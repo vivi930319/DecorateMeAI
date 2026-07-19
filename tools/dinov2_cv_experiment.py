@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import json
+import argparse
 import sys
 from pathlib import Path
 
@@ -36,6 +37,7 @@ from face_roi import PARTS, roi_bbox  # noqa: E402
 from train_basic_cnn_roi import build_part_data, load_cache, split_kfold_by_identity  # noqa: E402
 
 EMB_PATH = Path("data/roi_cache/dinov2_embeddings.npz")
+CONTOUR_EMB_PATH = Path("data/roi_cache/dinov2_face_contour_embeddings.npz")
 OUT_PATH = Path("models/basic_features_roi/dinov2_cv_results.json")
 DINO_SIZE = 224
 MAX_IMAGE_SIZE = 1024  # 跟 prepare_roi_cache 一致，landmark 尺度才對得上
@@ -115,6 +117,65 @@ def compute_embeddings():
     return {"embeddings": embeddings}
 
 
+def compute_contour_embeddings():
+    """對 MediaPipe 臉部外輪廓遮罩抽 DINOv2 embedding，列順序與 index.json 對齊。"""
+    if CONTOUR_EMB_PATH.is_file():
+        print(f"已有輪廓 embedding 快取 {CONTOUR_EMB_PATH}，直接使用")
+        return np.load(CONTOUR_EMB_PATH)["embeddings"]
+    import torch
+
+    masks = np.load("data/roi_cache/face_contour.npy", mmap_mode="r")
+    print("載入 DINOv2 ViT-S/14，抽取臉部輪廓 embedding...", flush=True)
+    dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+    dino.eval()
+    embeddings = np.zeros((len(masks), 384), dtype=np.float32)
+    with torch.inference_mode():
+        for i, mask in enumerate(masks):
+            if not mask.any():
+                continue
+            rgb = cv2.resize(mask, (DINO_SIZE, DINO_SIZE), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
+            x = torch.from_numpy(((rgb - _MEAN) / _STD).transpose(2, 0, 1)[None])
+            vector = dino(x).squeeze(0).numpy()
+            embeddings[i] = vector / (np.linalg.norm(vector) + 1e-9)
+    np.savez_compressed(CONTOUR_EMB_PATH, embeddings=embeddings)
+    return embeddings
+
+
+def compute_feature_contour_embeddings(parts):
+    """對眉／唇等 MediaPipe 二值形狀遮罩抽取 DINOv2 embedding。"""
+    import torch
+
+    results = {}
+    missing = []
+    for part in parts:
+        path = Path(f"data/roi_cache/dinov2_{part}_contour_embeddings.npz")
+        if path.is_file():
+            results[part] = np.load(path)["embeddings"]
+        else:
+            missing.append(part)
+    if not missing:
+        return results
+
+    print("載入 DINOv2 ViT-S/14，抽取部位形狀 embedding...", flush=True)
+    dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+    dino.eval()
+    with torch.inference_mode():
+        for part in missing:
+            masks = np.load(f"data/roi_cache/{part}_contour.npy", mmap_mode="r")
+            embeddings = np.zeros((len(masks), 384), dtype=np.float32)
+            for i, mask in enumerate(masks):
+                if not mask.any():
+                    continue
+                rgb = cv2.resize(mask, (DINO_SIZE, DINO_SIZE), interpolation=cv2.INTER_LINEAR).astype(np.float32) / 255.0
+                x = torch.from_numpy(((rgb - _MEAN) / _STD).transpose(2, 0, 1)[None])
+                vector = dino(x).squeeze(0).numpy()
+                embeddings[i] = vector / (np.linalg.norm(vector) + 1e-9)
+            path = Path(f"data/roi_cache/dinov2_{part}_contour_embeddings.npz")
+            np.savez_compressed(path, embeddings=embeddings)
+            results[part] = embeddings
+    return results
+
+
 def macro_accuracy(truth, pred, n):
     cm = np.zeros((n, n), dtype=int)
     for t, p in zip(truth, pred):
@@ -123,16 +184,50 @@ def macro_accuracy(truth, pred, n):
     return float(np.mean(rec)) if rec else 0.0
 
 
+def pooled_classification_metrics(confusion):
+    """由聚合混淆矩陣計算每類 precision / recall / F1 與整體 macro 指標。"""
+    confusion = np.asarray(confusion, dtype=np.int64)
+    precision, recall, f1 = [], [], []
+    for i in range(len(confusion)):
+        tp = int(confusion[i, i])
+        predicted = int(confusion[:, i].sum())
+        actual = int(confusion[i, :].sum())
+        p = tp / predicted if predicted else 0.0
+        r = tp / actual if actual else 0.0
+        precision.append(p)
+        recall.append(r)
+        f1.append(2 * p * r / (p + r) if p + r else 0.0)
+    return {
+        "pooled_confusion_matrix": confusion.tolist(),
+        "pooled_per_class_precision": precision,
+        "pooled_per_class_recall": recall,
+        "pooled_per_class_f1": f1,
+        "pooled_macro_precision": float(np.mean(precision)),
+        "pooled_macro_recall": float(np.mean(recall)),
+        "pooled_macro_f1": float(np.mean(f1)),
+        "pooled_accuracy": float(np.trace(confusion) / confusion.sum()),
+    }
+
+
 def main():
     from sklearn.linear_model import LogisticRegression
     from sklearn.svm import LinearSVC
 
-    emb = compute_embeddings()["embeddings"]
+    parser = argparse.ArgumentParser(description="DINOv2 五官分類 5-fold 實驗")
+    parser.add_argument("--identity-mode", choices=("cluster", "per_image"), default="cluster")
+    parser.add_argument("--parts", nargs="*", default=list(PARTS))
+    parser.add_argument("--face-input", choices=("rgb", "contour"), default="rgb")
+    parser.add_argument("--contour-parts", nargs="*", default=[], choices=list(PARTS))
+    args = parser.parse_args()
+
+    emb = (compute_contour_embeddings() if args.face_input == "contour"
+           else compute_embeddings()["embeddings"])
+    feature_contour_embeddings = compute_feature_contour_embeddings(args.contour_parts)
     all_rois, records = load_cache()
 
     # CNN 的 5-fold CV 基準（同 fold），用來逐部位對比
     cnn_baseline = {}
-    for part in PARTS:
+    for part in args.parts:
         p = Path(f"models/basic_features_roi/{part}_cv_metrics.json")
         if p.is_file():
             cv = json.loads(p.read_text(encoding="utf-8"))["cv"]
@@ -146,24 +241,32 @@ def main():
 
     results = {}
     print(f"\n{'部位':12s} {'DINOv2+LogReg':>16s} {'DINOv2+SVM':>14s} {'CNN 基準':>16s}")
-    for part in PARTS:
+    for part in args.parts:
         rows = [i for i, r in enumerate(records) if part in r["labels"]]
         _, labels, identities, classes = build_part_data(part, all_rois, records)
-        X = emb[rows]
+        if args.identity_mode == "per_image":
+            identities = np.arange(len(labels), dtype=np.int64)
+        X = feature_contour_embeddings.get(part, emb)[rows]
         folds = split_kfold_by_identity(labels, identities, 5, 42)  # 跟 CNN CV 完全相同的 fold
 
         part_res = {"classes": classes}
         for name, make in classifiers.items():
             fold_scores = []
+            pooled_confusion = np.zeros((len(classes), len(classes)), dtype=np.int64)
             for train_idx, val_idx in folds:
                 clf = make().fit(X[train_idx], labels[train_idx])
                 pred = clf.predict(X[val_idx])
                 fold_scores.append(macro_accuracy(labels[val_idx], pred, len(classes)))
+                for truth, guessed in zip(labels[val_idx], pred):
+                    pooled_confusion[int(truth), int(guessed)] += 1
             part_res[name] = {
                 "fold_macros": fold_scores,
                 "mean": float(np.mean(fold_scores)),
                 "std": float(np.std(fold_scores)),
+                **pooled_classification_metrics(pooled_confusion),
             }
+        part_res["identity_mode"] = args.identity_mode
+        part_res["face_input"] = args.face_input
         results[part] = part_res
 
         lr, sv = part_res["logreg"], part_res["svm"]
@@ -171,8 +274,15 @@ def main():
         cnn_s = f"{cnn[0]:.3f} ± {cnn[1]:.3f}" if cnn else "-"
         print(f"{part:12s} {lr['mean']:>8.3f} ± {lr['std']:.3f} {sv['mean']:>7.3f} ± {sv['std']:.3f} {cnn_s:>16s}")
 
-    OUT_PATH.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"\n已寫入 {OUT_PATH}")
+    if args.contour_parts:
+        out_path = OUT_PATH.with_name("dinov2_cv_per_image_feature_contour_results.json")
+    elif args.face_input == "contour":
+        out_path = OUT_PATH.with_name("dinov2_cv_per_image_contour_results.json")
+    else:
+        out_path = (OUT_PATH.with_name("dinov2_cv_per_image_results.json")
+                    if args.identity_mode == "per_image" else OUT_PATH)
+    out_path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"\n已寫入 {out_path}")
 
 
 if __name__ == "__main__":

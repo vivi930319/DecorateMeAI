@@ -235,6 +235,36 @@ def find_conflict_identities(labels, identities):
     return {ident for ident, labs in seen.items() if len(labs) > 1}
 
 
+class SimpleRoiCNN(nn.Module):
+    """不使用預訓練權重的基礎 CNN，作為 MobileNetV3 / DINOv2 的公平對照組。"""
+
+    def __init__(self, n_classes):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 32, 3, padding=1), nn.BatchNorm2d(32), nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, 3, padding=1), nn.BatchNorm2d(64), nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+            nn.Conv2d(64, 128, 3, padding=1), nn.BatchNorm2d(128), nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+            nn.Conv2d(128, 192, 3, padding=1), nn.BatchNorm2d(192), nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d(1),
+        )
+        self.classifier = nn.Sequential(nn.Flatten(), nn.Dropout(0.25), nn.Linear(192, n_classes))
+
+    def forward(self, x):
+        return self.classifier(self.features(x))
+
+
+def build_model(architecture, n_classes, pretrained=True):
+    if architecture == "simple_cnn":
+        return SimpleRoiCNN(n_classes)
+    weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
+    model = mobilenet_v3_small(weights=weights)
+    model.classifier[3] = nn.Linear(model.classifier[3].in_features, n_classes)
+    return model
+
+
 def train_one(part, rois, labels, identities, classes, split_name, train_idx, val_idx, args, device):
     n_classes = len(classes)
 
@@ -256,8 +286,7 @@ def train_one(part, rois, labels, identities, classes, split_name, train_idx, va
         RoiDataset(rois[val_idx], labels[val_idx], train=False),
         batch_size=args.batch_size, shuffle=False, num_workers=0)
 
-    model = mobilenet_v3_small(weights=MobileNet_V3_Small_Weights.DEFAULT)
-    model.classifier[3] = nn.Linear(model.classifier[3].in_features, n_classes)
+    model = build_model(args.architecture, n_classes, pretrained=True)
     model.to(device)
 
     criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
@@ -301,17 +330,17 @@ def train_one(part, rois, labels, identities, classes, split_name, train_idx, va
     }, best_state
 
 
-def export_onnx(model_state, part, classes, device):
+def export_onnx(model_state, part, classes, device, architecture="mobilenet_v3_small"):
     """匯出 ONNX。線上用 onnxruntime 推論就好，不必把 200MB 的 torch 塞進 Cloud Run 映像
     （insightface 本來就依賴 onnxruntime，等於零額外成本）。"""
-    model = mobilenet_v3_small(weights=None)
-    model.classifier[3] = nn.Linear(model.classifier[3].in_features, len(classes))
+    model = build_model(architecture, len(classes), pretrained=False)
     model.load_state_dict(model_state)
     model.eval()
 
     size = ROI_SPECS[part]["size"]
     dummy = torch.zeros(1, 3, size, size)
-    onnx_path = OUT_DIR / f"{part}.onnx"
+    name = f"{part}_simple_cnn" if architecture == "simple_cnn" else part
+    onnx_path = OUT_DIR / f"{name}.onnx"
     # dynamo=False：torch 2.12 的新 exporter 預設會把權重另外存成 <name>.onnx.data。
     # MobileNetV3-small 才 10MB，根本不需要 external data，拆成兩個檔只會讓部署多一個
     # 「少複製一個檔就靜默壞掉」的機會。舊 exporter 直接吐單一自帶權重的 .onnx。
@@ -322,9 +351,10 @@ def export_onnx(model_state, part, classes, device):
         opset_version=17,
         dynamo=False,
     )
-    torch.save(model_state, OUT_DIR / f"{part}.pt")  # 留著，之後要重匯出或接續訓練不必重跑
-    (OUT_DIR / f"{part}_classes.json").write_text(
-        json.dumps({"classes": classes, "size": size}, ensure_ascii=False, indent=2),
+    torch.save(model_state, OUT_DIR / f"{name}.pt")  # 留著，之後要重匯出或接續訓練不必重跑
+    (OUT_DIR / f"{name}_classes.json").write_text(
+        json.dumps({"classes": classes, "size": size, "architecture": architecture},
+                   ensure_ascii=False, indent=2),
         encoding="utf-8")
     return onnx_path
 
@@ -347,6 +377,15 @@ def parse_args():
                    help="眼型 7 類合併為 3 類（杏仁/桃花->圓眼、丹鳳/瞇縫->細長眼）")
     p.add_argument("--drop-conflicts", action="store_true",
                    help="剔除標註矛盾的身分（同一人同部位被標成多個類別）的所有照片")
+    p.add_argument("--architecture", choices=("mobilenet_v3_small", "simple_cnn"),
+                   default="mobilenet_v3_small",
+                   help="訓練架構；simple_cnn 是不使用預訓練權重的基礎 CNN 對照組")
+    p.add_argument("--identity-mode", choices=("cluster", "per_image"), default="cluster",
+                   help="人物分組方式；per_image 適用於每個部位內每人只有一張照片的資料集")
+    p.add_argument("--face-input", choices=("rgb", "contour"), default="rgb",
+                   help="臉型輸入；contour 使用 MediaPipe 外輪廓二值遮罩")
+    p.add_argument("--contour-parts", nargs="*", default=[], choices=list(PARTS),
+                   help="指定使用 MediaPipe 二值形狀遮罩的部位")
     return p.parse_args()
 
 
@@ -389,6 +428,10 @@ def run_cv(part, rois, labels, identities, classes, args, device):
         "merge_eye": bool(args.merge_eye),
         "drop_conflicts": bool(args.drop_conflicts),
         "epochs": args.epochs,
+        "architecture": args.architecture,
+        "identity_mode": args.identity_mode,
+        "face_input": args.face_input,
+        "contour_parts": list(args.contour_parts),
     }
 
 
@@ -402,10 +445,19 @@ def main():
     print(f"device={device}  epochs={args.epochs}\n")
 
     all_rois, records = load_cache()
+    if args.face_input == "contour":
+        all_rois["face_shape"] = np.load(CACHE_DIR / "face_contour.npy")
+    for part in args.contour_parts:
+        all_rois[part] = np.load(CACHE_DIR / f"{part}_contour.npy")
     summary = {}
 
     for part in args.parts:
         rois, labels, identities, classes = build_part_data(part, all_rois, records)
+
+        if args.identity_mode == "per_image":
+            # 這批資料是一個人的五官分別分類；在單一部位內每張圖都是獨立人物。
+            # 不使用 InsightFace 聚類，避免把外貌相似的不同人物錯誤綁成同一組。
+            identities = np.arange(len(labels), dtype=np.int64)
 
         if args.merge_eye and part == "eye_shape":
             labels, classes = apply_label_merge(labels, classes, EYE_MERGE_MAP)
@@ -423,7 +475,11 @@ def main():
 
         if args.cv:
             # 不同實驗（合併類別/剔除矛盾）各自存檔，免得互相覆蓋、事後對不出哪個數字是哪個實驗的
-            tag = ("_merged" if (args.merge_eye and part == "eye_shape") else "") + \
+            tag = ("_simple_cnn" if args.architecture == "simple_cnn" else "") + \
+                  ("_per_image" if args.identity_mode == "per_image" else "") + \
+                  ("_contour" if args.face_input == "contour" else "") + \
+                  ("_feature_contour" if args.contour_parts else "") + \
+                  ("_merged" if (args.merge_eye and part == "eye_shape") else "") + \
                   ("_noconflict" if args.drop_conflicts else "")
             summary[part] = {"cv": run_cv(part, rois, labels, identities, classes, args, device)}
             (OUT_DIR / f"{part}_cv{tag}_metrics.json").write_text(
@@ -441,7 +497,7 @@ def main():
                                       split_name, train_idx, val_idx, args, device)
             part_result[split_name] = result
             if split_name == "identity":
-                onnx_path = export_onnx(state, part, classes, device)
+                onnx_path = export_onnx(state, part, classes, device, args.architecture)
                 print(f"    已匯出 {onnx_path}")
 
         if "random" in part_result:
@@ -459,7 +515,12 @@ def main():
     # CV 是評估用，寫到獨立檔案 —— training_summary.json 是單次切分的正式結果，
     # eval_rule_baseline.py / tune_hybrid.py 都讀它，覆蓋掉會讓對照表拿不到 CNN 分數。
     if args.cv:
-        cv_tag = ("_merged" if args.merge_eye else "") + ("_noconflict" if args.drop_conflicts else "")
+        cv_tag = ("_simple_cnn" if args.architecture == "simple_cnn" else "") + \
+                 ("_per_image" if args.identity_mode == "per_image" else "") + \
+                 ("_contour" if args.face_input == "contour" else "") + \
+                 ("_feature_contour" if args.contour_parts else "") + \
+                 ("_merged" if args.merge_eye else "") + \
+                 ("_noconflict" if args.drop_conflicts else "")
         summary_name = f"cv_summary{cv_tag}.json"
     else:
         summary_name = "training_summary.json"
