@@ -55,8 +55,7 @@ const ApiConfig = {
             suggestPath: '/suggest'
         },
         render: {
-            baseUrl: RuntimeApiConfig.renderUrl || '',
-            apiKey: RuntimeApiConfig.renderApiKey || '',
+            baseUrl: gatewayService('render-service'),
             renderPath: '/render'
         },
         product: {
@@ -95,18 +94,16 @@ const ApiConfig = {
 const Api = {
     config: ApiConfig,
 
-    async _warmRenderService(baseUrl, apiKey) {
+    async _warmService(baseUrl) {
         if (!baseUrl) return;
-        const headers = {};
-        if (apiKey) headers['X-API-Key'] = apiKey;
         try {
             await fetch(`${baseUrl}/health`, {
                 method: 'GET',
-                headers,
+                headers: this._gatewayHeaders(),
                 cache: 'no-store',
             });
         } catch (_) {
-            // Ignore warm-up failures and let the real render request surface the actionable error.
+            // Ignore warm-up failures and let the real request surface the actionable error.
         }
     },
 
@@ -114,20 +111,20 @@ const Api = {
     // （mediapipe 載模型特別久）。趁使用者還在選照片、還沒按下按鈕的空檔先打一發 /health 把容器叫醒，
     // 等他真的送出時通常已經是熱的。故意不 await，純背景預熱，失敗也無所謂。
     warmFaceServices() {
-        const runtime = getRuntimeApiConfig();
-        const apiKey = runtime.faceApiKey || this.config.services.faceBasic.apiKey || '';
-        const targets = [
-            runtime.faceBasicUrl || this.config.services.faceBasic.baseUrl,
-            runtime.faceProUrl || this.config.services.facePro.baseUrl,
-        ];
-        targets.filter(Boolean).forEach(baseUrl => { this._warmRenderService(baseUrl, apiKey); });
+        [
+            this.config.services.faceBasic.baseUrl,
+            this.config.services.facePro.baseUrl,
+        ].filter(Boolean).forEach(baseUrl => { this._warmService(baseUrl); });
     },
 
-    // 臉部分析一律走 Gateway，帶登入後的短期 session。Gateway 是 session-only 模式，
+    // 臉部分析與渲染一律走 Gateway，帶登入後的短期 session。Gateway 是 session-only 模式，
     // 上游金鑰只留在伺服器端，瀏覽器不再送 X-API-Key。
-    _faceHeaders() {
+    _gatewayHeaders(headers = {}) {
         const token = this._getGatewaySessionToken();
-        return token ? { Authorization: `Bearer ${token}` } : {};
+        return token ? { ...headers, Authorization: `Bearer ${token}` } : { ...headers };
+    },
+    _faceHeaders() {
+        return this._gatewayHeaders();
     },
 
     // 臉部分析錯誤可能有兩種格式：上游是 {detail:{error:{message}}}，Gateway 是 {error:{code,message}}。
@@ -242,25 +239,14 @@ const Api = {
     },
 
     async renderMakeup({ imageDataUrl, prompt, strength = 0.45 }) {
-        const runtimeConfig = getRuntimeApiConfig();
-        const serviceConfig = {
-            ...(this.config.services.render || {}),
-            baseUrl: runtimeConfig.renderUrl || this.config.services.render.baseUrl || '',
-            apiKey: runtimeConfig.renderApiKey || this.config.services.render.apiKey || '',
-        };
-        const url = serviceConfig.baseUrl && serviceConfig.renderPath
-            ? `${serviceConfig.baseUrl}${serviceConfig.renderPath}`
-            : '';
-        if (!url) throw new Error('renderUrl 未設定，請聯繫渲染端組員提供 Cloud Run URL');
-        const headers = { 'Content-Type': 'application/json' };
-        const apiKey = serviceConfig.apiKey;
-        if (apiKey) headers['X-API-Key'] = apiKey;
-        const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
-        if (profile.email) headers['X-User-Email'] = profile.email;
-        if (profile.role) headers['X-User-Role'] = profile.role;
+        const baseUrl = this.config.services.render.baseUrl;
+        const url = `${baseUrl}${this.config.services.render.renderPath}`;
+        // 身分改由 Gateway 從 session 認定；X-User-Email／X-User-Role 是瀏覽器可偽造的，
+        // Gateway 也不會轉送，所以不再送出（渲染端沒有 email 時會退回以 IP 計算配額）。
+        const headers = this._gatewayHeaders({ 'Content-Type': 'application/json' });
         let res;
         try {
-            await this._warmRenderService(serviceConfig.baseUrl, apiKey);
+            await this._warmService(baseUrl);
             await new Promise(resolve => setTimeout(resolve, 500));
             const requestInit = {
                 method: 'POST',
@@ -280,10 +266,7 @@ const Api = {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
             if (res.status === 401) {
-                if (!apiKey) {
-                    throw new Error('Render API 需要金鑰，但目前頁面沒有載到 renderApiKey。請重新整理，或檢查 config.local.js / 部署設定。');
-                }
-                throw new Error('Render API 金鑰驗證失敗。請重新整理頁面後再試，若仍失敗表示目前前端設定的 renderApiKey 與伺服器不一致。');
+                throw new Error('登入狀態已失效，請重新登入後再試一次。');
             }
             throw new Error(data?.error?.message || data?.error || `Render API HTTP ${res.status}`);
         }
@@ -300,25 +283,18 @@ const Api = {
     // 非同步渲染：gpt-image-2 要跑 50~150 秒，同步等會撞 Cloud Run 逾時（實測一堆 504）。
     // 改成送出後拿 jobId、每 2 秒輪詢一次，onProgress 會被餵 1~100 的進度給進度條用。
     // 2026-07-15 對齊後端新接口：前端只送結構化資料（styleId + analysisPackage），prompt 由後端組
-    // （前端送的 prompt 會被後端忽略——renderApiKey 是明文，信任前端 prompt 等於任何人能用我們額度生任意圖）；
+    // （前端送的 prompt 會被後端忽略——信任前端 prompt 等於任何人能用我們額度生任意圖）；
     // 輪詢必須帶建立 job 時回的 resultToken（X-Job-Token），不帶會被 403 擋到逾時。
     async renderMakeupAsync({ imageDataUrl, styleId = 'natural', analysisPackage = null, strength = 0.35, onProgress = null }) {
-        const runtimeConfig = getRuntimeApiConfig();
-        const baseUrl = runtimeConfig.renderUrl || this.config.services.render.baseUrl || '';
-        const apiKey = runtimeConfig.renderApiKey || this.config.services.render.apiKey || '';
-        if (!baseUrl) throw new Error('renderUrl 未設定，請聯繫渲染端組員提供 Cloud Run URL');
-
-        const headers = { 'Content-Type': 'application/json' };
-        if (apiKey) headers['X-API-Key'] = apiKey;
-        const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
-        if (profile.email) headers['X-User-Email'] = profile.email;
-        if (profile.role) headers['X-User-Role'] = profile.role;
+        const baseUrl = this.config.services.render.baseUrl;
+        // 同上：身分由 Gateway 依 session 認定，不再送瀏覽器可偽造的 X-User-Email／X-User-Role。
+        const headers = this._gatewayHeaders({ 'Content-Type': 'application/json' });
 
         const emit = (p) => { if (typeof onProgress === 'function') onProgress(p); };
 
         let submitRes;
         try {
-            await this._warmRenderService(baseUrl, apiKey);
+            await this._warmService(baseUrl);
             const requestInit = {
                 method: 'POST',
                 headers,
@@ -338,7 +314,7 @@ const Api = {
         const submitted = await submitRes.json().catch(() => ({}));
         if (!submitRes.ok) {
             if (submitRes.status === 401) {
-                throw new Error('Render API 金鑰驗證失敗。請重新整理頁面後再試。');
+                throw new Error('登入狀態已失效，請重新登入後再試一次。');
             }
             throw new Error(submitted?.error?.message || submitted?.error || `Render API HTTP ${submitRes.status}`);
         }
