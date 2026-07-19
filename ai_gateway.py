@@ -363,6 +363,22 @@ async def health():
     }
 
 
+@app.get("/public-config")
+async def public_config():
+    """前端啟動時來這裡拿會員／商品資料庫網址，不再自己寫死。
+
+    為什麼需要：資料庫走 Cloudflare Quick Tunnel，每次重啟就換一組隨機網址。
+    以前每換一次就要改前端兩個檔案、Gateway 兩個環境變數再重新部署，漏一個就是整站故障
+    （見前端 issue #23）。改成由 Gateway 統一發布後，換網址只需要更新 Gateway。
+
+    只回瀏覽器本來就會送出、也看得到的公開位址。金鑰、session secret、上游憑證一律不在此暴露。
+    """
+    return {
+        "memberDatabaseUrl": MEMBER_DATABASE_URL,
+        "productUrl": PRODUCT_DATABASE_URL,
+    }
+
+
 @app.post("/auth/login")
 async def login(body: LoginRequest, request: Request):
     # In session-only mode the browser has no reusable API key.  Login is
