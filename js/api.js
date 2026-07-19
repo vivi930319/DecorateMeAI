@@ -17,9 +17,13 @@ const RuntimeApiConfig = getRuntimeApiConfig();
 // 所有服務的 baseUrl 與金鑰一律由 config.local.js（window.DECORATE_ME_CONFIG）在執行時注入，
 // 這裡不寫死任何網址或金鑰，避免機密進版控外洩；未注入時為空字串，url() 會回空、不對外呼叫。
 // AI Gateway 代理臉部分析與渲染：瀏覽器不再持有上游長期金鑰（規格書「Admin 商品管理安全 Proxy」§3 禁止），
-// 改帶 /auth/login 發的短期 session。Gateway 路由是 /{service}/{path}，所以 baseUrl 要帶上服務名當前綴。
+// 改帶 /auth/login 發的短期 session。Gateway 路由是 /{service}/{path}，所以要帶上服務名當前綴。
+//
+// 正式站用相對路徑：firebase.json 的 rewrites 已把 /face-basic 等路徑導到 ai-gateway，
+// 走同源就不必處理 CORS，Gateway 種的 dm_session（SameSite=Lax）也才送得出去。
+// 本機開發沒有 rewrites，可在 config.local.js 設 aiGatewayUrl 指向 Gateway 絕對網址。
 const AI_GATEWAY_URL = String(RuntimeApiConfig.aiGatewayUrl || '').replace(/\/+$/, '');
-const gatewayService = name => (AI_GATEWAY_URL ? `${AI_GATEWAY_URL}/${name}` : '');
+const gatewayService = name => `${AI_GATEWAY_URL}/${name}`;
 
 const ApiConfig = {
     services: {
@@ -29,8 +33,7 @@ const ApiConfig = {
             logoutPath: '/auth/logout'
         },
         faceBasic: {
-            // Gateway 未設定時退回直連，本機開發仍可用自己的 face 服務。
-            baseUrl: gatewayService('face-basic') || RuntimeApiConfig.faceBasicUrl || '',
+            baseUrl: gatewayService('face-basic'),
             apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/basic',
             posePath: '/v1/face/pose',
@@ -39,7 +42,7 @@ const ApiConfig = {
             jobResultPath: '/v1/face/jobs/{jobId}/result'
         },
         facePro: {
-            baseUrl: gatewayService('face-pro') || RuntimeApiConfig.faceProUrl || '',
+            baseUrl: gatewayService('face-pro'),
             apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/pro',
             jobPath: '/v1/face/jobs/pro',
@@ -120,15 +123,11 @@ const Api = {
         targets.filter(Boolean).forEach(baseUrl => { this._warmRenderService(baseUrl, apiKey); });
     },
 
-    // 走 AI Gateway 時用登入後的短期 session（Gateway 是 session-only 模式，X-API-Key 會被忽略，
-    // 而且上游金鑰只留在 Gateway）。沒設定 Gateway 時退回直連模式的 X-API-Key，本機開發不受影響。
-    _faceHeaders(service) {
-        if (this.config.services.aiGateway.baseUrl) {
-            const token = this._getGatewaySessionToken();
-            return token ? { Authorization: `Bearer ${token}` } : {};
-        }
-        const key = this.config.services[service]?.apiKey;
-        return key ? { 'X-API-Key': key } : {};
+    // 臉部分析一律走 Gateway，帶登入後的短期 session。Gateway 是 session-only 模式，
+    // 上游金鑰只留在伺服器端，瀏覽器不再送 X-API-Key。
+    _faceHeaders() {
+        const token = this._getGatewaySessionToken();
+        return token ? { Authorization: `Bearer ${token}` } : {};
     },
 
     // 臉部分析錯誤可能有兩種格式：上游是 {detail:{error:{message}}}，Gateway 是 {error:{code,message}}。
@@ -150,7 +149,7 @@ const Api = {
 
     // 後端建 job 時發 resultToken，之後查詢 job 狀態/結果必須帶 X-Job-Token，否則回 403
     _faceJobHeaders(service, resultToken) {
-        const headers = { ...this._faceHeaders(service) };
+        const headers = { ...this._faceHeaders() };
         if (resultToken) headers['X-Job-Token'] = resultToken;
         return headers;
     },
@@ -159,7 +158,7 @@ const Api = {
     async detectFacePose(file) {
         const fd = new FormData();
         fd.append('file', file);
-        const res = await fetch(this.config.url('faceBasic', 'posePath'), { method: 'POST', body: fd, headers: this._faceHeaders('faceBasic') });
+        const res = await fetch(this.config.url('faceBasic', 'posePath'), { method: 'POST', body: fd, headers: this._faceHeaders() });
         if (!res.ok) throw await this._faceError(res, '角度偵測失敗');
         return res.json();
     },
@@ -167,7 +166,7 @@ const Api = {
     async createFaceJob(file) {
         const fd = new FormData();
         fd.append('file', file);
-        const res = await fetch(this.config.url('faceBasic', 'jobPath'), { method: 'POST', body: fd, headers: this._faceHeaders('faceBasic') });
+        const res = await fetch(this.config.url('faceBasic', 'jobPath'), { method: 'POST', body: fd, headers: this._faceHeaders() });
         if (!res.ok) throw await this._faceError(res, '建立 BASIC job 失敗');
         return res.json();
     },
@@ -178,7 +177,7 @@ const Api = {
         for (const role of ['left45', 'right45', 'side']) {
             if (files[role]) fd.append(role, files[role]);
         }
-        const res = await fetch(this.config.url('facePro', 'jobPath'), { method: 'POST', body: fd, headers: this._faceHeaders('facePro') });
+        const res = await fetch(this.config.url('facePro', 'jobPath'), { method: 'POST', body: fd, headers: this._faceHeaders() });
         if (!res.ok) throw await this._faceError(res, '建立 PRO job 失敗');
         return res.json();
     },
@@ -733,8 +732,10 @@ const Api = {
     // 用會員帳密向 Gateway 換一組 session；Gateway 會轉打會員資料庫驗證，成功後回同樣的 member 物件。
     // 失敗只影響臉部分析／渲染，不能讓整個登入流程掛掉，所以呼叫端一律容錯。
     async loginToGateway(email, password) {
-        const url = this.config.url('aiGateway', 'loginPath');
-        if (!url) return { ok: false, code: 'GATEWAY_NOT_CONFIGURED' };
+        // 同源時 baseUrl 是空字串，直接串接會得到 /auth/login；不能用 config.url()，
+        // 它在 baseUrl 為空時會回空字串。
+        const gateway = this.config.services.aiGateway;
+        const url = `${gateway.baseUrl}${gateway.loginPath}`;
         try {
             const res = await fetch(url, {
                 method: 'POST',
