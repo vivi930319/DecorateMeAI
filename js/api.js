@@ -1954,6 +1954,19 @@ const MemberRewards = {
     hasTheme(email, themeId) {
         return this.unlockedThemes(email).includes(themeId);
     },
+    // 伺服器端兌換成功後，把解鎖狀態同步回本機。
+    // 少了這步，setActiveTheme 會因為 hasTheme 不通過而靜默失敗 —— 點數扣了、主題卻套用不上。
+    unlockTheme(email, themeId) {
+        const key = this._email(email);
+        if (key === 'guest' || !themeId) return false;
+        const all = this._load(this._themesKey, {});
+        const owned = all[key] || [];
+        if (!owned.includes(themeId)) {
+            all[key] = [...owned, themeId];
+            this._save(this._themesKey, all);
+        }
+        return true;
+    },
     redeemTheme(email, themeId) {
         const key = this._email(email);
         if (key === 'guest') return { ok: false, message: '請先登入會員再兌換主題。' };

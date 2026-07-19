@@ -233,6 +233,17 @@ const POINT_REASON_LABELS = {
     admin_adjustment: '管理員調整'
 };
 
+// 會員資料庫的任務清單不一定會帶 title／group，只給 taskId（first_analysis 之類）。
+// 缺的時候用本機任務定義補成中文，不要把代碼直接顯示給使用者。
+function taskMeta(taskId) {
+    const id = String(taskId || '').trim().toLowerCase();
+    const hit = (typeof Tasks !== 'undefined' ? Tasks.list || [] : [])
+        .find(t => String(t.id).toLowerCase() === id);
+    if (hit) return { title: hit.title, group: hit.group };
+    // 認不出來的代碼：把底線換成空白至少比原樣好讀，仍保留線索方便追查
+    return { title: id ? id.replace(/_/g, ' ') : '任務', group: null };
+}
+
 function pointReasonLabel(reason) {
     const raw = String(reason || '').trim();
     if (!raw) return '點數異動';
@@ -2926,14 +2937,19 @@ const PageInit = {
                 taskCenter.innerHTML = '<div class="empty-state compact">登入會員後即可查看任務中心</div>';
             } else {
                 const paintTasks = (tasks, remote) => {
-                    const normalized = tasks.map(t => ({
-                        id: t.id || t.taskId,
-                        group: t.group || (t.daily ? '每日任務' : '任務'),
-                        title: t.title || t.name || t.taskId || '任務',
-                        reward: t.reward ?? 0,
-                        done: t.done !== false,
-                        claimed: !!t.claimed
-                    })).filter(t => t.id);
+                    const normalized = tasks.map(t => {
+                        const id = t.id || t.taskId;
+                        const meta = taskMeta(id);
+                        return {
+                            id,
+                            // 後端沒給中文名稱時用本機定義，避免畫面出現 first_analysis 這種代碼
+                            group: t.group || meta.group || (t.daily ? '每日任務' : '任務'),
+                            title: t.title || t.name || meta.title,
+                            reward: t.reward ?? 0,
+                            done: t.done !== false,
+                            claimed: !!t.claimed
+                        };
+                    }).filter(t => t.id);
                     const groups = [...new Set(normalized.map(t => t.group))];
                     taskCenter.innerHTML = groups.map(group => `
                         <div class="task-group">
@@ -3021,8 +3037,11 @@ const PageInit = {
                         if (!isGuest() && Api.redeemMemberTheme) {
                             const remote = await Api.redeemMemberTheme(profile.email, id).catch(() => null);
                             if (remote?.ok) {
-                                MemberRewards.setActiveTheme(profile.email, id);
-                                showToast('已兌換並套用主題');
+                                // 先把伺服器端的解鎖同步到本機，setActiveTheme 才會通過 hasTheme 檢查。
+                                // 少了這行會變成「點數扣了、主題套不上」，而且畫面還是報成功。
+                                MemberRewards.unlockTheme(profile.email, id);
+                                const applied = MemberRewards.setActiveTheme(profile.email, id);
+                                showToast(applied ? '已兌換並套用主題' : '已兌換，但套用失敗，請重新整理後再套用一次');
                                 PageInit.profile();
                                 return;
                             }
@@ -3034,10 +3053,12 @@ const PageInit = {
                         }
                         const result = MemberRewards.redeemTheme(profile.email, id);
                         if (!result.ok) { showAlert(result.message, { type:'error' }); btn.disabled = false; return; }
-                        MemberRewards.setActiveTheme(profile.email, id);
-                        showToast('已兌換並套用主題');
+                        const applied = MemberRewards.setActiveTheme(profile.email, id);
+                        showToast(applied ? '已兌換並套用主題' : '已兌換，但套用失敗，請重新整理後再套用一次');
                     } else {
-                        MemberRewards.setActiveTheme(profile.email, id);
+                        // 套用既有主題也可能失敗（例如本機解鎖紀錄遺失），不要一律報成功
+                        const applied = MemberRewards.setActiveTheme(profile.email, id);
+                        if (!applied) { showAlert('這個主題尚未解鎖，請先兌換。', { type:'error' }); btn.disabled = false; return; }
                         showToast('已套用主題');
                     }
                     PageInit.profile();
