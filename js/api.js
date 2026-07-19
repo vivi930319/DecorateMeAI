@@ -16,10 +16,21 @@ const RuntimeApiConfig = getRuntimeApiConfig();
 
 // 所有服務的 baseUrl 與金鑰一律由 config.local.js（window.DECORATE_ME_CONFIG）在執行時注入，
 // 這裡不寫死任何網址或金鑰，避免機密進版控外洩；未注入時為空字串，url() 會回空、不對外呼叫。
+// AI Gateway 代理臉部分析與渲染：瀏覽器不再持有上游長期金鑰（規格書「Admin 商品管理安全 Proxy」§3 禁止），
+// 改帶 /auth/login 發的短期 session。Gateway 路由是 /{service}/{path}，所以 baseUrl 要帶上服務名當前綴。
+const AI_GATEWAY_URL = String(RuntimeApiConfig.aiGatewayUrl || '').replace(/\/+$/, '');
+const gatewayService = name => (AI_GATEWAY_URL ? `${AI_GATEWAY_URL}/${name}` : '');
+
 const ApiConfig = {
     services: {
+        aiGateway: {
+            baseUrl: AI_GATEWAY_URL,
+            loginPath: '/auth/login',
+            logoutPath: '/auth/logout'
+        },
         faceBasic: {
-            baseUrl: RuntimeApiConfig.faceBasicUrl || '',
+            // Gateway 未設定時退回直連，本機開發仍可用自己的 face 服務。
+            baseUrl: gatewayService('face-basic') || RuntimeApiConfig.faceBasicUrl || '',
             apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/basic',
             posePath: '/v1/face/pose',
@@ -28,7 +39,7 @@ const ApiConfig = {
             jobResultPath: '/v1/face/jobs/{jobId}/result'
         },
         facePro: {
-            baseUrl: RuntimeApiConfig.faceProUrl || '',
+            baseUrl: gatewayService('face-pro') || RuntimeApiConfig.faceProUrl || '',
             apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/pro',
             jobPath: '/v1/face/jobs/pro',
@@ -109,10 +120,32 @@ const Api = {
         targets.filter(Boolean).forEach(baseUrl => { this._warmRenderService(baseUrl, apiKey); });
     },
 
-    // 臉部分析服務的 X-API-Key（faceBasic/facePro 共用同一把）；沒設定時回空物件、不影響本機。
+    // 走 AI Gateway 時用登入後的短期 session（Gateway 是 session-only 模式，X-API-Key 會被忽略，
+    // 而且上游金鑰只留在 Gateway）。沒設定 Gateway 時退回直連模式的 X-API-Key，本機開發不受影響。
     _faceHeaders(service) {
+        if (this.config.services.aiGateway.baseUrl) {
+            const token = this._getGatewaySessionToken();
+            return token ? { Authorization: `Bearer ${token}` } : {};
+        }
         const key = this.config.services[service]?.apiKey;
         return key ? { 'X-API-Key': key } : {};
+    },
+
+    // 臉部分析錯誤可能有兩種格式：上游是 {detail:{error:{message}}}，Gateway 是 {error:{code,message}}。
+    // 只認其中一種會把真正原因吞掉，變成無法排查的通用訊息。
+    async _faceError(res, fallback) {
+        const data = await res.json().catch(() => null);
+        const error = data?.detail?.error || data?.error || null;
+        const code = error?.code || '';
+        // session 過期是最常見且可自行解決的情況，直接給出可行動的指示
+        if (res.status === 401 || code === 'MEMBER_AUTH_REQUIRED' || code === 'MEMBER_AUTH_INVALID') {
+            return new Error('登入狀態已失效，請重新登入後再試一次。');
+        }
+        const message = error?.message
+            || (typeof data?.detail === 'string' ? data.detail : '')
+            || data?.message
+            || fallback;
+        return new Error(code ? `${message}（${code}）` : message);
     },
 
     // 後端建 job 時發 resultToken，之後查詢 job 狀態/結果必須帶 X-Job-Token，否則回 403
@@ -127,10 +160,7 @@ const Api = {
         const fd = new FormData();
         fd.append('file', file);
         const res = await fetch(this.config.url('faceBasic', 'posePath'), { method: 'POST', body: fd, headers: this._faceHeaders('faceBasic') });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: '角度偵測失敗' }));
-            throw new Error(err.detail?.error?.message || err.detail || '角度偵測失敗');
-        }
+        if (!res.ok) throw await this._faceError(res, '角度偵測失敗');
         return res.json();
     },
 
@@ -138,10 +168,7 @@ const Api = {
         const fd = new FormData();
         fd.append('file', file);
         const res = await fetch(this.config.url('faceBasic', 'jobPath'), { method: 'POST', body: fd, headers: this._faceHeaders('faceBasic') });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
-            throw new Error(err.detail?.error?.message || err.detail || '建立 BASIC job 失敗');
-        }
+        if (!res.ok) throw await this._faceError(res, '建立 BASIC job 失敗');
         return res.json();
     },
 
@@ -152,30 +179,21 @@ const Api = {
             if (files[role]) fd.append(role, files[role]);
         }
         const res = await fetch(this.config.url('facePro', 'jobPath'), { method: 'POST', body: fd, headers: this._faceHeaders('facePro') });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
-            throw new Error(err.detail?.error?.message || err.detail || '建立 PRO job 失敗');
-        }
+        if (!res.ok) throw await this._faceError(res, '建立 PRO job 失敗');
         return res.json();
     },
 
     async getFaceJob(mode, jobId, resultToken) {
         const service = mode === 'pro' ? 'facePro' : 'faceBasic';
         const res = await fetch(this.config.jobUrl(service, 'jobStatusPath', jobId), { cache: 'no-store', headers: this._faceJobHeaders(service, resultToken) });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
-            throw new Error(err.detail?.error?.message || err.detail || '查詢 job 失敗');
-        }
+        if (!res.ok) throw await this._faceError(res, '查詢 job 失敗');
         return res.json();
     },
 
     async getFaceJobResult(mode, jobId, resultToken) {
         const service = mode === 'pro' ? 'facePro' : 'faceBasic';
         const res = await fetch(this.config.jobUrl(service, 'jobResultPath', jobId), { cache: 'no-store', headers: this._faceJobHeaders(service, resultToken) });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: '伺服器錯誤' }));
-            throw new Error(err.detail?.error?.message || err.detail || '取得 job 結果失敗');
-        }
+        if (!res.ok) throw await this._faceError(res, '取得 job 結果失敗');
         return res.json();
     },
 
@@ -690,6 +708,53 @@ const Api = {
         return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
     },
 
+    // AI Gateway 自己簽的 session（issuer decorate-me-ai-gateway），跟會員資料庫的 token 不是同一個，
+    // 兩者不能互換。Gateway 也會種 dm_session cookie，但它是 SameSite=Lax、跨網域不會送出，
+    // 所以一律用回應 body 的 accessToken 走 Authorization header。
+    _gatewayTokenKey: 'gatewaySessionToken',
+    _getGatewaySessionToken() {
+        try {
+            const token = sessionStorage.getItem(this._gatewayTokenKey) || '';
+            return token.length <= 4096 ? token : '';
+        } catch (_) {
+            return '';
+        }
+    },
+    _rememberGatewaySessionToken(token) {
+        try {
+            if (typeof token === 'string' && token.length > 0 && token.length <= 4096) {
+                sessionStorage.setItem(this._gatewayTokenKey, token);
+            } else {
+                sessionStorage.removeItem(this._gatewayTokenKey);
+            }
+        } catch (_) {}
+    },
+
+    // 用會員帳密向 Gateway 換一組 session；Gateway 會轉打會員資料庫驗證，成功後回同樣的 member 物件。
+    // 失敗只影響臉部分析／渲染，不能讓整個登入流程掛掉，所以呼叫端一律容錯。
+    async loginToGateway(email, password) {
+        const url = this.config.url('aiGateway', 'loginPath');
+        if (!url) return { ok: false, code: 'GATEWAY_NOT_CONFIGURED' };
+        try {
+            const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ email, password })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                this._rememberGatewaySessionToken('');
+                return { ok: false, status: res.status, code: data?.detail?.error?.code || `HTTP_${res.status}` };
+            }
+            this._rememberGatewaySessionToken(data.accessToken || '');
+            return { ok: true, member: data.member || null, expiresAt: data.expiresAt || null };
+        } catch (err) {
+            this._rememberGatewaySessionToken('');
+            return { ok: false, code: 'NETWORK_ERROR', error: err.message };
+        }
+    },
+
     // 保留這個 wrapper 名稱是為了相容既有呼叫點，但不再做 relogin。
     // 只有送往會員資料庫的請求才附加 Bearer，避免把會員憑證送到商品/爬蟲服務。
     async _fetchWithRelogin(input, init) {
@@ -1143,6 +1208,9 @@ const Api = {
         try { sessionStorage.removeItem('beautyAuthCreds'); } catch (_) {}
         const data = await res.json();
         this._rememberMemberAccessToken(data);
+        // 再向 AI Gateway 換一組 session，臉部分析／渲染要靠它。這裡刻意不擋登入：
+        // Gateway 掛掉時使用者仍能登入使用其他功能，只有 AI 功能會提示重新登入。
+        await this.loginToGateway(email, password);
         return data;
     },
 
@@ -1582,6 +1650,7 @@ const Auth = {
         sessionStorage.removeItem('beautyProfile');
         sessionStorage.removeItem('beautyAuthCreds');
         sessionStorage.removeItem('memberAccessToken');
+        sessionStorage.removeItem('gatewaySessionToken');
     },
 
     logout() {
