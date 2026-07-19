@@ -12,8 +12,10 @@ from ai_gateway import (  # noqa: E402
     client_ip,
     is_path_allowed,
     issue_access_token,
+    require_admin_access,
     require_client_api_key,
     require_member_access,
+    validate_product_id,
 )
 
 
@@ -74,6 +76,35 @@ class AiGatewayTest(unittest.TestCase):
         with self.assertRaises(Exception) as raised:
             require_member_access(request)
         self.assertEqual(raised.exception.status_code, 401)
+
+    def test_http_only_cookie_token_is_accepted(self):
+        token, _ = issue_access_token("admin@example.com", "admin", "active")
+        request = Mock()
+        request.headers = {}
+        request.cookies = {"dm_session": token}
+        claims = require_admin_access(request)
+        self.assertEqual(claims["sub"], "admin@example.com")
+
+    def test_non_admin_and_suspended_admin_are_rejected(self):
+        request = Mock()
+        member_token, _ = issue_access_token("member@example.com", "member", "active")
+        request.headers = {"authorization": f"Bearer {member_token}"}
+        request.cookies = {}
+        with self.assertRaises(Exception) as member_error:
+            require_admin_access(request)
+        self.assertEqual(member_error.exception.status_code, 403)
+
+        suspended_token, _ = issue_access_token("admin@example.com", "admin", "suspended")
+        request.headers = {"authorization": f"Bearer {suspended_token}"}
+        with self.assertRaises(Exception) as suspended_error:
+            require_admin_access(request)
+        self.assertEqual(suspended_error.exception.detail["error"]["code"], "ADMIN_SUSPENDED")
+
+    def test_product_id_validation(self):
+        self.assertEqual(validate_product_id("lipsticks:933"), "lipsticks:933")
+        for value in ("../secret", "a/b", "a\\b", ""):
+            with self.assertRaises(Exception):
+                validate_product_id(value)
 
 
 if __name__ == "__main__":

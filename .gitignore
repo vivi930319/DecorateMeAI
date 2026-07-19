@@ -58,8 +58,22 @@
 !firebase-hosting-full/前端交接手冊_搬機版_2026-07-17.md
 !firebase-hosting-full/public/
 !firebase-hosting-full/public/config.local.example.js
+!firebase-hosting-full/public/pages/
+!firebase-hosting-full/public/pages/checkin.html
+!firebase-hosting-full/public/pages/admin.html
+!firebase-hosting-full/public/js/
+!firebase-hosting-full/public/js/config.js
+!firebase-hosting-full/public/admin_api_contract_test.js
 firebase-hosting-full/public/.gitignore
 firebase-hosting-full/public/README.md
 
+# 系統改善清單需要納入版本控制，完成項目才能長期追蹤。
+!系統改善待辦清單_2026-07-18.md
+
 # 本機新手教學文件，不上傳 Git
 local_only_notes/
+
+# 除 README.md 外，所有 Markdown 都只留在本機，不上傳 GitHub。
+# 規則放在檔案最後，覆蓋上方曾為交接文件設定的個別例外。
+*.md
+!README.md

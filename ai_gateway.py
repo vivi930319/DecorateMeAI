@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import asyncio
 import ipaddress
 import json
 import os
@@ -30,6 +31,9 @@ class Upstream:
     api_key: str
     client_api_key: str
     allowed_paths: tuple[re.Pattern[str], ...]
+    requires_upstream_api_key: bool = True
+    requires_cloud_run_iam: bool = True
+    required_in_production: bool = True
 
 
 FACE_JOB_ID = r"JOB-[0-9a-f]{12}"
@@ -42,6 +46,9 @@ def _patterns(*values: str) -> tuple[re.Pattern[str], ...]:
 
 def _service_url(env_name: str) -> str:
     return os.getenv(env_name, "").strip().rstrip("/")
+
+
+ALLOW_EXTERNAL_TEXT_UPSTREAM = os.getenv("GATEWAY_ALLOW_EXTERNAL_TEXT_UPSTREAM", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 UPSTREAMS = {
@@ -81,13 +88,52 @@ UPSTREAMS = {
             rf"render/jobs/{RENDER_JOB_ID}",
         ),
     ),
+    "text-suggestion": Upstream(
+        base_url=_service_url("TEXT_SUGGESTION_URL"),
+        api_key=os.getenv("UPSTREAM_TEXT_SUGGESTION_API_KEY", ""),
+        client_api_key=os.getenv("GATEWAY_TEXT_SUGGESTION_API_KEY", ""),
+        allowed_paths=_patterns(
+            r"health",
+            r"suggest",
+        ),
+        requires_upstream_api_key=False,
+        requires_cloud_run_iam=False,
+        required_in_production=ALLOW_EXTERNAL_TEXT_UPSTREAM,
+    ),
+    # Member API calls use the signed session as the access control.  The
+    # database URL and any upstream credential stay inside Cloud Run.
+    "member-database": Upstream(
+        base_url=_service_url("MEMBER_DATABASE_URL"),
+        api_key=os.getenv("UPSTREAM_MEMBER_API_KEY", ""),
+        client_api_key=os.getenv("GATEWAY_MEMBER_API_KEY", ""),
+        allowed_paths=_patterns(
+            r"api/recommend/personal",
+            r"api/favorites/toggle",
+            r"api/members",
+            r"api/members/[^/]+",
+            r"api/members/[^/]+/points",
+            r"api/members/[^/]+/check-in",
+            r"api/members/[^/]+/tasks",
+            r"api/members/[^/]+/tasks/[^/]+/claim",
+            r"api/members/[^/]+/theme-shop/[^/]+/redeem",
+            r"api/members/[^/]+/saved-looks",
+            r"api/members/[^/]+/saved-looks/[^/]+",
+        ),
+        requires_upstream_api_key=False,
+        requires_cloud_run_iam=False,
+    ),
 }
 
 MAX_BODY_BYTES = max(1024, int(os.getenv("AI_GATEWAY_MAX_BODY_BYTES", str(13 * 1024 * 1024))))
 UPSTREAM_TIMEOUT_SECONDS = max(10, int(os.getenv("AI_GATEWAY_UPSTREAM_TIMEOUT_SECONDS", "600")))
 MEMBER_DATABASE_URL = _service_url("MEMBER_DATABASE_URL")
+PRODUCT_DATABASE_URL = _service_url("PRODUCT_DATABASE_URL")
+PRODUCT_ADMIN_API_KEY = os.getenv("PRODUCT_ADMIN_API_KEY", "")
+ADMIN_PROXY_TIMEOUT_SECONDS = max(5, min(int(os.getenv("ADMIN_PROXY_TIMEOUT_SECONDS", "15")), 60))
+ADMIN_PROXY_MAX_BODY_BYTES = max(1024, min(int(os.getenv("ADMIN_PROXY_MAX_BODY_BYTES", "1048576")), 5 * 1024 * 1024))
 SESSION_SECRET = os.getenv("GATEWAY_SESSION_SECRET", "")
 SESSION_TTL_SECONDS = max(300, min(int(os.getenv("GATEWAY_SESSION_TTL_SECONDS", "7200")), 86400))
+SESSION_ONLY_MODE = os.getenv("GATEWAY_SESSION_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = max(60, int(os.getenv("GATEWAY_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "600")))
 LOGIN_RATE_LIMIT_MAX_REQUESTS = max(1, int(os.getenv("GATEWAY_LOGIN_RATE_LIMIT_MAX_REQUESTS", "10")))
 IS_PRODUCTION = os.getenv("APP_ENV", "").strip().lower() in {"prod", "production"}
@@ -98,11 +144,11 @@ def _validate_configuration() -> None:
         return
     missing = []
     for name, upstream in UPSTREAMS.items():
-        if not upstream.base_url:
+        if upstream.required_in_production and not upstream.base_url:
             missing.append(f"{name}.base_url")
-        if not upstream.api_key:
+        if upstream.requires_upstream_api_key and not upstream.api_key:
             missing.append(f"{name}.upstream_api_key")
-        if not upstream.client_api_key:
+        if not SESSION_ONLY_MODE and not upstream.client_api_key:
             missing.append(f"{name}.gateway_api_key")
     if not MEMBER_DATABASE_URL:
         missing.append("member_database_url")
@@ -206,7 +252,7 @@ def enforce_login_rate_limit(request: Request) -> None:
         bucket.append(now)
 
 
-def issue_access_token(email: str, role: str = "") -> tuple[str, int]:
+def issue_access_token(email: str, role: str = "", status: str = "active") -> tuple[str, int]:
     now = int(time.time())
     expires_at = now + SESSION_TTL_SECONDS
     token = jwt.encode(
@@ -215,6 +261,7 @@ def issue_access_token(email: str, role: str = "") -> tuple[str, int]:
             "aud": "decorate-me-ai",
             "sub": email.strip().lower(),
             "role": role[:64],
+            "status": status[:32],
             "iat": now,
             "exp": expires_at,
         },
@@ -227,6 +274,9 @@ def issue_access_token(email: str, role: str = "") -> tuple[str, int]:
 def require_member_access(request: Request) -> dict:
     authorization = request.headers.get("authorization", "")
     scheme, _, token = authorization.partition(" ")
+    if not token:
+        token = request.cookies.get("dm_session", "")
+        scheme = "bearer" if token else ""
     if scheme.lower() != "bearer" or not token:
         raise HTTPException(status_code=401, detail={"error": {"code": "MEMBER_AUTH_REQUIRED", "message": "Member sign-in is required."}})
     try:
@@ -242,13 +292,30 @@ def require_member_access(request: Request) -> dict:
         raise HTTPException(status_code=401, detail={"error": {"code": "MEMBER_AUTH_INVALID", "message": "Member session is invalid or expired."}})
 
 
+def require_admin_access(request: Request) -> dict:
+    claims = require_member_access(request)
+    if str(claims.get("status") or "active").lower() != "active":
+        raise HTTPException(status_code=403, detail={"error": {"code": "ADMIN_SUSPENDED", "message": "Administrator account is suspended."}})
+    if str(claims.get("role") or "").lower() != "admin":
+        raise HTTPException(status_code=403, detail={"error": {"code": "ADMIN_REQUIRED", "message": "Administrator permission is required."}})
+    return claims
+
+
+def validate_product_id(product_id: str) -> str:
+    value = str(product_id or "").strip()
+    if not value or len(value) > 160 or "/" in value or "\\" in value or ".." in value or any(ord(char) < 32 for char in value):
+        raise HTTPException(status_code=400, detail={"error": {"code": "INVALID_PRODUCT_ID", "message": "Invalid product id."}})
+    return value
+
+
 def build_upstream_headers(request: Request, upstream: Upstream, identity_token: str) -> dict[str, str]:
     headers = {
         "Accept": request.headers.get("accept", "application/json"),
-        "X-Serverless-Authorization": f"Bearer {identity_token}",
         "X-API-Key": upstream.api_key,
         "X-Forwarded-For": client_ip(request),
     }
+    if upstream.requires_cloud_run_iam and identity_token:
+        headers["X-Serverless-Authorization"] = f"Bearer {identity_token}"
     content_type = request.headers.get("content-type")
     if content_type:
         headers["Content-Type"] = content_type
@@ -275,9 +342,9 @@ app = FastAPI(title="DecorateMe AI Gateway", docs_url=None, redoc_url=None, life
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_cors_origins(),
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Accept", "Authorization", "Content-Type", "X-API-Key", "X-Job-Token"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Accept", "Authorization", "Content-Type", "If-Match", "X-API-Key", "X-Job-Token"],
     max_age=3600,
 )
 install_api_error_handling(app, "ai-gateway")
@@ -285,18 +352,23 @@ install_api_error_handling(app, "ai-gateway")
 
 @app.get("/health")
 async def health():
-    configured = all(upstream.base_url for upstream in UPSTREAMS.values())
+    configured = all(upstream.base_url for upstream in UPSTREAMS.values() if upstream.required_in_production)
     return {
         "status": "ok" if configured else "degraded",
         "service": "ai-gateway",
         "privateUpstreamAuth": "cloud-run-iam",
         "memberAuth": "short-lived-access-token",
+        "browserAuth": "member-session-only" if SESSION_ONLY_MODE else "client-key-and-member-session",
+        "externalTextUpstream": "enabled-for-demo" if ALLOW_EXTERNAL_TEXT_UPSTREAM else "disabled",
     }
 
 
 @app.post("/auth/login")
 async def login(body: LoginRequest, request: Request):
-    require_any_client_api_key(request.headers.get("x-api-key", ""))
+    # In session-only mode the browser has no reusable API key.  Login is
+    # protected by the rate limiter and the member credentials themselves.
+    if not SESSION_ONLY_MODE:
+        require_any_client_api_key(request.headers.get("x-api-key", ""))
     enforce_login_rate_limit(request)
     if not MEMBER_DATABASE_URL or not SESSION_SECRET:
         raise HTTPException(status_code=503, detail={"error": {"code": "AUTH_NOT_CONFIGURED", "message": "Member authentication is unavailable."}})
@@ -331,8 +403,146 @@ async def login(body: LoginRequest, request: Request):
     if not verified_email or verified_email != body.email.strip().lower():
         raise HTTPException(status_code=502, detail={"error": {"code": "MEMBER_SERVICE_ERROR", "message": "Member authentication failed."}})
     role = str(member.get("role") or member.get("member_role") or "")
-    access_token, expires_at = issue_access_token(verified_email, role)
-    return {"accessToken": access_token, "expiresAt": expires_at, "tokenType": "Bearer"}
+    member_status = str(member.get("status") or "active")
+    access_token, expires_at = issue_access_token(verified_email, role, member_status)
+    result = JSONResponse(content={"success": True, "member": member, "accessToken": access_token, "expiresAt": expires_at, "tokenType": "Bearer"})
+    result.set_cookie(
+        key="dm_session",
+        value=access_token,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        path="/",
+    )
+    return result
+
+
+@app.post("/auth/logout")
+async def logout():
+    result = JSONResponse(content={"ok": True})
+    result.delete_cookie(key="dm_session", path="/", secure=IS_PRODUCTION, httponly=True, samesite="lax")
+    return result
+
+
+async def proxy_public_member_request(request: Request, upstream_path: str):
+    """Forward only the three pre-login member operations.
+
+    These routes deliberately do not accept arbitrary paths.  The browser can
+    register or verify an OTP, but it never learns the member database URL.
+    Login attempts and OTP operations share the gateway rate limiter.
+    """
+    enforce_login_rate_limit(request)
+    body = await request.body()
+    if len(body) > 256 * 1024:
+        raise HTTPException(status_code=413, detail={"error": {"code": "PAYLOAD_TOO_LARGE", "message": "Request body is too large."}})
+    if not MEMBER_DATABASE_URL:
+        raise HTTPException(status_code=503, detail={"error": {"code": "AUTH_NOT_CONFIGURED", "message": "Member authentication is unavailable."}})
+    headers = {"Accept": request.headers.get("accept", "application/json"), "Content-Type": request.headers.get("content-type", "application/json")}
+    try:
+        response = await request.app.state.http_client.post(
+            f"{MEMBER_DATABASE_URL}{upstream_path}",
+            content=body,
+            headers=headers,
+            timeout=20,
+        )
+    except httpx.TimeoutException:
+        return JSONResponse(status_code=504, content={"error": {"code": "MEMBER_SERVICE_TIMEOUT", "message": "Member service timed out."}})
+    except httpx.HTTPError:
+        return JSONResponse(status_code=503, content={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE", "message": "Member service is unavailable."}})
+    response_headers = {"X-Content-Type-Options": "nosniff"}
+    if response.headers.get("content-type"):
+        response_headers["content-type"] = response.headers["content-type"]
+    return Response(content=response.content, status_code=response.status_code, headers=response_headers)
+
+
+@app.post("/auth/register")
+async def register(request: Request):
+    return await proxy_public_member_request(request, "/api/register")
+
+
+@app.post("/auth/send-otp")
+async def send_otp(request: Request):
+    return await proxy_public_member_request(request, "/api/send-otp")
+
+
+@app.post("/auth/verify-otp")
+async def verify_otp(request: Request):
+    return await proxy_public_member_request(request, "/api/verify-otp")
+
+
+async def proxy_admin_request(request: Request, upstream_path: str):
+    claims = require_admin_access(request)
+    if not PRODUCT_DATABASE_URL or not PRODUCT_ADMIN_API_KEY:
+        raise HTTPException(status_code=503, detail={"error": {"code": "ADMIN_PROXY_NOT_CONFIGURED", "message": "Admin proxy is not configured."}})
+
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > ADMIN_PROXY_MAX_BODY_BYTES:
+                raise HTTPException(status_code=413, detail={"error": {"code": "REQUEST_TOO_LARGE", "message": "Request body is too large."}})
+        except ValueError:
+            raise HTTPException(status_code=400, detail={"error": {"code": "BAD_CONTENT_LENGTH", "message": "Invalid Content-Length header."}})
+    body = await request.body()
+    if len(body) > ADMIN_PROXY_MAX_BODY_BYTES:
+        raise HTTPException(status_code=413, detail={"error": {"code": "REQUEST_TOO_LARGE", "message": "Request body is too large."}})
+
+    headers = {
+        "Accept": request.headers.get("accept", "application/json"),
+        "Authorization": f"Bearer {PRODUCT_ADMIN_API_KEY}",
+        "X-Admin-Actor": str(claims.get("sub") or "")[:254],
+        "X-Request-ID": request.headers.get("x-request-id", secrets.token_hex(16))[:128],
+    }
+    if request.headers.get("content-type"):
+        headers["Content-Type"] = request.headers["content-type"]
+    if request.headers.get("if-match"):
+        headers["If-Match"] = request.headers["if-match"][:32]
+
+    try:
+        response = await request.app.state.http_client.request(
+            method=request.method,
+            url=f"{PRODUCT_DATABASE_URL}{upstream_path}",
+            params=list(request.query_params.multi_items()),
+            headers=headers,
+            content=body,
+            timeout=ADMIN_PROXY_TIMEOUT_SECONDS,
+        )
+    except httpx.TimeoutException:
+        return JSONResponse(status_code=504, content={"detail": {"error": {"code": "PRODUCT_UPSTREAM_TIMEOUT", "message": "Product service timed out.", "retryable": True}}})
+    except httpx.HTTPError:
+        return JSONResponse(status_code=503, content={"detail": {"error": {"code": "PRODUCT_SERVICE_UNAVAILABLE", "message": "Product service is unavailable.", "retryable": True}}})
+
+    response_headers = {"X-Content-Type-Options": "nosniff"}
+    for header in ("content-type", "cache-control", "retry-after", "x-request-id"):
+        if response.headers.get(header):
+            response_headers[header] = response.headers[header]
+    return Response(content=response.content, status_code=response.status_code, headers=response_headers)
+
+
+@app.api_route("/admin-api/products", methods=["GET", "POST"])
+async def admin_products(request: Request):
+    return await proxy_admin_request(request, "/api/products")
+
+
+@app.api_route("/admin-api/products/{product_id}", methods=["GET", "PATCH", "DELETE"])
+async def admin_product(product_id: str, request: Request):
+    safe_id = validate_product_id(product_id)
+    return await proxy_admin_request(request, f"/api/products/{safe_id}")
+
+
+@app.post("/admin-api/crawler/product-preview")
+async def admin_crawler_preview(request: Request):
+    return await proxy_admin_request(request, "/api/crawler/product-preview")
+
+
+@app.post("/admin-api/crawler/search-preview")
+async def admin_crawler_search(request: Request):
+    return await proxy_admin_request(request, "/api/crawler/search-preview")
+
+
+@app.get("/admin-api/product-audit-logs")
+async def admin_product_audit_logs(request: Request):
+    return await proxy_admin_request(request, "/api/admin/product-audit-logs")
 
 
 @app.api_route("/{service}/{path:path}", methods=["GET", "POST", "DELETE"])
@@ -341,7 +551,11 @@ async def proxy(service: str, path: str, request: Request):
     if upstream is None or not is_path_allowed(upstream, path):
         raise HTTPException(status_code=404, detail={"error": {"code": "NOT_FOUND", "message": "Route not found."}})
 
-    require_client_api_key(upstream, request.headers.get("x-api-key", ""))
+    if service == "text-suggestion" and not ALLOW_EXTERNAL_TEXT_UPSTREAM:
+        raise HTTPException(status_code=503, detail={"error": {"code": "EXTERNAL_TEXT_UPSTREAM_DISABLED", "message": "External text suggestion is disabled until the trusted service is ready."}})
+
+    if not SESSION_ONLY_MODE:
+        require_client_api_key(upstream, request.headers.get("x-api-key", ""))
     require_member_access(request)
     if not upstream.base_url:
         raise HTTPException(status_code=503, detail={"error": {"code": "NOT_CONFIGURED", "message": "Upstream service is not configured."}})
@@ -359,7 +573,9 @@ async def proxy(service: str, path: str, request: Request):
         raise HTTPException(status_code=413, detail={"error": {"code": "PAYLOAD_TOO_LARGE", "message": "Request body is too large."}})
 
     try:
-        identity_token = await asyncio.to_thread(TOKEN_CACHE.get, upstream.base_url)
+        identity_token = ""
+        if upstream.requires_cloud_run_iam:
+            identity_token = await asyncio.to_thread(TOKEN_CACHE.get, upstream.base_url)
         response = await request.app.state.http_client.request(
             method=request.method,
             url=f"{upstream.base_url}/{path}",
