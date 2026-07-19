@@ -1191,6 +1191,29 @@ const Api = {
         return data;
     },
 
+    // 把會員資料庫的錯誤回應轉成可顯示的訊息。
+    // 重點是「伺服器有回應」與「連不上伺服器」必須分開講：前者代表請求送到了、只是被拒絕，
+    // 把它顯示成連線失敗會讓使用者往完全錯誤的方向排查（實際發生過，見 issue #22）。
+    async _memberApiError(res, fallback) {
+        let data = null;
+        try { data = await res.json(); } catch (_) {}
+        const error = data?.error || data?.detail?.error || null;
+        const code = error?.code || data?.code || '';
+        const known = {
+            EMAIL_EXISTS: '這個信箱已經註冊過了。若帳號已被停權或刪除，請聯繫管理員，重新註冊不會生效。',
+            INVALID_OTP: '驗證碼錯誤，請重新確認。',
+            OTP_EXPIRED: '驗證碼已過期，請重新發送。',
+            OTP_RATE_LIMITED: '驗證碼發送過於頻繁，請稍後再試。',
+            USER_NOT_FOUND: '找不到這個帳號。',
+        };
+        // 後端有些錯誤的 message 直接等於 code（例如 EMAIL_EXISTS），那種原樣顯示沒有意義
+        const raw = error?.message && error.message !== code ? error.message : '';
+        const err = new Error(known[code] || raw || data?.message || `${fallback}（HTTP ${res.status}）`);
+        err.status = res.status;
+        err.code = code;
+        return err;
+    },
+
     async register(payload) {
         const body = {
             phone_number: payload.phone,
@@ -1199,31 +1222,27 @@ const Api = {
             password: payload.password,
             age: Number(payload.age)
         };
-        const res = await fetch(this.config.url('memberDatabase', 'registerPath'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        if (!res.ok) {
-            // 原本不管什麼錯都丟「連線失敗」，把後端明確的 EMAIL_EXISTS 也蓋掉了，
-            // 使用者看到的訊息與真正原因無關，等於沒有線索可循。
-            let detail = null;
-            try { detail = await res.json(); } catch (_) {}
-            const code = detail?.error?.code || detail?.code || '';
-            const err = new Error(
-                code === 'EMAIL_EXISTS'
-                    ? '這個信箱已經註冊過了。若帳號已被停權或刪除，請聯繫管理員，重新註冊不會生效。'
-                    : (detail?.error?.message || detail?.message || `註冊失敗（HTTP ${res.status}）`)
-            );
-            err.status = res.status;
-            err.code = code;
-            throw err;
+        let res;
+        try {
+            res = await fetch(this.config.url('memberDatabase', 'registerPath'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+        } catch (err) {
+            throw new Error('無法連線到會員資料庫，請稍後再試。');
         }
+        // 原本不管什麼錯都丟「註冊 API 連線失敗」，把後端明確的 EMAIL_EXISTS 也蓋掉了
+        if (!res.ok) throw await this._memberApiError(res, '註冊失敗');
         return res.json();
     },
 
     async sendOTP(email) {
         const memberApi = this.config.services.memberDatabase;
+        // 分辨「連不上」與「伺服器拒絕」：只有每一個端點都連不上才算連線失敗，
+        // 伺服器有回應（例如寄送頻率過高、信箱格式不符）就要照實說，不能混為一談。
+        let lastRejection = null;
+        let reachedServer = false;
         for (const endpoint of memberApi.sendOtpPaths) {
             try {
                 const res = await fetch(`${memberApi.baseUrl}${endpoint}`, {
@@ -1232,20 +1251,30 @@ const Api = {
                     body: JSON.stringify({ email })
                 });
                 if (res.ok) return res.json();
+                reachedServer = true;
+                lastRejection = await this._memberApiError(res, '驗證碼寄送失敗');
             } catch (_) {
-                // 原型階段允許 fallback 到下一個 endpoint 或本地模擬。
+                // 這個端點連不上，換下一個試
             }
         }
-        throw new Error('驗證碼 API 連線失敗');
+        if (reachedServer && lastRejection) throw lastRejection;
+        throw new Error('無法連線到會員資料庫，請稍後再試。');
     },
 
     async verifyOTP(email, otp) {
-        const res = await fetch(this.config.url('memberDatabase', 'verifyOtpPath'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, otp })
-        });
-        if (!res.ok) throw new Error('OTP 驗證 API 連線失敗');
+        let res;
+        try {
+            res = await fetch(this.config.url('memberDatabase', 'verifyOtpPath'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, otp })
+            });
+        } catch (err) {
+            // fetch 自己拋例外才是真的連不上（DNS、斷線、CORS 被擋）
+            throw new Error('無法連線到會員資料庫，請稍後再試。');
+        }
+        // 驗證碼錯誤是最常見的情況，以前卻顯示成「連線失敗」，使用者只會一直重試同一組錯的碼
+        if (!res.ok) throw await this._memberApiError(res, '驗證碼錯誤或已失效，請重新確認。');
         return res.json();
     },
 
