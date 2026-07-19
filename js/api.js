@@ -1204,7 +1204,21 @@ const Api = {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         });
-        if (!res.ok) throw new Error('註冊 API 連線失敗');
+        if (!res.ok) {
+            // 原本不管什麼錯都丟「連線失敗」，把後端明確的 EMAIL_EXISTS 也蓋掉了，
+            // 使用者看到的訊息與真正原因無關，等於沒有線索可循。
+            let detail = null;
+            try { detail = await res.json(); } catch (_) {}
+            const code = detail?.error?.code || detail?.code || '';
+            const err = new Error(
+                code === 'EMAIL_EXISTS'
+                    ? '這個信箱已經註冊過了。若帳號已被停權或刪除，請聯繫管理員，重新註冊不會生效。'
+                    : (detail?.error?.message || detail?.message || `註冊失敗（HTTP ${res.status}）`)
+            );
+            err.status = res.status;
+            err.code = code;
+            throw err;
+        }
         return res.json();
     },
 

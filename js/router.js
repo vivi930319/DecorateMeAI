@@ -4305,13 +4305,21 @@ async function doLoginAction() {
             });
             return;
         }
-        // 後端還沒區分（回統一錯誤）→ 退回原本：一律提供去註冊捷徑，已註冊者選「重新輸入」
-        showConfirm((err.message || '帳號或密碼錯誤') + '。還沒有帳號嗎？可以用剛才輸入的資料直接去註冊。', {
+        // 帳號存在但被停權／刪除（後台的刪除是軟刪除，資料列還在、email 也還被占用）。
+        // 這種情況絕對不能引導去註冊 —— 註冊一定會撞 EMAIL_EXISTS，使用者只會看到一個
+        // 跟真正原因無關的錯誤，然後卡在原地。
+        if (/SUSPEND|DELET|DISABLED|INACTIVE|BLOCK/i.test(err.code || '') || err.status === 403) {
+            showAlert('此帳號已被停權或刪除，無法登入。請聯繫管理員處理，重新註冊不會生效。', { type: 'error' });
+            return;
+        }
+        // 其餘未分類的錯誤：只顯示原因，不預設「你還沒註冊」。
+        // 舊版一律提供「去註冊」捷徑，等於把所有登入失敗都猜成未註冊，是上面那個問題的根源。
+        showConfirm(err.message || '帳號或密碼錯誤，請重新確認。', {
             title: '登入失敗',
             type: 'error',
-            okText: '去註冊',
-            cancelText: '重新輸入',
-            onOk: function(){ Router.prefillRegister = { email: email, password: password }; showRegister(); }
+            okText: '重新輸入',
+            cancelText: '忘記密碼',
+            onCancel: function(){ if (typeof showForgotPassword === 'function') showForgotPassword(); }
         });
         return;
     }
@@ -4353,6 +4361,14 @@ async function doRegisterAction() {
         await Api.register(Router.pendingRegister);
         await Api.sendOTP(email);
     } catch (err) {
+        // 信箱已存在時給返回登入的出口，不要讓使用者卡在註冊頁反覆重試同一個必然失敗的動作
+        if (err?.code === 'EMAIL_EXISTS') {
+            showConfirm(err.message, {
+                title: '此信箱已註冊', type: 'error', okText: '返回登入', cancelText: '取消',
+                onOk: function(){ showLogin(); }
+            });
+            return;
+        }
         showAlert(err?.message || '註冊或驗證碼發送失敗，請稍後再試', { type:'error' });
         return;
     }
