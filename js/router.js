@@ -3041,7 +3041,13 @@ const PageInit = {
                                 // 少了這行會變成「點數扣了、主題套不上」，而且畫面還是報成功。
                                 MemberRewards.unlockTheme(profile.email, id);
                                 const applied = MemberRewards.setActiveTheme(profile.email, id);
-                                showToast(applied ? '已兌換並套用主題' : '已兌換，但套用失敗，請重新整理後再套用一次');
+                                // alreadyOwned：先前兌換過但本機沒記錄到（例如當時套用失敗）。
+                                // 伺服器不會重複扣點，這裡等於把狀態補回來，不能再說一次「已兌換」。
+                                showToast(
+                                    !applied ? '套用失敗，請重新整理後再試一次'
+                                    : remote.alreadyOwned ? '你已擁有這個主題，已為你套用（未重複扣點）'
+                                    : '已兌換並套用主題'
+                                );
                                 PageInit.profile();
                                 return;
                             }

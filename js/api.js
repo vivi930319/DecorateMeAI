@@ -947,7 +947,14 @@ const Api = {
                 headers: { 'Content-Type': 'application/json' }
             });
             const data = await res.json().catch(() => ({}));
-            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+            if (!res.ok) {
+                const code = data?.error?.code || data?.code || '';
+                // 已經擁有不算失敗：點數先前就扣過了，使用者確實有這個主題。
+                // 回成功，呼叫端才會把解鎖同步到本機並套用 —— 否則會卡在
+                // 「伺服器說你有、本機說你沒有」，怎麼按都套用不上。
+                if (/ALREADY_OWNED|already.?owned/i.test(code)) return { ok: true, alreadyOwned: true };
+                return { ok: false, status: res.status, code, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+            }
             return { ok: true, ...data };
         } catch (_) {
             return { ok: false };
