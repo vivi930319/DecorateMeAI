@@ -121,6 +121,150 @@ function getProductPopularity(product) {
     return Number(product?.popularity || product?.sales || product?.views || product?.reviews || product?.score || 0);
 }
 
+// 後台「專題展示」：用一次 AI 工作階段說明資料流向——哪些欄位前端看得到、哪些只留在後端。
+// 只顯示白名單摘要，照片、Email、權杖、完整分析包與完整提示詞一律不出現。
+// 由 adminDemoEnabled 控制開關、adminDemoExpiresAt 控制到期，專題結束後可直接關掉。
+function initAdminDemo() {
+    const panel = document.getElementById('adminDemoPanel');
+    if (!panel || typeof AdminStore === 'undefined' || !AdminStore.isAdmin()) return;
+    const featureDefaults = (typeof window !== 'undefined' && window.DECORATE_ME_FEATURES) || {};
+    const runtimeConfig = (typeof window !== 'undefined' && window.DECORATE_ME_CONFIG) || {};
+    const runtime = { ...featureDefaults, ...runtimeConfig };
+    const expiresAt = runtime.adminDemoExpiresAt ? new Date(runtime.adminDemoExpiresAt) : null;
+    const enabled = runtime.adminDemoEnabled === true && (!expiresAt || Number.isNaN(expiresAt.getTime()) || Date.now() < expiresAt.getTime());
+    if (!enabled) {
+        panel.remove();
+        return;
+    }
+    panel.hidden = false;
+
+    // 有真實分析資料就用遮罩後的摘要，否則用示範值，確保沒跑過分析也能展示流程
+    const packageData = (typeof Router !== 'undefined' && Router.analysisPackage && typeof Router.analysisPackage === 'object')
+        ? Router.analysisPackage : null;
+    const face = packageData && typeof packageData.faceAnalysis === 'object' ? packageData.faceAnalysis : {};
+    const valueFrom = (keys, fallback) => {
+        for (const key of keys) {
+            const value = face?.[key] ?? packageData?.[key];
+            if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 48);
+        }
+        return fallback;
+    };
+    const summary = {
+        faceShape: valueFrom(['faceShape', 'face_shape'], 'oval'),
+        skinTone: valueFrom(['skinTone', 'skin_tone'], 'medium'),
+        undertone: valueFrom(['undertone', 'skinUndertone'], 'warm'),
+        styleId: String((packageData?.render && packageData.render.styleId) || packageData?.styleId || 'natural').slice(0, 48)
+    };
+    const source = document.getElementById('adminDemoSource');
+    if (source) source.textContent = packageData ? '本次工作遮罩摘要' : 'Demo 範例資料';
+
+    const stages = [
+        {
+            stage: 'uploaded', progress: 10, note: '照片已進入私人暫存區。',
+            publicData: { jobId: 'JOB-DEMO-7C21', status: 'running', stage: 'uploaded', progress: 10 },
+            protectedData: { imageObject: 'temporary/USER-***/JOB-***/input.webp', access: 'worker-only', expiresIn: '24h' },
+            logData: { jobId: 'JOB-DEMO-7C21', event: 'upload.validated', durationMs: 218 }
+        },
+        {
+            stage: 'face_analysis', progress: 35, note: '模型正在產生結構化臉部特徵。',
+            publicData: { jobId: 'JOB-DEMO-7C21', status: 'running', stage: 'face_analysis', progress: 35 },
+            protectedData: { analysisPackage: '[完整特徵已隱藏]', landmarks: '[468 points hidden]', access: 'worker-only' },
+            logData: { jobId: 'JOB-DEMO-7C21', event: 'analysis.running', modelVersion: 'basic-roi-v1' }
+        },
+        {
+            stage: 'recommendation', progress: 55, note: '分析摘要已轉換為妝容方案。',
+            publicData: { faceShape: summary.faceShape, skinTone: summary.skinTone, undertone: summary.undertone, styleId: summary.styleId },
+            protectedData: { renderPrompt: '[完整提示詞已隱藏]', promptVersion: 'v3', access: 'worker-only' },
+            logData: { jobId: 'JOB-DEMO-7C21', event: 'recommendation.completed', durationMs: 1840 }
+        },
+        {
+            stage: 'rendering', progress: 78, note: '第三方模型正在產生妝容結果圖。',
+            publicData: { jobId: 'JOB-DEMO-7C21', status: 'running', stage: 'rendering', progress: 78 },
+            protectedData: { inputObject: 'temporary/USER-***/JOB-***/input.webp', resultObject: null, tokenHash: 'sha256:••••••••' },
+            logData: { jobId: 'JOB-DEMO-7C21', event: 'render.provider_wait', attempt: 1 }
+        },
+        {
+            stage: 'completed', progress: 100, note: '結果已保存至私人 GCS，查看時才簽發短效網址。',
+            publicData: { recordId: 'LOOK-DEMO-19', status: 'completed', styleId: summary.styleId, signedUrlTtl: '10 minutes' },
+            protectedData: { resultObject: 'users/USER-***/renders/LOOK-***.webp', temporaryPayload: 'scheduled_for_deletion', bucket: 'private' },
+            logData: { jobId: 'JOB-DEMO-7C21', event: 'workflow.completed', sensitivePayload: '[not logged]' }
+        }
+    ];
+    const text = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+    const render = index => {
+        const item = stages[index] || stages[0];
+        text('adminDemoStage', item.stage);
+        text('adminDemoProgressText', `${item.progress}%`);
+        text('adminDemoStageNote', item.note);
+        text('adminDemoPublicData', JSON.stringify(item.publicData, null, 2));
+        text('adminDemoProtectedData', JSON.stringify(item.protectedData, null, 2));
+        text('adminDemoLogData', JSON.stringify(item.logData, null, 2));
+        const bar = document.getElementById('adminDemoProgressBar');
+        if (bar) bar.style.width = `${item.progress}%`;
+        panel.querySelectorAll('[data-demo-step]').forEach((button, buttonIndex) => {
+            button.classList.toggle('active', buttonIndex === index);
+            button.setAttribute('aria-pressed', String(buttonIndex === index));
+        });
+    };
+    panel.querySelectorAll('[data-demo-step]').forEach(button => {
+        button.onclick = () => render(Number(button.dataset.demoStep));
+    });
+    const restart = document.getElementById('adminDemoRestart');
+    if (restart) restart.onclick = () => render(0);
+    if (expiresAt && !Number.isNaN(expiresAt.getTime())) {
+        text('adminDemoExpiry', `展示功能到期：${expiresAt.toLocaleString('zh-TW')}`);
+    } else {
+        text('adminDemoExpiry', '展示功能未設定到期時間');
+    }
+    render(0);
+}
+
+// 會員資料庫的點數紀錄回的是英文代碼（check_in、task_first_analysis…），本機補的紀錄則已經是中文。
+// 這裡只翻譯代碼、中文原樣保留；認不出來的代碼也照原樣顯示，不要變成空白或「點數異動」而失去線索。
+const POINT_REASON_LABELS = {
+    check_in: '每日打卡',
+    daily_checkin: '每日打卡',
+    checkin: '每日打卡',
+    referral: '推薦新會員加入獎勵',
+    referral_bonus: '推薦新會員加入獎勵',
+    signup: '註冊獎勵',
+    signup_bonus: '註冊獎勵',
+    admin_adjust: '管理員調整',
+    admin_adjustment: '管理員調整'
+};
+
+function pointReasonLabel(reason) {
+    const raw = String(reason || '').trim();
+    if (!raw) return '點數異動';
+    // 只有純英數底線才視為代碼；中文敘述直接顯示
+    if (!/^[a-z0-9_]+$/i.test(raw)) return raw;
+
+    const key = raw.toLowerCase();
+    if (POINT_REASON_LABELS[key]) return POINT_REASON_LABELS[key];
+
+    // 連續簽到獎勵：check_in_streak_bonus_3d
+    const streak = key.match(/^check_?in_streak_bonus_(\d+)d?$/);
+    if (streak) return `連續簽到 ${streak[1]} 天獎勵`;
+
+    // 兌換主題：redeem_theme_rose → 兌換主題：玫瑰柔霧
+    const theme = key.match(/^redeem_theme_(.+)$/);
+    if (theme) {
+        const hit = (typeof MemberRewards !== 'undefined' ? MemberRewards.themes || [] : [])
+            .find(t => String(t.id).toLowerCase() === theme[1]);
+        return `兌換主題：${hit ? hit.name : theme[1]}`;
+    }
+
+    // 任務獎勵：task_first_analysis → 任務獎勵：完成第一次臉部分析
+    const task = key.match(/^task_(.+)$/);
+    if (task) {
+        const hit = (typeof Tasks !== 'undefined' ? Tasks.list || [] : [])
+            .find(t => String(t.id).toLowerCase() === task[1]);
+        return `任務獎勵：${hit ? hit.title : task[1]}`;
+    }
+
+    return raw;
+}
+
 function loadGeneralProductCatalog(onDone) {
     if (Array.isArray(Router?.generalProductCatalog) && Router.generalProductCatalog.length) {
         if (typeof onDone === 'function') onDone();
@@ -2907,7 +3051,7 @@ const PageInit = {
                 ledgerEl.innerHTML = rows.length ? `<div class="point-ledger">${rows.slice(0, 8).map(row => {
                     const createdAt = row.created_at || row.createdAt || row.time || row.timestamp;
                     return `<div>
-                        <span>${escapeHtml(row.reason || row.description || '點數異動')}</span>
+                        <span>${escapeHtml(pointReasonLabel(row.reason || row.description))}</span>
                         <time>${createdAt ? new Date(createdAt).toLocaleString('zh-TW') : ''}</time>
                         <b class="${Number(row.delta) >= 0 ? 'plus' : 'minus'}">${Number(row.delta) >= 0 ? '+' : ''}${Number(row.delta) || 0}</b>
                     </div>`;
@@ -3035,6 +3179,7 @@ const PageInit = {
 
         const sectionMeta = {
             overview: { eyebrow: 'ADMIN OVERVIEW', title: '營運總覽' },
+            demo: { eyebrow: 'PROJECT DEMONSTRATION', title: '專題展示' },
             members: { eyebrow: 'MEMBER ACCESS', title: '會員與權限管理' },
             products: { eyebrow: 'PRODUCT CATALOG', title: '商品管理' },
             crawler: { eyebrow: 'CRAWLER IMPORT', title: '商品網址匯入' }
@@ -3062,6 +3207,7 @@ const PageInit = {
         sectionButtons.forEach(btn => { btn.onclick = () => setAdminSection(btn.dataset.adminSection); });
         document.querySelectorAll('[data-admin-jump]').forEach(btn => { btn.onclick = () => setAdminSection(btn.dataset.adminJump); });
         setAdminSection(initialSection);
+        initAdminDemo();
 
         let memberConnectionState = 'pending';
         let productConnectionState = 'pending';

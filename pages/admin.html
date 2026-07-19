@@ -9,14 +9,17 @@
             <button class="active" type="button" data-admin-section="overview">
                 <span class="admin-nav-index">01</span><span>營運總覽</span>
             </button>
+            <button type="button" data-admin-section="demo">
+                <span class="admin-nav-index">02</span><span>專題展示</span>
+            </button>
             <button type="button" data-admin-section="members">
-                <span class="admin-nav-index">02</span><span>會員管理</span>
+                <span class="admin-nav-index">03</span><span>會員管理</span>
             </button>
             <button type="button" data-admin-section="products">
-                <span class="admin-nav-index">03</span><span>商品管理</span>
+                <span class="admin-nav-index">04</span><span>商品管理</span>
             </button>
             <button type="button" data-admin-section="crawler">
-                <span class="admin-nav-index">04</span><span>爬蟲匯入</span>
+                <span class="admin-nav-index">05</span><span>爬蟲匯入</span>
             </button>
         </nav>
 
@@ -80,6 +83,42 @@
                         <button type="button" data-admin-jump="crawler"><span>從商品網址匯入</span><b>前往</b></button>
                     </section>
                 </div>
+            </section>
+
+            <section class="admin-view" data-admin-view="demo" hidden>
+                <div class="admin-view-heading">
+                    <div>
+                        <h2>專題展示</h2>
+                        <p>展示一次 AI 工作階段的資料流向，說明哪些資料前端看得到、哪些只留在後端。</p>
+                    </div>
+                </div>
+                <section class="admin-demo" id="adminDemoPanel" hidden>
+                    <div class="admin-demo-meta">
+                        <p>僅顯示白名單摘要；照片、Email、權杖、完整分析包與完整提示詞皆不顯示。</p>
+                        <div class="admin-demo-state"><i></i><span id="adminDemoSource">Demo 範例資料</span></div>
+                    </div>
+                    <div class="admin-demo-steps" id="adminDemoSteps" aria-label="工作階段">
+                        <button type="button" class="active" data-demo-step="0"><b>01</b><span>上傳驗證</span></button>
+                        <button type="button" data-demo-step="1"><b>02</b><span>臉部分析</span></button>
+                        <button type="button" data-demo-step="2"><b>03</b><span>妝容建議</span></button>
+                        <button type="button" data-demo-step="3"><b>04</b><span>圖片渲染</span></button>
+                        <button type="button" data-demo-step="4"><b>05</b><span>完成保存</span></button>
+                    </div>
+                    <div class="admin-demo-progress" aria-label="工作進度">
+                        <div><span id="adminDemoStage">uploaded</span><b id="adminDemoProgressText">10%</b></div>
+                        <div class="admin-demo-progress-track"><i id="adminDemoProgressBar"></i></div>
+                        <p id="adminDemoStageNote">照片已進入私人暫存區。</p>
+                    </div>
+                    <div class="admin-demo-grid">
+                        <article><span>前端可見資料</span><pre id="adminDemoPublicData"></pre></article>
+                        <article><span>後端受限暫存</span><pre id="adminDemoProtectedData"></pre></article>
+                        <article><span>一般系統 Log</span><pre id="adminDemoLogData"></pre></article>
+                    </div>
+                    <div class="admin-demo-footer">
+                        <span id="adminDemoExpiry"></span>
+                        <button type="button" class="admin-secondary-button compact" id="adminDemoRestart">重新展示</button>
+                    </div>
+                </section>
             </section>
 
             <section class="admin-view" data-admin-view="members" hidden>

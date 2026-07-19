@@ -2305,3 +2305,34 @@ body.admin-mode .main-content,
 .admin-fail.ok { border-color:rgba(164,103,90,.45); background:rgba(232,196,180,.24); color:var(--gold-deep); }
 .admin-fail.warn { border-color:rgba(176,69,63,.38); background:rgba(240,205,201,.4); color:var(--danger); }
 .admin-crawler-image { border-color:var(--line-gold); background:var(--ivory); }
+
+/* ═══════════════ 後台專題展示（AI 工作階段資料流向） ═══════════════ */
+.admin-demo { margin:0; padding:0; border:0; border-radius:0; background:transparent; color:var(--ink); font-family:"Noto Sans TC",Arial,sans-serif; box-shadow:none; }
+.admin-demo[hidden] { display:none !important; }
+.admin-demo-heading,.admin-demo-footer { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
+.admin-demo-meta { min-height:32px; display:flex; align-items:center; justify-content:space-between; gap:18px; margin-bottom:12px; }
+.admin-demo-meta p { margin:0; color:var(--mid); font-size:12px; line-height:1.6; }
+.admin-demo-heading span { color:var(--gold-deep); font-size:11px; font-weight:600; }
+.admin-demo-heading h2 { margin:7px 0 0; font-size:21px; font-weight:600; }
+.admin-demo-heading p { margin:8px 0 0; color:var(--mid); font-size:12px; line-height:1.7; }
+.admin-demo-state { min-height:32px; display:flex; align-items:center; gap:8px; padding:0 11px; border:1px solid rgba(164,103,90,.35); border-radius:999px; background:rgba(232,196,180,.25); white-space:nowrap; }
+.admin-demo-state i { width:7px; height:7px; border-radius:50%; background:var(--gold-deep); }
+.admin-demo-state span { color:var(--gold-deep); }
+.admin-demo-steps { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); margin-top:0; border:0; border-bottom:1px solid var(--line-gold); border-radius:0; overflow:visible; }
+.admin-demo-steps button { min-height:54px; display:flex; align-items:center; justify-content:center; gap:9px; border:0; border-bottom:3px solid transparent; background:transparent; color:var(--mid); cursor:pointer; }
+.admin-demo-steps button b { font-size:10px; font-weight:600; }
+.admin-demo-steps button span { font-size:12px; font-weight:500; }
+.admin-demo-steps button:hover { background:rgba(255,255,255,.32); color:var(--ink); }
+.admin-demo-steps button.active { border-bottom-color:var(--gold-deep); background:transparent; color:var(--gold-deep); }
+.admin-demo-progress { margin-top:20px; }
+.admin-demo-progress > div:first-child { display:flex; justify-content:space-between; gap:12px; font-size:13px; }
+.admin-demo-progress-track { height:8px; margin-top:9px; border-radius:999px; background:var(--ivory-2); overflow:hidden; }
+.admin-demo-progress-track i { display:block; width:10%; height:100%; border-radius:inherit; background:var(--terra-grad); transition:width .25s ease; }
+.admin-demo-progress p { margin:8px 0 0; color:var(--mid); font-size:12px; }
+.admin-demo-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-top:20px; }
+.admin-demo-grid article { min-width:0; border:1px solid var(--line-gold); border-radius:7px; overflow:hidden; background:var(--white); }
+.admin-demo-grid article > span { display:block; padding:11px 14px; border-bottom:1px solid var(--line-gold); background:var(--ivory); color:var(--ink-soft); font-size:12px; font-weight:600; }
+.admin-demo-grid pre { min-height:190px; margin:0; padding:14px; overflow:auto; background:var(--white); color:var(--ink-soft); font:400 12px/1.65 Consolas,monospace; white-space:pre-wrap; word-break:break-word; }
+.admin-demo-footer { align-items:center; margin-top:16px; color:var(--mid); font-size:11px; }
+@media (max-width:900px) { .admin-demo-steps { grid-template-columns:repeat(5,minmax(112px,1fr)); overflow-x:auto; overflow-y:hidden; } .admin-demo-grid { grid-template-columns:1fr; } }
+@media (max-width:600px) { .admin-demo-meta,.admin-demo-heading,.admin-demo-footer { align-items:flex-start; flex-direction:column; } }
