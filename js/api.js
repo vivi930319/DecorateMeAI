@@ -570,20 +570,16 @@ const Api = {
         }
     },
 
-    _adminProductKeyName: 'decorateMeAdminApiKey',
-    getAdminProductKey() {
-        try { return sessionStorage.getItem(this._adminProductKeyName) || ''; } catch (_) { return ''; }
-    },
-    setAdminProductKey(value) {
-        try {
-            const key = String(value || '').trim();
-            if (key) sessionStorage.setItem(this._adminProductKeyName, key);
-            else sessionStorage.removeItem(this._adminProductKeyName);
-        } catch (_) {}
-    },
+    // 商品管理端點用管理員登入後的 token 驗證，由後端判斷 role=admin。
+    //
+    // 這裡原本還支援讓管理員手動貼一把 ADMIN_API_KEY，但那把金鑰實際上並不存在：
+    // 〈商品搜尋管理與推薦演算法整合規格書 2026-07-17〉§3 約定的是
+    // `Authorization: Bearer <admin-token>`，資料庫端也是照這個實作；
+    // 手貼金鑰是〈Admin 商品管理安全 Proxy 規格書 2026-07-18〉§1 描述的過渡驗收做法，
+    // 該文件同時要求上線後移除，而資料庫端從未提供過這樣一把金鑰。
+    // 留著只會讓管理員以為少填了什麼，實際上填什麼都會被回 INVALID_TOKEN。
     _adminProductHeaders(headers = {}) {
-        const key = this.getAdminProductKey();
-        return key ? { ...headers, Authorization: `Bearer ${key}` } : this._memberHeaders(headers);
+        return this._memberHeaders(headers);
     },
     _productApiError(data, status) {
         const error = data?.detail?.error || data?.error || {};

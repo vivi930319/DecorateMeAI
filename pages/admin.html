@@ -177,12 +177,6 @@
                     <p id="adminProductSearchStatus" aria-live="polite">輸入關鍵字即可快速篩選資料庫商品。</p>
                 </div>
 
-                <div class="admin-product-search-panel">
-                    <label><span>本次工作階段 Admin API Key</span><input id="adminProductApiKey" type="password" placeholder="只保存在目前分頁，不寫入 Git" autocomplete="off"></label>
-                    <button class="admin-secondary-button" id="adminProductApiKeySave" type="button">套用管理憑證</button>
-                    <p id="adminProductApiKeyStatus" aria-live="polite">新增、編輯、停用、預覽與稽核紀錄需要管理憑證。</p>
-                </div>
-
                 <div class="admin-product-grid">
                     <form class="admin-product-form" id="adminProductForm">
                         <div class="admin-block-heading"><span>Editor</span><h3>商品資料</h3></div>
@@ -244,7 +238,7 @@
 
                 <section class="admin-main" style="margin-top:24px">
                     <div class="admin-toolbar"><div class="admin-block-heading"><span>Audit</span><h3>商品操作紀錄</h3></div><button class="admin-secondary-button" id="adminProductAuditReload" type="button">讀取紀錄</button></div>
-                    <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>時間</th><th>操作</th><th>商品 ID</th><th>操作者</th></tr></thead><tbody id="adminProductAuditRows"><tr><td colspan="4">套用管理憑證後可讀取</td></tr></tbody></table></div>
+                    <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>時間</th><th>操作</th><th>商品 ID</th><th>操作者</th></tr></thead><tbody id="adminProductAuditRows"><tr><td colspan="4">讀取中…</td></tr></tbody></table></div>
                 </section>
             </section>
 

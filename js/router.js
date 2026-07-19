@@ -3865,9 +3865,6 @@ const PageInit = {
             else showAlert(`Google 搜尋引導失敗：${result.error || '未取得搜尋網址'}`, { type: 'error' });
         };
 
-        const adminKeyInput = document.getElementById('adminProductApiKey');
-        const adminKeyStatus = document.getElementById('adminProductApiKeyStatus');
-        if (adminKeyInput) adminKeyInput.value = Api.getAdminProductKey();
         const loadProductAuditLogs = async () => {
             const rows = document.getElementById('adminProductAuditRows');
             if (!rows) return;
@@ -3879,12 +3876,8 @@ const PageInit = {
             }
             rows.innerHTML = result.logs.length ? result.logs.map(log => `<tr><td>${escapeHtml(log.createdAt || log.created_at || log.timestamp || '—')}</td><td>${escapeHtml(log.action || log.operation || '—')}</td><td>${escapeHtml(log.productId || log.product_id || '—')}</td><td>${escapeHtml(log.adminEmail || log.actor || '—')}</td></tr>`).join('') : '<tr><td colspan="4">尚無操作紀錄</td></tr>';
         };
-        const adminKeySave = document.getElementById('adminProductApiKeySave');
-        if (adminKeySave) adminKeySave.onclick = () => {
-            Api.setAdminProductKey(adminKeyInput?.value || '');
-            if (adminKeyStatus) adminKeyStatus.textContent = Api.getAdminProductKey() ? '管理憑證已套用，只保存在本分頁。' : '管理憑證已清除。';
-            if (Api.getAdminProductKey()) loadProductAuditLogs();
-        };
+        // 管理憑證改用登入 token，進到這頁就直接讀稽核紀錄，不必再等使用者「套用」什麼
+        loadProductAuditLogs();
         const auditReload = document.getElementById('adminProductAuditReload');
         if (auditReload) auditReload.onclick = loadProductAuditLogs;
         loadAdminProducts();
@@ -3909,7 +3902,7 @@ const PageInit = {
                         if (!result.ok) {
                             deleteTrigger.disabled = false;
                             deleteTrigger.textContent = '刪除';
-                            showAlert(`商品停用失敗：${result.error || '未知錯誤'}${result.status === 401 ? '（請重新套用 Admin API Key）' : ''}`, { type: 'error' });
+                            showAlert(`商品停用失敗：${result.error || '未知錯誤'}${result.status === 401 ? '（登入狀態已失效，請重新登入）' : ''}`, { type: 'error' });
                             return;
                         }
                         if (String(editingProductId) === String(product.id)) exitEditMode();
@@ -3997,7 +3990,7 @@ const PageInit = {
                     } else if (result.code === 'PRODUCT_ALREADY_EXISTS') {
                         showAlert('資料庫已有相同來源／SKU／色號的商品，請改用編輯功能。', { type: 'error' });
                     } else {
-                        showAlert(`資料庫寫入失敗：${result.error}${result.status === 401 ? '（請重新套用 Admin API Key）' : ''}`, { type: 'error' });
+                        showAlert(`資料庫寫入失敗：${result.error}${result.status === 401 ? '（登入狀態已失效，請重新登入）' : ''}`, { type: 'error' });
                     }
                     return false;
                 }
