@@ -36,3 +36,6 @@ models/*
 models/basic_features_roi/*
 !models/basic_features_roi/*.onnx
 !models/basic_features_roi/*_classes.json
+# DINOv2 線性分類器的權重（npz）。backbone 是 .onnx，分類頭只存 coef／intercept；
+# 沒放行的話映像裡只有 backbone，DINOv2 shadow 會整組跳過。
+!models/basic_features_roi/*.npz

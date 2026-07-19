@@ -1020,6 +1020,12 @@ class FaceAnalyzer:
         # 整段包 try —— 模型壞掉不能影響正式分析，失敗時五個欄位維持規則式的答案。
         try:
             shadow = basic_roi_shadow.predict(self.frame, self._pts_cache)
+
+            # DINOv2 在臉型／眼型／鼻型勝過 CNN，但依部署決策先只跑 shadow。
+            # 必須在 apply_model_first 覆蓋 result 之前算完並記錄，否則對照的就不是原本的答案。
+            dino = basic_roi_shadow.predict_dinov2(self.frame, self._pts_cache)
+            basic_roi_shadow.log_dinov2_comparison(shadow, dino)
+
             if shadow:
                 # 注意順序：對照 log 必須在覆蓋之前記，否則就變成模型跟自己比對了。
                 basic_roi_shadow.log_comparison(result, shadow)
@@ -1029,6 +1035,14 @@ class FaceAnalyzer:
                         result["分類來源"] = sources
                 if basic_roi_shadow.EXPOSE_IN_RESPONSE:
                     result["模型分類"] = shadow
+
+            # 觀察期結束、確認 DINOv2 表現後，設 ROI_DINOV2_MODEL_FIRST=1 讓它接手這三個部位。
+            if dino and basic_roi_shadow.DINOV2_MODEL_FIRST:
+                dino_sources = basic_roi_shadow.apply_model_first(result, dino)
+                if dino_sources:
+                    result.setdefault("分類來源", {}).update(dino_sources)
+            if dino and basic_roi_shadow.EXPOSE_IN_RESPONSE:
+                result["模型分類_dinov2"] = dino
         except Exception:
             logging.getLogger(__name__).exception("ROI 模型預測失敗，改用規則式結果")
 

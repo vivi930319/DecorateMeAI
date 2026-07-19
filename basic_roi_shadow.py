@@ -56,8 +56,37 @@ PART_TO_FIELD = {
 ENCODER = "mobilenet_v3_small"
 PROVIDER = "roi_cnn"
 
+# ── DINOv2 shadow ────────────────────────────────────────────────────────────
+# 2026-07-19 的三模型公平比較裡，臉型／眼型／鼻型由 DINOv2 ViT-S/14 + 線性分類器勝出
+# （0.522 / 0.387 / 0.863）。但依當時的部署決策，第一階段**只跑 shadow、不接管正式輸出**：
+# 先在真實流量上驗證速度與記憶體，並累積與現行 CNN 的對照資料。
+#
+# 服務端不裝 torch —— backbone 已離線匯出成 ONNX（與 torch 原模型最大誤差 2.6e-05），
+# 用既有的 onnxruntime 推論，分類器則是 scikit-learn 的 joblib，兩者都已是相依套件。
+#
+# 看完 shadow log 要升為正式答案時，設 ROI_DINOV2_MODEL_FIRST=1 即可，不需要改程式。
+DINOV2_ENABLED = os.getenv("ROI_DINOV2_ENABLED", "1") != "0"
+DINOV2_MODEL_FIRST = os.getenv("ROI_DINOV2_MODEL_FIRST", "0") == "1"
+DINOV2_ENCODER = "dinov2_vits14"
+DINOV2_PROVIDER = "roi_dinov2"
+DINOV2_SIZE = 224
+
+# 只有這三個部位選用 DINOv2；眉型與唇型的最佳模型仍是 MobileNetV3，不必多花這筆推論成本。
+#
+# 分類器不直接載 joblib：pickle 會綁定 sklearn 版本，訓練環境是 1.9.0、部署映像是 1.7.2，
+# 實測 LogisticRegression.predict_proba 會拋 AttributeError，官方也警告可能產生無效結果。
+# 兩個分類器都是線性模型，改成只存 coef／intercept，用 numpy 算 X @ coef.T + intercept。
+# 權重由 tools/export_dinov2_heads.py 產生，並已驗證與 sklearn 預測完全一致。
+DINOV2_PARTS = ("face_shape", "eye_shape", "nose_shape")
+
+# 與 tools/dinov2_cv_experiment.py 相同的 ImageNet 正規化常數；改動會讓 embedding 對不上訓練分佈。
+_DINO_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+_DINO_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
 _sessions: dict[str, tuple] | None = None
 _load_failed = False
+_dino: tuple | None = None
+_dino_load_failed = False
 
 
 def _load() -> dict[str, tuple]:
@@ -102,6 +131,161 @@ def _load() -> dict[str, tuple]:
 def _softmax(logits: np.ndarray) -> np.ndarray:
     exp = np.exp(logits - logits.max())
     return exp / exp.sum()
+
+
+def _load_dinov2() -> tuple | None:
+    """Lazy load DINOv2 backbone 與線性分類器。任何一步失敗就永久停用，不影響其他預測。"""
+    global _dino, _dino_load_failed
+    if _dino is not None or _dino_load_failed:
+        return _dino
+    if not DINOV2_ENABLED:
+        _dino_load_failed = True
+        return None
+
+    try:
+        import onnxruntime as ort
+
+        backbone_path = MODEL_DIR / f"{DINOV2_ENCODER}.onnx"
+        if not backbone_path.is_file():
+            logger.info("DINOv2 shadow：找不到 %s，停用", backbone_path)
+            _dino_load_failed = True
+            return None
+
+        # 同 _load()：綁單執行緒，避免跟 MediaPipe／InsightFace 搶 Cloud Run 上唯一的 CPU。
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 1
+        opts.inter_op_num_threads = 1
+        backbone = ort.InferenceSession(
+            str(backbone_path), opts, providers=["CPUExecutionProvider"]
+        )
+
+        heads = {}
+        for part in DINOV2_PARTS:
+            head_path = MODEL_DIR / f"{part}_dinov2_head.npz"
+            # 用獨立的類別檔，不能共用 {part}_classes.json：鼻型的 CNN 仍是三分類（含窄鼻），
+            # DINOv2 已改用 grouped_yun 二分類，共用會讓 CNN 的 classes[best] 索引越界。
+            meta_path = MODEL_DIR / f"{part}_dinov2_classes.json"
+            if not head_path.is_file() or not meta_path.is_file():
+                logger.info("DINOv2 shadow：找不到 %s，跳過這個部位", head_path)
+                continue
+            classes = json.loads(meta_path.read_text(encoding="utf-8"))["classes"]
+            with np.load(head_path) as data:
+                heads[part] = (
+                    data["coef"].astype(np.float32),
+                    data["intercept"].astype(np.float32),
+                    classes,
+                )
+
+        if not heads:
+            _dino_load_failed = True
+            return None
+
+        _dino = (backbone, heads)
+        logger.info("DINOv2 shadow：載入 backbone 與 %d 個部位分類器", len(heads))
+    except Exception:
+        _dino_load_failed = True
+        logger.exception("DINOv2 shadow：載入失敗，本次起停用")
+
+    return _dino
+
+
+def _dino_tensor(frame_bgr: np.ndarray, points: np.ndarray, part: str) -> np.ndarray:
+    """裁出 224x224 ROI 並做成 DINOv2 的輸入，與訓練時的前處理逐步對齊。"""
+    import cv2
+
+    from face_roi import roi_bbox
+
+    h, w = frame_bgr.shape[:2]
+    x1, y1, x2, y2 = roi_bbox(points, part, h, w)
+    pad_l, pad_t = max(0, -x1), max(0, -y1)
+    pad_r, pad_b = max(0, x2 - w), max(0, y2 - h)
+    if pad_l or pad_t or pad_r or pad_b:
+        frame_bgr = cv2.copyMakeBorder(
+            frame_bgr, pad_t, pad_b, pad_l, pad_r, cv2.BORDER_REPLICATE
+        )
+        x1, x2, y1, y2 = x1 + pad_l, x2 + pad_l, y1 + pad_t, y2 + pad_t
+    crop = frame_bgr[y1:y2, x1:x2]
+    interp = cv2.INTER_AREA if crop.shape[0] > DINOV2_SIZE else cv2.INTER_LINEAR
+    crop = cv2.resize(crop, (DINOV2_SIZE, DINOV2_SIZE), interpolation=interp)
+
+    rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    return ((rgb - _DINO_MEAN) / _DINO_STD).transpose(2, 0, 1)[None]
+
+
+def _dino_decide(coef: np.ndarray, intercept: np.ndarray, emb: np.ndarray) -> tuple[int, float]:
+    """線性分類器的推論：回傳 (類別索引, 信心)。
+
+    信心只是把邊界距離壓到 0~1 方便閱讀，不是校準過的機率；不同部位之間不可互相比較。
+    二分類時 coef 只有一列，decision > 0 代表第二類。
+    """
+    scores = emb @ coef.T + intercept
+    if scores.shape[0] == 1:  # 二分類
+        margin = float(scores[0])
+        return (1 if margin > 0 else 0), float(1.0 / (1.0 + np.exp(-abs(margin))))
+    best = int(np.argmax(scores))
+    top2 = np.sort(scores)[-2:]
+    return best, float(1.0 / (1.0 + np.exp(-(top2[1] - top2[0]))))
+
+
+def predict_dinov2(frame_bgr: np.ndarray, points: np.ndarray) -> dict | None:
+    """DINOv2 shadow 預測。與 predict() 相同的容錯原則：失敗一律回 None／略過該部位。"""
+    loaded = _load_dinov2()
+    if not loaded:
+        return None
+    backbone, heads = loaded
+
+    result: dict[str, object] = {
+        "provider": DINOV2_PROVIDER,
+        "encoder": DINOV2_ENCODER,
+        "mode": "model_first" if DINOV2_MODEL_FIRST else "shadow",
+    }
+    predicted = 0
+
+    for part, (coef, intercept, classes) in heads.items():
+        try:
+            tensor = _dino_tensor(frame_bgr, points, part)
+            emb = backbone.run(None, {"images": tensor})[0][0]
+            # 訓練時對 embedding 做過 L2 正規化，推論必須一致，否則分類器輸入分佈會偏掉
+            emb = emb / (np.linalg.norm(emb) + 1e-9)
+            best, confidence = _dino_decide(coef, intercept, emb)
+            result[PART_TO_FIELD[part]] = {
+                "label": classes[best],
+                "confidence": round(confidence, 3),
+                "source": f"{DINOV2_PROVIDER}_{DINOV2_ENCODER}",
+            }
+            predicted += 1
+        except Exception:
+            logger.exception("DINOv2 shadow：%s 預測失敗", part)
+
+    return result if predicted else None
+
+
+def log_dinov2_comparison(cnn_shadow: dict | None, dino_shadow: dict | None) -> None:
+    """記錄 DINOv2 與現行 CNN 的差異，這是 shadow 階段唯一的產出，沒有它就只是白燒 CPU。"""
+    if not dino_shadow:
+        return
+
+    try:
+        agree, differ = [], []
+        for field in PART_TO_FIELD.values():
+            dino = dino_shadow.get(field)
+            if not isinstance(dino, dict):
+                continue
+            cnn = (cnn_shadow or {}).get(field)
+            cnn_label = cnn["label"] if isinstance(cnn, dict) else None
+            (agree if cnn_label == dino["label"] else differ).append(
+                f"{field}: CNN={cnn_label} DINOv2={dino['label']}({dino['confidence']:.2f})"
+            )
+
+        total = len(agree) + len(differ)
+        if total:
+            logger.info(
+                "DINOv2 shadow 對照：一致 %d/%d%s",
+                len(agree), total,
+                ("　差異 -> " + "；".join(differ)) if differ else "",
+            )
+    except Exception:
+        logger.exception("DINOv2 shadow：對照記錄失敗")
 
 
 def predict(frame_bgr: np.ndarray, points: np.ndarray) -> dict | None:
