@@ -996,24 +996,66 @@ body {
 .member-role { font-family:var(--sans); font-size:10px; letter-spacing:.28em; text-transform:uppercase; color:var(--gold-soft); margin-top:11px; }
 .member-id .btn-outline { color:#5B3A38; }
 .member-id .btn-outline:hover { color:#5B3A38; }
-body[data-member-theme="rose"] .member-wrap,
-body[data-member-theme="rose"] .tier-card,
-body[data-member-theme="rose"] .member-action-card,
-body[data-member-theme="rose"] .theme-card,
-body[data-member-theme="rose"] .point-ledger { border-color:rgba(197,107,123,.45); }
+/* ═══════════════ 會員主題 ═══════════════
+   直接覆蓋 :root 的顏色變數，讓整站跟著換色，而不是只改幾個邊框。
+   全站有 800 多處使用 var(--x)，所以這裡改變數就等於整體換膚。
+   只動顏色、不動版面，避免主題影響排版。                                    */
+
+/* 玫瑰柔霧 —— 粉色調 */
+body[data-member-theme="rose"] {
+    --ivory:#F3D9E1; --ivory-2:#E9C4D2; --paper:#FBEBF0; --white:#FDF4F7;
+    --gold:#C5567D; --gold-lt:#EFB9CE; --gold-deep:#A33C61; --gold-soft:#DE93B0;
+    --gold-dim:rgba(197,86,125,0.34);
+    --gold-grad:linear-gradient(100deg,#A33C61 0%,#EFB9CE 30%,#FDEAF2 50%,#EFB9CE 70%,#A33C61 100%);
+    --blush:#D06A8E; --blush-lt:#F4CEDD; --blush-deep:#B04A70; --blush-panel:#F7DDE8;
+    --terra:#C5567D; --terra-lt:#E29CBA; --terra-deep:#9B3459;
+    --terra-grad:linear-gradient(150deg,#D97BA0 0%,#BE5680 60%,#9B3459 100%);
+    --ink:#3A1E2B; --ink-2:#4A2836; --ink-3:#5B3442;
+    --ink-soft:#4A2433; --mid:#9C6379; --lt:#B37F94; --muted:#AE7C90;
+    --line:rgba(90,40,60,0.14); --line-gold:rgba(197,86,125,0.30);
+    --line-dk:rgba(239,185,206,0.22);
+}
+body[data-member-theme="rose"] .topbar { background:rgba(74,36,51,0.86); }
 body[data-member-theme="rose"] .member-id { background:#5B3A38; }
-body[data-member-theme="jade"] .member-wrap,
-body[data-member-theme="jade"] .tier-card,
-body[data-member-theme="jade"] .member-action-card,
-body[data-member-theme="jade"] .theme-card,
-body[data-member-theme="jade"] .point-ledger { border-color:rgba(106,154,124,.45); }
+
+/* 青玉光澤 —— 綠色調 */
+body[data-member-theme="jade"] {
+    --ivory:#D8EADF; --ivory-2:#BFDBCB; --paper:#EBF6F0; --white:#F4FAF6;
+    --gold:#4F9270; --gold-lt:#A8D4BC; --gold-deep:#2F6B4C; --gold-soft:#7FB99A;
+    --gold-dim:rgba(79,146,112,0.34);
+    --gold-grad:linear-gradient(100deg,#2F6B4C 0%,#A8D4BC 30%,#E4F5EC 50%,#A8D4BC 70%,#2F6B4C 100%);
+    --blush:#5AA37E; --blush-lt:#C2E3D1; --blush-deep:#3C7D5C; --blush-panel:#DCEFE4;
+    --terra:#4F9270; --terra-lt:#8CC3A6; --terra-deep:#2B5F44;
+    --terra-grad:linear-gradient(150deg,#6BAA88 0%,#43855F 60%,#2B5F44 100%);
+    --ink:#1D3227; --ink-2:#264033; --ink-3:#31503F;
+    --ink-soft:#22392C; --mid:#5E8471; --lt:#7BA089; --muted:#749A84;
+    --line:rgba(30,70,50,0.14); --line-gold:rgba(79,146,112,0.30);
+    --line-dk:rgba(168,212,188,0.22);
+}
+body[data-member-theme="jade"] .topbar { background:rgba(32,58,44,0.86); }
 body[data-member-theme="jade"] .member-id { background:#30483A; }
-body[data-member-theme="noir"] .member-wrap,
-body[data-member-theme="noir"] .tier-card,
-body[data-member-theme="noir"] .member-action-card,
-body[data-member-theme="noir"] .theme-card,
-body[data-member-theme="noir"] .point-ledger { border-color:rgba(217,182,111,.52); }
-body[data-member-theme="noir"] .member-id { background:#2F2629; }
+
+/* 黑金 PRO —— 深色調。這是唯一會把明暗翻轉的主題：
+   底色改深、文字改亮，否則深底配深字會完全看不到。 */
+body[data-member-theme="noir"] {
+    --ivory:#221D20; --ivory-2:#2C2528; --paper:#2A2326; --white:#332B2F;
+    --gold:#D9B66F; --gold-lt:#F0DCA9; --gold-deep:#B8934E; --gold-soft:#E3C88C;
+    --gold-dim:rgba(217,182,111,0.34);
+    --gold-grad:linear-gradient(100deg,#B8934E 0%,#F0DCA9 30%,#FBF1D8 50%,#F0DCA9 70%,#B8934E 100%);
+    --blush:#C9A063; --blush-lt:#4A3F31; --blush-deep:#E0BE80; --blush-panel:#3A322A;
+    --terra:#D9B66F; --terra-lt:#EACF9B; --terra-deep:#A8823F;
+    --terra-grad:linear-gradient(150deg,#E0C186 0%,#C09E58 60%,#A8823F 100%);
+    /* 文字與淺色元素：深底之下必須反過來用亮色 */
+    --ink:#F7EAD2; --ink-2:#EADCC2; --ink-3:#DCCDB0;
+    --ink-soft:#F2E4CC; --mid:#B9A88C; --lt:#A29075; --muted:#AE9C82;
+    --line:rgba(247,234,210,0.16); --line-gold:rgba(217,182,111,0.34);
+    --line-dk:rgba(217,182,111,0.24);
+}
+body[data-member-theme="noir"] .topbar { background:rgba(18,15,17,0.9); }
+body[data-member-theme="noir"] .member-id { background:#151113; }
+/* 深色主題下，原本預期深字配淺底的按鈕要反轉，否則亮底亮字看不見 */
+body[data-member-theme="noir"] .btn-gold { color:#2A2226; }
+body[data-member-theme="noir"] ::selection { background:var(--gold); color:#2A2226; }
 .member-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:var(--line-gold); }
 .stat-cell { background:var(--paper); padding:40px 24px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; transition:background .4s var(--ease); }
 .stat-en { font-family:var(--sans); font-size:9.5px; letter-spacing:.3em; text-transform:uppercase; color:var(--gold-deep); margin-bottom:16px; }
