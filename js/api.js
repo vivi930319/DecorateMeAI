@@ -30,7 +30,8 @@ const ApiConfig = {
         aiGateway: {
             baseUrl: AI_GATEWAY_URL,
             loginPath: '/auth/login',
-            logoutPath: '/auth/logout'
+            logoutPath: '/auth/logout',
+            configPath: '/public-config'
         },
         faceBasic: {
             baseUrl: gatewayService('face-basic'),
@@ -93,6 +94,34 @@ const ApiConfig = {
 // ═══ API 串接層 ═══
 const Api = {
     config: ApiConfig,
+
+    // 向 Gateway 取得會員／商品資料庫網址，取代前端寫死的設定。
+    //
+    // 為什麼要這樣做：資料庫走 Cloudflare Quick Tunnel，每次重啟就換一組隨機網址。
+    // 以前每換一次都要改前端兩個檔案、Gateway 兩個環境變數再重新部署，漏掉任一處就整站故障，
+    // 而且症狀常常跟真正原因無關（見 issue #23）。改由 Gateway 統一發布後，換網址只要動 Gateway。
+    //
+    // 取不到就沿用內建值：Gateway 掛掉時不能讓整個前端跟著不能用。
+    async bootstrapConfig() {
+        const gateway = this.config.services.aiGateway;
+        try {
+            const res = await fetch(`${gateway.baseUrl}${gateway.configPath}`, { cache: 'no-store' });
+            if (!res.ok) return false;
+            const data = await res.json();
+            const memberUrl = String(data.memberDatabaseUrl || '').replace(/\/+$/, '');
+            const productUrl = String(data.productUrl || '').replace(/\/+$/, '');
+            // 只接受看起來像網址的值，避免後端回空字串時把設定清成無效狀態
+            if (/^https?:\/\//.test(memberUrl)) this.config.services.memberDatabase.baseUrl = memberUrl;
+            if (/^https?:\/\//.test(productUrl)) {
+                this.config.services.product.baseUrl = productUrl;
+                // crawler 沒有自己的網址時本來就沿用 productUrl，這裡要一起更新
+                if (!getRuntimeApiConfig().crawlerUrl) this.config.services.crawler.baseUrl = productUrl;
+            }
+            return true;
+        } catch (_) {
+            return false;  // 連不到 Gateway，沿用內建網址
+        }
+    },
 
     async _warmService(baseUrl) {
         if (!baseUrl) return;

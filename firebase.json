@@ -24,6 +24,10 @@
     ],
     "rewrites": [
       {
+        "source": "/public-config",
+        "run": { "serviceId": "ai-gateway", "region": "asia-east1" }
+      },
+      {
         "source": "/auth/**",
         "run": { "serviceId": "ai-gateway", "region": "asia-east1" }
       },

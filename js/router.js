@@ -4175,13 +4175,17 @@ const PageInit = {
         a.onclick = (e) => { e.preventDefault(); Router.go(a.dataset.page); };
     });
 
-    // 判斷登入狀態
-    if (Auth.isLoggedIn()) {
-        showApp();
-    } else {
-        showLogin();
-    }
-    if (Auth.isLoggedIn()) routeFromHash();
+    // 先向 Gateway 取得資料庫網址，再開始任何會打 API 的流程。
+    // 資料庫網址由 Gateway 統一發布，前端不再寫死（見 issue #23）；取不到就沿用內建值，
+    // 所以這裡不需要擋住畫面，失敗只代表用舊網址，不會讓前端整個起不來。
+    Api.bootstrapConfig().finally(() => {
+        if (Auth.isLoggedIn()) {
+            showApp();
+            routeFromHash();
+        } else {
+            showLogin();
+        }
+    });
 })();
 
 function showApp() {
