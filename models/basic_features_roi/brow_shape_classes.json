@@ -1,0 +1,12 @@
+{
+  "classes": [
+    "一字眉",
+    "彎月眉",
+    "落尾眉"
+  ],
+  "size": 96,
+  "architecture": "mobilenet_v3_small",
+  "epochs": 20,
+  "train_count": 336,
+  "training_scope": "100_percent"
+}

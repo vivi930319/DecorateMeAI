@@ -77,3 +77,18 @@ local_only_notes/
 # 規則放在檔案最後，覆蓋上方曾為交接文件設定的個別例外。
 *.md
 !README.md
+
+# 五官分類模型：搬機時這些重訓才能重建，納入版控當備份。
+# dinov2_vits14.onnx（88MB）刻意不收 —— 那是 Meta 的公開模型，
+# 用 tools/export_dinov2_heads.py 同一套流程隨時可重新匯出。
+!models/
+!models/basic_features_roi/
+!models/basic_features_roi/*_shape.onnx
+!models/basic_features_roi/*_classes.json
+!models/basic_features_roi/*_dinov2_head.npz
+
+# 模型部署紀錄：搬機與交接都需要，納入版控。
+!模型部署紀錄_DINOv2_Shadow_2026-07-19.md
+!模型三方公平比較_2026-07-19.md
+!CNN訓練歷程_BASIC五官分類.md
+!DINOv2_臉部特徵分類模型規格書.md
