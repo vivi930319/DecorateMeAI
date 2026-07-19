@@ -42,6 +42,7 @@ const sandbox = {
   Image: class Image {},
   FileReader: class FileReader {},
   File: class File {},
+  Headers,
   localStorage: makeStorage(storage),
   sessionStorage: makeStorage(session)
 };
@@ -74,7 +75,7 @@ sandbox.Cart.change(1, -2);
 if (sandbox.Cart.count() !== 0 || sandbox.Cart.list().length !== 0) throw new Error('Cart item removal failed');
 
 // ── 服務設定 ────────────────────────────────────────────────
-const requiredServices = ['faceBasic', 'facePro', 'textSuggestion', 'render', 'product', 'memberDatabase', 'crawler'];
+const requiredServices = ['faceBasic', 'facePro', 'textSuggestion', 'render', 'product', 'memberDatabase', 'crawler', 'adminProxy'];
 for (const service of requiredServices) {
   if (!sandbox.ApiConfig.services[service]) throw new Error(`Missing service: ${service}`);
 }
@@ -87,7 +88,7 @@ if (!proUrl.endsWith('/v1/face/analyze/pro')) throw new Error(`Bad PRO URL: ${pr
 if (suggestionUrl !== 'http://127.0.0.1:8010/suggest') throw new Error(`Bad suggestion URL: ${suggestionUrl}`);
 
 // ── Api 方法 ─────────────────────────────────────────────────
-for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'previewCrawledProduct']) {
+for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'previewCrawledProduct', 'listProducts', 'listAdminProducts', 'getRemoteProduct', 'createRemoteProduct', 'patchRemoteProduct', 'deleteRemoteProduct', 'listProductAuditLogs']) {
   if (typeof sandbox.Api[method] !== 'function') throw new Error(`Missing Api.${method}`);
 }
 

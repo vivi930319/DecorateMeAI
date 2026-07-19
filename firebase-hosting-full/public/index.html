@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Serif+TC:wght@300;400;500;700&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/main.css?v=20260716-admin-looks-large">
+<link rel="stylesheet" href="css/main.css?v=20260719-demo-layout">
 </head>
 <body>
 
@@ -44,6 +44,7 @@
                 <a href="#history" data-page="history">分析紀錄</a>
                 <a href="#compare" data-page="compare">妝容對比圖</a>
                 <a href="#suggestion" data-page="suggestion">妝容建議</a>
+                <a href="#checkin" data-page="checkin">每日打卡</a>
                 <a href="#profile" data-page="profile">會員中心</a>
                 <a href="#admin" data-page="admin" data-admin-link style="display:none;">管理中台</a>
             </nav>
@@ -101,10 +102,10 @@
     document.addEventListener('mouseleave', function(){ if(glow) glow.style.opacity = '0'; });
 })();
 </script>
-<script defer src="js/config.js?v=20260715-220953"></script>
-<script defer src="config.local.js?v=20260716-admin-delete" onerror="void 0"></script>
-<script defer src="js/data.js?v=20260716-white-product-demo"></script>
-<script defer src="js/api.js?v=20260716-admin-mobile-auth"></script>
-<script defer src="js/router.js?v=20260716-saved-looks-crud"></script>
+<script defer src="js/config.js?v=20260718-admin-demo"></script>
+<script defer src="config.local.js?v=20260719-admin-proxy" onerror="void 0"></script>
+<script defer src="js/data.js?v=20260719-image-speed"></script>
+<script defer src="js/api.js?v=20260719-restore-categories"></script>
+<script defer src="js/router.js?v=20260719-restore-1040"></script>
 </body>
 </html>

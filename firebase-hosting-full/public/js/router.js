@@ -3,7 +3,7 @@ const HEART_SVG = '<span class="pulse"></span><svg viewBox="0 0 24 24" aria-hidd
 const CAT_EN = { '底妝':'FOUNDATION','眼影':'EYESHADOW','眼線/睫毛':'EYES & LASH','唇彩':'LIP COLOR','腮紅':'BLUSH','眉毛彩妝':'BROW','修容':'CONTOUR','打亮':'HIGHLIGHT' };
 function phBox(cls, label, src){
     const cap = (cls.indexOf('product-thumb')>-1) ? '' : `<span class="ph-cap">${escapeHtml(label||'')}</span>`;
-    const img = src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(label||'')}" loading="lazy" decoding="async" onload="this.classList.add('loaded')">` : '';
+    const img = src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(label||'')}" width="600" height="760" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">` : '';
     return `<div class="ph ${cls}">${cap}${img}</div>`;
 }
 
@@ -14,6 +14,100 @@ function escapeHtml(value) {
         .replaceAll('>', '&gt;')
         .replaceAll('"', '&quot;')
         .replaceAll("'", '&#039;');
+}
+
+function initAdminDemo() {
+    const panel = document.getElementById('adminDemoPanel');
+    if (!panel || typeof AdminStore === 'undefined' || !AdminStore.isAdmin()) return;
+    const featureDefaults = (typeof window !== 'undefined' && window.DECORATE_ME_FEATURES) || {};
+    const runtimeConfig = (typeof window !== 'undefined' && window.DECORATE_ME_CONFIG) || {};
+    const runtime = { ...featureDefaults, ...runtimeConfig };
+    const expiresAt = runtime.adminDemoExpiresAt ? new Date(runtime.adminDemoExpiresAt) : null;
+    const enabled = runtime.adminDemoEnabled === true && (!expiresAt || Number.isNaN(expiresAt.getTime()) || Date.now() < expiresAt.getTime());
+    if (!enabled) {
+        panel.remove();
+        return;
+    }
+    panel.hidden = false;
+
+    const packageData = (typeof Router !== 'undefined' && Router.analysisPackage && typeof Router.analysisPackage === 'object')
+        ? Router.analysisPackage : null;
+    const face = packageData && typeof packageData.faceAnalysis === 'object' ? packageData.faceAnalysis : {};
+    const valueFrom = (keys, fallback) => {
+        for (const key of keys) {
+            const value = face?.[key] ?? packageData?.[key];
+            if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 48);
+        }
+        return fallback;
+    };
+    const summary = {
+        faceShape: valueFrom(['faceShape', 'face_shape'], 'oval'),
+        skinTone: valueFrom(['skinTone', 'skin_tone'], 'medium'),
+        undertone: valueFrom(['undertone', 'skinUndertone'], 'warm'),
+        styleId: String((packageData?.render && packageData.render.styleId) || packageData?.styleId || 'natural').slice(0, 48)
+    };
+    const source = document.getElementById('adminDemoSource');
+    if (source) source.textContent = packageData ? '本次工作遮罩摘要' : 'Demo 範例資料';
+
+    const stages = [
+        {
+            stage: 'uploaded', progress: 10, note: '照片已進入私人暫存區。',
+            publicData: { jobId: 'JOB-DEMO-7C21', status: 'running', stage: 'uploaded', progress: 10 },
+            protectedData: { imageObject: 'temporary/USER-***/JOB-***/input.webp', access: 'worker-only', expiresIn: '24h' },
+            logData: { jobId: 'JOB-DEMO-7C21', event: 'upload.validated', durationMs: 218 }
+        },
+        {
+            stage: 'face_analysis', progress: 35, note: '模型正在產生結構化臉部特徵。',
+            publicData: { jobId: 'JOB-DEMO-7C21', status: 'running', stage: 'face_analysis', progress: 35 },
+            protectedData: { analysisPackage: '[完整特徵已隱藏]', landmarks: '[468 points hidden]', access: 'worker-only' },
+            logData: { jobId: 'JOB-DEMO-7C21', event: 'analysis.running', modelVersion: 'basic-roi-v1' }
+        },
+        {
+            stage: 'recommendation', progress: 55, note: '分析摘要已轉換為妝容方案。',
+            publicData: { faceShape: summary.faceShape, skinTone: summary.skinTone, undertone: summary.undertone, styleId: summary.styleId },
+            protectedData: { renderPrompt: '[完整提示詞已隱藏]', promptVersion: 'v3', access: 'worker-only' },
+            logData: { jobId: 'JOB-DEMO-7C21', event: 'recommendation.completed', durationMs: 1840 }
+        },
+        {
+            stage: 'rendering', progress: 78, note: '第三方模型正在產生妝容結果圖。',
+            publicData: { jobId: 'JOB-DEMO-7C21', status: 'running', stage: 'rendering', progress: 78 },
+            protectedData: { inputObject: 'temporary/USER-***/JOB-***/input.webp', resultObject: null, tokenHash: 'sha256:••••••••' },
+            logData: { jobId: 'JOB-DEMO-7C21', event: 'render.provider_wait', attempt: 1 }
+        },
+        {
+            stage: 'completed', progress: 100, note: '結果已保存至私人 GCS，查看時才簽發短效網址。',
+            publicData: { recordId: 'LOOK-DEMO-19', status: 'completed', styleId: summary.styleId, signedUrlTtl: '10 minutes' },
+            protectedData: { resultObject: 'users/USER-***/renders/LOOK-***.webp', temporaryPayload: 'scheduled_for_deletion', bucket: 'private' },
+            logData: { jobId: 'JOB-DEMO-7C21', event: 'workflow.completed', sensitivePayload: '[not logged]' }
+        }
+    ];
+    const text = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+    const render = index => {
+        const item = stages[index] || stages[0];
+        text('adminDemoStage', item.stage);
+        text('adminDemoProgressText', `${item.progress}%`);
+        text('adminDemoStageNote', item.note);
+        text('adminDemoPublicData', JSON.stringify(item.publicData, null, 2));
+        text('adminDemoProtectedData', JSON.stringify(item.protectedData, null, 2));
+        text('adminDemoLogData', JSON.stringify(item.logData, null, 2));
+        const bar = document.getElementById('adminDemoProgressBar');
+        if (bar) bar.style.width = `${item.progress}%`;
+        panel.querySelectorAll('[data-demo-step]').forEach((button, buttonIndex) => {
+            button.classList.toggle('active', buttonIndex === index);
+            button.setAttribute('aria-pressed', String(buttonIndex === index));
+        });
+    };
+    panel.querySelectorAll('[data-demo-step]').forEach(button => {
+        button.onclick = () => render(Number(button.dataset.demoStep));
+    });
+    const restart = document.getElementById('adminDemoRestart');
+    if (restart) restart.onclick = () => render(0);
+    if (expiresAt && !Number.isNaN(expiresAt.getTime())) {
+        text('adminDemoExpiry', `展示功能到期：${expiresAt.toLocaleString('zh-TW')}`);
+    } else {
+        text('adminDemoExpiry', '展示功能未設定到期時間');
+    }
+    render(0);
 }
 
 // 呼叫完外部 AI 服務（Ollama／Replicate）後，強制冷卻幾秒才能再按，避免使用者短時間內連點造成後端連線壓力
@@ -128,14 +222,27 @@ function loadGeneralProductCatalog(onDone) {
     }
     if (Router?.generalProductLoading) return;
     Router.generalProductLoading = true;
-    Api.listProducts()
+    let firstPagePainted = false;
+    Api.listAllProducts({ limit: 100 }, {
+        onPage(progress) {
+            Router.generalProductCatalog = progress.products || [];
+            Router.generalProductTotal = progress.total || Router.generalProductCatalog.length;
+            Router.generalProductError = false;
+            if (!firstPagePainted) {
+                firstPagePainted = true;
+                if (typeof onDone === 'function') onDone();
+            }
+        }
+    })
         .then(rec => {
             Router.generalProductCatalog = rec?.products?.length ? rec.products : [];
+            Router.generalProductTotal = rec?.total || Router.generalProductCatalog.length;
             Router.generalProductError = !(rec && rec.ok); // 區分「載入失敗」與「真的沒商品」
             if (typeof onDone === 'function') onDone();
         })
         .catch(() => {
             Router.generalProductCatalog = [];
+            Router.generalProductTotal = 0;
             Router.generalProductError = true;
             if (typeof onDone === 'function') onDone();
         })
@@ -204,7 +311,7 @@ const SVC_ICONS = {
 const STYLE_ROLE = { softBaddie:'Soft Glam', richGirl:'Quiet Luxury', hongKong:'Retro HK', koreanClean:'Clean Girl', yandere:'Doll Core', japaneseClear:'J-Sheer', mensPlain:'Mens Bare' };
 
 // 頁面順序（判斷轉場方向）
-const NAV_ORDER = ['dashboard','analysis','style','products','favorites','history','compare','suggestion','profile','admin'];
+const NAV_ORDER = ['dashboard','analysis','style','products','favorites','history','compare','suggestion','checkin','profile','admin'];
 const ROUTE_PAGES = new Set(NAV_ORDER);
 
 // 玻璃提示彈窗（取代瀏覽器原生 alert）
@@ -263,8 +370,8 @@ function openLookModal(item){
   var beforeSrc = lookImageSrc(item.beforeImage);
   var afterSrc = lookImageSrc(item.renderedImage);
   var photo = (beforeSrc && afterSrc)
-    ? '<div class="lm-compare-photo"><figure><img src="'+beforeSrc+'" alt="渲染前照片"><figcaption>Before</figcaption></figure><figure><img src="'+afterSrc+'" alt="渲染後照片"><figcaption>After</figcaption></figure></div>'
-    : (afterSrc ? '<img src="'+afterSrc+'" alt="">' : '<span>'+escapeHtml(item.style||'Saved Look')+'</span>');
+    ? '<div class="lm-compare-photo"><figure><img src="'+beforeSrc+'" alt="渲染前照片" decoding="async"><figcaption>Before</figcaption></figure><figure><img src="'+afterSrc+'" alt="渲染後照片" decoding="async"><figcaption>After</figcaption></figure></div>'
+    : (afterSrc ? '<img src="'+afterSrc+'" alt="" decoding="async">' : '<span>'+escapeHtml(item.style||'Saved Look')+'</span>');
   var ts = item.timestamp ? new Date(item.timestamp).toLocaleString('zh-TW') : '';
   var ov=document.createElement('div'); ov.id='lookModal'; ov.className='look-modal';
   ov.innerHTML='<div class="lm-card" role="dialog" aria-modal="true">'
@@ -489,6 +596,139 @@ function mapRemoteSavedLook(L){
     };
 }
 
+// 妝容收藏同步規則：資料庫是唯一來源；localStorage 只保留離線尚未同步的資料。
+function savedLookFingerprint(value) {
+    const normalizeImage = (raw) => {
+        const text = String(raw || '').trim();
+        if (!text) return '';
+        try {
+            const url = new URL(text);
+            // 短效簽名網址的 query 會變動，指紋只比較實際檔案路徑。
+            url.search = '';
+            url.hash = '';
+            return url.toString().toLowerCase();
+        } catch (_) {
+            return text.slice(0, 500).toLowerCase();
+        }
+    };
+    return [
+        String(value?.style || '').trim().toLowerCase(),
+        normalizeImage(value?.beforeImage || value?.beforeImageUrl || value?.before_image_url),
+        normalizeImage(value?.renderedImage || value?.afterImageUrl || value?.after_image_url)
+    ].join('|');
+}
+
+function isSavedLookNotFound(result) {
+    const status = Number(result?.status);
+    const text = `${result?.code || ''} ${result?.error || ''}`.toLowerCase();
+    return status === 404 || /not[_ -]?found|找不到|不存在|no saved.?look/.test(text);
+}
+
+function syncSavedLookCache(email) {
+    if (!email || typeof Api === 'undefined' || typeof Api.listSavedLooks !== 'function') {
+        return Promise.resolve({ ok: false, looks: [] });
+    }
+    return Api.listSavedLooks(email).then(result => {
+        if (!result || !result.ok) return result || { ok: false, looks: [] };
+
+        let localAll = [];
+        try { localAll = JSON.parse(localStorage.getItem(looksKey()) || '[]'); } catch (_) {}
+        if (!Array.isArray(localAll)) localAll = [];
+
+        const remote = (Array.isArray(result.looks) ? result.looks : []).map(mapRemoteSavedLook);
+        const localByRemote = new Map();
+        const localByFingerprint = new Map();
+        localAll.forEach((item, index) => {
+            if (item && item.remoteId != null) localByRemote.set(String(item.remoteId), { item, index });
+            const fingerprint = savedLookFingerprint(item);
+            if (fingerprint && !localByFingerprint.has(fingerprint)) {
+                localByFingerprint.set(fingerprint, { item, index });
+            }
+        });
+
+        const consumed = new Set();
+        const mergedRemote = remote.map(remoteItem => {
+            const byId = remoteItem.remoteId != null ? localByRemote.get(String(remoteItem.remoteId)) : null;
+            const byFingerprint = byId || localByFingerprint.get(savedLookFingerprint(remoteItem));
+            if (!byFingerprint) return remoteItem;
+            consumed.add(byFingerprint.index);
+            const localItem = byFingerprint.item || {};
+            return {
+                ...localItem,
+                ...remoteItem,
+                beforeImage: remoteItem.beforeImage || localItem.beforeImage || '',
+                renderedImage: remoteItem.renderedImage || localItem.renderedImage || '',
+                advice: Object.keys(remoteItem.advice || {}).length ? remoteItem.advice : (localItem.advice || {}),
+                analysis: Object.keys(remoteItem.analysis || {}).length ? remoteItem.analysis : (localItem.analysis || {}),
+                analysisPackageId: localItem.analysisPackageId || remoteItem.analysisPackageId || null,
+                remoteId: remoteItem.remoteId
+            };
+        });
+
+        // remoteId 已存在但資料庫清單沒有的項目，視為已由 Admin 或其他裝置刪除，不再保留。
+        // 只有尚未取得遠端 id 的離線收藏才可以留在本機等待下次同步。
+        const offlineOnly = localAll.filter((item, index) => !consumed.has(index) && item && item.remoteId == null);
+        const merged = mergedRemote.concat(offlineOnly)
+            .sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')))
+            .slice(0, 20);
+        try { localStorage.setItem(looksKey(), JSON.stringify(merged)); } catch (_) {}
+        return { ...result, ok: true, looks: merged, remoteLooks: remote };
+    }).catch(() => ({ ok: false, looks: [] }));
+}
+
+async function deleteSavedLookConsistently(email, record) {
+    if (!email || !record || record.remoteId == null || typeof Api === 'undefined' || typeof Api.deleteSavedLook !== 'function') {
+        return { ok: true, localOnly: true };
+    }
+
+    // 先重新抓一次資料庫，避免使用 Admin 已刪除或其他裝置更新前留下的舊 id。
+    const fresh = await syncSavedLookCache(email);
+    if (fresh && fresh.ok && Array.isArray(fresh.remoteLooks)) {
+        const sameId = fresh.remoteLooks.find(item => String(item.remoteId) === String(record.remoteId));
+        const sameContent = fresh.remoteLooks.filter(item => savedLookFingerprint(item) === savedLookFingerprint(record));
+        const current = sameId || (sameContent.length === 1 ? sameContent[0] : null);
+        if (!current || current.remoteId == null) {
+            return { ok: false, status: 404, code: 'SAVED_LOOK_NOT_FOUND', error: '找不到收藏' };
+        }
+        return Api.deleteSavedLook(email, current.remoteId);
+    }
+    return Api.deleteSavedLook(email, record.remoteId);
+}
+
+function announceSavedLookChange() {
+    try { localStorage.setItem('dm_saved_look_changed', String(Date.now())); } catch (_) {}
+    try {
+        if (typeof BroadcastChannel !== 'undefined') {
+            window.__dmSavedLookChannel = window.__dmSavedLookChannel || new BroadcastChannel('decorate-me-saved-looks');
+            window.__dmSavedLookChannel.postMessage({ type: 'saved-look-changed' });
+        }
+    } catch (_) {}
+}
+
+function bindSavedLookSync() {
+    if (typeof window === 'undefined' || window.__dmSavedLookSyncBound) return;
+    window.__dmSavedLookSyncBound = true;
+    const notify = () => {
+        if (Router.currentPage === 'profile' && typeof Router._reloadProfileSavedLooks === 'function') {
+            Router._reloadProfileSavedLooks();
+        }
+        if (Router.currentPage === 'admin' && typeof Router._reloadAdmin === 'function') {
+            Router._reloadAdmin();
+        }
+    };
+    window.addEventListener('storage', event => {
+        if (event.key === 'dm_saved_look_changed') notify();
+    });
+    try {
+        if (typeof BroadcastChannel !== 'undefined') {
+            window.__dmSavedLookChannel = window.__dmSavedLookChannel || new BroadcastChannel('decorate-me-saved-looks');
+            window.__dmSavedLookChannel.addEventListener('message', event => {
+                if (event.data?.type === 'saved-look-changed') notify();
+            });
+        }
+    } catch (_) {}
+}
+
 function saveCurrentLook(){
     if (isGuest()) {
         promptGuestAuth('收藏妝容對比圖');
@@ -524,6 +764,7 @@ function saveCurrentLook(){
                     const hit = recs.find(x => x.timestamp === stored.timestamp);
                     if (hit) { hit.remoteId = r.look.id; localStorage.setItem(looksKey(), JSON.stringify(recs)); }
                 } catch (_) {}
+                announceSavedLookChange();
                 if (typeof showToast === 'function') showToast('已同步到雲端資料庫');
             } else if (r && r.skipped) {
                 // before/after 尚未有可持久化的 http(s) URL，只存本機，絕不把 base64 寫進 String(500) 欄位
@@ -733,6 +974,33 @@ compare: `
 </div>`,
 suggestion: `<div class="page-header"><h1>妝容建議</h1><div class="divider"></div><p>依照臉部分析結果與選擇風格，產生妝容建議與可收藏的妝容對比圖。</p></div><div id="suggestionArea"></div>`,
 admin: `
+<section class="admin-demo" id="adminDemoPanel" hidden>
+    <div class="admin-demo-meta">
+        <p>僅顯示白名單摘要；照片、Email、權杖、完整分析包與完整提示詞皆不顯示。</p>
+        <div class="admin-demo-state"><i></i><span id="adminDemoSource">Demo 範例資料</span></div>
+    </div>
+    <div class="admin-demo-steps" id="adminDemoSteps" aria-label="工作階段">
+        <button type="button" class="active" data-demo-step="0"><b>01</b><span>上傳驗證</span></button>
+        <button type="button" data-demo-step="1"><b>02</b><span>臉部分析</span></button>
+        <button type="button" data-demo-step="2"><b>03</b><span>妝容建議</span></button>
+        <button type="button" data-demo-step="3"><b>04</b><span>圖片渲染</span></button>
+        <button type="button" data-demo-step="4"><b>05</b><span>完成保存</span></button>
+    </div>
+    <div class="admin-demo-progress" aria-label="工作進度">
+        <div><span id="adminDemoStage">uploaded</span><b id="adminDemoProgressText">10%</b></div>
+        <div class="admin-demo-progress-track"><i id="adminDemoProgressBar"></i></div>
+        <p id="adminDemoStageNote">照片已進入私人暫存區。</p>
+    </div>
+    <div class="admin-demo-grid">
+        <article><span>前端可見資料</span><pre id="adminDemoPublicData"></pre></article>
+        <article><span>後端受限暫存</span><pre id="adminDemoProtectedData"></pre></article>
+        <article><span>一般系統 Log</span><pre id="adminDemoLogData"></pre></article>
+    </div>
+    <div class="admin-demo-footer">
+        <span id="adminDemoExpiry"></span>
+        <button type="button" class="admin-secondary-button compact" id="adminDemoRestart">重新展示</button>
+    </div>
+</section>
 <div class="page-header admin-header">
     <h1>管理中台</h1>
     <div class="divider"></div>
@@ -811,7 +1079,6 @@ admin: `
             </div>
         </form>
         <div class="admin-product-manager">
-            <div class="admin-preview-grid" id="adminProductPreview"></div>
             <div class="admin-table-wrap">
                 <table class="admin-table admin-product-table">
                     <thead>
@@ -881,6 +1148,7 @@ const Router = {
     currentCategory: null,
     productRecommendationLoading: false,
     generalProductCatalog: null,
+    generalProductTotal: 0,
     generalProductLoading: false,
 
     stopAnalysisCameras() {
@@ -917,8 +1185,8 @@ const Router = {
         }
 
         // 訪客攔截：收藏 / 分析紀錄 需登入
-        if ((page === "favorites" || page === "history") && isGuest()) {
-            promptGuestAuth(page === "favorites" ? "收藏" : "分析紀錄");
+        if ((page === "favorites" || page === "history" || page === "checkin") && isGuest()) {
+            promptGuestAuth(page === "favorites" ? "收藏" : (page === "history" ? "分析紀錄" : "每日打卡"));
             return;
         }
         if (this.currentPage === 'analysis' && page !== 'analysis') this.stopAnalysisCameras();
@@ -928,7 +1196,7 @@ const Router = {
             }
             const back = (NAV_ORDER.indexOf(page) > -1 && NAV_ORDER.indexOf(this.currentPage) > -1
                           && NAV_ORDER.indexOf(page) < NAV_ORDER.indexOf(this.currentPage));
-            const res = await fetch(`pages/${page}.html?v=20260624-brightness`, { cache: 'no-store' });
+            const res = await fetch(`pages/${page}.html?v=20260719-demo-layout`, { cache: 'no-store' });
             if (!res.ok) throw new Error('Page not found');
             const html = await res.text();
             const mc = document.getElementById('mainContent');
@@ -2127,7 +2395,13 @@ const PageInit = {
                 </section>` : ''}
                 ${Router.productRecommendationError && !recommended.length ? '<div class="empty-state compact">個人化推薦暫時無法載入（推薦服務維護中），先為你顯示全部商品。</div>' : ''}
                 <div class="filter-bar">${chips}</div>
-                <div class="prod-count">${isLoadingProducts ? '商品載入中' : (Router.generalProductError && !list.length ? '商品服務暫時無法載入，請稍後再試' : `${list.length} 件商品`)}</div>`;
+                <div class="prod-count">${isLoadingProducts
+                    ? '商品載入中'
+                    : (Router.generalProductError && !list.length
+                        ? '商品服務暫時無法載入，請稍後再試'
+                        : (Router.generalProductLoading
+                            ? `${list.length} 件商品 · 其餘載入中`
+                            : `${list.length} 件商品`))}</div>`;
             const bindChips = () => {
                 area.querySelectorAll('.chip').forEach(ch => ch.onclick = () => renderShop(ch.dataset.filter));
             };
@@ -2579,7 +2853,7 @@ const PageInit = {
             <div class="rendered-suggestion-card">
                 <div class="rendered-photo-frame">
                     ${displayImage
-                        ? `<img src="${displayImage}" alt="${renderedImage ? `${style.name} 渲染後妝容照片` : `${style.name} 原始照片`}">`
+                        ? `<img src="${displayImage}" alt="${renderedImage ? `${style.name} 渲染後妝容照片` : `${style.name} 原始照片`}" decoding="async">`
                         : `<div class="rendered-photo-placeholder">
                             <span>妝後照片</span>
                             <b>${style.name}</b>
@@ -2638,6 +2912,110 @@ const PageInit = {
                 </div>
             </div>
         `).join('') + '</div>';
+    },
+
+    checkin() {
+        const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
+        const streakNumber = document.getElementById('checkinStreakNumber');
+        const statusTitle = document.getElementById('checkinStreakHeading');
+        const statusMessage = document.getElementById('checkinStreakMessage');
+        const nextMessage = document.getElementById('checkinNextMilestone');
+        const sourceEl = document.getElementById('checkinDataSource');
+        const daysEl = document.getElementById('checkinDays');
+        const noteEl = document.getElementById('checkinCalendarNote');
+        const ring = document.getElementById('checkinRing');
+        const button = document.getElementById('checkinPageButton');
+        if (!streakNumber || !daysEl) return;
+
+        const dateKey = value => {
+            const raw = String(value || '').trim();
+            if (!raw) return '';
+            return raw.length >= 10 ? raw.slice(0, 10) : raw;
+        };
+        const today = new Date();
+        const todayKey = today.toISOString().slice(0, 10);
+        const dayFromKey = key => {
+            const parts = String(key || '').split('-').map(Number);
+            return parts.length === 3 && parts.every(Number.isFinite) ? new Date(Date.UTC(parts[0], parts[1] - 1, parts[2])) : new Date(today);
+        };
+        const keyFromDate = date => date.toISOString().slice(0, 10);
+        const escapeDateLabel = key => {
+            const date = dayFromKey(key);
+            return `${date.getUTCMonth() + 1}/${date.getUTCDate()}`;
+        };
+
+        const render = (rawStatus, remote) => {
+            const status = rawStatus || {};
+            const checkedToday = !!(status.checkedToday ?? status.checked_today);
+            const streak = Math.max(0, Number(status.streak ?? status.currentStreak ?? status.consecutiveDays) || 0);
+            const lastDate = dateKey(status.lastDate || status.last_date || status.date || status.checkedAt) || todayKey;
+            const endDate = dayFromKey(checkedToday ? todayKey : lastDate);
+            const endKey = keyFromDate(endDate);
+            const nextMilestone = MemberRewards.nextStreakMilestone(streak);
+            streakNumber.textContent = String(streak);
+            if (statusTitle) statusTitle.textContent = checkedToday ? '今天已完成打卡' : '目前連續打卡';
+            if (statusMessage) statusMessage.textContent = streak
+                ? `你已連續打卡 ${streak} 天，繼續保持這個節奏。`
+                : '今天開始打卡，累積你的第一天。';
+            if (nextMessage) nextMessage.textContent = nextMilestone
+                ? `再連續 ${nextMilestone - streak} 天，可獲得額外 ${MemberRewards._streakBonusTable[nextMilestone]} 點。`
+                : '你已達目前最高連續獎勵里程碑。';
+            if (sourceEl) sourceEl.textContent = remote ? 'DATABASE SYNC' : 'LOCAL STATUS';
+            if (noteEl) noteEl.textContent = remote ? '打卡狀態已與會員資料庫同步。' : '完成今天打卡，讓連續天數繼續累積。';
+            if (ring) ring.classList.toggle('is-complete', checkedToday);
+            if (button) {
+                button.disabled = checkedToday || isGuest();
+                button.textContent = checkedToday ? '今天已打卡' : '打卡 +10';
+            }
+
+            const days = [];
+            for (let offset = 6; offset >= 0; offset -= 1) {
+                const day = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - offset));
+                const key = keyFromDate(day);
+                const diff = Math.round((endDate - day) / 86400000);
+                const checked = streak > 0 && diff >= 0 && diff < streak && key <= endKey;
+                days.push({ key, checked, today: key === todayKey });
+            }
+            daysEl.innerHTML = days.map((day, index) => `
+                <div class="checkin-day ${day.checked ? 'is-checked' : ''} ${day.today ? 'is-today' : ''}" style="--i:${index}" title="${day.checked ? '已完成打卡' : '尚未打卡'}">
+                    <span>${day.checked ? '✓' : '·'}</span>
+                    <small>${escapeDateLabel(day.key)}</small>
+                </div>`).join('');
+            document.querySelectorAll('.checkin-milestone[data-milestone]').forEach(item => {
+                item.classList.toggle('is-reached', streak >= Number(item.dataset.milestone));
+            });
+        };
+
+        const localStatus = typeof MemberRewards !== 'undefined'
+            ? MemberRewards.checkinStatus(profile.email)
+            : { checkedToday: false, streak: 0 };
+        render(localStatus, false);
+
+        const loadRemoteStatus = async () => {
+            if (isGuest() || !profile.email || typeof Api === 'undefined' || typeof Api.getCheckinStatus !== 'function') return;
+            const result = await Api.getCheckinStatus(profile.email).catch(() => null);
+            if (result?.ok) render(result, true);
+        };
+        loadRemoteStatus();
+
+        if (button) button.onclick = async () => {
+            if (isGuest()) { showLogin(); return; }
+            button.disabled = true;
+            if (typeof Api === 'undefined' || typeof Api.checkInMember !== 'function') {
+                showAlert('打卡服務尚未連線，尚未扣除點數。', { type: 'error' });
+                button.disabled = false;
+                return;
+            }
+            const result = await Api.checkInMember(profile.email).catch(() => null);
+            if (!result?.ok) {
+                showAlert(result?.error || '打卡失敗，請稍後再試。', { type: 'error' });
+                button.disabled = false;
+                return;
+            }
+            if (result.balance != null && typeof MemberRewards !== 'undefined') MemberRewards.setPoints(profile.email, result.balance);
+            showToast(`打卡成功，獲得 ${result.awarded ?? result.points ?? 10} 點`);
+            await loadRemoteStatus();
+        };
     },
 
     profile() {
@@ -2702,6 +3080,13 @@ const PageInit = {
         if (pointEl && !isGuest() && profile.email && Api.getMemberPoints) {
             Api.getMemberPoints(profile.email).then(r => {
                 if (!r || !r.ok || r.balance == null) return;
+                if (typeof MemberRewards !== 'undefined') MemberRewards.setPoints(profile.email, r.balance);
+                if (typeof MemberRewards !== 'undefined') {
+                    const remoteThemes = r.ownedThemes || r.owned_theme_ids || r.member?.ownedThemes;
+                    if (Array.isArray(remoteThemes)) remoteThemes.forEach(themeId => MemberRewards.unlockTheme(profile.email, themeId));
+                    const remoteActive = r.activeTheme || r.active_theme || r.member?.activeTheme;
+                    if (remoteActive) MemberRewards.setActiveTheme(profile.email, remoteActive);
+                }
                 pointEl.textContent = r.balance;
                 if (r.lifetime != null && typeof MemberRewards !== 'undefined') {
                     // 讓會員等級進度也能吃到資料庫的 lifetime；保留 localStorage 只是為了既有 MemberTier 介面。
@@ -2709,6 +3094,7 @@ const PageInit = {
                     all[String(profile.email).trim().toLowerCase()] = Number(r.lifetime) || 0;
                     MemberRewards._save(MemberRewards._lifetimeKey, all);
                 }
+                if (typeof renderThemeShop === 'function') renderThemeShop();
             }).catch(() => {});
         }
 
@@ -2836,8 +3222,10 @@ const PageInit = {
             }
         }
 
+        let renderThemeShop = null;
         const themeShop = document.getElementById('profileThemeShop');
         if (themeShop) {
+            renderThemeShop = () => {
             const activeTheme = MemberRewards.getActiveTheme(profile.email);
             themeShop.innerHTML = `<div class="theme-shop-grid">${MemberRewards.themes.map(theme => {
                 const owned = MemberRewards.hasTheme(profile.email, theme.id);
@@ -2857,9 +3245,15 @@ const PageInit = {
                     const id = btn.dataset.themeId;
                     if (btn.dataset.themeAction === 'redeem') {
                         btn.disabled = true;
+                        let remote = null;
                         if (!isGuest() && Api.redeemMemberTheme) {
-                            const remote = await Api.redeemMemberTheme(profile.email, id).catch(() => null);
+                            remote = await Api.redeemMemberTheme(profile.email, id).catch(() => null);
                             if (remote?.ok) {
+                                MemberRewards.unlockTheme(profile.email, id);
+                                const remoteBalance = remote.balance ?? remote.points ?? remote.member?.points;
+                                if (remoteBalance != null) MemberRewards.setPoints(profile.email, remoteBalance);
+                                const remoteThemes = remote.ownedThemes || remote.owned_theme_ids || remote.member?.ownedThemes;
+                                if (Array.isArray(remoteThemes)) remoteThemes.forEach(themeId => MemberRewards.unlockTheme(profile.email, themeId));
                                 MemberRewards.setActiveTheme(profile.email, id);
                                 showToast('已兌換並套用主題');
                                 PageInit.profile();
@@ -2870,6 +3264,11 @@ const PageInit = {
                                 btn.disabled = false;
                                 return;
                             }
+                        }
+                        if (!isGuest() && !remote?.ok) {
+                            showAlert(remote?.error || '點數商店目前無法連線，尚未扣除點數。', { type:'error' });
+                            btn.disabled = false;
+                            return;
                         }
                         const result = MemberRewards.redeemTheme(profile.email, id);
                         if (!result.ok) { showAlert(result.message, { type:'error' }); btn.disabled = false; return; }
@@ -2882,6 +3281,8 @@ const PageInit = {
                     PageInit.profile();
                 };
             });
+            };
+            renderThemeShop();
         }
 
         const ledgerEl = document.getElementById('profilePointLedger');
@@ -2925,7 +3326,7 @@ const PageInit = {
                     <button class="look-del" data-del="${index}" aria-label="刪除此妝容">×</button>
                     <div class="saved-look-photo">
                         ${imageSrc
-                            ? `<img src="${imageSrc}" alt="${styleLabel}" onload="this.classList.add('loaded')">${expired}`
+                            ? `<img src="${imageSrc}" alt="${styleLabel}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">${expired}`
                             : `<span>${styleLabel}</span>`
                         }
                     </div>
@@ -2950,15 +3351,32 @@ const PageInit = {
                             // 已同步的收藏先刪資料庫，成功後才刪本機快取，避免兩邊狀態不一致
                             var em = (typeof Auth !== 'undefined' && Auth.getProfile()) ? Auth.getProfile().email : null;
                             var deleteRemote = (em && removed && removed.remoteId != null && Api.deleteSavedLook)
-                                ? Api.deleteSavedLook(em, removed.remoteId)
+                                ? deleteSavedLookConsistently(em, removed)
                                 : Promise.resolve({ ok: true });
                             deleteRemote.then(function(result){
                                 if (!result || !result.ok) {
-                                    showAlert("資料庫刪除失敗，本機收藏尚未刪除。請確認登入狀態與會員資料庫連線後再試。", { type: "error" });
+                                    if (isSavedLookNotFound(result)) {
+                                        recs.splice(idx, 1);
+                                        localStorage.setItem(looksKey(), JSON.stringify(recs));
+                                        announceSavedLookChange();
+                                        showToast('資料庫已沒有此筆，已同步清除本機收藏');
+                                        paintSavedLooks(recs);
+                                        return;
+                                    }
+                                    if (result && result.status === 401) {
+                                        showAlert("登入狀態已失效，本機收藏尚未刪除。請重新登入後再試。", {
+                                            type: "error",
+                                            onOk: showLogin
+                                        });
+                                        return;
+                                    }
+                                    const detail = result && result.error ? `\n${result.error}` : '';
+                                    showAlert(`資料庫刪除失敗，本機收藏尚未刪除。${detail}`, { type: "error" });
                                     return;
                                 }
                                 recs.splice(idx, 1);
                                 localStorage.setItem(looksKey(), JSON.stringify(recs));
+                                announceSavedLookChange();
                                 showToast(removed && removed.remoteId != null ? "妝容已從資料庫與本機刪除" : "已刪除本機收藏（此筆尚未同步資料庫）");
                                 paintSavedLooks(recs);
                             }).catch(function(){
@@ -2985,7 +3403,8 @@ const PageInit = {
                     localAll.forEach(x => { if (x.remoteId != null) localByRemote[x.remoteId] = x; });
                     const fromRemote = remote.map(rm => (rm.remoteId != null && localByRemote[rm.remoteId]) ? localByRemote[rm.remoteId] : rm);
                     const remoteIds = new Set(remote.map(rm => String(rm.remoteId)));
-                    const localOnly = localAll.filter(x => x.remoteId == null || !remoteIds.has(String(x.remoteId)));
+                    // 有 remoteId 但不在資料庫清單的項目代表已由其他端刪除，不再保留本機殘留卡片。
+                    const localOnly = localAll.filter(x => x.remoteId == null);
                     const merged = fromRemote.concat(localOnly).sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
                     localStorage.setItem(looksKey(), JSON.stringify(merged.slice(0, 20)));
                     if (Router.currentPage === 'profile') paintSavedLooks(merged);
@@ -2993,6 +3412,15 @@ const PageInit = {
             }
         }
         // 更改密碼：訪客隱藏
+        bindSavedLookSync();
+        Router._reloadProfileSavedLooks = async () => {
+            if (Router.currentPage !== 'profile' || isGuest()) return;
+            const current = (typeof Auth !== 'undefined' && Auth.getProfile) ? Auth.getProfile() : null;
+            if (!current?.email) return;
+            const result = await syncSavedLookCache(current.email);
+            if (result?.ok && Router.currentPage === 'profile') paintSavedLooks(result.looks || []);
+        };
+
         var __cpBtn = document.getElementById("changePwdBtn");
         if (__cpBtn) {
             if (isGuest()) { __cpBtn.style.display = "none"; }
@@ -3010,6 +3438,7 @@ const PageInit = {
             Router.go('dashboard');
             return;
         }
+        initAdminDemo();
         const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
         const profileNameEl = document.getElementById('adminProfileName');
         const profileEmailEl = document.getElementById('adminProfileEmail');
@@ -3017,10 +3446,12 @@ const PageInit = {
         if (profileEmailEl) profileEmailEl.textContent = profile.email || '—';
 
         const sectionMeta = {
+            demo: { eyebrow: 'PROJECT DEMONSTRATION', title: '工作流程監控' },
             overview: { eyebrow: 'ADMIN OVERVIEW', title: '營運總覽' },
             members: { eyebrow: 'MEMBER ACCESS', title: '會員與權限管理' },
             products: { eyebrow: 'PRODUCT CATALOG', title: '商品管理' },
-            crawler: { eyebrow: 'CRAWLER IMPORT', title: '商品網址匯入' }
+            crawler: { eyebrow: 'CRAWLER IMPORT', title: '商品網址匯入' },
+            audit: { eyebrow: 'PRODUCT AUDIT', title: '商品異動紀錄' }
         };
         const sectionButtons = Array.from(document.querySelectorAll('[data-admin-section]'));
         const sectionViews = Array.from(document.querySelectorAll('[data-admin-view]'));
@@ -3032,6 +3463,7 @@ const PageInit = {
                 view.classList.toggle('active', active);
                 view.hidden = !active;
             });
+            if (next === 'demo') initAdminDemo();
             const meta = sectionMeta[next];
             const eyebrow = document.getElementById('adminSectionEyebrow');
             const title = document.getElementById('adminSectionTitle');
@@ -3304,7 +3736,11 @@ const PageInit = {
                             const result = await Api.deleteMember(email);
                             if (!result || !result.ok) {
                                 btn.disabled = false;
-                                showAlert(`會員刪除失敗：${result?.error || '請確認會員資料庫連線與管理員權限'}`, { type: 'error' });
+                                const statusHint = result?.status ? `（HTTP ${result.status}${result.code ? ` / ${result.code}` : ''}）` : '';
+                                const reason = result?.error && result.error !== '會員刪除失敗'
+                                    ? result.error
+                                    : '後端未完成刪除，請確認會員刪除 API 與管理員權限';
+                                showAlert(`會員刪除失敗${statusHint}：${reason}`, { type: 'error' });
                                 return;
                             }
                             dbMembers = dbMembers.filter(member => String(member.email).toLowerCase() !== String(email).toLowerCase());
@@ -3362,7 +3798,7 @@ const PageInit = {
                     return `<article class="saved-look-card" data-admin-look-index="${index}" style="cursor:pointer;">
                         <button class="look-del" data-admin-del-look="${index}" aria-label="從資料庫刪除此妝容">×</button>
                         <div class="saved-look-photo">${afterSrc
-                            ? `<img src="${afterSrc}" alt="${escapeHtml(item.style || '妝容')}" onload="this.classList.add('loaded')">`
+                            ? `<img src="${afterSrc}" alt="${escapeHtml(item.style || '妝容')}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add('loaded')">`
                             : `<span>${escapeHtml(item.style || 'Look')}</span>`}</div>
                         <div class="saved-look-body">
                             <div class="saved-look-kicker">Saved Look · DB</div>
@@ -3405,13 +3841,20 @@ const PageInit = {
                         onOk: async () => {
                             button.disabled = true;
                             const result = await Api.deleteSavedLook(email, target.id);
-                            if (!result || !result.ok) {
+                            if ((!result || !result.ok) && !isSavedLookNotFound(result)) {
                                 button.disabled = false;
                                 showAlert('資料庫刪除失敗，這筆妝容仍然保留。請確認 admin session 與資料庫連線。', { type: 'error' });
                                 return;
                             }
-                            looksByEmail[email] = looks.filter((_, i) => i !== index);
-                            showToast('妝容已從資料庫刪除');
+                            const latest = await Api.listSavedLooks(email);
+                            if (!latest || !latest.ok) {
+                                button.disabled = false;
+                                showAlert('刪除後重新讀取資料庫失敗，請按重新整理確認狀態。', { type: 'error' });
+                                return;
+                            }
+                            looksByEmail[email] = Array.isArray(latest.looks) ? latest.looks : [];
+                            announceSavedLookChange();
+                            showToast(isSavedLookNotFound(result) ? '資料庫已沒有此筆，Admin 已完成同步' : '妝容已從資料庫刪除');
                             ov.remove();
                             render();
                             openMemberLooksModal(email);
@@ -3427,6 +3870,7 @@ const PageInit = {
 
         // 後台自動刷新：切回這個分頁 / 視窗重新取得焦點時自動重抓會員與收藏數，不用手按「重新讀取」
         Router._reloadAdmin = loadAdminMembers;
+        bindSavedLookSync();
         if (!Router._adminAutoRefreshBound) {
             Router._adminAutoRefreshBound = true;
             let lastAutoReload = 0;
@@ -3573,10 +4017,10 @@ const PageInit = {
                 <td>${escapeHtml(product.cat)}</td>
                 <td>${escapeHtml(product.price)}</td>
                 <td><span class="admin-source">商品資料庫</span></td>
-                <td><span class="admin-fail ok">已上架</span></td>
+                <td><span class="admin-fail ${product.status === 'active' ? 'ok' : 'warn'}">${escapeHtml(product.status === 'active' ? '已上架' : '已停用')}</span></td>
                 <td><div class="admin-product-actions">
                     <button class="admin-secondary-button compact" type="button" data-edit-btn="${escapeHtml(product.id)}">編輯</button>
-                    <button class="admin-danger-button compact" type="button" data-delete-product="${escapeHtml(product.id)}">刪除</button>
+                    <button class="admin-danger-button compact" type="button" data-delete-product="${escapeHtml(product.id)}">停用</button>
                 </div></td>
             </tr>`).join('');
         };
@@ -3590,14 +4034,14 @@ const PageInit = {
             setConnectionStatus('adminProductConnection', '連線中', 'pending');
             updateOverallStatus();
             renderProducts();
-            return Api.listProducts().then(rec => {
+            return Api.listAllAdminProducts({ limit: 100 }).then(rec => {
                 if (rec?.ok) {
                     dbProducts = rec.products || [];
                     dbProductsError = '';
                     productConnectionState = 'ok';
                     setConnectionStatus('adminProductConnection', '正常', 'ok');
                     const total = document.getElementById('adminProductTotal');
-                    if (total) total.textContent = String(dbProducts.length);
+                    if (total) total.textContent = String(rec.total ?? dbProducts.length);
                 } else {
                     dbProducts = [];
                     dbProductsError = rec?.status ? `商品資料庫讀取失敗（HTTP ${rec.status}）` : '商品資料庫無法連線';
@@ -3624,24 +4068,24 @@ const PageInit = {
                 const id = deleteTrigger.dataset.deleteProduct;
                 const product = (dbProducts || []).find(p => String(p.id) === String(id));
                 if (!product) return;
-                showConfirm(`確定要刪除「${product.name || '這項商品'}」嗎？刪除後前台商品推薦也會看不到這筆資料。`, {
-                    title: '刪除商品',
+                showConfirm(`確定要停用「${product.name || '這項商品'}」嗎？資料會保留，但前台推薦不再顯示。`, {
+                    title: '停用商品',
                     type: 'error',
-                    okText: '刪除',
+                    okText: '停用',
                     cancelText: '保留',
                     onOk: async () => {
                         deleteTrigger.disabled = true;
-                        deleteTrigger.textContent = '刪除中';
+                        deleteTrigger.textContent = '停用中';
                         const result = await Api.deleteRemoteProduct(product.rawId ?? product.id);
                         if (!result.ok) {
                             deleteTrigger.disabled = false;
-                            deleteTrigger.textContent = '刪除';
-                            showAlert(`商品刪除失敗：${result.error || '未知錯誤'}${result.status === 401 ? '（管理員 session 沒帶上——請重新登入管理員帳號）' : ''}`, { type: 'error' });
+                            deleteTrigger.textContent = '停用';
+                            showAlert(`商品停用失敗：${result.error || '未知錯誤'}${result.status === 401 ? '（登入憑證已失效，請重新登入）' : ''}`, { type: 'error' });
                             return;
                         }
                         if (String(editingProductId) === String(product.id)) exitEditMode();
                         Router.generalProductCatalog = null;
-                        showToast('商品已刪除');
+                        showToast('商品已停用，原始資料仍保留');
                         loadAdminProducts();
                     }
                 });
@@ -3667,8 +4111,8 @@ const PageInit = {
             const shadesRaw = document.getElementById('adminProductShades')?.value.trim();
             const shadesInput = shadesRaw ? shadesRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
             const shades = shadesInput.filter(c => /^#[0-9a-fA-F]{3,8}$/.test(c));
-            if (!name || !cat || !price) {
-                showAlert('請完整填寫商品名稱、分類與價格', { type:'error' });
+            if (!name || !brand || !cat || !price || !img || !sourceUrl) {
+                showAlert('請完整填寫商品名稱、品牌、分類、價格、圖片 URL 與來源 URL', { type:'error' });
                 return;
             }
             if (shades.length !== shadesInput.length) {
@@ -3676,15 +4120,25 @@ const PageInit = {
                 return;
             }
             // 全部走真商品資料庫，不再寫 localStorage demo
+            const numericPrice = Number(String(price).replace(/[^0-9.]/g, ''));
+            if (!Number.isFinite(numericPrice) || numericPrice < 0) {
+                showAlert('價格格式不正確', { type: 'error' });
+                return;
+            }
             const payload = {
-                name, price,
+                name, price: numericPrice,
                 type: CAT_TO_TYPE[cat] || 'foundations',
-                image_url: img || '',
+                imageUrl: img || '',
+                imageUrls: img ? [img] : [],
                 description: desc || '',
-                hex: shades[0] || null
+                hex: shades[0] || null,
+                status: 'active',
+                reviewStatus: 'approved',
+                inStock: true,
+                currency: 'TWD'
             };
             if (brand) payload.brand = brand;
-            if (sourceUrl) payload.source_url = sourceUrl;
+            if (sourceUrl) payload.sourceUrl = sourceUrl;
             submitBtn.disabled = true;
             const finish = (result, okMsg) => {
                 submitBtn.disabled = false;
@@ -3699,7 +4153,14 @@ const PageInit = {
             };
             if (editingProductId) {
                 const target = (dbProducts || []).find(p => String(p.id) === String(editingProductId));
+                payload.version = target?.version;
                 Api.patchRemoteProduct(target?.rawId, payload).then(result => {
+                    if (result.code === 'VERSION_CONFLICT') {
+                        submitBtn.disabled = false;
+                        Api.getRemoteProduct(target?.rawId).then(() => loadAdminProducts());
+                        showAlert('這筆商品已被其他人更新，系統正在重新載入最新資料，請確認後再修改。', { type: 'error' });
+                        return;
+                    }
                     if (finish(result, '產品已更新並寫入資料庫')) exitEditMode();
                 });
             } else {
@@ -3714,8 +4175,11 @@ const PageInit = {
         const crawlerMessage = document.getElementById('adminCrawlerMessage');
         const crawlerEmpty = document.getElementById('adminCrawlerEmpty');
         const crawlerResult = document.getElementById('adminCrawlerResult');
+        const placeholderUseButton = document.getElementById('adminUseCrawlerResult');
+        if (placeholderUseButton && !crawlerResult?.contains(placeholderUseButton)) placeholderUseButton.remove();
         let crawledProduct = null;
         const crawlerErrorLabels = {
+            HTTP_404: '商品後端尚未部署爬蟲預覽 API，請先完成 /api/crawler/product-preview 服務',
             INVALID_URL: '商品網址格式不正確',
             UNSUPPORTED_SITE: '目前尚未支援這個來源網站',
             FETCH_TIMEOUT: '來源網站回應逾時',
@@ -3764,7 +4228,7 @@ const PageInit = {
             crawlerResult.innerHTML = `
                 <article class="admin-crawler-product">
                     <div class="admin-crawler-image">
-                        ${safeImageUrl ? `<img src="${escapeHtml(safeImageUrl)}" alt="${escapeHtml(product.name || '商品預覽')}" loading="lazy">` : '<span>無商品圖片</span>'}
+                        ${safeImageUrl ? `<img src="${escapeHtml(safeImageUrl)}" alt="${escapeHtml(product.name || '商品預覽')}" loading="lazy" decoding="async" fetchpriority="low" referrerpolicy="no-referrer">` : '<span>無商品圖片</span>'}
                     </div>
                     <div class="admin-crawler-product-body">
                         <div class="admin-crawler-product-meta">
@@ -3830,6 +4294,34 @@ const PageInit = {
             setCrawlerStatus(partial ? '需要補資料' : '擷取完成', partial ? 'warning' : 'success', partial ? '部分欄位缺漏，可帶入表單後補齊' : '商品資料已建立預覽');
             renderCrawlerPreview(crawledProduct, partial ? 'partial' : 'ok');
         };
+
+        const loadProductAuditLogs = async () => {
+            const rows = document.getElementById('adminAuditRows');
+            const button = document.getElementById('adminReloadAuditBtn');
+            if (!rows) return;
+            if (button) button.disabled = true;
+            rows.innerHTML = '<tr><td colspan="5"><div class="empty-state compact">稽核紀錄載入中…</div></td></tr>';
+            const result = await Api.listProductAuditLogs(100);
+            if (button) button.disabled = false;
+            if (!result.ok) {
+                rows.innerHTML = `<tr><td colspan="5"><div class="empty-state compact">${escapeHtml(result.error || '稽核紀錄讀取失敗')}</div></td></tr>`;
+                return;
+            }
+            if (!result.logs.length) {
+                rows.innerHTML = '<tr><td colspan="5"><div class="empty-state compact">目前沒有商品異動紀錄</div></td></tr>';
+                return;
+            }
+            rows.innerHTML = result.logs.map(log => `<tr>
+                <td>${escapeHtml(log.createdAt || log.created_at || '—')}</td>
+                <td>${escapeHtml(log.action || '—')}</td>
+                <td>${escapeHtml(log.productId || log.product_id || '—')}</td>
+                <td>${escapeHtml(log.actorEmail || log.actor_email || log.adminEmail || log.admin_email || log.admin_id || '—')}</td>
+                <td>${escapeHtml(log.requestId || log.request_id || '—')}</td>
+            </tr>`).join('');
+        };
+        const auditReloadBtn = document.getElementById('adminReloadAuditBtn');
+        if (auditReloadBtn) auditReloadBtn.onclick = loadProductAuditLogs;
+        document.querySelector('[data-admin-section="audit"]')?.addEventListener('click', loadProductAuditLogs);
 
         const refreshAllBtn = document.getElementById('adminRefreshAllBtn');
         if (refreshAllBtn) refreshAllBtn.onclick = () => {

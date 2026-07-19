@@ -1,0 +1,127 @@
+<div class="admin-workspace">
+  <aside class="admin-sidebar">
+    <div class="admin-brand"><strong>管理控制台</strong><span>DECORATE ME ADMIN</span></div>
+    <nav class="admin-section-nav" aria-label="管理功能">
+      <button type="button" class="active" data-admin-section="overview"><span class="admin-nav-index">01</span>系統總覽</button>
+      <button type="button" data-admin-section="demo"><span class="admin-nav-index">02</span>專題展示</button>
+      <button type="button" data-admin-section="members"><span class="admin-nav-index">03</span>會員權限</button>
+      <button type="button" data-admin-section="products"><span class="admin-nav-index">04</span>商品管理</button>
+      <button type="button" data-admin-section="crawler"><span class="admin-nav-index">05</span>爬蟲匯入</button>
+      <button type="button" data-admin-section="audit"><span class="admin-nav-index">06</span>商品稽核</button>
+    </nav>
+    <div class="admin-account">
+      <div class="admin-account-avatar">AD</div>
+      <div><strong id="adminProfileName">管理員</strong><span id="adminProfileEmail">—</span></div>
+      <button type="button" class="admin-logout-button" onclick="Auth.logout()">登出管理後台</button>
+    </div>
+  </aside>
+
+  <section class="admin-stage">
+    <header class="admin-topbar">
+      <div><span id="adminSectionEyebrow">ADMIN OVERVIEW</span><h1 id="adminSectionTitle">系統總覽</h1></div>
+      <div class="admin-topbar-actions">
+        <span class="admin-sync-status pending" id="adminOverallStatus"><i></i>資料同步中</span>
+        <button type="button" class="admin-secondary-button compact" id="adminRefreshAllBtn">重新整理</button>
+      </div>
+    </header>
+
+    <main class="admin-content">
+      <section class="admin-view active" data-admin-view="overview">
+        <div class="admin-view-heading"><div><span>STATUS</span><h2>服務與資料總覽</h2></div><time id="adminLastSync">尚未同步</time></div>
+        <div class="admin-summary">
+          <article><span>全部會員</span><b id="adminTotal">—</b><small>會員資料庫</small></article>
+          <article><span>啟用中</span><b id="adminActive">—</b><small>可正常登入</small></article>
+          <article><span>已停權</span><b id="adminSuspended">—</b><small>存取已限制</small></article>
+          <article><span>管理員</span><b id="adminAdmins">—</b><small>高權限帳號</small></article>
+        </div>
+        <div class="admin-overview-grid">
+          <section class="admin-status-board">
+            <div class="admin-block-heading"><span>CONNECTIONS</span><h3>服務連線狀態</h3></div>
+            <div class="admin-service-row"><div><strong>會員資料庫</strong><span>登入、權限與會員資料</span></div><b id="adminMemberConnection" class="pending">連線中</b></div>
+            <div class="admin-service-row"><div><strong>商品資料庫</strong><span>商品目錄與推薦來源</span></div><b id="adminProductConnection" class="pending">連線中</b></div>
+            <div class="admin-service-row"><div><strong>商品爬蟲</strong><span>預覽與匯入服務</span></div><b id="adminCrawlerConnection" class="idle">待測試</b></div>
+          </section>
+          <section class="admin-quick-actions">
+            <div class="admin-block-heading"><span>QUICK ACCESS</span><h3>快速操作</h3></div>
+            <button type="button" data-admin-jump="demo">開啟專題展示 <b>前往</b></button>
+            <button type="button" data-admin-jump="members">管理會員權限 <b>前往</b></button>
+            <button type="button" data-admin-jump="products">管理商品目錄 <b>前往</b></button>
+            <button type="button" data-admin-jump="crawler">測試爬蟲匯入 <b>前往</b></button>
+          </section>
+        </div>
+      </section>
+
+      <section class="admin-view" data-admin-view="demo" hidden>
+        <section class="admin-demo" id="adminDemoPanel" hidden>
+          <div class="admin-demo-meta">
+            <p>僅顯示白名單摘要；照片、Email、權杖、完整分析包與完整提示詞皆不顯示。</p>
+            <div class="admin-demo-state"><i></i><span id="adminDemoSource">Demo 範例資料</span></div>
+          </div>
+          <div class="admin-demo-steps" id="adminDemoSteps" aria-label="工作階段">
+            <button type="button" class="active" data-demo-step="0"><b>01</b><span>上傳驗證</span></button>
+            <button type="button" data-demo-step="1"><b>02</b><span>臉部分析</span></button>
+            <button type="button" data-demo-step="2"><b>03</b><span>妝容建議</span></button>
+            <button type="button" data-demo-step="3"><b>04</b><span>圖片渲染</span></button>
+            <button type="button" data-demo-step="4"><b>05</b><span>完成保存</span></button>
+          </div>
+          <div class="admin-demo-progress" aria-label="工作進度">
+            <div><span id="adminDemoStage">uploaded</span><b id="adminDemoProgressText">10%</b></div>
+            <div class="admin-demo-progress-track"><i id="adminDemoProgressBar"></i></div>
+            <p id="adminDemoStageNote">照片已進入私人暫存區。</p>
+          </div>
+          <div class="admin-demo-grid">
+            <article><span>前端可見資料</span><pre id="adminDemoPublicData"></pre></article>
+            <article><span>後端受限暫存</span><pre id="adminDemoProtectedData"></pre></article>
+            <article><span>一般系統 Log</span><pre id="adminDemoLogData"></pre></article>
+          </div>
+          <div class="admin-demo-footer"><span id="adminDemoExpiry"></span><button type="button" class="admin-secondary-button compact" id="adminDemoRestart">重新展示</button></div>
+        </section>
+      </section>
+
+      <section class="admin-view" data-admin-view="members" hidden>
+        <div class="admin-view-heading"><div><span>MEMBER ACCESS</span><h2>會員與權限管理</h2></div></div>
+        <div class="admin-actions-row">
+          <button class="admin-tab active" data-admin-filter="all">全部使用者</button><button class="admin-tab" data-admin-filter="active">啟用中</button><button class="admin-tab" data-admin-filter="suspended">已停權</button><button class="admin-tab" data-admin-filter="admin">管理員</button>
+        </div>
+        <div class="admin-main">
+          <div class="admin-toolbar"><label class="admin-search"><span>搜尋會員</span><input id="adminSearch" type="search" placeholder="姓名或 Email"></label><button class="admin-primary-button" id="adminSaveBtn" type="button">儲存權限</button></div>
+          <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>會員</th><th>等級</th><th>角色</th><th>狀態</th><th>頁面權限</th><th>收藏</th><th>點數</th><th>操作</th></tr></thead><tbody id="adminUserRows"></tbody></table></div>
+        </div>
+      </section>
+
+      <section class="admin-view" data-admin-view="products" hidden>
+        <div class="admin-view-heading"><div><span>PRODUCT CATALOG</span><h2>商品管理</h2></div><button type="button" class="admin-secondary-button compact" id="adminReloadProductsBtn">重新載入</button></div>
+        <div class="admin-product-grid">
+          <form class="admin-product-form" id="adminProductForm">
+            <div class="admin-product-form-mode">編輯中：<span id="adminProductEditingLabel"></span></div>
+            <label>商品名稱<input id="adminProductName" type="text" required></label><label>品牌<input id="adminProductBrand" type="text" required></label>
+            <label>分類<select id="adminProductCategory"><option value="底妝">底妝</option><option value="眼影">眼影</option><option value="眼線/睫毛">眼線／睫毛</option><option value="唇彩">唇彩</option><option value="腮紅">腮紅</option><option value="眉毛產品">眉毛產品</option><option value="修容">修容</option><option value="打亮">打亮</option></select></label>
+            <label>價格<input id="adminProductPrice" type="text" required></label><label>圖片 URL<input id="adminProductImg" type="url" required></label><label>來源 URL<input id="adminProductSourceUrl" type="url" required></label>
+            <label>商品描述<textarea id="adminProductDesc"></textarea></label><label>色號<input id="adminProductShades" type="text" placeholder="#AABBCC, #DDEEFF"></label>
+            <div class="admin-product-form-actions"><button class="admin-primary-button" type="submit" id="adminProductSubmitBtn">新增商品</button><button class="admin-secondary-button" type="button" id="adminProductCancelBtn" hidden>取消編輯</button></div>
+          </form>
+          <div class="admin-product-manager">
+            <div class="admin-view-heading"><div><span>CATALOG</span><h2>目前商品 <b id="adminProductTotal">0</b></h2></div></div>
+            <div class="admin-table-wrap"><table class="admin-table admin-product-table"><thead><tr><th>商品</th><th>分類</th><th>價格</th><th>來源</th><th>狀態</th><th>操作</th></tr></thead><tbody id="adminProductRows"></tbody></table></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="admin-view" data-admin-view="crawler" hidden>
+        <div class="admin-view-heading"><div><span>CRAWLER IMPORT</span><h2>商品爬蟲預覽與匯入</h2></div><span class="admin-crawler-state idle" id="adminCrawlerState">待測試</span></div>
+        <div class="admin-crawler-layout">
+          <form class="admin-crawler-form" id="adminCrawlerForm"><label>商品網址<input id="adminCrawlerUrl" type="url" placeholder="https://..." required></label><button class="admin-primary-button" type="submit" id="adminCrawlerSubmitBtn">取得商品預覽</button><p class="admin-crawler-message" id="adminCrawlerMessage"></p></form>
+          <section class="admin-crawler-preview"><div class="admin-crawler-empty" id="adminCrawlerEmpty">輸入商品網址後顯示預覽</div><div id="adminCrawlerResult" hidden></div><button type="button" class="admin-primary-button" id="adminUseCrawlerResult" hidden>加入商品資料庫</button></section>
+        </div>
+      </section>
+
+      <section class="admin-view" data-admin-view="audit" hidden>
+        <div class="admin-view-heading"><div><span>PRODUCT AUDIT</span><h2>商品異動紀錄</h2></div><button type="button" class="admin-secondary-button compact" id="adminReloadAuditBtn">重新載入</button></div>
+        <div class="admin-main">
+          <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>時間</th><th>動作</th><th>商品 ID</th><th>管理員</th><th>Request ID</th></tr></thead><tbody id="adminAuditRows"><tr><td colspan="5"><div class="empty-state compact">尚未載入稽核紀錄</div></td></tr></tbody></table></div>
+        </div>
+      </section>
+    </main>
+  </section>
+</div>
+<div id="adminLooksModal" hidden></div>

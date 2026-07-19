@@ -1,0 +1,43 @@
+<section class="checkin-page">
+    <div class="page-header checkin-page-header">
+        <div class="page-kicker">CHECK-IN</div>
+        <h1>每日打卡</h1>
+        <p>每天回來累積點數，讓連續簽到變成你的美麗習慣。</p>
+    </div>
+
+    <section class="checkin-hero" aria-labelledby="checkinStreakHeading">
+        <div class="checkin-hero-copy">
+            <span class="checkin-eyebrow" id="checkinDataSource">LOCAL STATUS</span>
+            <h2 id="checkinStreakHeading">目前連續打卡</h2>
+            <div class="checkin-streak-number"><strong id="checkinStreakNumber">0</strong><span>天</span></div>
+            <p id="checkinStreakMessage">今天開始打卡，累積你的第一天。</p>
+            <p class="checkin-next" id="checkinNextMilestone">每日打卡可獲得 10 點。</p>
+        </div>
+        <div class="checkin-hero-action">
+            <div class="checkin-ring" id="checkinRing" aria-hidden="true"><span>✦</span></div>
+            <button class="btn-gold checkin-main-button" id="checkinPageButton" type="button">打卡 +10</button>
+        </div>
+    </section>
+
+    <section class="checkin-calendar-section" aria-labelledby="checkinCalendarHeading">
+        <div class="member-section-head">
+            <span>STREAK CALENDAR</span>
+            <h2 id="checkinCalendarHeading">最近 7 天</h2>
+        </div>
+        <div class="checkin-checksum" id="checkinDays" aria-live="polite"></div>
+        <p class="checkin-calendar-note" id="checkinCalendarNote">完成今天打卡，讓連續天數繼續累積。</p>
+    </section>
+
+    <section class="checkin-rewards" aria-labelledby="checkinRewardsHeading">
+        <div class="member-section-head">
+            <span>MILESTONES</span>
+            <h2 id="checkinRewardsHeading">連續獎勵</h2>
+        </div>
+        <div class="checkin-milestone-grid">
+            <div class="checkin-milestone" data-milestone="3"><b>3</b><span>天</span><small>+5 點</small></div>
+            <div class="checkin-milestone" data-milestone="7"><b>7</b><span>天</span><small>+20 點</small></div>
+            <div class="checkin-milestone" data-milestone="14"><b>14</b><span>天</span><small>+40 點</small></div>
+            <div class="checkin-milestone" data-milestone="30"><b>30</b><span>天</span><small>+100 點</small></div>
+        </div>
+    </section>
+</section>

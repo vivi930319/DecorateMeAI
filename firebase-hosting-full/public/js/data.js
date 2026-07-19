@@ -1,43 +1,43 @@
 // ═══ 風格資料 ═══
 const STYLES = [
     {
-        id:'softBaddie', name:'Soft Baddie', img:'softbaddie.jpg', tags:['柔霧底妝','甜酷氛圍','自然修容','微性感'],
+        id:'softBaddie', name:'Soft Baddie', img:'assets/styles/soft-baddie-v1.webp', tags:['柔霧底妝','甜酷氛圍','自然修容','微性感'],
         intro:'柔霧底妝搭配甜酷眼唇重點，適合想保留精緻感又帶一點攻擊性的妝容。',
         palette:['#D8B69E','#B97970','#7C544A'],
         advice:{ base:'清透柔霧底妝，局部遮瑕保留自然膚質。', brow:'眉峰略拉高，保留俐落毛流。', eye:'柔霧大地色加深眼尾，眼線略拉長。', blush:'腮紅位置偏高，搭配輕微修容。', lip:'低飽和玫瑰或肉桂色，邊界可微霧化。' }
     },
     {
-        id:'richGirl', name:'千金', img:'千金.png', tags:['高級感','精緻底妝','低調奢華','氣質妝容'],
+        id:'richGirl', name:'千金', img:'assets/styles/rich-girl-v1.webp', tags:['高級感','精緻底妝','低調奢華','氣質妝容'],
         intro:'強調乾淨底妝、低飽和色彩與細節光澤，整體看起來精緻但不厚重。',
         palette:['#E8CDBB','#CBA384','#A77E68'],
         advice:{ base:'薄透光澤底妝，重點放在膚色均勻。', brow:'順著原生眉型補空隙，避免過重。', eye:'燕麥、奶茶色眼影，眼頭少量提亮。', blush:'低飽和裸粉或杏色，淡淡掃在蘋果肌。', lip:'奶茶玫瑰、裸豆沙色最穩。' }
     },
     {
-        id:'hongKong', name:'港風', img:'港風.png', tags:['復古感','濃郁五官','氛圍唇色','立體眉眼'],
+        id:'hongKong', name:'港風', img:'assets/styles/hong-kong-v1.webp', tags:['復古感','濃郁五官','氛圍唇色','立體眉眼'],
         intro:'復古港風重點是濃郁眉眼與飽和唇色，適合五官需要被強化的妝容。',
         palette:['#B85B4D','#7E2F2A','#C79C6E'],
         advice:{ base:'霧面底妝搭配明確輪廓。', brow:'眉型可稍粗，保留自然眉峰。', eye:'暖棕大面積暈染，內眼線強化眼神。', blush:'偏暖磚紅或杏棕，連接修容。', lip:'復古紅、磚紅、濃郁玫瑰色。' }
     },
     {
-        id:'koreanClean', name:'韓系亞裔', img:'韓系亞裔.jpg', tags:['清透感','偽素顏','低飽和','日常自然'],
+        id:'koreanClean', name:'韓系亞裔', img:'assets/styles/korean-clean-v1.webp', tags:['清透感','偽素顏','低飽和','日常自然'],
         intro:'乾淨、透明、低負擔的日常妝感，重點在於膚質和淡色系層次。',
         palette:['#F1C9C5','#E6AFA8','#D9BFA9'],
         advice:{ base:'保濕氣墊或輕薄粉底，保留自然光澤。', brow:'平柔眉或自然野生眉，顏色比髮色淺一點。', eye:'粉裸、米棕消腫，臥蠶自然提亮。', blush:'蜜桃粉或淡杏色，範圍小而柔。', lip:'水光唇釉、粉裸色或MLBB。' }
     },
     {
-        id:'yandere', name:'病嬌', img:'病嬌.png', tags:['白皙氛圍','眼下腮紅','微病感','角色感'],
+        id:'yandere', name:'病嬌', img:'assets/styles/yandere-v1.webp', tags:['白皙氛圍','眼下腮紅','微病感','角色感'],
         intro:'偏角色感的妝容，透過白皙底妝、眼下腮紅與血色唇營造脆弱氛圍。',
         palette:['#E7A0A6','#B84B5C','#F3D8D9'],
         advice:{ base:'底妝可比平常略亮，但避免灰白。', brow:'眉色淡化，降低攻擊感。', eye:'眼下粉紅暈染，眼線微下垂。', blush:'腮紅集中眼下到顴骨上方。', lip:'咬唇、血色紅或莓果色。' }
     },
     {
-        id:'japaneseClear', name:'日雜清透', img:'日雜.png', tags:['透明感','柔和自然','淡色系','溫柔日常'],
+        id:'japaneseClear', name:'日雜清透', img:'assets/styles/japanese-clear-v1.webp', tags:['透明感','柔和自然','淡色系','溫柔日常'],
         intro:'空氣感、柔霧與淡色層次，適合想要自然但有細節的日系妝容。',
         palette:['#F0B7A8','#E2A78D','#D6B6A4'],
         advice:{ base:'輕薄霧光底妝，局部定妝。', brow:'淡眉色與柔和眉尾。', eye:'單色蜜桃或淡棕眼影，少量珠光。', blush:'淡粉橘橫向暈染，營造親和感。', lip:'潤澤珊瑚、透明紅或蜜桃色。' }
     },
     {
-        id:'mensPlain', name:'男士白開水', img:'男士白開水.png', tags:['乾淨自然','原生質感','清爽眉眼','低妝感'],
+        id:'mensPlain', name:'男士白開水', img:'assets/styles/mens-plain-v1.webp', tags:['乾淨自然','原生質感','清爽眉眼','低妝感'],
         intro:'保留男性原生輪廓與肌膚質感，以輕薄修飾、整潔眉型和低彩度唇色呈現乾淨清爽的白開水妝感。',
         palette:['#E6D8CF','#BFA99A','#806F65'],
         advice:{ base:'局部遮瑕並薄透均勻膚色，保留自然肌理，T 字輕微控油。', brow:'順著原生眉流補齊空隙，眉尾保持俐落但不刻意描框。', eye:'使用霧面淺棕輕掃眼窩與下眼尾，避免明顯珠光與濃眼線。', blush:'以低飽和裸杏色少量修飾氣色，也可依膚況省略。', lip:'使用透明護唇或低彩度裸豆沙色，修飾唇色不製造明顯妝感。' }

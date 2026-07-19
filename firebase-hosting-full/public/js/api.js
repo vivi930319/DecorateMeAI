@@ -14,13 +14,26 @@ function getRuntimeApiConfig() {
 
 const RuntimeApiConfig = getRuntimeApiConfig();
 
+// When gatewayUrl exists, service URLs are intentionally relative gateway
+// routes.  Leaving gatewayUrl as an empty string uses Firebase Hosting
+// rewrites, so the browser still never receives an upstream service URL/key.
+const GatewayConfigured = Object.prototype.hasOwnProperty.call(RuntimeApiConfig, 'gatewayUrl');
+const GatewayBaseUrl = String(RuntimeApiConfig.gatewayUrl || '').replace(/\/+$/, '');
+const gatewayServiceUrl = (serviceName, fallback = '') => {
+    if (!GatewayConfigured) return fallback;
+    return `${GatewayBaseUrl}/${serviceName}`;
+};
+const gatewayAuthUrl = (path) => GatewayConfigured
+    ? `${GatewayBaseUrl}${path}`
+    : '';
+
 // 所有服務的 baseUrl 與金鑰一律由 config.local.js（window.DECORATE_ME_CONFIG）在執行時注入，
 // 這裡不寫死任何網址或金鑰，避免機密進版控外洩；未注入時為空字串，url() 會回空、不對外呼叫。
 const ApiConfig = {
     services: {
         faceBasic: {
-            baseUrl: RuntimeApiConfig.faceBasicUrl || '',
-            apiKey: RuntimeApiConfig.faceApiKey || '',
+            baseUrl: gatewayServiceUrl('face-basic', RuntimeApiConfig.faceBasicUrl || ''),
+            apiKey: GatewayConfigured ? '' : (RuntimeApiConfig.faceApiKey || ''),
             analyzePath: '/v1/face/analyze/basic',
             posePath: '/v1/face/pose',
             jobPath: '/v1/face/jobs/basic',
@@ -28,21 +41,21 @@ const ApiConfig = {
             jobResultPath: '/v1/face/jobs/{jobId}/result'
         },
         facePro: {
-            baseUrl: RuntimeApiConfig.faceProUrl || '',
-            apiKey: RuntimeApiConfig.faceApiKey || '',
+            baseUrl: gatewayServiceUrl('face-pro', RuntimeApiConfig.faceProUrl || ''),
+            apiKey: GatewayConfigured ? '' : (RuntimeApiConfig.faceApiKey || ''),
             analyzePath: '/v1/face/analyze/pro',
             jobPath: '/v1/face/jobs/pro',
             jobStatusPath: '/v1/face/jobs/{jobId}',
             jobResultPath: '/v1/face/jobs/{jobId}/result'
         },
         textSuggestion: {
-            baseUrl: RuntimeApiConfig.textSuggestionUrl || '',
-            apiKey: RuntimeApiConfig.textSuggestionApiKey || '',
+            baseUrl: gatewayServiceUrl('text-suggestion', RuntimeApiConfig.textSuggestionUrl || ''),
+            apiKey: GatewayConfigured ? '' : (RuntimeApiConfig.textSuggestionApiKey || ''),
             suggestPath: '/suggest'
         },
         render: {
-            baseUrl: RuntimeApiConfig.renderUrl || '',
-            apiKey: RuntimeApiConfig.renderApiKey || '',
+            baseUrl: gatewayServiceUrl('render-service', RuntimeApiConfig.renderUrl || ''),
+            apiKey: GatewayConfigured ? '' : (RuntimeApiConfig.renderApiKey || ''),
             renderPath: '/render'
         },
         product: {
@@ -54,13 +67,27 @@ const ApiConfig = {
             baseUrl: RuntimeApiConfig.crawlerUrl || RuntimeApiConfig.productUrl || '',
             previewPath: '/api/crawler/product-preview'
         },
+        adminProxy: {
+            baseUrl: GatewayConfigured ? GatewayBaseUrl : (RuntimeApiConfig.adminProxyUrl || ''),
+            loginPath: '/auth/login',
+            logoutPath: '/auth/logout',
+            productsPath: '/admin-api/products',
+            crawlerPreviewPath: '/admin-api/crawler/product-preview',
+            auditPath: '/admin-api/product-audit-logs'
+        },
         memberDatabase: {
-            baseUrl: RuntimeApiConfig.memberDatabaseUrl || '',
+            baseUrl: gatewayServiceUrl('member-database', RuntimeApiConfig.memberDatabaseUrl || ''),
             loginPath: '/api/login',
             registerPath: '/api/register',
             // 只打正規發碼端點；不要 fallback 到 /api/register，否則會送出只帶 email 的殘缺請求，被後端回 400 MISSING_FIELDS（曾被誤判成 CSRF）
             sendOtpPaths: ['/api/send-otp'],
             verifyOtpPath: '/api/verify-otp'
+        },
+        authProxy: {
+            baseUrl: GatewayConfigured ? GatewayBaseUrl : '',
+            registerPath: '/auth/register',
+            sendOtpPaths: ['/auth/send-otp'],
+            verifyOtpPath: '/auth/verify-otp'
         }
     },
 
@@ -77,13 +104,32 @@ const ApiConfig = {
     }
 };
 
+// 商品／爬蟲管理 API 的登入憑證來源。正式環境可在載入本檔前注入
+// window.DECORATE_ME_AUTH_PROVIDER.getAccessToken()（例如 Firebase ID Token）。
+// fallback 只讀會員登入後留下的短期 token；此處永遠不接受或保存 ADMIN_API_KEY。
+const AdminApiAuthProvider = {
+    async getAccessToken() {
+        const provider = typeof window !== 'undefined' ? window.DECORATE_ME_AUTH_PROVIDER : null;
+        if (provider && typeof provider.getAccessToken === 'function') {
+            const token = await provider.getAccessToken();
+            return typeof token === 'string' && token.length <= 4096 ? token : '';
+        }
+        try {
+            const token = sessionStorage.getItem('memberAccessToken') || '';
+            return token.length <= 4096 ? token : '';
+        } catch (_) {
+            return '';
+        }
+    }
+};
+
 // ═══ API 串接層 ═══
 const Api = {
     config: ApiConfig,
 
     async _warmRenderService(baseUrl, apiKey) {
         if (!baseUrl) return;
-        const headers = {};
+        const headers = this._memberHeaders({});
         if (apiKey) headers['X-API-Key'] = apiKey;
         try {
             await fetch(`${baseUrl}/health`, {
@@ -101,10 +147,10 @@ const Api = {
     // 等他真的送出時通常已經是熱的。故意不 await，純背景預熱，失敗也無所謂。
     warmFaceServices() {
         const runtime = getRuntimeApiConfig();
-        const apiKey = runtime.faceApiKey || this.config.services.faceBasic.apiKey || '';
+        const apiKey = GatewayConfigured ? '' : (runtime.faceApiKey || this.config.services.faceBasic.apiKey || '');
         const targets = [
-            runtime.faceBasicUrl || this.config.services.faceBasic.baseUrl,
-            runtime.faceProUrl || this.config.services.facePro.baseUrl,
+            GatewayConfigured ? this.config.services.faceBasic.baseUrl : (runtime.faceBasicUrl || this.config.services.faceBasic.baseUrl),
+            GatewayConfigured ? this.config.services.facePro.baseUrl : (runtime.faceProUrl || this.config.services.facePro.baseUrl),
         ];
         targets.filter(Boolean).forEach(baseUrl => { this._warmRenderService(baseUrl, apiKey); });
     },
@@ -112,7 +158,7 @@ const Api = {
     // 臉部分析服務的 X-API-Key（faceBasic/facePro 共用同一把）；沒設定時回空物件、不影響本機。
     _faceHeaders(service) {
         const key = this.config.services[service]?.apiKey;
-        return key ? { 'X-API-Key': key } : {};
+        return this._memberHeaders(key ? { 'X-API-Key': key } : {});
     },
 
     // 後端建 job 時發 resultToken，之後查詢 job 狀態/結果必須帶 X-Job-Token，否則回 403
@@ -195,7 +241,7 @@ const Api = {
     },
 
     _textSuggestionHeaders() {
-        const headers = { 'Content-Type': 'application/json' };
+        const headers = this._memberHeaders({ 'Content-Type': 'application/json' });
         const apiKey = this.config.services.textSuggestion.apiKey;
         if (apiKey) headers['X-API-Key'] = apiKey;
         return headers;
@@ -228,19 +274,20 @@ const Api = {
         const runtimeConfig = getRuntimeApiConfig();
         const serviceConfig = {
             ...(this.config.services.render || {}),
-            baseUrl: runtimeConfig.renderUrl || this.config.services.render.baseUrl || '',
-            apiKey: runtimeConfig.renderApiKey || this.config.services.render.apiKey || '',
+            baseUrl: GatewayConfigured ? this.config.services.render.baseUrl : (runtimeConfig.renderUrl || this.config.services.render.baseUrl || ''),
+            apiKey: GatewayConfigured ? '' : (runtimeConfig.renderApiKey || this.config.services.render.apiKey || ''),
         };
         const url = serviceConfig.baseUrl && serviceConfig.renderPath
             ? `${serviceConfig.baseUrl}${serviceConfig.renderPath}`
             : '';
         if (!url) throw new Error('renderUrl 未設定，請聯繫渲染端組員提供 Cloud Run URL');
-        const headers = { 'Content-Type': 'application/json' };
+        let headers = { 'Content-Type': 'application/json' };
         const apiKey = serviceConfig.apiKey;
         if (apiKey) headers['X-API-Key'] = apiKey;
         const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
         if (profile.email) headers['X-User-Email'] = profile.email;
         if (profile.role) headers['X-User-Role'] = profile.role;
+        headers = this._memberHeaders(headers);
         let res;
         try {
             await this._warmRenderService(serviceConfig.baseUrl, apiKey);
@@ -287,15 +334,16 @@ const Api = {
     // 輪詢必須帶建立 job 時回的 resultToken（X-Job-Token），不帶會被 403 擋到逾時。
     async renderMakeupAsync({ imageDataUrl, styleId = 'natural', analysisPackage = null, strength = 0.35, onProgress = null }) {
         const runtimeConfig = getRuntimeApiConfig();
-        const baseUrl = runtimeConfig.renderUrl || this.config.services.render.baseUrl || '';
-        const apiKey = runtimeConfig.renderApiKey || this.config.services.render.apiKey || '';
+        const baseUrl = GatewayConfigured ? this.config.services.render.baseUrl : (runtimeConfig.renderUrl || this.config.services.render.baseUrl || '');
+        const apiKey = GatewayConfigured ? '' : (runtimeConfig.renderApiKey || this.config.services.render.apiKey || '');
         if (!baseUrl) throw new Error('renderUrl 未設定，請聯繫渲染端組員提供 Cloud Run URL');
 
-        const headers = { 'Content-Type': 'application/json' };
+        let headers = { 'Content-Type': 'application/json' };
         if (apiKey) headers['X-API-Key'] = apiKey;
         const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
         if (profile.email) headers['X-User-Email'] = profile.email;
         if (profile.role) headers['X-User-Role'] = profile.role;
+        headers = this._memberHeaders(headers);
 
         const emit = (p) => { if (typeof onProgress === 'function') onProgress(p); };
 
@@ -414,16 +462,26 @@ const Api = {
             highlighter: '打亮',
             highlighters: '打亮'
         };
-        const rawCat = String(product.category || product.cat || product.type || '').trim();
-        const tagCat = Array.isArray(product.tags) ? product.tags.find(tag => categoryMap[String(tag).trim()]) : '';
-        const cat = categoryMap[rawCat] || categoryMap[tagCat] || product.cat || '底妝';
+        // API 的中文 category 偶爾會因上游編碼錯誤變成亂碼；穩定的英文 type 才是分類主鍵。
+        const rawType = String(product.type || '').trim().toLowerCase();
+        const rawCategory = String(product.category || product.cat || '').trim();
+        const tagCat = Array.isArray(product.tags) ? product.tags.find(tag => categoryMap[String(tag).trim().toLowerCase()]) : '';
+        const canonicalCategories = new Set(Object.values(categoryMap));
+        const directCategory = [product.cat, product.category]
+            .map(value => String(value || '').trim())
+            .find(value => canonicalCategories.has(value));
+        const cat = categoryMap[rawType]
+            || categoryMap[rawCategory.toLowerCase()]
+            || categoryMap[String(tagCat || '').trim().toLowerCase()]
+            || directCategory
+            || '底妝';
         const price = product.price == null
             ? ''
             : (String(product.price).startsWith('NT$') ? String(product.price) : `NT$${product.price}`);
         return {
-            id: product.id != null ? `api-${rawCat || cat}-${product.id}` : `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            id: product.id != null ? `api-${rawType || cat}-${product.id}` : `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             rawId: product.id ?? null,
-            apiType: rawCat || null, // 原始 type slug（例如 lipsticks），呼叫 /api/product/{type}/{id} 這類單品 API 要用
+            apiType: rawType || null, // 原始 type slug（例如 lipsticks），呼叫 /api/product/{type}/{id} 這類單品 API 要用
             cat,
             name: product.name || '推薦商品',
             brand: product.brand || '',
@@ -440,8 +498,41 @@ const Api = {
                 || ((typeof product.productUrl === 'string' && /^https?:/i.test(product.productUrl)) ? product.productUrl : ''),
             hex: /^#[0-9a-fA-F]{3,8}$/.test(product.hex || '') ? product.hex : null,
             tags: product.tags || [],
+            status: product.status || 'active',
+            reviewStatus: product.reviewStatus || 'pending',
+            inStock: product.inStock !== false,
+            currency: product.currency || 'TWD',
+            imageUrls: Array.isArray(product.imageUrls) ? product.imageUrls : [],
+            shadeName: product.shadeName || null,
+            lab: Array.isArray(product.lab) ? product.lab : null,
+            styleTags: Array.isArray(product.styleTags) ? product.styleTags : [],
+            finishTags: Array.isArray(product.finishTags) ? product.finishTags : [],
+            version: Number.isFinite(Number(product.version)) ? Number(product.version) : null,
+            recommendationReady: product.recommendationReady === true,
             source: 'product-api'
         };
+    },
+
+    _apiError(data, status) {
+        const error = data?.detail?.error || data?.error || {};
+        return {
+            status,
+            code: error.code || data?.code || `HTTP_${status}`,
+            error: error.message || data?.message || `HTTP ${status}`,
+            details: error.details || {},
+            retryable: error.retryable === true
+        };
+    },
+
+    async _adminApiFetch(input, init = {}) {
+        const token = await AdminApiAuthProvider.getAccessToken();
+        const headers = new Headers(init.headers || {});
+        if (token) headers.set('Authorization', `Bearer ${token}`);
+        return fetch(input, { ...init, credentials: 'include', headers });
+    },
+
+    _adminProxyUrl(path) {
+        return `${this.config.services.adminProxy.baseUrl}${path}`;
     },
 
     // 單品詳情：只有這支 API 才有真正的 hex/lab/vector，商品清單 API 沒有
@@ -525,34 +616,130 @@ const Api = {
         }
     },
 
-    async listProducts() {
+    async listProducts(params = {}) {
         const url = this.config.url('product', 'listPath');
         if (!url) return { ok: false, products: [] };
         try {
-            const res = await fetch(url, { cache: 'no-store' });
+            const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== '' && value != null));
+            const requestUrl = query.toString() ? `${url}?${query}` : url;
+            const res = await this._adminApiFetch(requestUrl, { cache: 'no-store' });
             if (!res.ok) return { ok: false, status: res.status, products: [] };
             const data = await res.json();
+            const items = Array.isArray(data.items) ? data.items : (Array.isArray(data.products) ? data.products : []);
             return {
                 ok: true,
                 ...data,
-                products: Array.isArray(data.products)
-                    ? data.products.map(item => this._normalizeProduct(item)).filter(Boolean)
-                    : []
+                products: items.map(item => this._normalizeProduct(item)).filter(Boolean),
+                total: Number.isFinite(Number(data.total)) ? Number(data.total) : items.length,
+                nextCursor: data.nextCursor ?? null
             };
         } catch (_) {
             return { ok: false, products: [] };
         }
     },
 
+    async _listAllProductPages(loader, params = {}, options = {}) {
+        const pageLimit = Math.max(1, Math.min(100, Number(params.limit) || 100));
+        const maxPages = Math.max(1, Math.min(100, Number(options.maxPages) || 50));
+        const commonParams = { ...params };
+        delete commonParams.limit;
+        delete commonParams.cursor;
+        let cursor = params.cursor ?? null;
+        let total = 0;
+        let pageCount = 0;
+        let lastPage = null;
+        const products = [];
+        const productIds = new Set();
+        const usedCursors = new Set();
+
+        while (pageCount < maxPages) {
+            const pageParams = { ...commonParams, limit: pageLimit };
+            if (cursor) pageParams.cursor = cursor;
+            const page = await loader(pageParams);
+            lastPage = page;
+            if (!page?.ok) {
+                return {
+                    ...(page || {}),
+                    ok: false,
+                    partial: products.length > 0,
+                    products,
+                    total: total || products.length,
+                    nextCursor: cursor,
+                    pageCount
+                };
+            }
+
+            for (const product of page.products || []) {
+                const key = String(product?.id ?? `${pageCount}:${products.length}`);
+                if (productIds.has(key)) continue;
+                productIds.add(key);
+                products.push(product);
+            }
+            pageCount += 1;
+            total = Number.isFinite(Number(page.total)) ? Number(page.total) : Math.max(total, products.length);
+            const nextCursor = page.nextCursor ?? null;
+
+            if (typeof options.onPage === 'function') {
+                options.onPage({ products, total, nextCursor, pageCount });
+            }
+            if (!nextCursor || (total > 0 && products.length >= total)) {
+                cursor = null;
+                break;
+            }
+            const cursorKey = String(nextCursor);
+            if (usedCursors.has(cursorKey)) {
+                return { ok: false, code: 'PRODUCT_CURSOR_LOOP', error: '商品分頁游標重複', partial: true, products, total, nextCursor, pageCount };
+            }
+            usedCursors.add(cursorKey);
+            cursor = nextCursor;
+        }
+
+        return {
+            ...(lastPage || {}),
+            ok: true,
+            products,
+            total: total || products.length,
+            nextCursor: cursor,
+            pageCount
+        };
+    },
+
+    async listAllProducts(params = {}, options = {}) {
+        return this._listAllProductPages(pageParams => this.listProducts(pageParams), params, options);
+    },
+
+    async listAdminProducts(params = {}) {
+        const query = new URLSearchParams(Object.entries(params).filter(([, value]) => value !== '' && value != null));
+        const base = this._adminProxyUrl(this.config.services.adminProxy.productsPath);
+        const requestUrl = query.toString() ? `${base}?${query}` : base;
+        try {
+            const res = await this._adminApiFetch(requestUrl, { cache: 'no-store' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, ...this._apiError(data, res.status), products: [] };
+            const items = Array.isArray(data.items) ? data.items : (Array.isArray(data.products) ? data.products : []);
+            return {
+                ok: true,
+                ...data,
+                products: items.map(item => this._normalizeProduct(item)).filter(Boolean),
+                total: Number.isFinite(Number(data.total)) ? Number(data.total) : items.length,
+                nextCursor: data.nextCursor ?? null
+            };
+        } catch (err) {
+            return { ok: false, code: 'ADMIN_PROXY_UNAVAILABLE', error: '管理 Proxy 無法連線：' + err.message, products: [] };
+        }
+    },
+
+    async listAllAdminProducts(params = {}, options = {}) {
+        return this._listAllProductPages(pageParams => this.listAdminProducts(pageParams), params, options);
+    },
+
     async previewCrawledProduct(sourceUrl) {
-        const service = this.config.services.crawler;
-        if (!service?.baseUrl) return { ok: false, code: 'CRAWLER_URL_NOT_CONFIGURED', error: 'crawlerUrl 與 productUrl 都尚未設定' };
-        const url = `${service.baseUrl}${service.previewPath}`;
+        const url = this._adminProxyUrl(this.config.services.adminProxy.crawlerPreviewPath);
         const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
         const timeout = controller ? setTimeout(() => controller.abort(), 30000) : null;
         try {
             const profile = typeof Auth !== 'undefined' ? (Auth.getProfile() || {}) : {};
-            const res = await this._fetchWithRelogin(url, {
+            const res = await this._adminApiFetch(url, {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
@@ -570,8 +757,8 @@ const Api = {
                 return {
                     ok: false,
                     status: res.status,
-                    code: data?.error?.code || data.code || `HTTP_${res.status}`,
-                    error: data?.error?.message || data.message || `HTTP ${res.status}`,
+                    code: data?.error?.code || data?.detail?.error?.code || data.code || `HTTP_${res.status}`,
+                    error: data?.error?.message || data?.detail?.error?.message || data.message || `HTTP ${res.status}`,
                     detail: data?.error?.detail || ''
                 };
             }
@@ -644,9 +831,10 @@ const Api = {
     // 只有送往會員資料庫的請求才附加 Bearer，避免把會員憑證送到商品/爬蟲服務。
     async _fetchWithRelogin(input, init) {
         const memberBaseUrl = this.config.services.memberDatabase.baseUrl;
+        const gatewayBaseUrl = this.config.services.adminProxy.baseUrl;
         const isMemberRequest = typeof input === 'string'
-            && !!memberBaseUrl
-            && input.startsWith(memberBaseUrl);
+            && ((!!memberBaseUrl && input.startsWith(memberBaseUrl))
+                || (!!gatewayBaseUrl && input.startsWith(gatewayBaseUrl)));
         const nextInit = isMemberRequest
             ? { ...(init || {}), headers: this._memberHeaders(init?.headers || {}) }
             : init;
@@ -721,7 +909,7 @@ const Api = {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+                return { ok: false, ...this._apiError(data, res.status) };
             }
             return { ok: true, member: data.member || null };
         } catch (err) {
@@ -746,7 +934,14 @@ const Api = {
             const earned = txns.length
                 ? txns.reduce((s, t) => s + (Number(t.delta) > 0 ? Number(t.delta) : 0), 0)
                 : null;
-            return { ok: true, balance: data.balance ?? null, lifetime: data.lifetime ?? earned, earned, transactions: txns };
+            return {
+                ok: true,
+                ...data,
+                balance: data.balance ?? null,
+                lifetime: data.lifetime ?? earned,
+                earned,
+                transactions: txns
+            };
         } catch (_) {
             return { ok: false, balance: null };
         }
@@ -899,15 +1094,21 @@ const Api = {
 
     async deleteSavedLook(email, id) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
-        if (!baseUrl || !email || id == null) return { ok: false };
+        if (!baseUrl || !email || id == null) return { ok: false, code: 'INVALID_DELETE_REQUEST', error: '缺少會員或收藏識別資料' };
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks/${encodeURIComponent(id)}`, {
                 method: 'DELETE',
                 credentials: 'include'
             });
-            return { ok: res.ok, status: res.status };
-        } catch (_) {
-            return { ok: false };
+            const data = await res.json().catch(() => ({}));
+            return {
+                ok: res.ok,
+                status: res.status,
+                code: data?.error?.code || data?.code || (res.ok ? '' : `HTTP_${res.status}`),
+                error: data?.error?.message || data?.message || (res.ok ? '' : `HTTP ${res.status}`)
+            };
+        } catch (err) {
+            return { ok: false, code: 'NETWORK_ERROR', error: err?.message || '會員資料庫連線失敗' };
         }
     },
 
@@ -916,14 +1117,17 @@ const Api = {
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
         if (rawId == null) return { ok: false, error: '找不到這筆商品的資料庫 id' };
         try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/products/${encodeURIComponent(rawId)}`, {
+            const version = payload?.version;
+            if (!Number.isFinite(Number(version))) return { ok: false, code: 'PRODUCT_VERSION_REQUIRED', error: '缺少商品 version，請重新載入商品後再修改' };
+            const changes = { ...payload };
+            delete changes.version;
+            const res = await this._adminApiFetch(`${this._adminProxyUrl(this.config.services.adminProxy.productsPath)}/${encodeURIComponent(rawId)}`, {
                 method: 'PATCH',
-                credentials: 'include',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                headers: { 'Content-Type': 'application/json', 'If-Match': String(version) },
+                body: JSON.stringify(changes)
             });
             const data = await res.json().catch(() => ({}));
-            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
+            if (!res.ok) return { ok: false, ...this._apiError(data, res.status) };
             return { ok: true, product: data.product || data };
         } catch (err) {
             return { ok: false, error: '連線失敗：' + err.message };
@@ -934,14 +1138,14 @@ const Api = {
         const baseUrl = this.config.services.product.baseUrl;
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
         try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/products`, {
+            const res = await this._adminApiFetch(this._adminProxyUrl(this.config.services.adminProxy.productsPath), {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
             const data = await res.json().catch(() => ({}));
-            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
+            if (!res.ok) return { ok: false, ...this._apiError(data, res.status) };
             return { ok: true, product: data.product || data };
         } catch (err) {
             return { ok: false, error: '連線失敗：' + err.message };
@@ -953,15 +1157,42 @@ const Api = {
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
         if (rawId == null) return { ok: false, error: '找不到這筆商品的資料庫 id' };
         try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/products/${encodeURIComponent(rawId)}`, {
+            const res = await this._adminApiFetch(`${this._adminProxyUrl(this.config.services.adminProxy.productsPath)}/${encodeURIComponent(rawId)}`, {
                 method: 'DELETE',
                 credentials: 'include'
             });
             const data = await res.json().catch(() => ({}));
-            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
-            return { ok: true };
+            if (!res.ok) return { ok: false, ...this._apiError(data, res.status) };
+            return { ok: true, product: data.product || null };
         } catch (err) {
             return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    async getRemoteProduct(rawId) {
+        const baseUrl = this.config.services.product.baseUrl;
+        if (!baseUrl || rawId == null) return { ok: false, error: 'productUrl 或商品 id 未設定' };
+        try {
+            const res = await this._adminApiFetch(`${this._adminProxyUrl(this.config.services.adminProxy.productsPath)}/${encodeURIComponent(rawId)}`, { cache: 'no-store' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, ...this._apiError(data, res.status) };
+            return { ok: true, product: this._normalizeProduct(data.product || data) };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    async listProductAuditLogs(limit = 100) {
+        const baseUrl = this.config.services.product.baseUrl;
+        if (!baseUrl) return { ok: false, error: 'productUrl 未設定', logs: [] };
+        try {
+            const safeLimit = Math.max(1, Math.min(500, Number(limit) || 100));
+            const res = await this._adminApiFetch(`${this._adminProxyUrl(this.config.services.adminProxy.auditPath)}?limit=${safeLimit}`, { cache: 'no-store' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, ...this._apiError(data, res.status), logs: [] };
+            return { ok: true, ...data, logs: data.logs || data.items || [] };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message, logs: [] };
         }
     },
 
@@ -1027,17 +1258,22 @@ const Api = {
 
     async login(email, password) {
         let res;
-        const doLogin = (withCreds) => fetch(this.config.url('memberDatabase', 'loginPath'), {
+        const doLogin = (url, withCreds) => fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password }),
             ...(withCreds ? { credentials: 'include' } : {})
         });
         try {
-            // 優先帶 credentials 讓後端 session cookie 種進來（後台管理端點靠它驗證）；
-            // 對方 CORS 若沒開放 credentials 會直接 TypeError，退回無 cookie 模式讓一般登入不受影響。
-            try { res = await doLogin(true); }
-            catch (_) { res = await doLogin(false); }
+            // 只有明確設定 Gateway Proxy 時才走同網域 /auth/login；
+            // 未部署 Proxy 的正式站／本機環境直接使用目前會員資料庫的 /api/login。
+            // 避免把不存在的同網域路徑誤當成登入 API，導致「Invalid or missing API key」。
+            if (GatewayConfigured || this.config.services.adminProxy.baseUrl) {
+                res = await doLogin(this._adminProxyUrl(this.config.services.adminProxy.loginPath), true);
+                if (res.status === 404) res = await doLogin(this.config.url('memberDatabase', 'loginPath'), true);
+            } else {
+                res = await doLogin(this.config.url('memberDatabase', 'loginPath'), false);
+            }
         } catch (err) {
             // 真正連不上後端（DNS/斷線/CORS 擋掉），才算「網路失敗」，允許前端 fallback 成本機模擬
             const networkErr = new Error('登入 API 連線失敗：' + err.message);
@@ -1069,7 +1305,10 @@ const Api = {
             password: payload.password,
             age: Number(payload.age)
         };
-        const res = await fetch(this.config.url('memberDatabase', 'registerPath'), {
+        const registerUrl = GatewayConfigured
+            ? `${this.config.services.authProxy.baseUrl}${this.config.services.authProxy.registerPath}`
+            : this.config.url('memberDatabase', 'registerPath');
+        const res = await fetch(registerUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
@@ -1079,7 +1318,7 @@ const Api = {
     },
 
     async sendOTP(email) {
-        const memberApi = this.config.services.memberDatabase;
+        const memberApi = GatewayConfigured ? this.config.services.authProxy : this.config.services.memberDatabase;
         for (const endpoint of memberApi.sendOtpPaths) {
             try {
                 const res = await fetch(`${memberApi.baseUrl}${endpoint}`, {
@@ -1096,7 +1335,10 @@ const Api = {
     },
 
     async verifyOTP(email, otp) {
-        const res = await fetch(this.config.url('memberDatabase', 'verifyOtpPath'), {
+        const verifyUrl = GatewayConfigured
+            ? `${this.config.services.authProxy.baseUrl}${this.config.services.authProxy.verifyOtpPath}`
+            : this.config.url('memberDatabase', 'verifyOtpPath');
+        const res = await fetch(verifyUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, otp })
@@ -1493,6 +1735,9 @@ const Auth = {
     },
     isLoggedIn() { return !!this.getUser(); },
     logout() {
+        try {
+            fetch('/auth/logout', { method: 'POST', credentials: 'include', keepalive: true }).catch(() => {});
+        } catch (_) {}
         sessionStorage.removeItem('beautyUser');
         sessionStorage.removeItem('beautyProfile');
         sessionStorage.removeItem('beautyAuthCreds');
@@ -1505,7 +1750,7 @@ const Auth = {
 const AdminStore = {
     _productsKey: 'beautyAdminProducts',
     _overridesKey: 'beautyAdminProductOverrides',
-    _defaultPages: ['dashboard', 'analysisBasic', 'style', 'products', 'favorites', 'history', 'compare', 'suggestion', 'profile'],
+    _defaultPages: ['dashboard', 'analysisBasic', 'style', 'products', 'favorites', 'history', 'compare', 'suggestion', 'checkin', 'profile'],
     _email(email) { return String(email || '').trim().toLowerCase(); },
     _syncCurrentProfile(email, patch) {
         const key = this._email(email);
@@ -1596,7 +1841,7 @@ const AdminStore = {
     failureReason(member) {
         const permission = member?.permission || this.permissionSnapshot(member);
         if (permission.status === 'suspended') return '登入失敗：帳號已停權';
-        const blocked = this._defaultPages.filter(page => !['dashboard', 'profile'].includes(page) && !permission.allowedPages.includes(page));
+        const blocked = this._defaultPages.filter(page => !['dashboard', 'profile', 'checkin'].includes(page) && !permission.allowedPages.includes(page));
         if (blocked.length) return `功能受限：${blocked.length} 個功能未開啟`;
         return '正常';
     },
@@ -1606,6 +1851,7 @@ const AdminStore = {
         const permission = this.permissionSnapshot(p);
         if (permission.status === 'suspended') return false;
         const allowed = permission.allowedPages;
+        if (page === 'checkin') return true;
         if (page === 'analysis') return allowed.includes('analysisBasic') || allowed.includes('analysisPro') || this.isVip(p);
         return allowed.includes(page);
     },
@@ -1775,6 +2021,17 @@ const MemberRewards = {
     },
     hasTheme(email, themeId) {
         return this.unlockedThemes(email).includes(themeId);
+    },
+    unlockTheme(email, themeId) {
+        const key = this._email(email);
+        if (key === 'guest' || !themeId || !this.themes.some(theme => theme.id === themeId)) return false;
+        const all = this._load(this._themesKey, {});
+        const owned = Array.isArray(all[key]) ? all[key] : [];
+        if (!owned.includes(themeId)) {
+            all[key] = [...owned, themeId];
+            this._save(this._themesKey, all);
+        }
+        return true;
     },
     redeemTheme(email, themeId) {
         const key = this._email(email);
