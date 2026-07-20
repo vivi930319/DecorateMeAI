@@ -4164,10 +4164,18 @@ const PageInit = {
     // 先向 Gateway 取得資料庫網址，再開始任何會打 API 的流程。
     // 資料庫網址由 Gateway 統一發布，前端不再寫死（見 issue #23）；取不到就沿用內建值，
     // 所以這裡不需要擋住畫面，失敗只代表用舊網址，不會讓前端整個起不來。
-    Api.bootstrapConfig().finally(() => {
+    Api.bootstrapConfig().finally(async () => {
         if (Auth.isLoggedIn()) {
-            showApp();
-            routeFromHash();
+            const session = await Api.validateSession();
+            if (session.ok) {
+                showApp();
+                routeFromHash();
+            } else if (session.status === 401) {
+                handleSessionExpired();
+            } else {
+                showLogin();
+                showAlert('目前無法確認登入狀態，請稍後重新登入。', { title: '連線暫時不可用', type: 'error' });
+            }
         } else {
             showLogin();
         }
@@ -4191,6 +4199,7 @@ function showApp() {
 function handleSessionExpired() {
     if (Router._sessionExpiryHandling) return;
     Router._sessionExpiryHandling = true;
+    if (typeof Api._cancelSessionRequests === 'function') Api._cancelSessionRequests();
     if (typeof Auth.clearSession === 'function') Auth.clearSession();
     Router.currentPage = null;
     Router._reloadAdmin = null;

@@ -31,6 +31,7 @@ const ApiConfig = {
             baseUrl: AI_GATEWAY_URL,
             loginPath: '/auth/login',
             logoutPath: '/auth/logout',
+            sessionPath: '/auth/session',
             registerPath: '/auth/register',
             sendOtpPath: '/auth/send-otp',
             verifyOtpPath: '/auth/verify-otp',
@@ -89,6 +90,34 @@ const ApiConfig = {
 // ═══ API 串接層 ═══
 const Api = {
     config: ApiConfig,
+    _sessionAbortController: typeof AbortController === 'function' ? new AbortController() : null,
+
+    _resetSessionRequests() {
+        this._sessionAbortController = typeof AbortController === 'function' ? new AbortController() : null;
+    },
+
+    _cancelSessionRequests() {
+        if (this._sessionAbortController && !this._sessionAbortController.signal.aborted) {
+            this._sessionAbortController.abort();
+        }
+    },
+
+    _sessionSignal(existingSignal) {
+        const sessionSignal = this._sessionAbortController?.signal;
+        const signals = [existingSignal, sessionSignal].filter(Boolean);
+        if (!signals.length) return undefined;
+        if (signals.length === 1) return signals[0];
+        if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.any === 'function') {
+            return AbortSignal.any(signals);
+        }
+        const combined = new AbortController();
+        const abort = () => combined.abort();
+        signals.forEach(signal => {
+            if (signal.aborted) abort();
+            else signal.addEventListener('abort', abort, { once: true });
+        });
+        return combined.signal;
+    },
 
     // 向 Gateway 取得穩定的同源路徑。上游資料庫的真實網址只留在 Cloud Run，
     // 瀏覽器不再直接連 Quick Tunnel，也不會因 tunnel 換址或第三方 cookie 被封鎖而整站失效。
@@ -722,20 +751,49 @@ const Api = {
                 };
             }
             this._sessionExpiredNotified = false;
+            this._resetSessionRequests();
             return { ok: true, member: data.member || null, expiresAt: data.expiresAt || null };
         } catch (err) {
             return { ok: false, code: 'NETWORK_ERROR', error: err.message };
         }
     },
 
+    async validateSession() {
+        const gateway = this.config.services.aiGateway;
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        const timer = controller ? setTimeout(() => controller.abort(), 5000) : null;
+        try {
+            const res = await fetch(`${gateway.baseUrl}${gateway.sessionPath}`, {
+                credentials: 'include',
+                cache: 'no-store',
+                signal: controller?.signal
+            });
+            if (!res.ok) return { ok: false, status: res.status };
+            this._sessionExpiredNotified = false;
+            this._resetSessionRequests();
+            return { ok: true };
+        } catch (err) {
+            return { ok: false, status: 0, networkFailure: true, error: err.message };
+        } finally {
+            if (timer) clearTimeout(timer);
+        }
+    },
+
     // 保留 wrapper 名稱相容既有呼叫點；所有會員請求使用同源 HttpOnly cookie。
     async _fetchWithRelogin(input, init) {
-        const nextInit = { ...(init || {}), credentials: 'include', headers: this._memberHeaders(init?.headers || {}) };
+        if (!this._sessionAbortController) this._resetSessionRequests();
+        const nextInit = {
+            ...(init || {}),
+            credentials: 'include',
+            headers: this._memberHeaders(init?.headers || {}),
+            signal: this._sessionSignal(init?.signal)
+        };
         const res = await fetch(input, nextInit);
         // 多個會員／管理員區塊會平行載入。Session 過期時只通知一次，
         // 由 Router 統一清除舊畫面與自動刷新，避免同一秒產生大量 401 與重複彈窗。
         if (res.status === 401 && !this._sessionExpiredNotified) {
             this._sessionExpiredNotified = true;
+            this._cancelSessionRequests();
             window.dispatchEvent(new CustomEvent('decorate-me:session-expired'));
         }
         return res;

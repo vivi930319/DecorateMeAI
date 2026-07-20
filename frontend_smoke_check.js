@@ -4,6 +4,7 @@ const vm = require('vm');
 
 const rootDir = __dirname;
 const apiSource = fs.readFileSync(path.join(rootDir, 'js', 'api.js'), 'utf8');
+const routerSource = fs.readFileSync(path.join(rootDir, 'js', 'router.js'), 'utf8');
 const storage = new Map();
 const session = new Map();
 
@@ -82,11 +83,14 @@ if (suggestionUrl !== '/text-suggestion/suggest') throw new Error(`Bad suggestio
 if (sandbox.ApiConfig.services.memberDatabase.baseUrl !== '/member-database') throw new Error('Member API must use same-origin Gateway');
 if (sandbox.ApiConfig.services.product.baseUrl !== '/product-api') throw new Error('Product API must use same-origin Gateway');
 if (sandbox.ApiConfig.services.crawler.baseUrl !== '/admin-api') throw new Error('Admin crawler API must use same-origin Gateway');
+if (sandbox.ApiConfig.services.aiGateway.sessionPath !== '/auth/session') throw new Error('Gateway session validation path missing');
 
 // ── Api 方法 ─────────────────────────────────────────────────
-for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'previewCrawledProduct']) {
+for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'previewCrawledProduct', 'validateSession']) {
   if (typeof sandbox.Api[method] !== 'function') throw new Error(`Missing Api.${method}`);
 }
+if (!routerSource.includes('const session = await Api.validateSession()')) throw new Error('Private pages must validate Gateway session before showApp');
+if (!apiSource.includes('this._cancelSessionRequests();')) throw new Error('Expired sessions must cancel protected request batch');
 
 // ── ImagePipeline ─────────────────────────────────────────────
 for (const method of ['compressForPackage', 'compressInWorker', 'compressOnMainThread', 'canUseWorker']) {
