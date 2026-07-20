@@ -374,17 +374,10 @@ def require_upstream_member_cookie(request: Request) -> str:
         )
 
 
-async def validate_upstream_member_session(request: Request, claims: dict) -> None:
-    """Confirm the sealed upstream cookie is still accepted by the member DB.
-
-    A sealed cookie can be cryptographically valid while the upstream session
-    has already been revoked or expired.  A small profile read makes the
-    session preflight reflect the real upstream authentication state without
-    exposing the member email or cookie to the browser.
-    """
-    upstream_cookie = require_upstream_member_cookie(request)
-    subject = str(claims.get("sub") or "").strip().lower()
-    if not subject or not MEMBER_DATABASE_URL:
+async def _validate_upstream_member_cookie(request: Request, upstream_cookie: str, subject: str) -> str:
+    """Return the accepted (and possibly rotated) upstream session cookie."""
+    subject = str(subject or "").strip().lower()
+    if not upstream_cookie or not subject or not MEMBER_DATABASE_URL:
         raise HTTPException(
             status_code=503,
             detail={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE", "message": "Member authentication is unavailable."}},
@@ -416,6 +409,19 @@ async def validate_upstream_member_session(request: Request, claims: dict) -> No
             status_code=503,
             detail={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE", "message": "Member authentication is unavailable."}},
         )
+    return _upstream_cookie_header(response) or upstream_cookie
+
+
+async def validate_upstream_member_session(request: Request, claims: dict) -> str:
+    """Confirm the sealed upstream cookie is still accepted by the member DB.
+
+    A sealed cookie can be cryptographically valid while the upstream session
+    has already been revoked or expired.  A small profile read makes the
+    session preflight reflect the real upstream authentication state without
+    exposing the member email or cookie to the browser.
+    """
+    upstream_cookie = require_upstream_member_cookie(request)
+    return await _validate_upstream_member_cookie(request, upstream_cookie, str(claims.get("sub") or ""))
 
 
 def opaque_actor_id(subject: str) -> str:
@@ -463,9 +469,10 @@ def validate_product_id(product_id: str) -> str:
 def build_upstream_headers(request: Request, upstream: Upstream, identity_token: str) -> dict[str, str]:
     headers = {
         "Accept": request.headers.get("accept", "application/json"),
-        "X-API-Key": upstream.api_key,
         "X-Forwarded-For": client_ip(request),
     }
+    if upstream.api_key:
+        headers["X-API-Key"] = upstream.api_key
     if upstream.requires_cloud_run_iam and identity_token:
         headers["X-Serverless-Authorization"] = f"Bearer {identity_token}"
     content_type = request.headers.get("content-type")
@@ -830,6 +837,15 @@ async def login(body: LoginRequest, request: Request):
     upstream_cookie = _upstream_cookie_header(response)
     if not upstream_cookie:
         raise HTTPException(status_code=502, detail={"error": {"code": "MEMBER_SESSION_MISSING", "message": "Member authentication failed."}})
+    try:
+        upstream_cookie = await _validate_upstream_member_cookie(request, upstream_cookie, verified_email)
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            raise HTTPException(
+                status_code=502,
+                detail={"error": {"code": "MEMBER_SESSION_UNUSABLE", "message": "Member authentication session could not be established."}},
+            )
+        raise
     payload = {"success": True, "member": member, "expiresAt": expires_at}
     if not SESSION_ONLY_MODE:
         payload.update({"accessToken": access_token, "tokenType": "Bearer"})
@@ -867,13 +883,23 @@ async def logout():
 async def session_status(request: Request):
     """Verify both Gateway and upstream member sessions before loading private pages."""
     claims = require_member_access(request)
-    await validate_upstream_member_session(request, claims)
-    return {
+    upstream_cookie = await validate_upstream_member_session(request, claims)
+    result = JSONResponse(content={
         "ok": True,
         "role": str(claims.get("role") or "member"),
         "status": str(claims.get("status") or "active"),
         "expiresAt": int(claims.get("exp") or 0) * 1000,
-    }
+    })
+    result.set_cookie(
+        key=MEMBER_SESSION_COOKIE,
+        value=seal_member_cookie(upstream_cookie),
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        path="/",
+    )
+    return result
 
 
 async def proxy_public_member_request(request: Request, upstream_path: str):

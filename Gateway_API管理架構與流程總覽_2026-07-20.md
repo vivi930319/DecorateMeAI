@@ -134,7 +134,7 @@ sequenceDiagram
 | 路由 | 方法 | 認證 | 說明 |
 |---|---|---|---|
 | `/health` | GET | 無 | 健康檢查與模式回報 |
-| `/public-config` | GET | 無 | **發布會員／商品資料庫網址**，見第六節 |
+| `/public-config` | GET | 無 | 只發布 `/member-database`、`/product-api` 等同源 Gateway 路徑，不公開上游網址 |
 | `/auth/login` | POST | 無（有速率限制） | 簽發 session，種 `dm_session` cookie |
 | `/auth/logout` | POST | 無 | 清除 cookie |
 | `/auth/register` | POST | 無 | 註冊 |
@@ -233,7 +233,9 @@ curl https://decorate-me.web.app/public-config
 
 ## 七、目前的缺口
 
-### 7.1 會員資料庫繞過 Gateway 直連（**進行中的故障**）
+### 7.1 會員資料庫繞過 Gateway 直連（**已改走同源 Gateway**）
+
+> 2026-07-21 更新：瀏覽器現在只呼叫 Gateway 登入。Gateway 取得會員資料庫的 `Set-Cookie` 後加密封裝成另一枚 HttpOnly cookie，後續由伺服器解封並轉送，因此瀏覽器不再直連 Tunnel，也不依賴第三方 cookie。未設定會員 API key 時不會送出空白 `X-API-Key`；登入成功前會立即驗證上游 cookie 能讀取會員資料。
 
 **症狀**：個人頁的打卡、任務讀取全部 403。
 
@@ -256,12 +258,12 @@ Third-party cookie will be blocked.
 
 **為什麼不能靠 cookie 撐過去**：Chrome 正在淘汰第三方 cookie（console 已出現 `Third-party cookie will be blocked`）。跨來源直連 tunnel 帶 cookie 這條路會完全斷掉，這不是設定問題。
 
-**正確方向**：走 Gateway 的 `/member-database/*`（白名單已經涵蓋所有失敗的路徑，`firebase.json` 的 rewrite 也已存在）。**但這需要資料庫端配合**，因為 Gateway 是伺服器對伺服器呼叫，帶不了瀏覽器的 session cookie。需要資料庫端提供其中一種：
+**長期正式方向**：目前以 Gateway 代登入並安全封裝上游 cookie，已能避免瀏覽器第三方 cookie 問題。正式商用若要支援立即撤銷、跨 instance 與更清楚的服務身分，資料庫端仍建議提供其中一種：
 
 1. 接受 `UPSTREAM_MEMBER_API_KEY` 這類服務對服務憑證（Gateway 已有此欄位，目前未啟用）
 2. 或接受 Gateway 簽的 JWT，共用 `GATEWAY_SESSION_SECRET` 驗章
 
-**在資料庫端配合之前，前端單方面改走 Gateway 只會把 403 換成另一種 403。**
+目前的 cookie 封裝方案是可運作的過渡整合；資料庫端完成服務憑證後，再將 Gateway 改成正式服務對服務驗證。
 
 ### 7.2 文字建議服務停用中
 

@@ -79,6 +79,9 @@ class AiGatewayTest(unittest.TestCase):
         self.assertNotIn("X-User-Email", headers)
         self.assertNotIn("Authorization", headers)
 
+        member_headers = build_upstream_headers(request, UPSTREAMS["member-database"], "")
+        self.assertNotIn("X-API-Key", member_headers)
+
     def test_member_access_token_is_required_and_verified(self):
         token, expires_at = issue_access_token("Member@Example.com", "member")
         self.assertGreater(expires_at, 0)
@@ -110,11 +113,15 @@ class AiGatewayTest(unittest.TestCase):
             "dm_session": token,
             "dm_member_session": seal_member_cookie("session=private-upstream-value"),
         }
-        request.app.state.http_client.get = AsyncMock(return_value=httpx.Response(200))
+        request.app.state.http_client.get = AsyncMock(
+            return_value=httpx.Response(200, request=httpx.Request("GET", "https://member.test/api/members/member%40example.com"))
+        )
         result = asyncio.run(session_status(request))
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["role"], "member")
-        self.assertNotIn("email", result)
+        payload = result.body.decode("utf-8")
+        self.assertIn('"ok":true', payload)
+        self.assertIn('"role":"member"', payload)
+        self.assertNotIn("email", payload)
+        self.assertIn("dm_member_session=", result.headers.get("set-cookie", ""))
         request.app.state.http_client.get.assert_awaited_once()
 
         request.cookies = {"dm_session": token}
