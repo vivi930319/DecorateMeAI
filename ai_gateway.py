@@ -12,7 +12,7 @@ from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 import jwt
@@ -371,6 +371,50 @@ def require_upstream_member_cookie(request: Request) -> str:
         raise HTTPException(
             status_code=401,
             detail={"error": {"code": "MEMBER_SESSION_INVALID", "message": "Member session is invalid or expired."}},
+        )
+
+
+async def validate_upstream_member_session(request: Request, claims: dict) -> None:
+    """Confirm the sealed upstream cookie is still accepted by the member DB.
+
+    A sealed cookie can be cryptographically valid while the upstream session
+    has already been revoked or expired.  A small profile read makes the
+    session preflight reflect the real upstream authentication state without
+    exposing the member email or cookie to the browser.
+    """
+    upstream_cookie = require_upstream_member_cookie(request)
+    subject = str(claims.get("sub") or "").strip().lower()
+    if not subject or not MEMBER_DATABASE_URL:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE", "message": "Member authentication is unavailable."}},
+        )
+    headers = {"Accept": "application/json", "Cookie": upstream_cookie}
+    try:
+        response = await request.app.state.http_client.get(
+            f"{MEMBER_DATABASE_URL}/api/members/{quote(subject, safe='')}",
+            headers=headers,
+            timeout=10,
+        )
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE", "message": "Member authentication is unavailable."}},
+        )
+    except httpx.HTTPError:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE", "message": "Member authentication is unavailable."}},
+        )
+    if response.status_code in {401, 403, 404}:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"code": "MEMBER_SESSION_INVALID", "message": "Member session is invalid or expired."}},
+        )
+    if not response.is_success:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE", "message": "Member authentication is unavailable."}},
         )
 
 
@@ -823,7 +867,7 @@ async def logout():
 async def session_status(request: Request):
     """Verify both Gateway and upstream member sessions before loading private pages."""
     claims = require_member_access(request)
-    require_upstream_member_cookie(request)
+    await validate_upstream_member_session(request, claims)
     return {
         "ok": True,
         "role": str(claims.get("role") or "member"),

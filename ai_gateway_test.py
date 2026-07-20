@@ -1,7 +1,7 @@
 import os
 import unittest
 import asyncio
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 
@@ -9,6 +9,7 @@ os.environ.setdefault("GATEWAY_FACE_API_KEY", "face-client-key")
 os.environ.setdefault("GATEWAY_RENDER_API_KEY", "render-client-key")
 os.environ.setdefault("GATEWAY_SESSION_SECRET", "test-session-secret-that-is-at-least-32-bytes")
 
+import ai_gateway as gateway  # noqa: E402
 from ai_gateway import (  # noqa: E402
     UPSTREAMS,
     build_upstream_headers,
@@ -23,6 +24,7 @@ from ai_gateway import (  # noqa: E402
     require_upstream_member_cookie,
     seal_member_cookie,
     session_status,
+    validate_upstream_member_session,
     _upstream_cookie_header,
     _authorize_member_path,
     _render_job_id_from_url,
@@ -100,6 +102,7 @@ class AiGatewayTest(unittest.TestCase):
         self.assertEqual(claims["sub"], "admin@example.com")
 
     def test_session_status_requires_both_http_only_sessions(self):
+        gateway.MEMBER_DATABASE_URL = "https://member.test"
         token, _ = issue_access_token("member@example.com", "member", "active")
         request = Mock()
         request.headers = {}
@@ -107,15 +110,31 @@ class AiGatewayTest(unittest.TestCase):
             "dm_session": token,
             "dm_member_session": seal_member_cookie("session=private-upstream-value"),
         }
+        request.app.state.http_client.get = AsyncMock(return_value=httpx.Response(200))
         result = asyncio.run(session_status(request))
         self.assertTrue(result["ok"])
         self.assertEqual(result["role"], "member")
         self.assertNotIn("email", result)
+        request.app.state.http_client.get.assert_awaited_once()
 
         request.cookies = {"dm_session": token}
         with self.assertRaises(Exception) as missing_upstream:
             asyncio.run(session_status(request))
         self.assertEqual(missing_upstream.exception.status_code, 401)
+
+    def test_session_status_rejects_revoked_upstream_cookie(self):
+        gateway.MEMBER_DATABASE_URL = "https://member.test"
+        token, _ = issue_access_token("member@example.com", "member", "active")
+        request = Mock()
+        request.headers = {}
+        request.cookies = {
+            "dm_session": token,
+            "dm_member_session": seal_member_cookie("session=revoked-upstream-value"),
+        }
+        request.app.state.http_client.get = AsyncMock(return_value=httpx.Response(401))
+        with self.assertRaises(Exception) as revoked:
+            asyncio.run(session_status(request))
+        self.assertEqual(revoked.exception.status_code, 401)
 
     def test_non_admin_and_suspended_admin_are_rejected(self):
         request = Mock()
