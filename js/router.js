@@ -368,6 +368,9 @@ const ROUTE_PAGES = new Set(NAV_ORDER);
 // 玻璃提示彈窗（取代瀏覽器原生 alert）
 function showAlert(msg, opts){
     opts = opts || {};
+    if (opts.type === 'error' && typeof localizeUserError === 'function') {
+        msg = localizeUserError(msg, opts.code || '', opts.status || 0);
+    }
     var old = document.getElementById("dmAlert"); if (old) old.remove();
     var ov = document.createElement("div");
     ov.id = "dmAlert"; ov.className = "glass-alert" + (opts.type ? " " + opts.type : "");
@@ -511,6 +514,12 @@ function showCartPanel(){
 // ═══ 玻璃雙鈕對話框（取代原生 confirm） ═══
 function showConfirm(msg, opts){
     opts = opts || {};
+    if (opts.type === 'error' && typeof localizeUserError === 'function') {
+        msg = localizeUserError(msg, opts.code || '', opts.status || 0);
+        if (opts.title && !/[\u3400-\u9fff]/.test(String(opts.title))) {
+            opts.title = '操作失敗';
+        }
+    }
     var old = document.getElementById("dmConfirm"); if (old) old.remove();
     var ov = document.createElement("div");
     ov.id = "dmConfirm"; ov.className = "glass-alert" + (opts.type ? " " + opts.type : "");

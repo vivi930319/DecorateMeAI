@@ -25,6 +25,108 @@ const RuntimeApiConfig = getRuntimeApiConfig();
 const AI_GATEWAY_URL = String(RuntimeApiConfig.aiGatewayUrl || '').replace(/\/+$/, '');
 const gatewayService = name => `${AI_GATEWAY_URL}/${name}`;
 
+// 所有使用者看得到的錯誤訊息在前端統一翻成中文。後端仍保留穩定的英文
+// error code 供程式判斷，但不把英文 message 或內部服務細節直接丟進彈窗。
+const USER_ERROR_ZH = Object.freeze({
+    UNAUTHORIZED: '驗證資訊無效，請重新登入後再試。',
+    FORBIDDEN: '你沒有執行這項操作的權限。',
+    INVALID_CREDENTIALS: '帳號或密碼錯誤，請重新確認。',
+    WRONG_PASSWORD: '密碼錯誤，請重新輸入。',
+    USER_NOT_FOUND: '找不到這個會員帳號。',
+    EMAIL_EXISTS: '這個信箱已經註冊過了。',
+    MEMBER_AUTH_REQUIRED: '請先登入會員後再繼續。',
+    MEMBER_SESSION_REQUIRED: '請先登入會員後再繼續。',
+    MEMBER_AUTH_INVALID: '登入狀態已失效，請重新登入後再繼續。',
+    MEMBER_SESSION_INVALID: '登入狀態已失效，請重新登入後再繼續。',
+    MEMBER_SESSION_MISSING: '會員登入狀態建立失敗，請稍後再試。',
+    MEMBER_SESSION_UNUSABLE: '會員登入狀態無法建立，請稍後再試。',
+    MEMBER_SESSION_TOO_LARGE: '會員登入資料異常，請重新登入。',
+    MEMBER_SERVICE_UNAVAILABLE: '會員服務目前無法連線，請稍後再試。',
+    MEMBER_SERVICE_TIMEOUT: '會員服務回應逾時，請稍後再試。',
+    MEMBER_SERVICE_ERROR: '會員服務處理失敗，請稍後再試。',
+    MEMBER_SCOPE_FORBIDDEN: '無法存取其他會員的資料。',
+    AUTH_NOT_CONFIGURED: '會員驗證服務尚未完成設定，請聯繫管理員。',
+    LOGIN_RATE_LIMITED: '登入嘗試次數過多，請稍後再試。',
+    ADMIN_REQUIRED: '只有管理員可以執行這項操作。',
+    ADMIN_SUSPENDED: '管理員帳號目前已停權。',
+    ADMIN_PROXY_NOT_CONFIGURED: '管理端服務尚未完成設定。',
+    INVALID_PRODUCT_ID: '商品識別資料不正確，請重新整理後再試。',
+    PRODUCT_UPSTREAM_TIMEOUT: '商品服務回應逾時，請稍後再試。',
+    PRODUCT_SERVICE_UNAVAILABLE: '商品服務目前無法連線，請稍後再試。',
+    EXTERNAL_TEXT_UPSTREAM_DISABLED: '文字建議服務目前暫停使用，其他功能不受影響。',
+    NOT_CONFIGURED: '這項服務尚未完成設定，請聯繫管理員。',
+    IDENTITY_TOKEN_UNAVAILABLE: '服務驗證暫時無法使用，請稍後再試。',
+    UPSTREAM_TIMEOUT: '後端服務回應逾時，請稍後再試。',
+    UPSTREAM_UNAVAILABLE: '後端服務目前無法連線，請稍後再試。',
+    PAYLOAD_TOO_LARGE: '上傳的資料過大，請縮小檔案後再試。',
+    REQUEST_TOO_LARGE: '上傳的資料過大，請縮小檔案後再試。',
+    IMAGE_TOO_LARGE: '圖片檔案過大，請壓縮後再試。',
+    INVALID_IMAGE: '圖片格式不正確，請重新選擇圖片。',
+    BAD_CONTENT_LENGTH: '上傳資料格式不正確，請重新選擇檔案。',
+    NOT_FOUND: '找不到要求的資料。',
+    METHOD_NOT_ALLOWED: '目前不支援這項操作。',
+    JOB_NOT_FOUND: '工作不存在或已經過期，請重新執行。',
+    MEDIA_NOT_FOUND: '找不到這張圖片，可能已被刪除。',
+    MEDIA_UNAVAILABLE: '圖片目前無法讀取，請稍後再試。',
+    FACE_ANALYSIS_TIMEOUT: '臉部分析逾時，請稍後再試。',
+    FACE_ANALYSIS_ERROR: '臉部分析失敗，請稍後再試。',
+    RENDER_TIMEOUT: '妝容生成逾時，請稍後再試。',
+    RENDER_PROVIDER_ERROR: '妝容生成服務處理失敗，請稍後再試。',
+    OLLAMA_UNAVAILABLE: '文字建議服務目前無法連線，請稍後再試。',
+    NETWORK_ERROR: '網路連線失敗，請確認網路後再試。',
+    FETCH_TIMEOUT: '服務回應逾時，請稍後再試。'
+});
+
+function localizeUserError(message, code = '', status = 0) {
+    const raw = String(message || '').trim();
+    const explicitCode = String(code || '').trim().toUpperCase();
+    const embeddedCode = (raw.match(/\b[A-Z][A-Z0-9_]{2,}\b/) || [])[0] || '';
+    const resolvedCode = explicitCode || embeddedCode;
+    if (USER_ERROR_ZH[resolvedCode]) return USER_ERROR_ZH[resolvedCode];
+
+    const exact = {
+        'member authentication is unavailable.': '會員服務目前無法連線，請稍後再試。',
+        'member authentication failed.': '會員驗證失敗，請稍後再試。',
+        'member authentication session could not be established.': '會員登入狀態無法建立，請稍後再試。',
+        'member sign-in is required.': '請先登入會員後再繼續。',
+        'member session is invalid or expired.': '登入狀態已失效，請重新登入後再繼續。',
+        'invalid email or password.': '帳號或密碼錯誤，請重新確認。',
+        'too many login attempts.': '登入嘗試次數過多，請稍後再試。',
+        'administrator permission is required.': '只有管理員可以執行這項操作。',
+        'administrator account is suspended.': '管理員帳號目前已停權。',
+        'service authentication is unavailable.': '服務驗證暫時無法使用，請稍後再試。',
+        'upstream service is unavailable.': '後端服務目前無法連線，請稍後再試。',
+        'upstream service timed out.': '後端服務回應逾時，請稍後再試。',
+        'route not found.': '找不到要求的功能。',
+        'method not allowed.': '目前不支援這項操作。',
+        'request body is too large.': '上傳的資料過大，請縮小檔案後再試。',
+        'render image is temporarily unavailable.': '圖片目前無法讀取，請稍後再試。',
+        'render image was not found.': '找不到這張圖片，可能已被刪除。',
+        'render job not found or expired.': '妝容生成工作不存在或已經過期，請重新執行。',
+        'failed to fetch': '網路連線失敗，請確認網路後再試。',
+        'page not found': '找不到要求的頁面。'
+    };
+    if (exact[raw.toLowerCase()]) return exact[raw.toLowerCase()];
+    if (status === 401) return '登入狀態已失效，請重新登入後再繼續。';
+    if (status === 403) return '你沒有執行這項操作的權限。';
+    if (status === 404) return '找不到要求的資料。';
+    if (status === 429) return '操作次數過多，請稍後再試。';
+    if (status >= 500) return '系統服務暫時異常，請稍後再試。';
+
+    // 已經含有中文的訊息通常是前端自己撰寫，只替換少量常見英文片段。
+    if (/[\u3400-\u9fff]/.test(raw)) {
+        return raw
+            .replace(/Failed to fetch|NetworkError|Load failed/gi, '網路連線失敗')
+            .replace(/Unknown error/gi, '未知錯誤')
+            .replace(/Page not found/gi, '找不到頁面');
+    }
+    // 未收錄的純英文後端訊息不直接顯示，避免把內部實作細節暴露給使用者。
+    if (/[A-Za-z]{3}/.test(raw)) return '系統目前無法完成這項操作，請稍後再試。';
+    return raw || '系統目前無法完成這項操作，請稍後再試。';
+}
+
+if (typeof window !== 'undefined') window.localizeUserError = localizeUserError;
+
 const ApiConfig = {
     services: {
         aiGateway: {
@@ -743,11 +845,13 @@ const Api = {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
+                const code = data?.detail?.error?.code || data?.error?.code || `HTTP_${res.status}`;
+                const message = data?.detail?.error?.message || data?.error?.message || '帳號或密碼錯誤';
                 return {
                     ok: false,
                     status: res.status,
-                    code: data?.detail?.error?.code || data?.error?.code || `HTTP_${res.status}`,
-                    error: data?.detail?.error?.message || data?.error?.message || '帳號或密碼錯誤'
+                    code,
+                    error: localizeUserError(message, code, res.status)
                 };
             }
             this._sessionExpiredNotified = false;

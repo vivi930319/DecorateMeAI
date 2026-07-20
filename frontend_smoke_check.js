@@ -42,7 +42,15 @@ const sandbox = {
 };
 
 vm.createContext(sandbox);
-vm.runInContext(`${apiSource}; this.ApiConfig = ApiConfig; this.Api = Api; this.ImagePipeline = ImagePipeline; this.AnalysisPackage = AnalysisPackage; this.Auth = Auth; this.AdminStore = AdminStore; this.Cart = Cart;`, sandbox);
+vm.runInContext(`${apiSource}; this.ApiConfig = ApiConfig; this.Api = Api; this.ImagePipeline = ImagePipeline; this.AnalysisPackage = AnalysisPackage; this.Auth = Auth; this.AdminStore = AdminStore; this.Cart = Cart; this.localizeUserError = localizeUserError;`, sandbox);
+
+// ── 使用者錯誤訊息中文化 ────────────────────────────────────
+if (sandbox.localizeUserError('Member authentication is unavailable.', 'MEMBER_SERVICE_UNAVAILABLE', 503) !== '會員服務目前無法連線，請稍後再試。') {
+  throw new Error('Member authentication errors must be localized to Chinese');
+}
+if (sandbox.localizeUserError('Unexpected internal provider detail') !== '系統目前無法完成這項操作，請稍後再試。') {
+  throw new Error('Unknown English backend errors must not be shown to users');
+}
 
 // ── 會員姓名與購物車 ─────────────────────────────────────────
 sandbox.Auth.setProfile({ name: '測試會員', email: 'USER@example.com', level: '一般會員' });
