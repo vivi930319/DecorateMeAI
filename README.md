@@ -1,197 +1,95 @@
-# Decorate Me — 臉部分析與 AI 妝容渲染後端
+# Decorate Me 後端與 Gateway
 
-Decorate Me 是一套 AI 美妝系統：使用者上傳一張自拍，系統分析五官與膚色，生成妝容建議，再用 AI 把妝容渲染回同一張臉，並推薦對應的彩妝商品。
+Decorate Me 是妝容分析、商品推薦、圖片渲染與會員收藏系統。本分支 `Isa` 保存 Python 後端、AI Gateway、Cloud Run 部署設定、Firestore 工作紀錄與 GCS 私人媒體流程。
 
-本後端負責兩塊核心能力，獨立成 API 供網頁前端與未來 iOS App 共用：
+正式前端：<https://decorate-me.web.app>
 
-- **臉部分析**：偵測人臉、抽取五官與膚色特徵、判定個人色彩（四季型）。
-- **AI 妝容渲染**：用擴散模型把妝容畫到原照片上，維持人物與姿勢不變。
-
-部署在 Google Cloud Run，前端網頁見 [decorate-me.web.app](https://decorate-me.web.app)。
-
----
-
-## 系統架構
+## 目前架構
 
 ```mermaid
-flowchart TB
-  classDef n fill:#ffffff,stroke:#000000,color:#000000;
-  U["使用者瀏覽器 / App"]
-  FE["前端 (Firebase Hosting)"]
-  subgraph BE["本後端 (Cloud Run)"]
-    GW["ai-gateway 會員驗證 / API 代理"]
-    FB["face-basic 臉部分析"]
-    FP["face-pro 臉部分析"]
-    RD["replicate-render 渲染"]
-  end
-  OLL["Ollama 文字建議"]
-  MDB["會員 / 商品資料庫"]
-  REP["Replicate openai/gpt-image-2"]
-  GCS["GCS 渲染圖儲存"]
-  FS["Firestore 分析 job"]
-
-  U --> FE
-  FE -->|會員登入 + X-API-Key| GW
-  GW -->|Cloud Run IAM ID token| FB
-  GW -->|Cloud Run IAM ID token| FP
-  GW -->|Cloud Run IAM ID token| RD
-  FE -->|X-API-Key| OLL
-  FE -->|session cookie| MDB
-  FB --> FS
-  FP --> FS
-  RD --> REP
-  RD --> GCS
-  class U,FE,FB,FP,RD,OLL,MDB,REP,GCS,FS n;
-  style BE fill:#ffffff,stroke:#000000,color:#000000;
+flowchart LR
+    FE["Firebase Hosting 前端"] -->|"同源 API + HttpOnly session"| GW["AI Gateway"]
+    GW --> DB["會員／商品資料庫"]
+    GW --> FB["Face BASIC"]
+    GW --> FP["Face PRO"]
+    GW --> RR["Render"]
+    RR --> GCS["私人 GCS Bucket"]
+    FB --> FS["Firestore"]
+    FP --> FS
+    RR --> FS
 ```
 
----
+瀏覽器只連正式網站的同源路徑。資料庫網址、上游 API key 與模型權杖只存在 Cloud Run／Secret Manager，不得寫入前端、文件或一般 Log。
 
-## 技術棧
+## 主要服務
 
-| 分類 | 使用 |
-|------|------|
-| 語言 / 框架 | Python 3.10（BASIC / PRO / suggestion）、Python 3.11（render）、FastAPI、Uvicorn |
-| 電腦視覺 | InsightFace（buffalo_l）、MediaPipe FaceMesh、OpenCV、NumPy |
-| AI 渲染 | Replicate（openai/gpt-image-2） |
-| 儲存 | Google Cloud Storage（渲染圖）、Firestore（分析 job） |
-| 部署 | Docker、Google Cloud Run（asia-east1） |
+| 服務 | 入口 | 用途 |
+|---|---|---|
+| AI Gateway | `ai_gateway.py` | 登入、權限、路徑白名單、會員／商品代理、Face／Render 代理與私人媒體 |
+| Face BASIC | `Face_analyzer_BASIC.py` | 基礎臉部分析與非同步工作 |
+| Face PRO | `Face_analyzer_PRO.py` | 進階臉部分析與非同步工作 |
+| Render | `replicate_render_api.py` | 妝容渲染、工作狀態、收藏保留與媒體刪除 |
+| Render 核心 | `replicate_render.py` | 模型呼叫、GCS 上傳、暫存與收藏物件管理 |
+| Job Store | `job_store.py` | Firestore 工作資料、TTL 與狀態轉換 |
 
----
+## 2026-07-21 正式安全狀態
 
-## 服務與端點
+- Gateway 已成為瀏覽器的單一 API 入口；`/public-config` 只回同源路徑。
+- 登入只使用 `HttpOnly + Secure + SameSite=Lax` cookie，不在前端保存會員 Bearer token。
+- `decorate-me-renders` 已禁止公開存取；匿名 GCS 物件網址回 403。
+- 未收藏渲染保存於 `temporary/`，2 天後自動刪除；收藏後移至 `retained/{opaqueOwnerId}/{jobId}`。
+- 會員經 `/media/render/{jobId}` 觀看自己的私人圖片。
+- 收藏刪除與會員刪除會同步清理 Render job 與 GCS 物件。
+- Face BASIC／PRO 缺少或錯誤金鑰時一致回 401。
+- Replicate 與文字建議服務秘密由 Secret Manager 注入，README 不記錄實際值。
 
-### 臉部分析（face-basic / face-pro）
-| 方法 | 路徑 | 說明 |
-|------|------|------|
-| GET | `/health` | 服務健康檢查 |
-| POST | `/v1/face/analyze/basic` | BASIC 分析（單張正臉），回五官與膚色 |
-| POST | `/v1/face/pose` | 偵測頭部角度（yaw/pitch/roll），引導拍正臉 |
-| POST | `/v1/face/analyze/pro` | PRO 分析（正臉＋側臉） |
-| — | 非同步 jobs API | 建立 job、輪詢進度、取結果（存 Firestore；建立時回 `resultToken`，輪詢需帶回） |
+真正的 GCS V4 Signed URL 尚待指定服務帳號自簽權限的明確授權；目前採登入驗證串流代理，Bucket 不會為了顯示圖片而改回公開。
 
-### AI 渲染（replicate-render）
-| 方法 | 路徑 | 說明 |
-|------|------|------|
-| GET | `/health` | 健康檢查，回報 api key / 限流 / 去重設定 |
-| POST | `/render` | 傳入原圖與白名單 `styleId`；英文 prompt 由後端產生，回渲染後永久網址 |
-| POST/GET | `/render/jobs` | 建立渲染 job、用 `jobId` + `resultToken` 輪詢 |
-| DELETE | `/render/jobs/{job_id}` | 以 job token 刪除已完成 job 與對應 GCS 圖片 |
+### Ollama 專題展示例外
 
----
+目前 Ollama 完整 Prompt 依專題紀錄需求保留在受控展示／除錯回應，本次不移除。Prompt 不得寫進一般存取 Log，也不得與真實照片、完整 email、權杖或完整分析包一起保存；待使用者明確確認 Ollama 完成後再移除。
 
-## 專案結構
+## 本機驗證
 
-```
-Face_analyzer_BASIC.py       BASIC 臉部分析服務（FastAPI）
-Face_analyzer_PRO.py         PRO 臉部分析服務
-replicate_render_api.py      AI 渲染服務（FastAPI）
-replicate_render.py          Replicate 呼叫 + GCS 上傳
-ai_gateway.py                會員 AI token + 私有 Cloud Run 代理
-Ollama_suggestion.py         妝容文字建議
-analysis_package.py          分析結果資料結構
-job_store.py                 非同步 job（Firestore）
-dev_server_utils.py          CORS / 本機開發工具
-Dockerfile, Dockerfile.render, Dockerfile.gateway   容器化與部署
-requirements.txt, requirements.render.txt, requirements.gateway.txt   依賴
-tools/                       ML 資料工程腳本（標註 / 分類 / 整理訓練資料，非服務本體）
+```powershell
+python -m py_compile ai_gateway.py Face_analyzer_BASIC.py Face_analyzer_PRO.py replicate_render.py replicate_render_api.py job_store.py
+python -m unittest ai_gateway_test.py render_api_test.py
 ```
 
----
+正式部署前還要執行秘密掃描，並確認測試輸出、PowerShell 歷史與文件都沒有實際金鑰或權杖。
 
-## 臉部分析怎麼做
+## Cloud Run 與 GCS
 
-1. 上傳圖縮到最長邊 1024px。
-2. **InsightFace（buffalo_l）** 偵測人臉與 3D 頭部姿態。
-3. **MediaPipe FaceMesh** 取 468 個臉部特徵點。
-4. 以左右眼為基準把臉旋轉校正到水平，消除歪頭誤差。
-5. 用特徵點的幾何比例分類臉型、眉型、眼型、鼻型、嘴型（閾值以 CelebA 資料校正）。
-6. 在皮膚區取 Lab / HSV 色彩，依冷暖（undertone）與明度判定膚色分級與**四季型**（春 / 夏 / 秋 / 冬）。
+| 項目 | 目前正式版本 |
+|---|---|
+| AI Gateway | `ai-gateway-00025-252` |
+| Render | `replicate-render-00045-6qd` |
+| Face BASIC | `face-basic-00024-pl8` |
+| Face PRO | `face-pro-00015-qj6` |
+| GCS Lifecycle | 只刪除 2 天以上的 `temporary/` 物件 |
 
-另有一套 Random Forest 分類器 pipeline（scikit-learn），已建置、待更多標註資料後可切換成機器學習分類。
+部署後必須確認新映像已切到 100% 流量，不可只確認 Cloud Build 成功。
 
-## AI 渲染怎麼做
+## 仍待完成
 
-1. 渲染 prompt = Ollama 生成的妝容指令 ＋ 一組「身分鎖定句」，明確要求臉型、五官、膚色、姿勢、背景、光線都不變，只上妝。
-2. 透過 Replicate 呼叫 openai/gpt-image-2 生成上妝圖。
-3. 上傳 GCS 取得永久網址（Replicate 原始網址會過期，不用）。
+- 移除 Face BASIC、Face PRO、Render 的公開 Cloud Run Invoker，只允許 Gateway 服務帳號。
+- 授予 Gateway 最小 Firestore 權限，讓登入限流跨 Cloud Run instance。
+- 等所有 Firestore TTL 狀態變成 `ACTIVE`。
+- 使用有效測試會員完成收藏刪除、會員刪除、Firestore 與 GCS 清除的端到端驗收。
+- 若明確同意指定 IAM 權限，再將私人媒體代理升級為 5～10 分鐘 GCS V4 Signed URL。
+- Ollama 完成後移除完整 Prompt 展示。
 
----
+## 文件
 
-## 安全
+- [Gateway 架構總覽](Gateway_API管理架構與流程總覽_2026-07-20.md)
+- [私人媒體與資料刪除部署紀錄](Gateway私人媒體與資料刪除部署紀錄_2026-07-21.md)
+- [系統資安、效率與流程改善清單](系統資安效率流程改善清單.md)
+- [歷史流程更改追蹤](歷史流程更改追蹤.md)
 
-- 正式前端只呼叫 AI Gateway；face-basic、face-pro、replicate-render 已啟用 Cloud Run IAM，匿名直連回 `403`。
-- Gateway 代理路徑同時要求 `X-API-Key` 與會員登入後取得的短期 Bearer token；API key 只作第二層防護，不再視為會員身分。
-- Gateway 使用專用服務帳號和 Google 簽署的 ID token 呼叫私有核心服務，session 簽章金鑰存 Secret Manager。
-- 非同步 job 建立時會回 `resultToken`；輪詢或取結果需帶 `X-Job-Token: <resultToken>`（或 `?result_token=`），避免只靠 jobId 被猜到結果。
-- CORS 限定前端網域，非 `*`；正式環境可用 `APP_ENV=production` 或 `REQUIRE_EXPLICIT_CORS=1` 強制檢查。
-- 渲染服務有每 IP + email 的固定時間窗限流（預設每小時 10 次，超量回 429）。
-- 渲染服務另有每日 provider quota（預設 30 次）；有 Firestore 時使用固定窗口原子計數，跨 Cloud Run instance 仍能共同計數，開發環境才退回程序內 fallback。
-- 相同圖片、後端 prompt 與 strength 的請求會做並發鎖與 Firestore 去重；重複進行中回 `409 DUPLICATE_IN_PROGRESS`，避免多次扣 Replicate 額度。
-- 渲染服務限制 base64 圖片與 prompt 大小，避免超大 JSON body 造成記憶體壓力。
-- 渲染非同步 job 有 timeout、retention、最大數量與 guarded status transition；背景 worker 遺失或逾時會回寫可重試的錯誤，不會被晚到的 worker 覆蓋。
-- 渲染服務對相同圖片與 prompt 做去重快取，避免重複呼叫 Replicate。
-- GCS 圖片只寫入 `rendered/` 前綴，服務提供刪除 endpoint；`gcs-lifecycle.json` 預設 30 天自動刪除，部署時可用 `-GcsBucketName` 套用。
-- API 錯誤統一為 `{ "error": { "code", "message", "retryable" } }`，並回傳 `X-Request-ID`；請求只記錄 method/path/status/duration，不記錄密碼、圖片或 token。
-- 前端不再把密碼寫入 `sessionStorage`；舊版 `beautyAuthCreds` 會在登入、登出或讀取 profile 時清除。登入逾時需重新登入，Bearer token / HttpOnly session 仍由會員後端負責。
-- 金鑰走環境變數，不寫進程式；`.env` 不進版控。
+## 分支分工
 
----
-
-## 環境變數
-
-| 變數 | 說明 |
-|------|------|
-| `FACE_API_KEY` | 臉部分析服務的 X-API-Key |
-| `RENDER_API_KEY` | 渲染服務的 X-API-Key |
-| `SUGGESTION_API_KEY` | Ollama 建議服務的 X-API-Key |
-| `GATEWAY_FACE_API_KEY` / `GATEWAY_RENDER_API_KEY` | Gateway 對瀏覽器驗證的第二層 API key |
-| `UPSTREAM_FACE_API_KEY` / `UPSTREAM_RENDER_API_KEY` | Gateway 呼叫核心服務時使用的應用層 key |
-| `FACE_BASIC_URL` / `FACE_PRO_URL` / `RENDER_URL` | Gateway 的三個私有 Cloud Run 目標 |
-| `MEMBER_DATABASE_URL` | Gateway 重驗會員帳密的後端網址 |
-| `GATEWAY_SESSION_SECRET` | AI access token 簽章金鑰；正式環境由 Secret Manager 掛載 |
-| `GATEWAY_SESSION_TTL_SECONDS` | AI access token 效期，正式環境為 7200 秒 |
-| `REPLICATE_API_TOKEN` | Replicate token |
-| `CORS_ORIGINS` | 允許的前端網域（逗號分隔） |
-| `APP_ENV` / `REQUIRE_EXPLICIT_CORS` | 正式環境強制要求明確 CORS 設定 |
-| `MAX_IMAGE_SIZE` | 影像處理縮放上限（預設 1024） |
-| `MAX_RENDER_IMAGE_CHARS` / `MAX_RENDER_IMAGE_BYTES` | 渲染輸入圖大小上限 |
-| `RENDER_JOB_TIMEOUT_SECONDS` / `RENDER_JOB_RETENTION_SECONDS` / `RENDER_JOB_MAX_COUNT` | 渲染 job 逾時、保留時間與數量上限 |
-| `JOB_STORE_SCAN_LIMIT` | Firestore job cleanup/stat 單次最多掃描筆數（預設 500） |
-| `RENDER_GUIDANCE` | 渲染 guidance（預設 3.0，偏向保留真人照片質感） |
-| `RENDER_RATE_LIMIT_MAX_REQUESTS` / `RENDER_RATE_LIMIT_WINDOW_SECONDS` | 渲染限流 |
-| `RENDER_QUOTA_MAX_REQUESTS` / `RENDER_QUOTA_WINDOW_SECONDS` | 渲染 provider 額度；預設每日 30 次 |
-| `RENDER_LIMIT_MAX_KEYS` | 限流與 quota 程序內 key 上限，避免記憶體無限成長 |
-| `RENDER_DEDUP_TTL_SECONDS` | 渲染去重快取有效期（預設 600） |
-| `RENDER_DURABLE_DEDUP_ENABLED` | 是否查 Firestore 做跨 instance 去重（預設開啟） |
-| `GCS_RENDER_BUCKET` / `GCS_RENDER_RETENTION_DAYS` | 渲染圖片 bucket 與保留天數（預設 30 天；仍需套用 GCS lifecycle） |
-| `MAX_RENDER_IMAGE_PIXELS` / `MAX_IMAGE_PIXELS` | 渲染與臉部分析的影像像素上限（預設 16MP） |
-| `MAX_ANALYSIS_PACKAGE_CHARS` | analysisPackage / faceAnalysis JSON 大小上限 |
-| `ROI_SHADOW_EXPOSE_RESPONSE` | 內部驗收時才把 ROI shadow 模型分類欄位回傳；預設只寫 log |
-
----
-
-## 本機執行與部署
-
-```bash
-# 本機執行臉部分析（範例）
-pip install -r requirements.txt
-uvicorn Face_analyzer_BASIC:app --port 8001
-
-# 渲染服務：Docker build 後部署 Cloud Run
-docker build -f Dockerfile.render -t replicate-render .
-gcloud run deploy replicate-render --image <image> --region asia-east1
-
-# 套用 GCS 30 天生命週期（部署腳本也可用 -GcsBucketName 執行）
-gcloud storage buckets update gs://<GCS_RENDER_BUCKET> --lifecycle-file=gcs-lifecycle.json
-```
-
----
-
-## 相關分支
-
-同一團隊 repo，不同分支負責不同模組：
-
-- `Isa`（本分支）：臉部分析與 AI 渲染後端（Python）
-- `dev_makeup`：網頁前端
-- `dev`：iOS App（SwiftUI）
+| 分支 | 內容 |
+|---|---|
+| `Isa` | Python 後端、Gateway、Face、Render 與雲端部署 |
+| `dev_makeup` | Web 前端與 Firebase Hosting |
+| `dev` | iOS App |

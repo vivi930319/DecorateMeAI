@@ -1,6 +1,9 @@
 import os
 import unittest
+import asyncio
 from unittest.mock import Mock
+
+import httpx
 
 os.environ.setdefault("GATEWAY_FACE_API_KEY", "face-client-key")
 os.environ.setdefault("GATEWAY_RENDER_API_KEY", "render-client-key")
@@ -12,9 +15,17 @@ from ai_gateway import (  # noqa: E402
     client_ip,
     is_path_allowed,
     issue_access_token,
+    opaque_actor_id,
+    public_config,
     require_admin_access,
     require_client_api_key,
     require_member_access,
+    require_upstream_member_cookie,
+    seal_member_cookie,
+    _upstream_cookie_header,
+    _authorize_member_path,
+    _render_job_id_from_url,
+    _sanitize_render_payload,
     validate_product_id,
 )
 
@@ -26,6 +37,8 @@ class AiGatewayTest(unittest.TestCase):
 
         self.assertTrue(is_path_allowed(basic, "v1/face/jobs/JOB-012345abcdef/result"))
         self.assertTrue(is_path_allowed(render, "render/jobs/0123456789abcdef0123456789abcdef"))
+        self.assertTrue(is_path_allowed(render, "render/jobs/0123456789abcdef0123456789abcdef/signed-url"))
+        self.assertTrue(is_path_allowed(render, "render/jobs/0123456789abcdef0123456789abcdef/retain"))
         self.assertFalse(is_path_allowed(basic, "../health"))
         self.assertFalse(is_path_allowed(render, "render/jobs/not-a-job-id"))
         self.assertFalse(is_path_allowed(render, "openapi.json"))
@@ -105,6 +118,49 @@ class AiGatewayTest(unittest.TestCase):
         for value in ("../secret", "a/b", "a\\b", ""):
             with self.assertRaises(Exception):
                 validate_product_id(value)
+
+    def test_member_database_cookie_is_sealed_before_browser_storage(self):
+        response = httpx.Response(200, headers={"set-cookie": "session=private-upstream-value; HttpOnly; Path=/"})
+        upstream = _upstream_cookie_header(response)
+        self.assertEqual(upstream, "session=private-upstream-value")
+        sealed = seal_member_cookie(upstream)
+        self.assertNotIn("private-upstream-value", sealed)
+
+        request = Mock()
+        request.cookies = {"dm_member_session": sealed}
+        self.assertEqual(require_upstream_member_cookie(request), upstream)
+
+    def test_public_config_never_reveals_upstream_urls(self):
+        config = asyncio.run(public_config())
+        self.assertEqual(config["memberDatabaseUrl"], "/member-database")
+        self.assertEqual(config["productUrl"], "/product-api")
+        self.assertFalse(any("trycloudflare.com" in str(value) for value in config.values()))
+
+    def test_admin_actor_is_opaque(self):
+        actor = opaque_actor_id("Admin@Example.com")
+        self.assertTrue(actor.startswith("actor_"))
+        self.assertNotIn("admin", actor.lower())
+
+    def test_member_path_cannot_cross_accounts(self):
+        claims = {"sub": "member@example.com", "role": "member"}
+        self.assertEqual(
+            _authorize_member_path(claims, "api/members/member@example.com/saved-looks"),
+            "member@example.com",
+        )
+        with self.assertRaises(Exception) as raised:
+            _authorize_member_path(claims, "api/members/other@example.com/saved-looks")
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_render_response_uses_stable_gateway_media_path(self):
+        request = Mock()
+        job_id = "0123456789abcdef0123456789abcdef"
+        payload = _sanitize_render_payload(
+            request,
+            {"jobId": job_id, "afterImageUrl": "https://storage.googleapis.com/private/image.png", "replicateTempUrl": "https://provider.invalid/temp"},
+        )
+        self.assertEqual(payload["afterImageUrl"], f"/media/render/{job_id}")
+        self.assertNotIn("replicateTempUrl", payload)
+        self.assertEqual(_render_job_id_from_url(payload["afterImageUrl"]), job_id)
 
 
 if __name__ == "__main__":

@@ -7,10 +7,12 @@ import json
 import logging
 import threading
 from collections import deque
+from datetime import datetime, timezone
 from threading import Lock
 
 from fastapi import FastAPI, Header, HTTPException, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from api_errors import error_payload, install_api_error_handling
@@ -25,8 +27,12 @@ from replicate_render import (
     SUGGESTION_SERVICE_URL,
     build_personalized_render_prompt,
     call_replicate_render,
+    create_signed_storage_url,
     data_url_to_bytes,
     delete_permanent_storage_url,
+    download_private_storage_url,
+    retain_permanent_storage_url,
+    storage_object_name_from_url,
 )
 
 app = FastAPI()
@@ -76,12 +82,35 @@ MAX_ANALYSIS_PACKAGE_CHARS = max(1024, int(os.getenv("MAX_ANALYSIS_PACKAGE_CHARS
 RENDER_DURABLE_DEDUP_ENABLED = os.getenv("RENDER_DURABLE_DEDUP_ENABLED", "1").strip().lower() in {"1", "true", "yes"}
 
 
-def _dedup_key(image: str, prompt: str, strength: float) -> str:
+class MediaUrlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str = Field(min_length=1, max_length=1000)
+
+
+def _job_expiry(seconds_from_now: int) -> datetime:
+    return datetime.fromtimestamp(time.time() + seconds_from_now, timezone.utc)
+
+
+def _require_job_owner(job: dict, user_id: str | None, admin_request: str | None = None) -> None:
+    if str(admin_request or "").strip() == "1":
+        return
+    expected = str(job.get("ownerId") or "").strip()
+    supplied = str(user_id or "").strip()
+    if not expected or not supplied or expected != supplied:
+        raise HTTPException(
+            status_code=403,
+            detail=error_payload("FORBIDDEN", "This render belongs to another member.", retryable=False),
+        )
+
+
+def _dedup_key(image: str, prompt: str, strength: float, owner_id: str = "") -> str:
     h = hashlib.sha256()
     h.update(image.encode("utf-8", "ignore"))
     h.update(b"|")
     h.update(prompt.encode("utf-8", "ignore"))
     h.update(f"|{strength}".encode("utf-8"))
+    h.update(b"|")
+    h.update(owner_id.encode("utf-8", "ignore"))
     return h.hexdigest()
 
 
@@ -412,9 +441,20 @@ def _epoch(value, fallback: float) -> float:
         return fallback
 
 
-def _delete_job_artifact(job: dict) -> None:
+def _delete_job_artifact(job: dict, force: bool = False) -> None:
     url = job.get("afterImageUrl")
     if url and job.get("isPermanent"):
+        if not force:
+            references = job_store.find_by_field(
+                RENDER_JOBS_COLLECTION, "afterImageUrl", url, limit=50
+            )
+            current_id = str(job.get("jobId") or "")
+            if any(
+                str(reference.get("jobId") or "") != current_id
+                and reference.get("retained")
+                for reference in references
+            ):
+                return
         delete_permanent_storage_url(url)
 
 
@@ -450,6 +490,10 @@ def _cleanup_render_jobs() -> None:
                 if did_timeout:
                     logging.warning("render job timed out job_id=%s", job_id)
         elif status in {"completed", "failed"}:
+            # A retained job is the ownership record behind /media/render/{id}.
+            # It stays until the saved look or member is explicitly deleted.
+            if job.get("retained"):
+                continue
             finished_at = _epoch(job.get("finishedAt") or job.get("createdAt"), now)
             if now - finished_at > RENDER_JOB_RETENTION_SECONDS:
                 _delete_job_artifact(job)
@@ -460,8 +504,9 @@ def _cleanup_render_jobs() -> None:
 
     remaining = job_store.all_jobs(RENDER_JOBS_COLLECTION)
     if len(remaining) > RENDER_JOB_MAX_COUNT:
-        ordered = sorted(remaining, key=lambda item: float(item.get("createdAt") or 0))
-        for job in ordered[: len(remaining) - RENDER_JOB_MAX_COUNT]:
+        removable = [job for job in remaining if not job.get("retained")]
+        ordered = sorted(removable, key=lambda item: float(item.get("createdAt") or 0))
+        for job in ordered[: max(0, len(remaining) - RENDER_JOB_MAX_COUNT)]:
             job_id = job.get("jobId")
             if job_id:
                 _delete_job_artifact(job)
@@ -535,7 +580,7 @@ async def render(
     _validate_render_request(req)
     prompt, prompt_source = _server_render_prompt(req)
     # 同圖同後端產生的 prompt 短時間內重複 → 直接回上次結果，不重打 Replicate
-    key = _dedup_key(req.image, prompt, req.strength)
+    key = _dedup_key(req.image, prompt, req.strength, str(x_user_email or "").strip())
     cached = _dedup_get(key)
     if cached is not None:
         return {**cached, "deduped": True}
@@ -616,7 +661,13 @@ def _verify_job_token(job: dict, x_job_token: str | None = None, result_token: s
         )
 
 
-def _run_render_job(job_id: str, image: str, prompt: str, prompt_source: str, dedup_key: str) -> None:
+def _run_render_job(
+    job_id: str,
+    image: str,
+    prompt: str,
+    prompt_source: str,
+    dedup_key: str,
+) -> None:
     now = time.time()
     if not job_store.patch_if_status(
         RENDER_JOBS_COLLECTION,
@@ -642,7 +693,14 @@ def _run_render_job(job_id: str, image: str, prompt: str, prompt_source: str, de
             RENDER_JOBS_COLLECTION,
             job_id,
             {"running"},
-            {**response, "progress": 100, "finishedAt": time.time(), "updatedAt": time.time()},
+            {
+                **response,
+                "objectName": storage_object_name_from_url(response.get("afterImageUrl")),
+                "progress": 100,
+                "finishedAt": time.time(),
+                "updatedAt": time.time(),
+                "expiresAt": _job_expiry(RENDER_JOB_RETENTION_SECONDS),
+            },
         )
         if did_complete:
             _dedup_set(dedup_key, response)  # 只快取成功結果
@@ -676,6 +734,7 @@ async def create_render_job(
     req: RenderRequest,
     request: Request,
     x_user_email: str | None = Header(default=None),
+    x_user_id: str | None = Header(default=None),
     _=Depends(require_api_key),
     __=Depends(enforce_render_rate_limit),
 ):
@@ -689,7 +748,13 @@ async def create_render_job(
     job_id = uuid.uuid4().hex
     result_token = uuid.uuid4().hex
     now = time.time()
-    key = _dedup_key(req.image, prompt, req.strength)
+    owner_id = str(x_user_id or "").strip()
+    if not owner_id:
+        raise HTTPException(
+            status_code=401,
+            detail=error_payload("MEMBER_ID_REQUIRED", "A verified member identity is required.", retryable=False),
+        )
+    key = _dedup_key(req.image, prompt, req.strength, owner_id)
 
     cached = _dedup_get(key)
     if cached is not None:
@@ -701,6 +766,9 @@ async def create_render_job(
             "finishedAt": now,
             "deduped": True,
             "resultToken": result_token,
+            "ownerId": owner_id,
+            "retained": False,
+            "expiresAt": _job_expiry(RENDER_JOB_RETENTION_SECONDS),
         }
         job_store.create(RENDER_JOBS_COLLECTION, job_id, job)
         return {**_job_view(job, include_token=True), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
@@ -717,6 +785,9 @@ async def create_render_job(
             "deduped": True,
             "dedupKey": key,
             "resultToken": result_token,
+            "ownerId": owner_id,
+            "retained": False,
+            "expiresAt": _job_expiry(RENDER_JOB_RETENTION_SECONDS),
         }
         job_store.create(RENDER_JOBS_COLLECTION, job_id, job)
         return {**_job_view(job, include_token=True), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
@@ -748,6 +819,9 @@ async def create_render_job(
         "createdAt": now,
         "updatedAt": now,
         "dedupKey": key,
+        "ownerId": owner_id,
+        "retained": False,
+        "expiresAt": _job_expiry(RENDER_JOB_TIMEOUT_SECONDS + RENDER_JOB_RETENTION_SECONDS),
     }
     try:
         job_store.create(RENDER_JOBS_COLLECTION, job_id, job)
@@ -781,6 +855,193 @@ async def get_render_job(
     _verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
     view = _job_view(job)
     return {**view, "progress": _estimate_progress(job, time.time()), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
+
+
+@app.get("/render/jobs/{job_id}/signed-url")
+async def get_render_signed_url(
+    job_id: str,
+    x_user_id: str | None = Header(default=None),
+    x_admin_request: str | None = Header(default=None),
+    _=Depends(require_api_key),
+):
+    """Issue a short-lived URL after checking the render's member owner."""
+    job = job_store.get(RENDER_JOBS_COLLECTION, job_id)
+    if job is None or job.get("status") != "completed" or not job.get("afterImageUrl"):
+        raise HTTPException(
+            status_code=404,
+            detail=error_payload("JOB_NOT_FOUND", "Render image was not found.", retryable=False),
+        )
+    _require_job_owner(job, x_user_id, x_admin_request)
+    try:
+        signed_url = create_signed_storage_url(job.get("afterImageUrl"))
+    except Exception as exc:
+        logging.getLogger(__name__).exception("signed render URL creation failed")
+        raise HTTPException(
+            status_code=503,
+            detail=error_payload("SIGNED_URL_UNAVAILABLE", "Render image is temporarily unavailable.", retryable=True),
+        ) from exc
+    return {"signedUrl": signed_url, "expiresIn": 600}
+
+
+@app.get("/render/jobs/{job_id}/content")
+async def get_render_content(
+    job_id: str,
+    x_user_id: str | None = Header(default=None),
+    x_admin_request: str | None = Header(default=None),
+    _=Depends(require_api_key),
+):
+    """Authenticated private-object fallback when IAM signBlob is unavailable."""
+    job = job_store.get(RENDER_JOBS_COLLECTION, job_id)
+    if job is None or job.get("status") != "completed" or not job.get("afterImageUrl"):
+        raise HTTPException(
+            status_code=404,
+            detail=error_payload("JOB_NOT_FOUND", "Render image was not found.", retryable=False),
+        )
+    _require_job_owner(job, x_user_id, x_admin_request)
+    try:
+        content, content_type = download_private_storage_url(job.get("afterImageUrl"))
+    except Exception as exc:
+        logging.getLogger(__name__).exception("private render image download failed")
+        raise HTTPException(
+            status_code=503,
+            detail=error_payload("MEDIA_UNAVAILABLE", "Render image is temporarily unavailable.", retryable=True),
+        ) from exc
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@app.post("/render/jobs/{job_id}/retain")
+async def retain_render_job(
+    job_id: str,
+    x_user_id: str | None = Header(default=None),
+    x_admin_request: str | None = Header(default=None),
+    _=Depends(require_api_key),
+):
+    """Keep the ownership record and object until the member deletes it."""
+    job = job_store.get(RENDER_JOBS_COLLECTION, job_id)
+    if job is None or job.get("status") != "completed":
+        raise HTTPException(
+            status_code=404,
+            detail=error_payload("JOB_NOT_FOUND", "Render image was not found.", retryable=False),
+        )
+    _require_job_owner(job, x_user_id, x_admin_request)
+    try:
+        retained_url = retain_permanent_storage_url(
+            job.get("afterImageUrl"),
+            str(job.get("ownerId") or ""),
+            job_id,
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).exception("retained render copy failed")
+        raise HTTPException(
+            status_code=503,
+            detail=error_payload("RETAIN_FAILED", "Render image could not be retained.", retryable=True),
+        ) from exc
+    job_store.patch(
+        RENDER_JOBS_COLLECTION,
+        job_id,
+        {
+            "retained": True,
+            "afterImageUrl": retained_url,
+            "objectName": storage_object_name_from_url(retained_url),
+            "updatedAt": time.time(),
+        },
+    )
+    job_store.unset(RENDER_JOBS_COLLECTION, job_id, ["expiresAt"])
+    return {"status": "retained", "jobId": job_id}
+
+
+@app.delete("/render/jobs/{job_id}/artifact")
+async def delete_owned_render_artifact(
+    job_id: str,
+    x_user_id: str | None = Header(default=None),
+    x_admin_request: str | None = Header(default=None),
+    _=Depends(require_api_key),
+):
+    job = job_store.get(RENDER_JOBS_COLLECTION, job_id)
+    if job is None:
+        return {"status": "not_found", "jobId": job_id}
+    _require_job_owner(job, x_user_id, x_admin_request)
+    if job.get("status") in {"queued", "running"}:
+        raise HTTPException(
+            status_code=409,
+            detail=error_payload("JOB_IN_PROGRESS", "A running render job cannot be deleted yet.", retryable=True),
+        )
+    _delete_job_artifact(job)
+    job_store.delete(RENDER_JOBS_COLLECTION, job_id)
+    return {"status": "deleted", "jobId": job_id}
+
+
+@app.post("/render/media/sign")
+async def sign_legacy_render_media(req: MediaUrlRequest, _=Depends(require_api_key)):
+    """Refresh a legacy saved GCS URL after the Gateway verified DB ownership."""
+    if not storage_object_name_from_url(req.url):
+        raise HTTPException(
+            status_code=400,
+            detail=error_payload("INVALID_MEDIA_URL", "Render object URL is invalid.", retryable=False),
+        )
+    return {"signedUrl": create_signed_storage_url(req.url), "expiresIn": 600}
+
+
+@app.post("/render/media/content")
+async def get_legacy_render_media(req: MediaUrlRequest, _=Depends(require_api_key)):
+    """Internal authenticated fallback for a legacy saved object URL."""
+    if not storage_object_name_from_url(req.url):
+        raise HTTPException(
+            status_code=400,
+            detail=error_payload("INVALID_MEDIA_URL", "Render object URL is invalid.", retryable=False),
+        )
+    content, content_type = download_private_storage_url(req.url)
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@app.delete("/render/media")
+async def delete_legacy_render_media(req: MediaUrlRequest, _=Depends(require_api_key)):
+    """Delete a validated legacy object after its saved-look row was deleted."""
+    if not storage_object_name_from_url(req.url):
+        raise HTTPException(
+            status_code=400,
+            detail=error_payload("INVALID_MEDIA_URL", "Render object URL is invalid.", retryable=False),
+        )
+    deleted = delete_permanent_storage_url(req.url)
+    return {"status": "deleted" if deleted else "not_found"}
+
+
+@app.delete("/render/users/{owner_id}")
+async def delete_member_render_artifacts(
+    owner_id: str,
+    x_user_id: str | None = Header(default=None),
+    x_admin_request: str | None = Header(default=None),
+    _=Depends(require_api_key),
+):
+    if str(x_admin_request or "").strip() != "1" and str(x_user_id or "").strip() != owner_id:
+        raise HTTPException(
+            status_code=403,
+            detail=error_payload("FORBIDDEN", "Member artifact deletion is not allowed.", retryable=False),
+        )
+    jobs = job_store.find_by_field(RENDER_JOBS_COLLECTION, "ownerId", owner_id, limit=500)
+    deleted = 0
+    artifact_urls = {
+        str(job.get("afterImageUrl"))
+        for job in jobs
+        if job.get("isPermanent") and job.get("afterImageUrl")
+    }
+    for job in jobs:
+        job_id = job.get("jobId")
+        if not job_id:
+            continue
+        job_store.delete(RENDER_JOBS_COLLECTION, job_id)
+        deleted += 1
+    for artifact_url in artifact_urls:
+        delete_permanent_storage_url(artifact_url)
+    return {"status": "deleted", "ownerId": owner_id, "jobsDeleted": deleted}
 
 
 @app.delete("/render/jobs/{job_id}")

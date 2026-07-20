@@ -7,7 +7,7 @@ import logging
 import mimetypes
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -36,7 +36,12 @@ RENDER_GUIDANCE = float(os.getenv("RENDER_GUIDANCE", "3.0"))
 # bucket 已經存在且 allUsers 有 objectViewer 權限（公開可讀），不需要額外簽名 URL。
 GCS_BUCKET_NAME = os.getenv("GCS_RENDER_BUCKET", "decorate-me-renders")
 GCS_RENDER_RETENTION_DAYS = max(1, int(os.getenv("GCS_RENDER_RETENTION_DAYS", "30")))
-GCS_RENDER_PREFIX = "rendered/"
+GCS_RENDER_PREFIX = "temporary/"
+GCS_RETAINED_PREFIX = "retained/"
+GCS_LEGACY_PREFIX = "rendered/"
+GCS_ALLOWED_PREFIXES = (GCS_RENDER_PREFIX, GCS_RETAINED_PREFIX, GCS_LEGACY_PREFIX)
+GCS_SIGNED_URL_SECONDS = max(60, min(int(os.getenv("GCS_SIGNED_URL_SECONDS", "600")), 3600))
+GCS_SIGNING_SERVICE_ACCOUNT = os.getenv("GCS_SIGNING_SERVICE_ACCOUNT", "").strip()
 REPLICATE_HTTP_TIMEOUT_SECONDS = max(60, int(os.getenv("REPLICATE_HTTP_TIMEOUT_SECONDS", "300")))
 OPENAI_HTTP_TIMEOUT_SECONDS = max(60, int(os.getenv("OPENAI_HTTP_TIMEOUT_SECONDS", "300")))
 REPLICATE_OPENAI_QUALITY = os.getenv("REPLICATE_OPENAI_QUALITY", "medium").strip().lower() or "medium"
@@ -129,7 +134,7 @@ def delete_permanent_storage_url(url: str | None) -> bool:
     if len(parts) < 2 or parts[0] != GCS_BUCKET_NAME:
         return False
     blob_name = "/".join(parts[1:])
-    if not blob_name.startswith(GCS_RENDER_PREFIX):
+    if not blob_name.startswith(GCS_ALLOWED_PREFIXES):
         return False
     try:
         from google.cloud import storage
@@ -140,6 +145,102 @@ def delete_permanent_storage_url(url: str | None) -> bool:
         # Deletion is best effort: GCS lifecycle remains the final safety net.
         logging.getLogger(__name__).warning("GCS object deletion failed: %s", exc)
         return False
+
+
+def storage_object_name_from_url(url: str | None) -> str | None:
+    """Return a validated object name for this service's private render bucket."""
+    if not url:
+        return None
+    parsed = urlsplit(url)
+    if parsed.scheme != "https" or parsed.netloc != "storage.googleapis.com":
+        return None
+    parts = [unquote(part) for part in parsed.path.split("/") if part]
+    if len(parts) < 2 or parts[0] != GCS_BUCKET_NAME:
+        return None
+    object_name = "/".join(parts[1:])
+    if not object_name.startswith(GCS_ALLOWED_PREFIXES):
+        return None
+    return object_name
+
+
+def retain_permanent_storage_url(url: str | None, owner_id: str, job_id: str) -> str:
+    """Copy a temporary object to the non-expiring member-owned prefix."""
+    object_name = storage_object_name_from_url(url)
+    if not object_name:
+        raise ValueError("Render object URL is invalid.")
+    if not owner_id.startswith("actor_") or not job_id:
+        raise ValueError("Render ownership is invalid.")
+    if object_name.startswith(GCS_RETAINED_PREFIX):
+        return str(url)
+
+    from google.cloud import storage
+
+    suffix = Path(object_name).suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png", ".webp"}:
+        suffix = ".jpg"
+    client = storage.Client()
+    bucket = client.bucket(GCS_BUCKET_NAME)
+    source = bucket.blob(object_name)
+    destination_name = f"{GCS_RETAINED_PREFIX}{owner_id}/{job_id}{suffix}"
+    destination = bucket.blob(destination_name)
+    if not destination.exists(client=client):
+        bucket.copy_blob(source, bucket, destination_name)
+    return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{destination_name}"
+
+
+def create_signed_storage_url(url: str | None, expires_seconds: int | None = None) -> str:
+    """Create a short-lived V4 URL without making the bucket public.
+
+    Cloud Run uses its own access token and IAM Credentials signBlob.  The
+    service account therefore needs Service Account Token Creator on itself;
+    no downloadable JSON key is stored in the container.
+    """
+    object_name = storage_object_name_from_url(url)
+    if not object_name:
+        raise ValueError("Render object URL is invalid.")
+
+    import google.auth
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+    from google.cloud import storage
+
+    credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    credentials.refresh(GoogleAuthRequest())
+    service_account_email = GCS_SIGNING_SERVICE_ACCOUNT or getattr(
+        credentials, "service_account_email", ""
+    )
+    if not service_account_email or service_account_email == "default":
+        raise RuntimeError("GCS signing service account is not configured.")
+
+    lifetime = GCS_SIGNED_URL_SECONDS if expires_seconds is None else max(
+        60, min(int(expires_seconds), 3600)
+    )
+    blob = storage.Client(credentials=credentials).bucket(GCS_BUCKET_NAME).blob(object_name)
+    return blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(seconds=lifetime),
+        method="GET",
+        service_account_email=service_account_email,
+        access_token=credentials.token,
+    )
+
+
+def download_private_storage_url(url: str | None) -> tuple[bytes, str]:
+    """Read a validated private render object for authenticated proxy fallback."""
+    object_name = storage_object_name_from_url(url)
+    if not object_name:
+        raise ValueError("Render object URL is invalid.")
+    from google.cloud import storage
+
+    blob = storage.Client().bucket(GCS_BUCKET_NAME).blob(object_name)
+    blob.reload()
+    if blob.size is not None and int(blob.size) > MAX_RENDER_IMAGE_BYTES:
+        raise ValueError("Stored render image is too large.")
+    content_type = str(blob.content_type or "application/octet-stream").split(";")[0]
+    if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise ValueError("Stored render image type is invalid.")
+    return blob.download_as_bytes(), content_type
 
 
 IMAGE_DATA_URL_KEYS = ("imageDataUrl", "image_data_url", "image")

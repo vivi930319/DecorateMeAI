@@ -5,7 +5,7 @@ import json
 import os
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from threading import Lock
 from fastapi import BackgroundTasks, FastAPI, UploadFile, HTTPException, File, Form, Header, Query
@@ -61,9 +61,9 @@ async def _api_key_guard(request, call_next):
     if (FACE_API_KEY and request.method != "OPTIONS"
             and request.url.path not in _API_KEY_OPEN_PATHS):
         if request.headers.get("x-api-key") != FACE_API_KEY:
-            raise HTTPException(
+            return JSONResponse(
                 status_code=401,
-                detail=error_payload("FORBIDDEN", "Invalid or missing API key.", retryable=False),
+                content={"detail": error_payload("FORBIDDEN", "Invalid or missing API key.", retryable=False)},
             )
     return await call_next(request)
 
@@ -408,6 +408,7 @@ async def create_basic_job(
         "progress": 0, "stage": "upload", "createdAt": _now_iso(),
         "startedAt": None, "completedAt": None, "updatedAt": _now_iso(), "error": None, "result": None,
         "resultToken": result_token,
+        "expiresAt": datetime.now(timezone.utc) + timedelta(seconds=FACE_JOB_RETENTION_SECONDS),
     }
     job_store.create(_COL, job_id, job_data)
     background_tasks.add_task(_run_basic_job, job_id, contents, brightness_mode, brightness_level)

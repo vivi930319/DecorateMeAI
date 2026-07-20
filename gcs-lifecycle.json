@@ -5,9 +5,9 @@
         "type": "Delete"
       },
       "condition": {
-        "age": 30,
+        "age": 2,
         "matchesPrefix": [
-          "rendered/"
+          "temporary/"
         ]
       }
     }

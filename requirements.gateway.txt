@@ -1,5 +1,7 @@
+cryptography
 fastapi
 google-auth
+google-cloud-firestore
 httpx
 PyJWT
 requests

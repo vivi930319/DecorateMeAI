@@ -5,6 +5,7 @@ Replaces in-memory _jobs dict so all Cloud Run instances share state.
 import os
 import hashlib
 import time
+from datetime import datetime, timezone
 
 try:
     from google.cloud import firestore
@@ -50,6 +51,21 @@ def patch(col: str, job_id: str, updates: dict) -> None:
         _memory_jobs.setdefault(col, {}).setdefault(job_id, {}).update(updates)
         return
     collection.document(job_id).update(updates)
+
+
+def unset(col: str, job_id: str, fields: list[str] | tuple[str, ...]) -> None:
+    """Remove selected fields without replacing the rest of a job document."""
+    names = [str(field) for field in fields if str(field)]
+    if not names:
+        return
+    collection = _col(col)
+    if collection is None:
+        job = _memory_jobs.get(col, {}).get(job_id)
+        if job is not None:
+            for name in names:
+                job.pop(name, None)
+        return
+    collection.document(job_id).update({name: firestore.DELETE_FIELD for name in names})
 
 
 def patch_if_status(col: str, job_id: str, expected_statuses: set[str] | tuple[str, ...], updates: dict) -> bool:
@@ -147,7 +163,7 @@ def consume_window_quota(
             {
                 "count": count + 1,
                 "windowStart": bucket_start,
-                "expiresAt": bucket_start + window_seconds,
+                "expiresAt": datetime.fromtimestamp(bucket_start + window_seconds, timezone.utc),
                 "updatedAt": current_time,
             },
             merge=True,

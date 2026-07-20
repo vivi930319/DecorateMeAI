@@ -2,7 +2,6 @@ import os
 import sys
 import types
 import unittest
-from pathlib import Path
 
 
 # Keep this unit test deterministic and offline.
@@ -59,6 +58,11 @@ class RenderApiTest(unittest.TestCase):
         render_api._dedup_release(key)
         self.assertTrue(render_api._dedup_claim(key))
 
+    def test_render_dedup_is_scoped_to_member(self):
+        first = render_api._dedup_key(TINY_PNG, "same prompt", 0.35, "actor_a")
+        second = render_api._dedup_key(TINY_PNG, "same prompt", 0.35, "actor_b")
+        self.assertNotEqual(first, second)
+
     def test_job_guard_prevents_late_worker_overwrite(self):
         job_store.create("test_jobs", "job-1", {"jobId": "job-1", "status": "failed"})
         changed = job_store.patch_if_status(
@@ -75,11 +79,10 @@ class RenderApiTest(unittest.TestCase):
         self.assertFalse(delete_permanent_storage_url("https://example.com/rendered/image.png"))
         self.assertFalse(delete_permanent_storage_url("https://storage.googleapis.com/another-bucket/rendered/image.png"))
 
-    def test_frontend_does_not_store_plaintext_password(self):
-        api_source = Path("firebase-hosting-full/public/js/api.js").read_text(encoding="utf-8")
-        router_source = Path("firebase-hosting-full/public/js/router.js").read_text(encoding="utf-8")
-        self.assertNotIn("sessionStorage.setItem('beautyAuthCreds'", api_source)
-        self.assertNotIn("password: n1", router_source)
+    def test_member_owner_check_blocks_cross_member_media(self):
+        with self.assertRaises(Exception) as raised:
+            render_api._require_job_owner({"ownerId": "actor_a"}, "actor_b")
+        self.assertEqual(raised.exception.status_code, 403)
 
 
 if __name__ == "__main__":

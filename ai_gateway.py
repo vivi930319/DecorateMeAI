@@ -1,6 +1,6 @@
 import asyncio
 import base64
-import asyncio
+import hashlib
 import ipaddress
 import json
 import os
@@ -11,18 +11,22 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from http.cookies import SimpleCookie
+from urllib.parse import unquote, urlsplit
 
 import httpx
 import jwt
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from api_errors import install_api_error_handling
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import id_token
 from pydantic import BaseModel, Field
 
 from dev_server_utils import get_cors_origins
+import job_store
 
 
 @dataclass(frozen=True)
@@ -86,6 +90,14 @@ UPSTREAMS = {
             r"render",
             r"render/jobs",
             rf"render/jobs/{RENDER_JOB_ID}",
+            rf"render/jobs/{RENDER_JOB_ID}/signed-url",
+            rf"render/jobs/{RENDER_JOB_ID}/content",
+            rf"render/jobs/{RENDER_JOB_ID}/retain",
+            rf"render/jobs/{RENDER_JOB_ID}/artifact",
+            r"render/media/sign",
+            r"render/media/content",
+            r"render/media",
+            r"render/users/actor_[0-9a-f]{24}",
         ),
     ),
     "text-suggestion": Upstream(
@@ -137,6 +149,17 @@ SESSION_ONLY_MODE = os.getenv("GATEWAY_SESSION_ONLY", "").strip().lower() in {"1
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = max(60, int(os.getenv("GATEWAY_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "600")))
 LOGIN_RATE_LIMIT_MAX_REQUESTS = max(1, int(os.getenv("GATEWAY_LOGIN_RATE_LIMIT_MAX_REQUESTS", "10")))
 IS_PRODUCTION = os.getenv("APP_ENV", "").strip().lower() in {"prod", "production"}
+MEMBER_SESSION_COOKIE = "dm_member_session"
+MAX_SEALED_MEMBER_SESSION_BYTES = 3500
+LOGIN_LIMIT_COLLECTION = os.getenv("GATEWAY_LOGIN_LIMIT_COLLECTION", "gateway_login_limits")
+PUBLIC_PRODUCT_PATHS = _patterns(r"api/products", r"recommend-products")
+SAVED_LOOK_PATH_RE = re.compile(r"^api/members/([^/]+)/saved-looks(?:/([^/]+))?$")
+MEMBER_PATH_RE = re.compile(r"^api/members/([^/]+)$")
+MEMBER_SCOPE_RE = re.compile(r"^api/members/([^/]+)(?:/|$)")
+STABLE_RENDER_URL_RE = re.compile(r"(?:https://[^/]+)?/media/render/([0-9a-f]{32})(?:[?#].*)?$")
+PRIVATE_RENDER_URL_RE = re.compile(
+    r"^https://storage\.googleapis\.com/decorate-me-renders/(?:rendered|temporary|retained)/[A-Za-z0-9._/-]+$"
+)
 
 
 def _validate_configuration() -> None:
@@ -238,6 +261,22 @@ def enforce_login_rate_limit(request: Request) -> None:
     now = time.time()
     cutoff = now - LOGIN_RATE_LIMIT_WINDOW_SECONDS
     key = client_ip(request)
+    durable = job_store.consume_window_quota(
+        LOGIN_LIMIT_COLLECTION,
+        key,
+        LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+        LOGIN_RATE_LIMIT_MAX_REQUESTS,
+        now=now,
+    )
+    if durable is not None:
+        allowed, _, retry_after = durable
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+                detail={"error": {"code": "LOGIN_RATE_LIMITED", "message": "Too many login attempts."}},
+            )
+        return
     with _login_rate_lock:
         bucket = _login_rate_hits.setdefault(key, deque())
         while bucket and bucket[0] <= cutoff:
@@ -269,6 +308,75 @@ def issue_access_token(email: str, role: str = "", status: str = "active") -> tu
         algorithm="HS256",
     )
     return token, expires_at
+
+
+def issue_legacy_media_token(url: str, owner_id: str) -> str:
+    now = int(time.time())
+    return jwt.encode(
+        {
+            "iss": "decorate-me-ai-gateway",
+            "aud": "decorate-me-private-media",
+            "url": url,
+            "ownerId": owner_id,
+            "iat": now,
+            "exp": now + 600,
+        },
+        SESSION_SECRET,
+        algorithm="HS256",
+    )
+
+
+def _member_cookie_cipher() -> Fernet:
+    key = base64.urlsafe_b64encode(hashlib.sha256(SESSION_SECRET.encode("utf-8")).digest())
+    return Fernet(key)
+
+
+def _upstream_cookie_header(response: httpx.Response) -> str:
+    jar = SimpleCookie()
+    for value in response.headers.get_list("set-cookie"):
+        try:
+            jar.load(value)
+        except Exception:
+            continue
+    if not jar:
+        return "; ".join(f"{name}={value}" for name, value in response.cookies.items())
+    return "; ".join(f"{name}={morsel.value}" for name, morsel in jar.items())
+
+
+def seal_member_cookie(cookie_header: str) -> str:
+    if not cookie_header:
+        return ""
+    sealed = _member_cookie_cipher().encrypt(cookie_header.encode("utf-8")).decode("ascii")
+    if len(sealed) > MAX_SEALED_MEMBER_SESSION_BYTES:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": {"code": "MEMBER_SESSION_TOO_LARGE", "message": "Member authentication failed."}},
+        )
+    return sealed
+
+
+def require_upstream_member_cookie(request: Request) -> str:
+    sealed = request.cookies.get(MEMBER_SESSION_COOKIE, "")
+    if not sealed:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"code": "MEMBER_SESSION_REQUIRED", "message": "Member sign-in is required."}},
+        )
+    try:
+        return _member_cookie_cipher().decrypt(
+            sealed.encode("ascii"),
+            ttl=SESSION_TTL_SECONDS,
+        ).decode("utf-8")
+    except (InvalidToken, UnicodeError, ValueError):
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"code": "MEMBER_SESSION_INVALID", "message": "Member session is invalid or expired."}},
+        )
+
+
+def opaque_actor_id(subject: str) -> str:
+    digest = hashlib.sha256(f"{SESSION_SECRET}:{subject.strip().lower()}".encode("utf-8")).hexdigest()
+    return f"actor_{digest[:24]}"
 
 
 def require_member_access(request: Request) -> dict:
@@ -325,6 +433,172 @@ def build_upstream_headers(request: Request, upstream: Upstream, identity_token:
     return headers
 
 
+def _authorize_member_path(claims: dict, path: str) -> str | None:
+    """Return a target member e-mail and block cross-member path changes."""
+    match = MEMBER_SCOPE_RE.match(path)
+    if not match:
+        return None
+    target_email = unquote(match.group(1)).strip().lower()
+    subject = str(claims.get("sub") or "").strip().lower()
+    is_admin = str(claims.get("role") or "").strip().lower() == "admin"
+    if target_email != subject and not is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"code": "MEMBER_SCOPE_FORBIDDEN", "message": "Another member's data cannot be accessed."}},
+        )
+    return target_email
+
+
+def _render_job_id_from_url(value: str | None) -> str | None:
+    match = STABLE_RENDER_URL_RE.fullmatch(str(value or "").strip())
+    return match.group(1) if match else None
+
+
+async def _render_internal_request(
+    request: Request,
+    method: str,
+    path: str,
+    *,
+    user_id: str = "",
+    admin: bool = False,
+    json_body: dict | None = None,
+) -> httpx.Response | None:
+    upstream = UPSTREAMS["render-service"]
+    if not upstream.base_url:
+        return None
+    try:
+        identity_token = ""
+        if upstream.requires_cloud_run_iam:
+            identity_token = await asyncio.to_thread(TOKEN_CACHE.get, upstream.base_url)
+        headers = {"Accept": "application/json", "X-API-Key": upstream.api_key}
+        if identity_token:
+            headers["X-Serverless-Authorization"] = f"Bearer {identity_token}"
+        if user_id:
+            headers["X-User-ID"] = user_id
+        if admin:
+            headers["X-Admin-Request"] = "1"
+        return await request.app.state.http_client.request(
+            method=method,
+            url=f"{upstream.base_url}/{path}",
+            headers=headers,
+            json=json_body,
+            timeout=30,
+        )
+    except Exception:
+        return None
+
+
+def _safe_render_gateway_url(request: Request, job_id: str) -> str:
+    # Relative URLs keep local development and the formal Firebase origin on
+    # the same authenticated path. They also fit the member DB's 500-char field.
+    return f"/media/render/{job_id}"
+
+
+def _sanitize_render_payload(request: Request, payload):
+    if isinstance(payload, list):
+        return [_sanitize_render_payload(request, item) for item in payload]
+    if not isinstance(payload, dict):
+        return payload
+    result = {key: _sanitize_render_payload(request, value) for key, value in payload.items()}
+    job_id = str(result.get("jobId") or "")
+    if re.fullmatch(RENDER_JOB_ID, job_id) and result.get("afterImageUrl"):
+        result["afterImageUrl"] = _safe_render_gateway_url(request, job_id)
+        result.pop("replicateTempUrl", None)
+        result["isPermanent"] = True
+    return result
+
+
+async def _sign_legacy_media(request: Request, value: str, owner_id: str) -> str:
+    if not PRIVATE_RENDER_URL_RE.fullmatch(str(value or "").strip()):
+        return value
+    response = await _render_internal_request(
+        request,
+        "POST",
+        "render/media/sign",
+        json_body={"url": value},
+    )
+    if response is None or not response.is_success:
+        return f"/media/legacy/{issue_legacy_media_token(value, owner_id)}"
+    try:
+        signed = str(response.json().get("signedUrl") or "")
+        parsed = urlsplit(signed)
+        return signed if parsed.scheme == "https" and parsed.netloc == "storage.googleapis.com" else value
+    except (TypeError, ValueError):
+        return value
+
+
+async def _refresh_saved_look_media(request: Request, payload, owner_id: str):
+    if not isinstance(payload, dict):
+        return payload
+    looks = payload.get("looks")
+    if not isinstance(looks, list):
+        return payload
+    raw_urls = []
+    for look in looks:
+        if not isinstance(look, dict):
+            continue
+        value = str(look.get("afterImageUrl") or look.get("after_image_url") or "")
+        if PRIVATE_RENDER_URL_RE.fullmatch(value):
+            raw_urls.append(value)
+    signed_values = await asyncio.gather(*[_sign_legacy_media(request, value, owner_id) for value in raw_urls])
+    replacements = dict(zip(raw_urls, signed_values))
+    if not replacements:
+        return payload
+    result = dict(payload)
+    result["looks"] = []
+    for look in looks:
+        item = dict(look) if isinstance(look, dict) else look
+        if isinstance(item, dict):
+            for key in ("afterImageUrl", "after_image_url"):
+                if item.get(key) in replacements:
+                    item[key] = replacements[item[key]]
+        result["looks"].append(item)
+    return result
+
+
+def _saved_media_urls(payload, saved_look_id: str | None = None) -> list[str]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("looks"), list):
+        return []
+    values = []
+    for look in payload["looks"]:
+        if not isinstance(look, dict):
+            continue
+        if saved_look_id is not None and str(look.get("id")) != str(saved_look_id):
+            continue
+        value = str(look.get("afterImageUrl") or look.get("after_image_url") or "").strip()
+        if _render_job_id_from_url(value) or PRIVATE_RENDER_URL_RE.fullmatch(value):
+            values.append(value)
+    return list(dict.fromkeys(values))
+
+
+async def _delete_saved_media(
+    request: Request,
+    values: list[str],
+    owner_id: str,
+    *,
+    admin: bool,
+) -> None:
+    for value in values:
+        job_id = _render_job_id_from_url(value)
+        if job_id:
+            await _render_internal_request(
+                request,
+                "DELETE",
+                f"render/jobs/{job_id}/artifact",
+                user_id=owner_id,
+                admin=admin,
+            )
+        elif PRIVATE_RENDER_URL_RE.fullmatch(value):
+            await _render_internal_request(
+                request,
+                "DELETE",
+                "render/media",
+                user_id=owner_id,
+                admin=admin,
+                json_body={"url": value},
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.http_client = httpx.AsyncClient(
@@ -365,18 +639,106 @@ async def health():
 
 @app.get("/public-config")
 async def public_config():
-    """前端啟動時來這裡拿會員／商品資料庫網址，不再自己寫死。
-
-    為什麼需要：資料庫走 Cloudflare Quick Tunnel，每次重啟就換一組隨機網址。
-    以前每換一次就要改前端兩個檔案、Gateway 兩個環境變數再重新部署，漏一個就是整站故障
-    （見前端 issue #23）。改成由 Gateway 統一發布後，換網址只需要更新 Gateway。
-
-    只回瀏覽器本來就會送出、也看得到的公開位址。金鑰、session secret、上游憑證一律不在此暴露。
-    """
+    """Only publish stable same-origin Gateway paths; never reveal upstream URLs."""
     return {
-        "memberDatabaseUrl": MEMBER_DATABASE_URL,
-        "productUrl": PRODUCT_DATABASE_URL,
+        "apiMode": "gateway",
+        "memberDatabaseUrl": "/member-database",
+        "productUrl": "/product-api",
+        "crawlerUrl": "/admin-api",
     }
+
+
+@app.get("/media/render/{job_id}")
+async def render_media(job_id: str, request: Request):
+    """Authenticate a member, then redirect to a ten-minute private GCS URL."""
+    if not re.fullmatch(RENDER_JOB_ID, job_id):
+        raise HTTPException(status_code=404, detail={"error": {"code": "MEDIA_NOT_FOUND", "message": "Render image was not found."}})
+    claims = require_member_access(request)
+    is_admin = str(claims.get("role") or "").strip().lower() == "admin"
+    owner_id = opaque_actor_id(str(claims.get("sub") or ""))
+    response = await _render_internal_request(
+        request,
+        "GET",
+        f"render/jobs/{job_id}/signed-url",
+        user_id=owner_id,
+        admin=is_admin,
+    )
+    if response is None:
+        raise HTTPException(status_code=503, detail={"error": {"code": "MEDIA_UNAVAILABLE", "message": "Render image is temporarily unavailable."}})
+    if response.status_code in {403, 404}:
+        raise HTTPException(status_code=response.status_code, detail={"error": {"code": "MEDIA_NOT_FOUND", "message": "Render image was not found."}})
+    if not response.is_success:
+        fallback = await _render_internal_request(
+            request,
+            "GET",
+            f"render/jobs/{job_id}/content",
+            user_id=owner_id,
+            admin=is_admin,
+        )
+        if fallback is None or not fallback.is_success:
+            raise HTTPException(status_code=503, detail={"error": {"code": "MEDIA_UNAVAILABLE", "message": "Render image is temporarily unavailable."}})
+        content_type = str(fallback.headers.get("content-type") or "")
+        if not content_type.startswith("image/"):
+            raise HTTPException(status_code=503, detail={"error": {"code": "MEDIA_UNAVAILABLE", "message": "Render image is temporarily unavailable."}})
+        return Response(
+            content=fallback.content,
+            media_type=content_type.split(";", 1)[0],
+            headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+        )
+    try:
+        signed_url = str(response.json().get("signedUrl") or "")
+    except ValueError:
+        signed_url = ""
+    parsed = urlsplit(signed_url)
+    if parsed.scheme != "https" or parsed.netloc != "storage.googleapis.com":
+        raise HTTPException(status_code=503, detail={"error": {"code": "MEDIA_UNAVAILABLE", "message": "Render image is temporarily unavailable."}})
+    return RedirectResponse(
+        url=signed_url,
+        status_code=302,
+        headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"},
+    )
+
+
+@app.get("/media/legacy/{media_token}")
+async def legacy_render_media(media_token: str, request: Request):
+    """Serve an old saved GCS URL through an expiring, member-bound link."""
+    claims = require_member_access(request)
+    try:
+        media_claims = jwt.decode(
+            media_token,
+            SESSION_SECRET,
+            algorithms=["HS256"],
+            audience="decorate-me-private-media",
+            issuer="decorate-me-ai-gateway",
+            options={"require": ["exp", "iat", "url", "ownerId"]},
+        )
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=404, detail={"error": {"code": "MEDIA_NOT_FOUND", "message": "Render image was not found."}})
+    acting_owner_id = opaque_actor_id(str(claims.get("sub") or ""))
+    is_admin = str(claims.get("role") or "").strip().lower() == "admin"
+    if acting_owner_id != str(media_claims.get("ownerId") or "") and not is_admin:
+        raise HTTPException(status_code=404, detail={"error": {"code": "MEDIA_NOT_FOUND", "message": "Render image was not found."}})
+    media_url = str(media_claims.get("url") or "")
+    if not PRIVATE_RENDER_URL_RE.fullmatch(media_url):
+        raise HTTPException(status_code=404, detail={"error": {"code": "MEDIA_NOT_FOUND", "message": "Render image was not found."}})
+    response = await _render_internal_request(
+        request,
+        "POST",
+        "render/media/content",
+        user_id=acting_owner_id,
+        admin=is_admin,
+        json_body={"url": media_url},
+    )
+    if response is None or not response.is_success:
+        raise HTTPException(status_code=503, detail={"error": {"code": "MEDIA_UNAVAILABLE", "message": "Render image is temporarily unavailable."}})
+    content_type = str(response.headers.get("content-type") or "")
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=503, detail={"error": {"code": "MEDIA_UNAVAILABLE", "message": "Render image is temporarily unavailable."}})
+    return Response(
+        content=response.content,
+        media_type=content_type.split(";", 1)[0],
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @app.post("/auth/login")
@@ -421,10 +783,25 @@ async def login(body: LoginRequest, request: Request):
     role = str(member.get("role") or member.get("member_role") or "")
     member_status = str(member.get("status") or "active")
     access_token, expires_at = issue_access_token(verified_email, role, member_status)
-    result = JSONResponse(content={"success": True, "member": member, "accessToken": access_token, "expiresAt": expires_at, "tokenType": "Bearer"})
+    upstream_cookie = _upstream_cookie_header(response)
+    if not upstream_cookie:
+        raise HTTPException(status_code=502, detail={"error": {"code": "MEMBER_SESSION_MISSING", "message": "Member authentication failed."}})
+    payload = {"success": True, "member": member, "expiresAt": expires_at}
+    if not SESSION_ONLY_MODE:
+        payload.update({"accessToken": access_token, "tokenType": "Bearer"})
+    result = JSONResponse(content=payload)
     result.set_cookie(
         key="dm_session",
         value=access_token,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        path="/",
+    )
+    result.set_cookie(
+        key=MEMBER_SESSION_COOKIE,
+        value=seal_member_cookie(upstream_cookie),
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
         secure=IS_PRODUCTION,
@@ -438,6 +815,7 @@ async def login(body: LoginRequest, request: Request):
 async def logout():
     result = JSONResponse(content={"ok": True})
     result.delete_cookie(key="dm_session", path="/", secure=IS_PRODUCTION, httponly=True, samesite="lax")
+    result.delete_cookie(key=MEMBER_SESSION_COOKIE, path="/", secure=IS_PRODUCTION, httponly=True, samesite="lax")
     return result
 
 
@@ -506,7 +884,7 @@ async def proxy_admin_request(request: Request, upstream_path: str):
     headers = {
         "Accept": request.headers.get("accept", "application/json"),
         "Authorization": f"Bearer {PRODUCT_ADMIN_API_KEY}",
-        "X-Admin-Actor": str(claims.get("sub") or "")[:254],
+        "X-Admin-Actor": opaque_actor_id(str(claims.get("sub") or "")),
         "X-Request-ID": request.headers.get("x-request-id", secrets.token_hex(16))[:128],
     }
     if request.headers.get("content-type"):
@@ -561,7 +939,43 @@ async def admin_product_audit_logs(request: Request):
     return await proxy_admin_request(request, "/api/admin/product-audit-logs")
 
 
-@app.api_route("/{service}/{path:path}", methods=["GET", "POST", "DELETE"])
+async def proxy_public_product_request(request: Request, path: str):
+    if not PRODUCT_DATABASE_URL or not any(pattern.fullmatch(path) for pattern in PUBLIC_PRODUCT_PATHS):
+        raise HTTPException(status_code=404, detail={"error": {"code": "NOT_FOUND", "message": "Route not found."}})
+    if (path == "api/products" and request.method != "GET") or (path == "recommend-products" and request.method != "POST"):
+        raise HTTPException(status_code=405, detail={"error": {"code": "METHOD_NOT_ALLOWED", "message": "Method not allowed."}})
+    body = await request.body()
+    if len(body) > MAX_BODY_BYTES:
+        raise HTTPException(status_code=413, detail={"error": {"code": "PAYLOAD_TOO_LARGE", "message": "Request body is too large."}})
+    headers = {"Accept": request.headers.get("accept", "application/json")}
+    if request.headers.get("content-type"):
+        headers["Content-Type"] = request.headers["content-type"]
+    try:
+        response = await request.app.state.http_client.request(
+            method=request.method,
+            url=f"{PRODUCT_DATABASE_URL}/{path}",
+            params=list(request.query_params.multi_items()),
+            headers=headers,
+            content=body,
+            timeout=ADMIN_PROXY_TIMEOUT_SECONDS,
+        )
+    except httpx.TimeoutException:
+        return JSONResponse(status_code=504, content={"error": {"code": "PRODUCT_UPSTREAM_TIMEOUT", "message": "Product service timed out."}})
+    except httpx.HTTPError:
+        return JSONResponse(status_code=503, content={"error": {"code": "PRODUCT_SERVICE_UNAVAILABLE", "message": "Product service is unavailable."}})
+    response_headers = {"X-Content-Type-Options": "nosniff"}
+    for header in ("content-type", "cache-control", "etag", "retry-after"):
+        if response.headers.get(header):
+            response_headers[header] = response.headers[header]
+    return Response(content=response.content, status_code=response.status_code, headers=response_headers)
+
+
+@app.api_route("/product-api/{path:path}", methods=["GET", "POST"])
+async def public_product_proxy(path: str, request: Request):
+    return await proxy_public_product_request(request, path)
+
+
+@app.api_route("/{service}/{path:path}", methods=["GET", "POST", "PATCH", "DELETE"])
 async def proxy(service: str, path: str, request: Request):
     upstream = UPSTREAMS.get(service)
     if upstream is None or not is_path_allowed(upstream, path):
@@ -572,7 +986,14 @@ async def proxy(service: str, path: str, request: Request):
 
     if not SESSION_ONLY_MODE:
         require_client_api_key(upstream, request.headers.get("x-api-key", ""))
-    require_member_access(request)
+    claims = require_member_access(request)
+    target_email = _authorize_member_path(claims, path) if service == "member-database" else None
+    acting_owner_id = opaque_actor_id(str(claims.get("sub") or ""))
+    target_owner_id = opaque_actor_id(target_email) if target_email else acting_owner_id
+    is_admin = str(claims.get("role") or "").strip().lower() == "admin"
+    upstream_member_cookie = ""
+    if service == "member-database":
+        upstream_member_cookie = require_upstream_member_cookie(request)
     if not upstream.base_url:
         raise HTTPException(status_code=503, detail={"error": {"code": "NOT_CONFIGURED", "message": "Upstream service is not configured."}})
 
@@ -592,11 +1013,35 @@ async def proxy(service: str, path: str, request: Request):
         identity_token = ""
         if upstream.requires_cloud_run_iam:
             identity_token = await asyncio.to_thread(TOKEN_CACHE.get, upstream.base_url)
+        upstream_headers = build_upstream_headers(request, upstream, identity_token)
+        if upstream_member_cookie:
+            upstream_headers["Cookie"] = upstream_member_cookie
+        if service == "render-service":
+            upstream_headers["X-User-ID"] = acting_owner_id
+
+        prefetched_media: list[str] = []
+        saved_match = SAVED_LOOK_PATH_RE.fullmatch(path) if service == "member-database" else None
+        member_match = MEMBER_PATH_RE.fullmatch(path) if service == "member-database" else None
+        if service == "member-database" and request.method == "DELETE" and (saved_match or member_match):
+            list_path = f"api/members/{saved_match.group(1) if saved_match else member_match.group(1)}/saved-looks"
+            before_delete = await request.app.state.http_client.get(
+                f"{upstream.base_url}/{list_path}",
+                headers=upstream_headers,
+                timeout=20,
+            )
+            if before_delete.is_success:
+                try:
+                    prefetched_media = _saved_media_urls(
+                        before_delete.json(),
+                        saved_match.group(2) if saved_match and saved_match.group(2) else None,
+                    )
+                except ValueError:
+                    prefetched_media = []
         response = await request.app.state.http_client.request(
             method=request.method,
             url=f"{upstream.base_url}/{path}",
             params=list(request.query_params.multi_items()),
-            headers=build_upstream_headers(request, upstream, identity_token),
+            headers=upstream_headers,
             content=body,
         )
     except httpx.TimeoutException:
@@ -610,7 +1055,69 @@ async def proxy(service: str, path: str, request: Request):
     for header in ("content-type", "cache-control", "retry-after"):
         if response.headers.get(header):
             response_headers[header] = response.headers[header]
-    return Response(content=response.content, status_code=response.status_code, headers=response_headers)
+    response_content = response.content
+    if response.is_success and service == "render-service":
+        try:
+            response_content = json.dumps(
+                _sanitize_render_payload(request, response.json()),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            response_headers["content-type"] = "application/json"
+        except ValueError:
+            pass
+    if response.is_success and service == "member-database" and request.method == "GET" and SAVED_LOOK_PATH_RE.fullmatch(path):
+        try:
+            response_content = json.dumps(
+                await _refresh_saved_look_media(request, response.json(), target_owner_id),
+                ensure_ascii=False,
+            ).encode("utf-8")
+            response_headers["content-type"] = "application/json"
+        except ValueError:
+            pass
+
+    if response.is_success and service == "member-database":
+        saved_match = SAVED_LOOK_PATH_RE.fullmatch(path)
+        member_match = MEMBER_PATH_RE.fullmatch(path)
+        if request.method == "POST" and saved_match and not saved_match.group(2):
+            try:
+                submitted = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                submitted = {}
+            job_id = _render_job_id_from_url(submitted.get("afterImageUrl"))
+            if job_id:
+                await _render_internal_request(
+                    request,
+                    "POST",
+                    f"render/jobs/{job_id}/retain",
+                    user_id=target_owner_id,
+                    admin=is_admin,
+                )
+        elif request.method == "DELETE" and saved_match:
+            await _delete_saved_media(request, prefetched_media, target_owner_id, admin=is_admin)
+        elif request.method == "DELETE" and member_match:
+            await _delete_saved_media(request, prefetched_media, target_owner_id, admin=is_admin)
+            await _render_internal_request(
+                request,
+                "DELETE",
+                f"render/users/{target_owner_id}",
+                user_id=target_owner_id,
+                admin=is_admin,
+            )
+
+    result = Response(content=response_content, status_code=response.status_code, headers=response_headers)
+    if service == "member-database":
+        rotated_cookie = _upstream_cookie_header(response)
+        if rotated_cookie:
+            result.set_cookie(
+                key=MEMBER_SESSION_COOKIE,
+                value=seal_member_cookie(rotated_cookie),
+                max_age=SESSION_TTL_SECONDS,
+                httponly=True,
+                secure=IS_PRODUCTION,
+                samesite="lax",
+                path="/",
+            )
+    return result
 
 
 if __name__ == "__main__":
