@@ -31,11 +31,13 @@ const ApiConfig = {
             baseUrl: AI_GATEWAY_URL,
             loginPath: '/auth/login',
             logoutPath: '/auth/logout',
+            registerPath: '/auth/register',
+            sendOtpPath: '/auth/send-otp',
+            verifyOtpPath: '/auth/verify-otp',
             configPath: '/public-config'
         },
         faceBasic: {
             baseUrl: gatewayService('face-basic'),
-            apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/basic',
             posePath: '/v1/face/pose',
             jobPath: '/v1/face/jobs/basic',
@@ -44,15 +46,13 @@ const ApiConfig = {
         },
         facePro: {
             baseUrl: gatewayService('face-pro'),
-            apiKey: RuntimeApiConfig.faceApiKey || '',
             analyzePath: '/v1/face/analyze/pro',
             jobPath: '/v1/face/jobs/pro',
             jobStatusPath: '/v1/face/jobs/{jobId}',
             jobResultPath: '/v1/face/jobs/{jobId}/result'
         },
         textSuggestion: {
-            baseUrl: RuntimeApiConfig.textSuggestionUrl || '',
-            apiKey: RuntimeApiConfig.textSuggestionApiKey || '',
+            baseUrl: gatewayService('text-suggestion'),
             suggestPath: '/suggest'
         },
         render: {
@@ -60,21 +60,16 @@ const ApiConfig = {
             renderPath: '/render'
         },
         product: {
-            baseUrl: RuntimeApiConfig.productUrl || '',
+            baseUrl: gatewayService('product-api'),
             recommendPath: '/recommend-products',
             listPath: '/api/products'
         },
         crawler: {
-            baseUrl: RuntimeApiConfig.crawlerUrl || RuntimeApiConfig.productUrl || '',
-            previewPath: '/api/crawler/product-preview'
+            baseUrl: gatewayService('admin-api'),
+            previewPath: '/crawler/product-preview'
         },
         memberDatabase: {
-            baseUrl: RuntimeApiConfig.memberDatabaseUrl || '',
-            loginPath: '/api/login',
-            registerPath: '/api/register',
-            // 只打正規發碼端點；不要 fallback 到 /api/register，否則會送出只帶 email 的殘缺請求，被後端回 400 MISSING_FIELDS（曾被誤判成 CSRF）
-            sendOtpPaths: ['/api/send-otp'],
-            verifyOtpPath: '/api/verify-otp'
+            baseUrl: gatewayService('member-database')
         }
     },
 
@@ -95,31 +90,35 @@ const ApiConfig = {
 const Api = {
     config: ApiConfig,
 
-    // 向 Gateway 取得會員／商品資料庫網址，取代前端寫死的設定。
-    //
-    // 為什麼要這樣做：資料庫走 Cloudflare Quick Tunnel，每次重啟就換一組隨機網址。
-    // 以前每換一次都要改前端兩個檔案、Gateway 兩個環境變數再重新部署，漏掉任一處就整站故障，
-    // 而且症狀常常跟真正原因無關（見 issue #23）。改由 Gateway 統一發布後，換網址只要動 Gateway。
-    //
-    // 取不到就沿用內建值：Gateway 掛掉時不能讓整個前端跟著不能用。
+    // 向 Gateway 取得穩定的同源路徑。上游資料庫的真實網址只留在 Cloud Run，
+    // 瀏覽器不再直接連 Quick Tunnel，也不會因 tunnel 換址或第三方 cookie 被封鎖而整站失效。
     async bootstrapConfig() {
         const gateway = this.config.services.aiGateway;
+        // router.js 用 .finally() 擋住開站流程，所以這裡一定要有逾時。
+        // Gateway 若是連得上卻不回應（不是 5xx，是 hang），沒有逾時就永遠不 settle，
+        // .finally() 不觸發，整個前端卡在白畫面——比用到舊網址嚴重得多。
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        const timer = controller ? setTimeout(() => controller.abort(), 4000) : null;
         try {
-            const res = await fetch(`${gateway.baseUrl}${gateway.configPath}`, { cache: 'no-store' });
-            if (!res.ok) return false;
+            const res = await fetch(`${gateway.baseUrl}${gateway.configPath}`, {
+                cache: 'no-store',
+                signal: controller ? controller.signal : undefined
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
-            const memberUrl = String(data.memberDatabaseUrl || '').replace(/\/+$/, '');
-            const productUrl = String(data.productUrl || '').replace(/\/+$/, '');
-            // 只接受看起來像網址的值，避免後端回空字串時把設定清成無效狀態
-            if (/^https?:\/\//.test(memberUrl)) this.config.services.memberDatabase.baseUrl = memberUrl;
-            if (/^https?:\/\//.test(productUrl)) {
-                this.config.services.product.baseUrl = productUrl;
-                // crawler 沒有自己的網址時本來就沿用 productUrl，這裡要一起更新
-                if (!getRuntimeApiConfig().crawlerUrl) this.config.services.crawler.baseUrl = productUrl;
-            }
+            const sameOriginGatewayPath = (value, fallback) => {
+                const raw = String(value || '').replace(/\/+$/, '');
+                return raw.startsWith('/') && !raw.startsWith('//') ? `${gateway.baseUrl}${raw}` : fallback;
+            };
+            this.config.services.memberDatabase.baseUrl = sameOriginGatewayPath(data.memberDatabaseUrl, gatewayService('member-database'));
+            this.config.services.product.baseUrl = sameOriginGatewayPath(data.productUrl, gatewayService('product-api'));
+            this.config.services.crawler.baseUrl = sameOriginGatewayPath(data.crawlerUrl, gatewayService('admin-api'));
             return true;
-        } catch (_) {
-            return false;  // 連不到 Gateway，沿用內建網址
+        } catch (err) {
+            console.warn('[config] /public-config 讀取失敗，沿用同源 Gateway 路徑：', err && err.message);
+            return false;
+        } finally {
+            if (timer) clearTimeout(timer);
         }
     },
 
@@ -149,8 +148,7 @@ const Api = {
     // 臉部分析與渲染一律走 Gateway，帶登入後的短期 session。Gateway 是 session-only 模式，
     // 上游金鑰只留在伺服器端，瀏覽器不再送 X-API-Key。
     _gatewayHeaders(headers = {}) {
-        const token = this._getGatewaySessionToken();
-        return token ? { ...headers, Authorization: `Bearer ${token}` } : { ...headers };
+        return { ...headers };
     },
     _faceHeaders() {
         return this._gatewayHeaders();
@@ -237,11 +235,11 @@ const Api = {
         throw new Error('臉部分析 job 逾時');
     },
 
+    // 2026-07-20 改走 Gateway：原本前端直連公開 tunnel 並自帶 X-API-Key，
+    // 那正是《Gateway 安全代理與 Ollama 專題展示說明》明文禁止的「前端直連」。
+    // 現在跟臉部分析、渲染一致，只送登入後的短期 session，瀏覽器不再持有任何上游金鑰。
     _textSuggestionHeaders() {
-        const headers = { 'Content-Type': 'application/json' };
-        const apiKey = this.config.services.textSuggestion.apiKey;
-        if (apiKey) headers['X-API-Key'] = apiKey;
-        return headers;
+        return this._gatewayHeaders({ 'Content-Type': 'application/json' });
     },
 
     async suggestMakeup({ analysisPackage, faceAnalysis, style, userNote }) {
@@ -257,6 +255,12 @@ const Api = {
         }
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
+            const code = err.detail?.error?.code || err.error?.code || '';
+            // 外部 Ollama 路徑預設關閉（GATEWAY_ALLOW_EXTERNAL_TEXT_UPSTREAM），
+            // Gateway 回的是英文原文，這裡換成使用者看得懂的說明。
+            if (code === 'EXTERNAL_TEXT_UPSTREAM_DISABLED') {
+                throw new Error('妝容建議服務目前停用中（尚未接上受信任的文字服務），其他功能不受影響。');
+            }
             const msg = err.detail?.error?.message
                 || err.error?.message
                 || err.detail
@@ -674,64 +678,28 @@ const Api = {
         }
     },
 
-    // ═══ 後台管理：members 讀寫都走登入憑證 ═══
-    // 不在瀏覽器保存密碼，也不使用密碼自動重登入。若 session 失效，讓畫面
-    // 顯示登入逾時並由使用者重新登入；若會員後端回傳短期 Bearer token，僅存
-    // 在本分頁的 sessionStorage，不能用來取代 HttpOnly cookie 的後端驗證。
+    // ═══ 後台管理：members 讀寫都走 Gateway 的 HttpOnly cookie ═══
     _memberTokenKey: 'memberAccessToken',
     _getMemberAccessToken() {
-        try {
-            const token = sessionStorage.getItem(this._memberTokenKey) || '';
-            return token.length <= 4096 ? token : '';
-        } catch (_) {
-            return '';
-        }
+        return '';
     },
-    _rememberMemberAccessToken(data) {
-        const token = data?.accessToken
-            || data?.access_token
-            || data?.token
-            || data?.member?.accessToken
-            || data?.member?.access_token
-            || data?.member?.token
-            || '';
-        try {
-            if (typeof token === 'string' && token.length > 0 && token.length <= 4096) {
-                sessionStorage.setItem(this._memberTokenKey, token);
-            } else {
-                sessionStorage.removeItem(this._memberTokenKey);
-            }
-        } catch (_) {}
+    _rememberMemberAccessToken() {
+        try { sessionStorage.removeItem(this._memberTokenKey); } catch (_) {}
     },
     _memberHeaders(headers = {}) {
-        const token = this._getMemberAccessToken();
-        return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
+        return headers;
     },
 
-    // AI Gateway 自己簽的 session（issuer decorate-me-ai-gateway），跟會員資料庫的 token 不是同一個，
-    // 兩者不能互換。Gateway 也會種 dm_session cookie，但它是 SameSite=Lax、跨網域不會送出，
-    // 所以一律用回應 body 的 accessToken 走 Authorization header。
+    // 舊版 token 欄位只保留介面相容性；正式站只使用 HttpOnly cookie，JavaScript 不保存 token。
     _gatewayTokenKey: 'gatewaySessionToken',
     _getGatewaySessionToken() {
-        try {
-            const token = sessionStorage.getItem(this._gatewayTokenKey) || '';
-            return token.length <= 4096 ? token : '';
-        } catch (_) {
-            return '';
-        }
+        return '';
     },
-    _rememberGatewaySessionToken(token) {
-        try {
-            if (typeof token === 'string' && token.length > 0 && token.length <= 4096) {
-                sessionStorage.setItem(this._gatewayTokenKey, token);
-            } else {
-                sessionStorage.removeItem(this._gatewayTokenKey);
-            }
-        } catch (_) {}
+    _rememberGatewaySessionToken() {
+        try { sessionStorage.removeItem(this._gatewayTokenKey); } catch (_) {}
     },
 
-    // 用會員帳密向 Gateway 換一組 session；Gateway 會轉打會員資料庫驗證，成功後回同樣的 member 物件。
-    // 失敗只影響臉部分析／渲染，不能讓整個登入流程掛掉，所以呼叫端一律容錯。
+    // 用會員帳密向 Gateway 登入；帳密只送一次，成功後由 HttpOnly cookie 維持會員與 AI session。
     async loginToGateway(email, password) {
         // 同源時 baseUrl 是空字串，直接串接會得到 /auth/login；不能用 config.url()，
         // 它在 baseUrl 為空時會回空字串。
@@ -746,27 +714,22 @@ const Api = {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                this._rememberGatewaySessionToken('');
-                return { ok: false, status: res.status, code: data?.detail?.error?.code || `HTTP_${res.status}` };
+                return {
+                    ok: false,
+                    status: res.status,
+                    code: data?.detail?.error?.code || data?.error?.code || `HTTP_${res.status}`,
+                    error: data?.detail?.error?.message || data?.error?.message || '帳號或密碼錯誤'
+                };
             }
-            this._rememberGatewaySessionToken(data.accessToken || '');
             return { ok: true, member: data.member || null, expiresAt: data.expiresAt || null };
         } catch (err) {
-            this._rememberGatewaySessionToken('');
             return { ok: false, code: 'NETWORK_ERROR', error: err.message };
         }
     },
 
-    // 保留這個 wrapper 名稱是為了相容既有呼叫點，但不再做 relogin。
-    // 只有送往會員資料庫的請求才附加 Bearer，避免把會員憑證送到商品/爬蟲服務。
+    // 保留 wrapper 名稱相容既有呼叫點；所有會員請求使用同源 HttpOnly cookie。
     async _fetchWithRelogin(input, init) {
-        const memberBaseUrl = this.config.services.memberDatabase.baseUrl;
-        const isMemberRequest = typeof input === 'string'
-            && !!memberBaseUrl
-            && input.startsWith(memberBaseUrl);
-        const nextInit = isMemberRequest
-            ? { ...(init || {}), headers: this._memberHeaders(init?.headers || {}) }
-            : init;
+        const nextInit = { ...(init || {}), credentials: 'include', headers: this._memberHeaders(init?.headers || {}) };
         return fetch(input, nextInit);
     },
 
@@ -965,6 +928,7 @@ const Api = {
     _isStorableImageUrl(value) {
         const raw = String(value || '').trim();
         if (!raw || raw.length > 500) return false;
+        if (/^\/media\/render\/[0-9a-f]{32}$/.test(raw)) return true;
         try {
             const url = new URL(raw);
             return url.protocol === 'https:' || url.protocol === 'http:';
@@ -1036,13 +1000,13 @@ const Api = {
     },
 
     async patchRemoteProduct(rawId, payload, version) {
-        const baseUrl = this.config.services.product.baseUrl;
+        const baseUrl = gatewayService('admin-api');
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
         if (rawId == null) return { ok: false, error: '找不到這筆商品的資料庫 id' };
         try {
             const headers = this._adminProductHeaders({ 'Content-Type': 'application/json' });
             if (version != null) headers['If-Match'] = String(version);
-            const res = await fetch(`${baseUrl}/api/products/${encodeURIComponent(rawId)}`, {
+            const res = await fetch(`${baseUrl}/products/${encodeURIComponent(rawId)}`, {
                 method: 'PATCH',
                 credentials: 'include',
                 headers,
@@ -1057,10 +1021,10 @@ const Api = {
     },
 
     async createRemoteProduct(payload) {
-        const baseUrl = this.config.services.product.baseUrl;
+        const baseUrl = gatewayService('admin-api');
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
         try {
-            const res = await fetch(`${baseUrl}/api/products`, {
+            const res = await fetch(`${baseUrl}/products`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
@@ -1075,11 +1039,11 @@ const Api = {
     },
 
     async deleteRemoteProduct(rawId) {
-        const baseUrl = this.config.services.product.baseUrl;
+        const baseUrl = gatewayService('admin-api');
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
         if (rawId == null) return { ok: false, error: '找不到這筆商品的資料庫 id' };
         try {
-            const res = await fetch(`${baseUrl}/api/products/${encodeURIComponent(rawId)}`, {
+            const res = await fetch(`${baseUrl}/products/${encodeURIComponent(rawId)}`, {
                 method: 'DELETE',
                 credentials: 'include',
                 headers: this._adminProductHeaders()
@@ -1096,7 +1060,7 @@ const Api = {
         const baseUrl = this.config.services.crawler.baseUrl;
         if (!baseUrl) return { ok: false, error: 'crawlerUrl 未設定' };
         try {
-            const res = await fetch(`${baseUrl}/api/crawler/search-preview`, {
+            const res = await fetch(`${baseUrl}/crawler/search-preview`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
@@ -1112,10 +1076,10 @@ const Api = {
     },
 
     async listProductAuditLogs(limit = 100) {
-        const baseUrl = this.config.services.product.baseUrl;
+        const baseUrl = gatewayService('admin-api');
         if (!baseUrl) return { ok: false, logs: [] };
         try {
-            const res = await fetch(`${baseUrl}/api/admin/product-audit-logs?limit=${encodeURIComponent(limit)}`, {
+            const res = await fetch(`${baseUrl}/product-audit-logs?limit=${encodeURIComponent(limit)}`, {
                 headers: this._adminProductHeaders(), credentials: 'include', cache: 'no-store'
             });
             const data = await res.json().catch(() => ({}));
@@ -1185,42 +1149,20 @@ const Api = {
     },
 
     async login(email, password) {
-        let res;
-        const doLogin = (withCreds) => fetch(this.config.url('memberDatabase', 'loginPath'), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password }),
-            ...(withCreds ? { credentials: 'include' } : {})
-        });
-        try {
-            // 優先帶 credentials 讓後端 session cookie 種進來（後台管理端點靠它驗證）；
-            // 對方 CORS 若沒開放 credentials 會直接 TypeError，退回無 cookie 模式讓一般登入不受影響。
-            try { res = await doLogin(true); }
-            catch (_) { res = await doLogin(false); }
-        } catch (err) {
-            // 真正連不上後端（DNS/斷線/CORS 擋掉），才算「網路失敗」，允許前端 fallback 成本機模擬
-            const networkErr = new Error('登入 API 連線失敗：' + err.message);
-            networkErr.networkFailure = true;
-            throw networkErr;
-        }
-        if (!res.ok) {
-            // 伺服器有回應，只是明確拒絕（帳密錯誤、帳號停權等）——這不是「連不上」，不能被當成 fallback 條件，否則等於帳密驗證形同虛設
-            let detail = null;
-            try { detail = await res.json(); } catch (_) {}
-            const err = new Error(detail?.error?.message || '帳號或密碼錯誤');
-            err.networkFailure = false;
-            err.status = res.status;
-            err.code = detail?.error?.code || null;  // 未註冊 USER_NOT_FOUND / 密碼錯 WRONG_PASSWORD（後端支援時前端據此分流）
+        const result = await this.loginToGateway(email, password);
+        if (!result.ok) {
+            const err = new Error(result.error || '帳號或密碼錯誤');
+            err.networkFailure = result.code === 'NETWORK_ERROR';
+            err.status = result.status || 0;
+            err.code = result.code || null;
             throw err;
         }
-        // 清除舊版本可能留下的敏感資料；本版本不保存密碼。
-        try { sessionStorage.removeItem('beautyAuthCreds'); } catch (_) {}
-        const data = await res.json();
-        this._rememberMemberAccessToken(data);
-        // 再向 AI Gateway 換一組 session，臉部分析／渲染要靠它。這裡刻意不擋登入：
-        // Gateway 掛掉時使用者仍能登入使用其他功能，只有 AI 功能會提示重新登入。
-        await this.loginToGateway(email, password);
-        return data;
+        try {
+            sessionStorage.removeItem('beautyAuthCreds');
+            sessionStorage.removeItem('memberAccessToken');
+            sessionStorage.removeItem('gatewaySessionToken');
+        } catch (_) {}
+        return { success: true, member: result.member, expiresAt: result.expiresAt };
     },
 
     // 把會員資料庫的錯誤回應轉成可顯示的訊息。
@@ -1256,9 +1198,11 @@ const Api = {
         };
         let res;
         try {
-            res = await fetch(this.config.url('memberDatabase', 'registerPath'), {
+            const gateway = this.config.services.aiGateway;
+            res = await fetch(`${gateway.baseUrl}${gateway.registerPath}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
                 body: JSON.stringify(body)
             });
         } catch (err) {
@@ -1270,35 +1214,30 @@ const Api = {
     },
 
     async sendOTP(email) {
-        const memberApi = this.config.services.memberDatabase;
-        // 分辨「連不上」與「伺服器拒絕」：只有每一個端點都連不上才算連線失敗，
-        // 伺服器有回應（例如寄送頻率過高、信箱格式不符）就要照實說，不能混為一談。
-        let lastRejection = null;
-        let reachedServer = false;
-        for (const endpoint of memberApi.sendOtpPaths) {
-            try {
-                const res = await fetch(`${memberApi.baseUrl}${endpoint}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email })
-                });
-                if (res.ok) return res.json();
-                reachedServer = true;
-                lastRejection = await this._memberApiError(res, '驗證碼寄送失敗');
-            } catch (_) {
-                // 這個端點連不上，換下一個試
-            }
+        const gateway = this.config.services.aiGateway;
+        try {
+            const res = await fetch(`${gateway.baseUrl}${gateway.sendOtpPath}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ email })
+            });
+            if (!res.ok) throw await this._memberApiError(res, '驗證碼寄送失敗');
+            return res.json();
+        } catch (err) {
+            if (err?.status) throw err;
+            throw new Error('無法連線到會員服務，請稍後再試。');
         }
-        if (reachedServer && lastRejection) throw lastRejection;
-        throw new Error('無法連線到會員資料庫，請稍後再試。');
     },
 
     async verifyOTP(email, otp) {
         let res;
         try {
-            res = await fetch(this.config.url('memberDatabase', 'verifyOtpPath'), {
+            const gateway = this.config.services.aiGateway;
+            res = await fetch(`${gateway.baseUrl}${gateway.verifyOtpPath}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
                 body: JSON.stringify({ email, otp })
             });
         } catch (err) {
@@ -1646,14 +1585,28 @@ function buildRenderPrompt(faceAnalysis, styleId, suggestion = '', ollamaRenderP
 
 const AnalysisDraft = {
     _key: 'beautyAnalysisDraft',
+    _ttlMs: 30 * 60 * 1000,
     save(pkg) {
-        localStorage.setItem(this._key, JSON.stringify(pkg));
+        localStorage.removeItem(this._key);
+        sessionStorage.setItem(this._key, JSON.stringify({ expiresAt: Date.now() + this._ttlMs, data: pkg }));
     },
     load() {
-        return JSON.parse(localStorage.getItem(this._key) || 'null');
+        localStorage.removeItem(this._key);
+        try {
+            const stored = JSON.parse(sessionStorage.getItem(this._key) || 'null');
+            if (!stored || Number(stored.expiresAt) <= Date.now()) {
+                this.clear();
+                return null;
+            }
+            return stored.data || null;
+        } catch (_) {
+            this.clear();
+            return null;
+        }
     },
     clear() {
         localStorage.removeItem(this._key);
+        sessionStorage.removeItem(this._key);
     }
 };
 
@@ -1706,8 +1659,13 @@ const Auth = {
     },
 
     logout() {
-        this.clearSession();
-        location.reload();
+        const gateway = (typeof Api !== 'undefined' && Api.config?.services?.aiGateway) || { baseUrl: '', logoutPath: '/auth/logout' };
+        fetch(`${gateway.baseUrl}${gateway.logoutPath}`, { method: 'POST', credentials: 'include' })
+            .catch(() => null)
+            .finally(() => {
+                this.clearSession();
+                location.reload();
+            });
     },
 };
 

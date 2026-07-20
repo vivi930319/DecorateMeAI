@@ -54,6 +54,14 @@
       {
         "source": "/member-database/**",
         "run": { "serviceId": "ai-gateway", "region": "asia-east1" }
+      },
+      {
+        "source": "/product-api/**",
+        "run": { "serviceId": "ai-gateway", "region": "asia-east1" }
+      },
+      {
+        "source": "/media/**",
+        "run": { "serviceId": "ai-gateway", "region": "asia-east1" }
       }
     ],
     "headers": [

@@ -1,122 +1,88 @@
-# Decorate Me — 網頁前端
+# Decorate Me Web 前端
 
-Decorate Me 是一套 AI 美妝系統：使用者上傳一張自拍，系統分析五官與膚色、生成妝容建議，再用 AI 把妝容渲染回同一張臉，並推薦對應的彩妝商品。
+本分支 `dev_makeup` 是 Decorate Me 的正式 Web 前端與 Firebase Hosting 部署來源。
 
-本專案是這套系統的**網頁前端**，用原生 JavaScript 開發，部署在 Firebase Hosting。
+正式網站：<https://decorate-me.web.app>
 
-- 線上：[decorate-me.web.app](https://decorate-me.web.app)
+## 前端現在怎麼連後端
 
----
-
-## 架構
-
-前端不含後端邏輯，透過 API 串接各服務：
+前端只呼叫正式網站的同源路徑，不直接保存資料庫 Tunnel 網址、Face／Render 服務網址或任何上游 API key。
 
 ```mermaid
 flowchart LR
-  classDef n fill:#ffffff,stroke:#000000,color:#000000;
-  FE["網頁前端 (Firebase Hosting)"]
-  FE -->|X-API-Key| FA["臉部分析 (Cloud Run)"]
-  FE -->|X-API-Key| RD["AI 渲染 (Cloud Run)"]
-  FE -->|X-API-Key| OL["Ollama 文字建議"]
-  FE -->|session cookie| DB["會員 / 商品資料庫"]
-  class FE,FA,RD,OL,DB n;
+    UI["瀏覽器 SPA"] -->|"同源請求"| FH["Firebase Hosting rewrites"]
+    FH --> GW["AI Gateway"]
+    GW --> DB["會員／商品資料庫"]
+    GW --> FACE["Face BASIC／PRO"]
+    GW --> RENDER["Render／私人圖片"]
 ```
 
----
+常用同源入口：
 
-## 技術
+| 路徑 | 用途 |
+|---|---|
+| `/auth/*` | 登入、註冊、OTP 與登出 |
+| `/member-database/*` | 會員、收藏、點數、任務與主題 |
+| `/product-api/*` | 公開商品資料 |
+| `/admin-api/*` | 管理員會員與商品操作 |
+| `/face-basic/*`、`/face-pro/*` | 臉部分析 |
+| `/render-service/*` | 圖片渲染工作 |
+| `/media/render/{jobId}` | 登入後讀取本人的私人渲染圖 |
 
-| 分類 | 使用 |
-|------|------|
-| 語言 | 原生 JavaScript（不使用框架）、HTML、CSS |
-| 部署 | Firebase Hosting |
-| 影像處理 | Canvas + Web Worker（上傳前壓縮到 1024px / JPEG 0.78、Gamma 亮度校正） |
-| 認證 | 後端 session cookie（`credentials: 'include'`），401 自動重登 |
-| 狀態 | sessionStorage（登入）、localStorage（收藏 / 購物車 / 歷史 / 草稿快取） |
+## 2026-07-21 重要變更
 
----
+- 登入只呼叫 Gateway，並使用 HttpOnly session cookie。
+- 舊版前端 token key 會被清除，不在 `sessionStorage` 保存會員 Bearer token。
+- `/public-config` 只使用同源路徑；即使後端資料庫 Tunnel 更換，前端也不需要再寫入新網址。
+- 商品頁維持讀取完整資料；正式 API 驗證為 1041 筆，沒有加入虛擬清單或只顯示 50 筆。
+- 完整分析包只在本分頁 `sessionStorage` 暫存，30 分鐘後失效。
+- 收藏圖使用穩定 `/media/render/{jobId}` 路徑；Bucket 保持私人，前端不保存永久公開 GCS URL。
+- Admin audit 顯示去識別化 actor ID，不顯示完整管理員 email。
 
-## 專案結構
+### Ollama 專題展示例外
 
-```
-index.html            進入點，載入各 JS
-config.local.js       服務網址與金鑰（本機檔，不進版控）
-js/
-  config.js           讀取 window.DECORATE_ME_CONFIG
-  data.js             風格資料
-  api.js              所有 API 呼叫（Api / Auth / AdminStore / Fav / Cart …）
-  router.js           Hash 路由、頁面邏輯
-  image-worker.js     影像壓縮 Web Worker
-pages/                各頁面 HTML（router 動態載入）
-css/main.css
-deploy.ps1            部署腳本（自動戳版本號後 firebase deploy）
-```
+目前 Ollama 完整 Prompt 依專題紀錄需求保留在受控展示／除錯回應，本次不移除。一般 access log 仍不得記錄 Prompt、照片、完整分析包、完整 email 或權杖。待使用者明確確認 Ollama 完成後再移除展示全文。
 
----
+## 主要檔案
 
-## 主要功能
+| 檔案 | 用途 |
+|---|---|
+| `index.html` | 正式 SPA 入口與資產版本 |
+| `js/api.js` | Gateway 設定、登入、會員、商品與 Admin API |
+| `js/router.js` | 前台／後台頁面與互動流程 |
+| `js/service-endpoints.js` | 同源服務路徑 fallback，不保存秘密 |
+| `firebase.json` | Hosting rewrites、快取與安全標頭 |
+| `frontend_smoke_check.js` | 重要安全與 API 契約檢查 |
+| `deploy.ps1` | 部署前檢查、秘密掃描與 Firebase 發布 |
 
-- 臉部分析（BASIC / PRO，含相機拍照）
-- 妝容建議與 AI 妝容對比圖，可收藏
-- 商品推薦與收藏、購物車
-- 會員中心（等級、點數、簽到、任務、主題）
-- 後台管理（會員權限、商品、即時檢視收藏與點數）
+`config.local.js` 只供本機公開設定使用，不得放 API key、JWT、密碼或其他秘密；範例請看 `config.local.example.js`。
 
----
+## 驗證與部署
 
-## 後台管理（Admin）
-
-僅 `role: admin` 的帳號可進入管理中台（非管理員自動導回首頁）。管理員登入後只顯示獨立後台，不載入一般會員導覽；所有讀寫都走管理員 session cookie。
-
-功能：
-
-- **會員清單**：`GET /api/members`（僅 admin 可讀，匿名 401、非 admin 403）
-- **即時檢視**：逐會員顯示妝容收藏數與點數；切回分頁自動刷新（3 秒節流）
-- **會員管理**：改角色 / 會員等級 / 停權 / 功能權限（`PATCH /api/members/{email}`）
-- **等級連動**：選 VIP / PRO 會員時，自動勾選「PRO 分析」「渲染不限次數」權限
-- **商品管理**：新增 / 編輯商品（`POST` / `PATCH /api/products`）
-- **爬蟲匯入**：輸入單一商品網址，呼叫 `POST /api/crawler/product-preview` 取得預覽，再帶入商品表單確認上架
-- **韌性**：搜尋 200ms debounce；session 過期（401）時自動重登並重試
-
-流程：
-
-```mermaid
-flowchart TB
-  classDef n fill:#ffffff,stroke:#000000,color:#000000;
-  A["管理員登入 (role=admin)"] --> B["種 session cookie"]
-  B --> C["GET /api/members 讀會員清單"]
-  C --> D["即時：GET saved-looks / points"]
-  C --> E["編輯：PATCH member（權限 / 等級 / 停權）"]
-  C --> F["商品：POST / PATCH products"]
-  C --> H["爬蟲：POST product-preview → 管理員確認"]
-  C -.401 過期.-> G["自動重登 → 重試"]
-  class A,B,C,D,E,F,G,H n;
-```
-
----
-
-## 本機執行與部署
-
-```bash
-# 1. 設定：複製範本填入實際網址 / 金鑰
-cp config.local.example.js config.local.js
-
-# 2. 本機預覽（任一靜態伺服器，例如）
-python dev_server.py     # 或 firebase emulators / live server
-
-# 3. 部署（自動戳 JS 版本號避免快取，再 firebase deploy）
+```powershell
+node --check js/api.js
+node --check js/router.js
+node frontend_smoke_check.js
 ./deploy.ps1
 ```
 
-設定檔 `config.local.js` 只存在本機、不進版控，換環境只改它、不動程式。
+`deploy.ps1` 會先執行語法檢查、smoke test 與秘密掃描，再部署 Firebase Hosting。部署後仍要檢查：
 
----
+- `https://decorate-me.web.app/public-config` 只回同源路徑。
+- 未登入私人媒體回 401。
+- 登入後會員、商品與 Admin 功能可正常讀取。
+- 線上資產版本與本次部署標記一致。
 
-## 相關分支
+## Admin 更新後顯示 401
 
-同一團隊 repo，不同分支負責不同模組：
+新版 Gateway 使用 HttpOnly cookie，舊版登入狀態不能沿用。更新後第一次進 Admin 若看到會員資料庫或稽核 API 401，請先登出、重新整理，再用管理員帳號重新登入。
 
-- `dev_makeup`（本分支）：網頁前端
-- `Isa`：臉部分析與 AI 渲染後端（Python）
-- `dev`：iOS App（SwiftUI）
+Console 若顯示 `content.js` 的 `Failed to initialize current tab`，通常是瀏覽器擴充功能錯誤，不是 Decorate Me API；可以用無痕視窗交叉確認。
+
+## 資安原則
+
+- 前端與 GitHub 不保存實際 API key、JWT、密碼或 OTP。
+- Log 不保存照片、完整分析包、完整 email、權杖或 Prompt。
+- GCS Bucket 不為了顯示圖片而改成公開。
+- 會員只能透過 Gateway 取得自己的圖片。
+- 刪除收藏或會員時，前端、資料庫、Render 工作與圖片必須同步清除。

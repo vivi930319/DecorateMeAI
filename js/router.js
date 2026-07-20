@@ -2598,13 +2598,8 @@ const PageInit = {
                 let pkg = Router.analysisPackage;
                 const imageDataUrl = pkg?.images?.front?.compressedDataUrl || pkg?.images?.front?.dataUrl || '';
                 if (!imageDataUrl) { showAlert('尚未上傳照片，請先完成臉部分析。', { type: 'error' }); return; }
-                const currentRenderApiKey = window.DECORATE_ME_CONFIG?.renderApiKey || '';
-                if (!currentRenderApiKey) {
-                    renderStatus.style.display = 'block';
-                    renderStatus.textContent = '目前頁面沒有載到 renderApiKey，請重新整理或檢查 config.local.js';
-                    showAlert('目前頁面沒有載到 renderApiKey，請重新整理頁面後再試；若還是一樣，表示部署環境沒有載入正確的 render 設定檔。', { type: 'error' });
-                    return;
-                }
+                // 2026-07-20 移除 renderApiKey 檢查：渲染改走 Gateway（session-only）後，
+                // 前端不再持有也不再送 render 金鑰，這個檢查只會平白擋住渲染按鈕。
                 // 2026-07-15 對齊後端接口：前端不再自己組 prompt（後端會忽略），只送結構化資料。
                 // 只挑後端會讀的兩塊，不整包送——資料包裡有 base64 圖片，整包送 payload 會爆炸。
                 const styleId = Router.selectedStyleId || pkg?.render?.styleId || 'natural';
@@ -3171,7 +3166,11 @@ const PageInit = {
                     // 本機已同步的筆（有 remoteId）資訊較完整（含完整臉部分析與風格），優先保留，不被後端摘要版覆蓋
                     const localByRemote = {};
                     localAll.forEach(x => { if (x.remoteId != null) localByRemote[x.remoteId] = x; });
-                    const fromRemote = remote.map(rm => (rm.remoteId != null && localByRemote[rm.remoteId]) ? localByRemote[rm.remoteId] : rm);
+                    // DB 回傳的影像網址可能是剛更新的短效 Signed URL；保留本機補充欄位，
+                    // 但影像與遠端狀態一律以資料庫最新值為準。
+                    const fromRemote = remote.map(rm => (rm.remoteId != null && localByRemote[rm.remoteId])
+                        ? { ...localByRemote[rm.remoteId], ...rm }
+                        : rm);
                     const remoteIds = new Set(remote.map(rm => String(rm.remoteId)));
                     const localOnly = localAll.filter(x => x.remoteId == null || !remoteIds.has(String(x.remoteId)));
                     const merged = fromRemote.concat(localOnly).sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
@@ -3880,7 +3879,7 @@ const PageInit = {
                 rows.innerHTML = `<tr><td colspan="4">${escapeHtml(result.error || '無法讀取稽核紀錄')}</td></tr>`;
                 return;
             }
-            rows.innerHTML = result.logs.length ? result.logs.map(log => `<tr><td>${escapeHtml(log.createdAt || log.created_at || log.timestamp || '—')}</td><td>${escapeHtml(log.action || log.operation || '—')}</td><td>${escapeHtml(log.productId || log.product_id || '—')}</td><td>${escapeHtml(log.adminEmail || log.actor || '—')}</td></tr>`).join('') : '<tr><td colspan="4">尚無操作紀錄</td></tr>';
+            rows.innerHTML = result.logs.length ? result.logs.map(log => `<tr><td>${escapeHtml(log.createdAt || log.created_at || log.timestamp || '—')}</td><td>${escapeHtml(log.action || log.operation || '—')}</td><td>${escapeHtml(log.productId || log.product_id || '—')}</td><td>${escapeHtml(log.actorId || log.actor_id || (String(log.actor || '').startsWith('actor_') ? log.actor : '管理員'))}</td></tr>`).join('') : '<tr><td colspan="4">尚無操作紀錄</td></tr>';
         };
         // 管理憑證改用登入 token，進到這頁就直接讀稽核紀錄，不必再等使用者「套用」什麼
         loadProductAuditLogs();

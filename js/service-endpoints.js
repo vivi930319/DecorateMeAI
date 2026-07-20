@@ -1,7 +1,6 @@
-// Public service locations only. Keep API keys and other credentials out of this file.
+// 瀏覽器只認得 Firebase Hosting 的同源 Gateway 路徑。
+// 會員、商品、爬蟲與模型服務的實際上游網址只設定在 ai-gateway Cloud Run，
+// 不再發布到前端，也不保留 Quick Tunnel fallback。
 window.DECORATE_ME_CONFIG = Object.assign(window.DECORATE_ME_CONFIG || {}, {
-    memberDatabaseUrl: 'https://hints-wrist-fireplace-kilometers.trycloudflare.com',
-    productUrl: 'https://hints-wrist-fireplace-kilometers.trycloudflare.com'
-    // aiGatewayUrl 刻意留空：firebase.json 的 rewrites 已把 /auth、/face-basic、/face-pro 等
-    // 路徑導到 ai-gateway，走同源即可，不需要也不應該寫死 Gateway 網址。
+    aiGatewayUrl: ''
 });

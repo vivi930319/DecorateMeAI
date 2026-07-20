@@ -19,13 +19,7 @@ const sandbox = {
   console,
   window: {
     DECORATE_ME_CONFIG: {
-      faceBasicUrl: 'http://127.0.0.1:8001',
-      faceProUrl: 'http://127.0.0.1:8002',
-      textSuggestionUrl: 'http://127.0.0.1:8010',
-      renderUrl: 'http://127.0.0.1:8020',
-      productUrl: 'http://127.0.0.1:8030',
-      memberDatabaseUrl: 'http://127.0.0.1:8040',
-      crawlerUrl: 'http://127.0.0.1:8050'
+      aiGatewayUrl: ''
     }
   },
   location: { reload() {} },
@@ -84,7 +78,10 @@ const proUrl = sandbox.ApiConfig.url('facePro', 'analyzePath');
 const suggestionUrl = sandbox.ApiConfig.url('textSuggestion', 'suggestPath');
 if (!basicUrl.endsWith('/v1/face/analyze/basic')) throw new Error(`Bad BASIC URL: ${basicUrl}`);
 if (!proUrl.endsWith('/v1/face/analyze/pro')) throw new Error(`Bad PRO URL: ${proUrl}`);
-if (suggestionUrl !== 'http://127.0.0.1:8010/suggest') throw new Error(`Bad suggestion URL: ${suggestionUrl}`);
+if (suggestionUrl !== '/text-suggestion/suggest') throw new Error(`Bad suggestion URL: ${suggestionUrl}`);
+if (sandbox.ApiConfig.services.memberDatabase.baseUrl !== '/member-database') throw new Error('Member API must use same-origin Gateway');
+if (sandbox.ApiConfig.services.product.baseUrl !== '/product-api') throw new Error('Product API must use same-origin Gateway');
+if (sandbox.ApiConfig.services.crawler.baseUrl !== '/admin-api') throw new Error('Admin crawler API must use same-origin Gateway');
 
 // ── Api 方法 ─────────────────────────────────────────────────
 for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'previewCrawledProduct']) {
@@ -104,6 +101,11 @@ const configExample = fs.readFileSync(path.join(rootDir, 'config.local.example.j
 if (!configExample.includes('allowInsecureOtpBypass: false')) {
   throw new Error('config.local.example.js must keep allowInsecureOtpBypass disabled by default');
 }
+for (const forbidden of ['faceApiKey', 'renderApiKey', 'textSuggestionApiKey', 'trycloudflare.com']) {
+  if (configExample.includes(forbidden)) throw new Error(`config.local.example.js must not contain ${forbidden}`);
+}
+if (apiSource.includes("sessionStorage.setItem(this._gatewayTokenKey")) throw new Error('Gateway token must not be stored in sessionStorage');
+if (apiSource.includes("sessionStorage.setItem(this._memberTokenKey")) throw new Error('Member token must not be stored in sessionStorage');
 const gitignore = fs.readFileSync(path.join(rootDir, '.gitignore'), 'utf8');
 if (!gitignore.includes('config.local.js')) {
   throw new Error('.gitignore must exclude config.local.js');
