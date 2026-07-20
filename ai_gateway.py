@@ -819,6 +819,19 @@ async def logout():
     return result
 
 
+@app.get("/auth/session")
+async def session_status(request: Request):
+    """Verify both Gateway and upstream member sessions before loading private pages."""
+    claims = require_member_access(request)
+    require_upstream_member_cookie(request)
+    return {
+        "ok": True,
+        "role": str(claims.get("role") or "member"),
+        "status": str(claims.get("status") or "active"),
+        "expiresAt": int(claims.get("exp") or 0) * 1000,
+    }
+
+
 async def proxy_public_member_request(request: Request, upstream_path: str):
     """Forward only the three pre-login member operations.
 

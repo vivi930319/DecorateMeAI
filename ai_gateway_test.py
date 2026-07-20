@@ -22,6 +22,7 @@ from ai_gateway import (  # noqa: E402
     require_member_access,
     require_upstream_member_cookie,
     seal_member_cookie,
+    session_status,
     _upstream_cookie_header,
     _authorize_member_path,
     _render_job_id_from_url,
@@ -97,6 +98,24 @@ class AiGatewayTest(unittest.TestCase):
         request.cookies = {"dm_session": token}
         claims = require_admin_access(request)
         self.assertEqual(claims["sub"], "admin@example.com")
+
+    def test_session_status_requires_both_http_only_sessions(self):
+        token, _ = issue_access_token("member@example.com", "member", "active")
+        request = Mock()
+        request.headers = {}
+        request.cookies = {
+            "dm_session": token,
+            "dm_member_session": seal_member_cookie("session=private-upstream-value"),
+        }
+        result = asyncio.run(session_status(request))
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["role"], "member")
+        self.assertNotIn("email", result)
+
+        request.cookies = {"dm_session": token}
+        with self.assertRaises(Exception) as missing_upstream:
+            asyncio.run(session_status(request))
+        self.assertEqual(missing_upstream.exception.status_code, 401)
 
     def test_non_admin_and_suspended_admin_are_rejected(self):
         request = Mock()
