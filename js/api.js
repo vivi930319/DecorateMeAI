@@ -721,6 +721,7 @@ const Api = {
                     error: data?.detail?.error?.message || data?.error?.message || '帳號或密碼錯誤'
                 };
             }
+            this._sessionExpiredNotified = false;
             return { ok: true, member: data.member || null, expiresAt: data.expiresAt || null };
         } catch (err) {
             return { ok: false, code: 'NETWORK_ERROR', error: err.message };
@@ -730,7 +731,14 @@ const Api = {
     // 保留 wrapper 名稱相容既有呼叫點；所有會員請求使用同源 HttpOnly cookie。
     async _fetchWithRelogin(input, init) {
         const nextInit = { ...(init || {}), credentials: 'include', headers: this._memberHeaders(init?.headers || {}) };
-        return fetch(input, nextInit);
+        const res = await fetch(input, nextInit);
+        // 多個會員／管理員區塊會平行載入。Session 過期時只通知一次，
+        // 由 Router 統一清除舊畫面與自動刷新，避免同一秒產生大量 401 與重複彈窗。
+        if (res.status === 401 && !this._sessionExpiredNotified) {
+            this._sessionExpiredNotified = true;
+            window.dispatchEvent(new CustomEvent('decorate-me:session-expired'));
+        }
+        return res;
     },
 
     async fetchAdminMembers() {

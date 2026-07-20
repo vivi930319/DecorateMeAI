@@ -3359,20 +3359,7 @@ const PageInit = {
                 setDbStatus(`會員資料庫讀取失敗：${dbMembersError}。${hint}`, false);
                 // 401 = 後端已拒絕目前的管理員憑證。清除前端殘留狀態再登入，
                 // 避免畫面仍顯示已登入、API 卻持續使用失效 token/session。
-                if (result?.status === 401) {
-                    showConfirm('管理員登入憑證已失效或未正確帶入。請重新登入，成功後會自動回到管理中心。', {
-                        title: '登入已過期', type: 'error', okText: '重新登入', cancelText: '稍後',
-                        onOk: function(){
-                            if (typeof Auth.clearSession === 'function') Auth.clearSession();
-                            else {
-                                sessionStorage.removeItem('beautyUser');
-                                sessionStorage.removeItem('beautyProfile');
-                                sessionStorage.removeItem('memberAccessToken');
-                            }
-                            showLogin();
-                        }
-                    });
-                }
+                if (result?.status === 401) handleSessionExpired();
             }
                 if (ensureReloadBtn) ensureReloadBtn.disabled = false;
             render();
@@ -4167,6 +4154,7 @@ const PageInit = {
         Router.go(page);
     });
     window.addEventListener('hashchange', routeFromHash);
+    window.addEventListener('decorate-me:session-expired', handleSessionExpired);
 
     // 頂部導覽
     document.querySelectorAll('.topbar-nav a, .topbar-user').forEach(a => {
@@ -4200,9 +4188,26 @@ function showApp() {
     Router.go(landing);
 }
 
+function handleSessionExpired() {
+    if (Router._sessionExpiryHandling) return;
+    Router._sessionExpiryHandling = true;
+    if (typeof Auth.clearSession === 'function') Auth.clearSession();
+    Router.currentPage = null;
+    Router._reloadAdmin = null;
+    showLogin();
+    showAlert('登入狀態已失效，已停止背景資料載入。請重新登入後再繼續。', {
+        title: '登入已過期',
+        type: 'error',
+        onOk: function(){ document.getElementById('loginEmail')?.focus(); }
+    });
+}
+
 function showLogin() {
+    Router.currentPage = null;
+    Router._reloadAdmin = null;
     document.body.classList.remove('admin-mode');
     document.getElementById('app').style.display = 'none';
+    if (location.hash) history.replaceState(null, '', `${location.pathname}${location.search}`);
     document.getElementById('auth-layer').innerHTML = `
         <div class="auth-overlay">
             <div class="auth-card">
@@ -4306,6 +4311,8 @@ async function doLoginAction() {
             vipRequested: !!(member.vipRequested || registered.vipRequested),
             renderQuota: member.renderQuota || registered.renderQuota || null
         });
+        Router._sessionExpiryHandling = false;
+        Api._sessionExpiredNotified = false;
     } catch (err) {
         // 不管是伺服器明確拒絕，還是根本連不上會員資料庫，都不能放行——
         // 沒有真正在資料庫裡的會員，一律不能用登入方式進去，避免有人靠擋網路/竄改 DNS 繞過驗證。
