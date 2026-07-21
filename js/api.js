@@ -1155,6 +1155,16 @@ const Api = {
         if (!payload?.style || !this._isStorableImageUrl(afterImageUrl)) {
             return { ok: false, skipped: true, reason: 'AFTER_IMAGE_URL_REQUIRED' };
         }
+        // 資料庫驗證 afterImageUrl 必須是 http(s) URL（INVALID_AFTER_IMAGE_URL），
+        // 但 Gateway 刻意回相對路徑——同一條路徑在本機開發與正式站都成立，也塞得進
+        // String(500)。存進資料庫前補上目前的 origin：Gateway 的 STABLE_RENDER_URL_RE
+        // 是 `(?:https://[^/]+)?/media/render/(...)`，主機前綴本來就是選用的，
+        // 所以收藏後的 retain 與日後刪除都照樣解析得到 job id。
+        // 注意：本機以 http:// 開發時存進去的網址不符合那個 https 前綴，retain 會失效；
+        // 正式站一律 https，不受影響。
+        const persistedAfterImageUrl = afterImageUrl.startsWith('/')
+            ? new URL(afterImageUrl, window.location.origin).href
+            : afterImageUrl;
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
                 method: 'POST',
@@ -1163,7 +1173,7 @@ const Api = {
                 body: JSON.stringify({
                     style: String(payload.style).slice(0, 120),
                     beforeImageUrl,
-                    afterImageUrl,
+                    afterImageUrl: persistedAfterImageUrl,
                     analysisSummary: payload.analysisSummary && typeof payload.analysisSummary === 'object'
                         ? payload.analysisSummary
                         : {}
