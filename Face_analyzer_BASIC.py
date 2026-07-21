@@ -144,12 +144,31 @@ FACE_JOB_RETENTION_SECONDS = int(os.getenv("FACE_JOB_RETENTION_SECONDS", "3600")
 FACE_JOB_MAX_COUNT = int(os.getenv("FACE_JOB_MAX_COUNT", "200"))
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://127.0.0.1:5500")
 
+def _insight_root() -> str:
+    """模型放在哪。
+
+    容器裡模型烘在映像的 `/app/.insightface`，先前這個路徑是寫死的。
+    但本機沒有那個目錄，InsightFace 找不到就會**嘗試重新下載** ——
+    離線、或像這台開發機一樣有 TLS 攔截的環境，下載必定失敗，
+    於是整份分析在容器外根本跑不起來（模型明明已經在 ~/.insightface）。
+
+    順序：環境變數 > 容器路徑 > 使用者家目錄。三個都找不到才交給
+    InsightFace 自己處理（那時下載是唯一選擇，也該讓它報錯）。
+    """
+    candidates = [os.getenv("INSIGHTFACE_ROOT", ""), "/app/.insightface",
+                  os.path.join(os.path.expanduser("~"), ".insightface")]
+    for candidate in candidates:
+        if candidate and os.path.isdir(os.path.join(candidate, "models", "buffalo_l")):
+            return candidate
+    return "/app/.insightface"
+
+
 def _get_insight():
     global _insight_app
     if _insight_app is None:
         _insight_app = InsightFaceApp(
             name="buffalo_l",
-            root="/app/.insightface",
+            root=_insight_root(),
             allowed_modules=INSIGHT_ALLOWED_MODULES or None,
             providers=["CPUExecutionProvider"]
         )
