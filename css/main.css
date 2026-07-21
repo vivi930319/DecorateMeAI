@@ -1001,22 +1001,27 @@ body {
    全站有 800 多處使用 var(--x)，所以這裡改變數就等於整體換膚。
    只動顏色、不動版面，避免主題影響排版。                                    */
 
-/* 玫瑰柔霧 —— 粉色調 */
+/* 莓果柔霧 —— 梅子紫調
+   主題 id 仍是 rose：那是資料庫記錄「已購買」的鍵值，改了會員就失去已兌換的主題。
+
+   前一版把表面（ivory / paper / white）和重點色都染成粉，而且重點色飽和度到 56%，
+   比 :root 的 36% 高一截。表面與重點色沒有對比、整片同一個粉，看起來就廉價。
+   這一版把粉留在小面積的點綴上，表面拉回接近中性的灰紫暖白，重點色壓到 30%。 */
 body[data-member-theme="rose"] {
-    --ivory:#F3D9E1; --ivory-2:#E9C4D2; --paper:#FBEBF0; --white:#FDF4F7;
-    --gold:#C5567D; --gold-lt:#EFB9CE; --gold-deep:#A33C61; --gold-soft:#DE93B0;
-    --gold-dim:rgba(197,86,125,0.34);
-    --gold-grad:linear-gradient(100deg,#A33C61 0%,#EFB9CE 30%,#FDEAF2 50%,#EFB9CE 70%,#A33C61 100%);
-    --blush:#D06A8E; --blush-lt:#F4CEDD; --blush-deep:#B04A70; --blush-panel:#F7DDE8;
-    --terra:#C5567D; --terra-lt:#E29CBA; --terra-deep:#9B3459;
-    --terra-grad:linear-gradient(150deg,#D97BA0 0%,#BE5680 60%,#9B3459 100%);
-    --ink:#3A1E2B; --ink-2:#4A2836; --ink-3:#5B3442;
-    --ink-soft:#4A2433; --mid:#9C6379; --lt:#B37F94; --muted:#AE7C90;
-    --line:rgba(90,40,60,0.14); --line-gold:rgba(197,86,125,0.30);
-    --line-dk:rgba(239,185,206,0.22);
+    --ivory:#E4D8DE; --ivory-2:#D3C2CC; --paper:#F1EAEE; --white:#F7F2F5;
+    --gold:#A0708C; --gold-lt:#C9AEBD; --gold-deep:#7E5470; --gold-soft:#B694A6;
+    --gold-dim:rgba(160,112,140,0.34);
+    --gold-grad:linear-gradient(100deg,#7E5470 0%,#C9AEBD 30%,#EFE4EA 50%,#C9AEBD 70%,#7E5470 100%);
+    --blush:#B0819A; --blush-lt:#E0CCD8; --blush-deep:#8E6178; --blush-panel:#EADCE3;
+    --terra:#A0708C; --terra-lt:#BE9AAC; --terra-deep:#71495F;
+    --terra-grad:linear-gradient(150deg,#AE82A0 0%,#8E6480 60%,#71495F 100%);
+    --ink:#2E2430; --ink-2:#3B2E3D; --ink-3:#4A3A4C;
+    --ink-soft:#372A39; --mid:#8A7285; --lt:#A08C9A; --muted:#9C8794;
+    --line:rgba(60,40,60,0.14); --line-gold:rgba(160,112,140,0.30);
+    --line-dk:rgba(201,174,189,0.22);
 }
-body[data-member-theme="rose"] .topbar { background:rgba(74,36,51,0.86); }
-body[data-member-theme="rose"] .member-id { background:#5B3A38; }
+body[data-member-theme="rose"] .topbar { background:rgba(58,42,58,0.86); }
+body[data-member-theme="rose"] .member-id { background:#4A3A4C; }
 
 /* 青玉光澤 —— 綠色調 */
 body[data-member-theme="jade"] {

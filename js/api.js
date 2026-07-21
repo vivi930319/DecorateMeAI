@@ -698,8 +698,13 @@ const Api = {
     },
 
     // 伺服器端收藏同步：跨裝置同步用，依賴組員資料庫的登入 session（同上，失敗時不影響本機 Fav）
+    //
+    // 走 member-database 而不是 product-api。收藏是會員資料，Gateway 也只在
+    // member-database 的白名單裡放行 api/favorites/toggle；先前送到 product-api，
+    // 被商品白名單（只有 api/products 與 recommend-products）擋掉，一律 404。
+    // 上游那條端點其實是好的——不帶 session 直接打會回 401，不是 404。
     async toggleRemoteFavorite(itemId, itemType) {
-        const baseUrl = this.config.services.product.baseUrl;
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl) return null;
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/favorites/toggle`, {
@@ -2057,7 +2062,8 @@ const MemberRewards = {
     _save(key, value) { localStorage.setItem(key, JSON.stringify(value)); },
     themes: [
         { id: 'classic', name: '經典奶茶', cost: 0, swatches: ['#F7F0E6', '#C49A62', '#4A3438'], desc: '預設會員中心主題' },
-        { id: 'rose', name: '玫瑰柔霧', cost: 80, swatches: ['#F8E1E4', '#C56B7B', '#5B3A38'], desc: '柔粉色會員介面' },
+        // id 維持 'rose'：資料庫用它記錄已購買，改了會員就失去已兌換的主題。
+        { id: 'rose', name: '莓果柔霧', cost: 80, swatches: ['#F1EAEE', '#A0708C', '#2E2430'], desc: '梅子紫調會員介面' },
         { id: 'jade', name: '青玉光澤', cost: 120, swatches: ['#E6F0EA', '#6A9A7C', '#30483A'], desc: '清透綠色會員介面' },
         { id: 'noir', name: '黑金 PRO', cost: 180, swatches: ['#2F2629', '#D9B66F', '#F7EAD2'], desc: '深色高級會員介面' }
     ],
