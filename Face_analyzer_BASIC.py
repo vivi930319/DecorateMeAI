@@ -1153,7 +1153,15 @@ class FaceAnalyzer:
 
             # DINOv2 在臉型／眼型／鼻型勝過 CNN，但依部署決策先只跑 shadow。
             # 必須在 apply_model_first 覆蓋 result 之前算完並記錄，否則對照的就不是原本的答案。
-            dino = basic_roi_shadow.predict_dinov2(self.frame, self._pts_cache)
+            #
+            # shadow 模式下改成抽樣：DINOv2 佔整個分析 57% 的時間，而它的輸出只進對照 log，
+            # 每個使用者都替一份離線比較實驗等了那 343ms。對照要的是統計不是每一筆。
+            # 抽樣率見 basic_roi_shadow.DINOV2_SAMPLE_RATE；MODEL_FIRST 開啟時不抽樣。
+            dino = (
+                basic_roi_shadow.predict_dinov2(self.frame, self._pts_cache)
+                if basic_roi_shadow.should_run_dinov2()
+                else None
+            )
             basic_roi_shadow.log_dinov2_comparison(shadow, dino)
 
             if shadow:

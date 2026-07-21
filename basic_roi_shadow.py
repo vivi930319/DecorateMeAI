@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 from pathlib import Path
 
 import numpy as np
@@ -67,6 +68,21 @@ PROVIDER = "roi_cnn"
 # 看完 shadow log 要升為正式答案時，設 ROI_DINOV2_MODEL_FIRST=1 即可，不需要改程式。
 DINOV2_ENABLED = os.getenv("ROI_DINOV2_ENABLED", "1") != "0"
 DINOV2_MODEL_FIRST = os.getenv("ROI_DINOV2_MODEL_FIRST", "0") == "1"
+
+# Shadow 階段的抽樣率。
+#
+# 實測（12 張、本機 CPU）各段耗時佔比：
+#     InsightFace 角度 199ms(33%)　MediaPipe 17ms(3%)　規則式 21ms(4%)
+#     ROI CNN 19ms(3%)　**DINOv2 343ms(57%)**　合計 599ms
+#
+# DINOv2 是整個分析裡最貴的一段，而在 shadow 模式下它的輸出只進對照 log，
+# 不影響使用者看到的任何欄位——等於每個人都替一份離線比較實驗付了 57% 的等待時間。
+#
+# 對照實驗要的是統計，不是每一筆。抽 10% 就能看出兩個模型在哪些部位系統性分歧，
+# 成本降到十分之一。要收更快就調高，要完全關掉設 ROI_DINOV2_ENABLED=0。
+#
+# MODEL_FIRST 開啟時不抽樣：那時 DINOv2 是正式答案，少跑一次就是少一個人的結果。
+DINOV2_SAMPLE_RATE = max(0.0, min(1.0, float(os.getenv("ROI_DINOV2_SAMPLE_RATE", "0.1"))))
 DINOV2_ENCODER = "dinov2_vits14"
 DINOV2_PROVIDER = "roi_dinov2"
 DINOV2_SIZE = 224
@@ -227,8 +243,31 @@ def _dino_decide(coef: np.ndarray, intercept: np.ndarray, emb: np.ndarray) -> tu
     return best, float(1.0 / (1.0 + np.exp(-(top2[1] - top2[0]))))
 
 
+def should_run_dinov2() -> bool:
+    """這一次請求要不要跑 DINOv2。
+
+    抽樣只適用於 shadow 模式。DINOV2_MODEL_FIRST 開啟時它是正式答案，
+    每一次都得跑——少跑一次就是少一個人的分類結果。
+    """
+    if not DINOV2_ENABLED:
+        return False
+    if DINOV2_MODEL_FIRST:
+        return True
+    if DINOV2_SAMPLE_RATE >= 1.0:
+        return True
+    if DINOV2_SAMPLE_RATE <= 0.0:
+        return False
+    return random.random() < DINOV2_SAMPLE_RATE
+
+
 def predict_dinov2(frame_bgr: np.ndarray, points: np.ndarray) -> dict | None:
-    """DINOv2 shadow 預測。與 predict() 相同的容錯原則：失敗一律回 None／略過該部位。"""
+    """DINOv2 shadow 預測。與 predict() 相同的容錯原則：失敗一律回 None／略過該部位。
+
+    抽樣判斷放在 should_run_dinov2()，呼叫端要先問過再進來——這裡也擋一次，
+    避免有人直接呼叫時繞過抽樣。
+    """
+    if not should_run_dinov2():
+        return None
     loaded = _load_dinov2()
     if not loaded:
         return None
