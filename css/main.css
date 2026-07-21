@@ -1308,8 +1308,18 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .admin-product-grid { display:grid; grid-template-columns:340px minmax(0,1fr); gap:18px; align-items:start; }
 .admin-product-search-panel { display:grid; grid-template-columns:minmax(260px,1fr) auto auto; gap:10px; align-items:end; margin-bottom:16px; border:1px solid var(--admin-line); border-radius:6px; padding:16px; background:#fff; }
 .admin-product-search-panel label { display:grid; gap:8px; color:#536069; font:600 12px/1.2 "Noto Sans TC",sans-serif; }
-.admin-product-search-panel input { width:100%; height:42px; border:1px solid #cfd5d9; border-radius:4px; padding:0 12px; background:#fff; color:var(--admin-ink); font:400 14px/1.4 "Noto Sans TC",sans-serif; outline:none; }
-.admin-product-search-panel input:focus { border-color:var(--gold-deep); box-shadow:0 0 0 3px rgba(192,137,122,.16); }
+/* select 要跟 input 用同一組尺寸與邊框，否則會是瀏覽器原生外觀，高度與圓角都對不上隔壁的搜尋框 */
+.admin-product-search-panel input,.admin-product-search-panel select { width:100%; height:42px; border:1px solid #cfd5d9; border-radius:4px; padding:0 12px; background:#fff; color:var(--admin-ink); font:400 14px/1.4 "Noto Sans TC",sans-serif; outline:none; }
+/* 原生下拉箭頭在各瀏覽器顏色不一，換成自繪的以配合色票；padding-right 留給箭頭 */
+.admin-product-search-panel select { appearance:none; -webkit-appearance:none; padding-right:34px; cursor:pointer;
+    background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);
+    background-position:calc(100% - 19px) calc(50% + 1px),calc(100% - 13px) calc(50% + 1px);
+    background-size:6px 6px,6px 6px; background-repeat:no-repeat; }
+.admin-product-search-panel input:focus,.admin-product-search-panel select:focus { border-color:var(--gold-deep); box-shadow:0 0 0 3px rgba(192,137,122,.16); }
+/* 面板是 3 欄但有 5 個控制項，兩顆按鈕會落到第二列的第 1、2 欄。
+   第 1 欄是 minmax(260px,1fr)，grid 項目預設 stretch，會把「清除」拉成 260px 寬。
+   justify-self:start 讓按鈕維持自然寬度。 */
+.admin-product-search-panel > .admin-secondary-button { justify-self:start; }
 .admin-product-search-panel p { grid-column:1/-1; min-height:18px; margin:0; color:var(--admin-muted); font-size:11px; line-height:1.5; }
 .admin-product-form,.admin-crawler-form,.admin-crawler-preview { border:1px solid var(--admin-line); border-radius:6px; background:#fff; padding:22px; }
 .admin-product-form { display:grid; gap:15px; }
@@ -2288,6 +2298,27 @@ a:focus-visible, button:focus-visible, [data-nav]:focus-visible,
 }
 
 /* ═══════════════ Admin console：沿用使用者前台玫瑰米白配色 ═══════════════ */
+/* 後台釘死在預設玫瑰米白，不跟著會員兌換的主題走。
+   為什麼：主題（rose／jade／noir）是會員用點數兌換的獎勵，寫在 body[data-member-theme] 上，
+   覆蓋的是 --gold／--paper／--ink 這組全站變數。後台沿用同一組變數，結果是每個管理員
+   看到的後台顏色都不一樣（有人綠、有人深色），互相對照畫面與截圖存證都對不起來。
+   後台是工具介面，配色要可預期，所以在這裡把變數重新宣告回 :root 的預設值。
+   第二個選擇器不是贅字：body[data-member-theme] 與 body.admin-mode 特異性相同（0,1,1），
+   只靠原始碼順序取勝太脆弱；補上 [data-member-theme] 讓它變 (0,2,1)，無論順序都贏。 */
+body.admin-mode,
+body.admin-mode[data-member-theme] {
+    --ink:#2C2024; --ink-2:#392A2E; --ink-3:#473438;
+    --ivory:#EAD7D2; --ivory-2:#DEC5BF; --paper:#F4E6E2; --white:#F6EAE7;
+    --gold:#C0897A; --gold-lt:#E8C4B4; --gold-deep:#A4675A; --gold-soft:#D7A492;
+    --gold-dim:rgba(192,137,122,0.34);
+    --gold-grad:linear-gradient(100deg,#A4675A 0%,#E8C4B4 30%,#F8E6DC 50%,#E8C4B4 70%,#A4675A 100%);
+    --blush:#D98C82; --blush-lt:#F1CFC8; --blush-deep:#BC7068; --blush-panel:#F4DAD3;
+    --terra:#C0897A; --terra-lt:#DCA593; --terra-deep:#9E5C4A;
+    --terra-grad:linear-gradient(150deg,#CE9A86 0%,#B5705E 60%,#9E5C4A 100%);
+    --ink-soft:#3A282C; --mid:#9A7068; --lt:#B0897A; --muted:#AE8A82;
+    --line:rgba(70,42,42,0.13); --line-gold:rgba(192,137,122,0.30);
+    --line-dk:rgba(232,196,180,0.20);
+}
 body.admin-mode { background:var(--ivory); color:var(--ink-soft); }
 body.admin-mode .app-shell,
 body.admin-mode .main-content,
@@ -2327,6 +2358,7 @@ body.admin-mode .main-content,
 .admin-summary article,
 .admin-status-board,.admin-quick-actions,
 .admin-product-form,.admin-crawler-form,.admin-crawler-preview,
+.admin-product-search-panel,
 .admin-preview-grid { border-color:var(--line-gold); background:var(--paper); }
 .admin-service-row,.admin-quick-actions button { border-top-color:var(--line-gold); }
 .admin-quick-actions button { background:var(--paper); color:var(--ink-soft); }
@@ -2334,8 +2366,11 @@ body.admin-mode .main-content,
 .admin-tab { border-color:var(--line-gold); background:var(--white); color:var(--mid); }
 .admin-tab.active,.admin-tab:hover { border-color:var(--gold-deep); background:var(--gold-deep); color:#fff; }
 .admin-search input,.admin-product-form input,.admin-product-form select,.admin-product-form textarea,.admin-crawler-form input,
+.admin-product-search-panel input,.admin-product-search-panel select,
 .admin-select,.admin-status { border-color:var(--line-gold); background:var(--white); color:var(--ink-soft); }
-.admin-search input:focus,.admin-product-form input:focus,.admin-product-form select:focus,.admin-product-form textarea:focus,.admin-crawler-form input:focus { border-color:var(--gold-deep); box-shadow:0 0 0 3px rgba(192,137,122,.16); }
+.admin-product-search-panel label { color:var(--mid); }
+.admin-search input:focus,.admin-product-form input:focus,.admin-product-form select:focus,.admin-product-form textarea:focus,.admin-crawler-form input:focus,
+.admin-product-search-panel input:focus,.admin-product-search-panel select:focus { border-color:var(--gold-deep); box-shadow:0 0 0 3px rgba(192,137,122,.16); }
 .admin-table-wrap { border-color:var(--line-gold); background:var(--paper); }
 .admin-table th { background:var(--ivory); color:var(--mid); }
 .admin-table td { border-top-color:var(--line-gold); color:var(--ink-soft); }
