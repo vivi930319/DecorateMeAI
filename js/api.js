@@ -50,6 +50,10 @@ const USER_ERROR_ZH = Object.freeze({
     ADMIN_REQUIRED: '只有管理員可以執行這項操作。',
     ADMIN_SUSPENDED: '管理員帳號目前已停權。',
     ADMIN_PROXY_NOT_CONFIGURED: '管理端服務尚未完成設定。',
+    // 點數與兌換：資料庫端只回這三個碼，先前沒收錄，訊息會掉到下面的通用分支去猜。
+    INSUFFICIENT_POINTS: '點數不足，無法完成這次兌換。',
+    ALREADY_OWNED: '你已經擁有這個項目了。',
+    INVALID_THEME: '找不到這個主題，請重新整理後再試。',
     INVALID_PRODUCT_ID: '商品識別資料不正確，請重新整理後再試。',
     PRODUCT_UPSTREAM_TIMEOUT: '商品服務回應逾時，請稍後再試。',
     PRODUCT_SERVICE_UNAVAILABLE: '商品服務目前無法連線，請稍後再試。',
@@ -80,8 +84,11 @@ const USER_ERROR_ZH = Object.freeze({
 function localizeUserError(message, code = '', status = 0) {
     const raw = String(message || '').trim();
     const explicitCode = String(code || '').trim().toUpperCase();
-    const embeddedCode = (raw.match(/\b[A-Z][A-Z0-9_]{2,}\b/) || [])[0] || '';
-    const resolvedCode = explicitCode || embeddedCode;
+    // 只有「整句訊息本身就是一個錯誤碼」時才拿它當碼查表。先前是掃句子裡第一個全大寫的字，
+    // 任何夾帶大寫單字的訊息都會被誤判成錯誤碼，查到什麼就顯示什麼 —— 使用者會看到
+    // 跟實際錯誤無關的句子（例如兌換點數不足卻顯示「你沒有執行這項操作的權限」）。
+    const bareCode = /^[A-Z][A-Z0-9_]{2,}$/.test(raw) ? raw : '';
+    const resolvedCode = explicitCode || bareCode;
     if (USER_ERROR_ZH[resolvedCode]) return USER_ERROR_ZH[resolvedCode];
 
     const exact = {
@@ -122,6 +129,9 @@ function localizeUserError(message, code = '', status = 0) {
     }
     // 未收錄的純英文後端訊息不直接顯示，避免把內部實作細節暴露給使用者。
     if (/[A-Za-z]{3}/.test(raw)) return '系統目前無法完成這項操作，請稍後再試。';
+    // 400 家族（欄位驗證、業務規則擋下）的收尾。刻意放在中文訊息分支「之後」——
+    // 放前面會蓋掉後端已經寫好的中文說明，例如把「點數不足」變成一句空話。
+    if (status === 400) return '這項操作無法完成，請確認輸入內容後再試一次。';
     return raw || '系統目前無法完成這項操作，請稍後再試。';
 }
 
