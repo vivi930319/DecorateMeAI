@@ -41,6 +41,21 @@
 
 登入本身是成功的（`/auth/session` 預檢通過），所以問題**不在登入**，而在「登入後其他端點是否認得同一個 Session」。
 
+### 根因（2026-07-21 已由資料庫端釐清）
+
+Session **不是**行程內記憶體，而是 PostgreSQL `member_sessions` 表，所以 R1 沒有問題。真正的原因是服務內同時存在三套身分機制，而各端點用的不是同一套：
+
+| 機制 | 儲存位置 | Gateway 會送嗎 |
+|---|---|---|
+| `member_session` cookie | PostgreSQL `member_sessions` | ✅ 會 |
+| Flask-Login 簽章 cookie | 瀏覽器 cookie | ❌ 不會 |
+| Bearer JWT | 不存 server | ❌ 不會 |
+
+- `/api/login` 建立 `member_session`；`/api/members/{email}` 與 `saved-looks` 用 `get_session_member()`／`authenticated_member()` 驗證 → Gateway 通得過。
+- `check-in`、`tasks`、`points` 用 `@login_required` 與 `current_user`，只認 Flask session 或 Bearer → Gateway 兩者都沒有 → 固定 401／403。
+
+所以本文件的重點是 **TASK 3**：讓第 3～16 條端點都認得 `member_session`。
+
 ---
 
 ## 二、系統怎麼串的
@@ -81,7 +96,7 @@ Gateway 目前只允許以下路徑通過，其他一律 404 擋掉。`{email}` 
 | 12 | GET | `/api/members/{email}/saved-looks` | 妝容收藏清單 | 是 |
 | 13 | POST | `/api/members/{email}/saved-looks` | 新增妝容收藏 | 是 |
 | 14 | DELETE | `/api/members/{email}/saved-looks/{id}` | 刪除單筆收藏 | 是 |
-| 15 | POST | `/api/recommend/personal` | 個人化推薦 | 是 |
+| 15 | GET | `/api/recommend/personal` | 個人化推薦（**目前 app.py 缺這個端點，前端有在呼叫**） | 是 |
 | 16 | POST | `/api/favorites/toggle` | 商品收藏切換 | 是 |
 
 **第 3～16 條全部都必須接受同一個登入 Cookie。** 這是這次的核心問題：目前很可能只有第 3 條（或只有登入）是通的。
@@ -143,6 +158,26 @@ X-Forwarded-For: <使用者 IP>
 
 ## 五、Cline 任務清單
 
+### TASK 0：確認 `member_sessions` 在正式資料庫真的存在（最優先）
+
+`postgres.sql` 裡沒有 `member_sessions` 的建表語句，目前靠 `db.create_all()` 動態建立。如果正式資料庫是從 `postgres.sql` 建的、而且沒跑過 `db.create_all()`，那麼**登入本身就會失敗**，後面所有 TASK 都是白做。
+
+**做什麼**
+
+1. 連到正式資料庫，確認資料表存在：
+
+   ```sql
+   SELECT to_regclass('public.member_sessions');
+   ```
+
+2. 回傳 `NULL` 就是不存在，把建表語句補進 `postgres.sql`，欄位對齊 `MemberSession` model：
+   `session_hash`（PK）、`member_id`（FK → `members.phone_number`）、`created_at`、`expires_at`、`revoked_at`、`last_seen_at`。
+3. 建議加索引：`expires_at`、`member_id`。
+
+**驗收**：上面的 SQL 回傳 `member_sessions`，且登入後該表確實新增一列。
+
+---
+
 ### TASK 1：找出 Session 驗證的實作位置
 
 **做什麼**
@@ -189,11 +224,32 @@ X-Forwarded-For: <使用者 IP>
 
 把 TASK 1 找到的 Session 驗證，套用到第三節表格第 3～16 條**每一條**。
 
+**怎麼改（重要：用「疊加」不要用「替換」）**
+
+不要把 `@login_required` 直接換成 `get_session_member()`。iOS App 與資料庫自己的網頁可能仍在用 Flask-Login 或 Bearer JWT，直接替換會把它們一起打死。
+
+正確做法是做一個統一解析器，三種都收，任一成立就放行：
+
+```python
+def resolve_member():
+    """依序嘗試三種身分來源，回傳 member 或 None。"""
+    member = get_session_member()          # Gateway 走這條
+    if member:
+        return member
+    if current_user.is_authenticated:      # 既有網頁 / iOS
+        return current_user
+    return None                            # 交由呼叫端回 401
+```
+
+然後把第 3～16 條端點的 `@login_required` 換成用 `resolve_member()` 的裝飾器。這樣 Gateway 開始能通過，而現有用戶端一個都不會壞。
+
 **注意**
 
-- 不是「拿掉驗證」，是「把同一套驗證補上去」
-- 目前 401 的是 `check-in`，但很可能 `points`、`tasks`、`saved-looks` 也一樣，**不要只修 check-in**
-- 驗證通過後，還要檢查「這個 Session 的會員」是否等於「URL 裡的 {email}」；不相等且不是 admin 就回 403
+- 不是「拿掉驗證」，是「多接受一種合法身分」
+- 目前確認 401 的是 `check-in`、`tasks`、`points`，但請把第 3～16 條**逐條**檢查，不要只修這三個
+- `member_id` 存的是 `phone_number`，但 URL 路徑用的是 email——比對擁有者時要確認兩邊是同一個欄位，不要拿 phone 去比 email
+- 擁有者不符時回 `403`；但 `role=admin` 必須放行，Gateway 的管理員功能會用管理員身分存取其他會員的路徑
+- `points` 目前在未登入時回 `403`，依 R5 應改成 `401`
 
 **驗收**：用同一個 Cookie 依序呼叫下列每一條，全部不可以是 401：
 

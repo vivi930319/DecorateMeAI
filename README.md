@@ -62,7 +62,7 @@ python -m unittest ai_gateway_test.py render_api_test.py
 
 | 項目 | 目前正式版本 |
 |---|---|
-| AI Gateway | `ai-gateway-00025-252` |
+| AI Gateway | `ai-gateway-00030-29l` |
 | Render | `replicate-render-00045-6qd` |
 | Face BASIC | `face-basic-00024-pl8` |
 | Face PRO | `face-pro-00015-qj6` |
