@@ -949,8 +949,16 @@ async def session_status(request: Request):
     """Verify both Gateway and upstream member sessions before loading private pages."""
     claims = require_member_access(request)
     upstream_cookie = await validate_upstream_member_session(request, claims)
+    # `sub` tells the browser *who* this session belongs to.  Without it a page
+    # that still holds a stale profile in localStorage keeps addressing member
+    # routes as the previous account: signing in as an administrator replaces
+    # the single `__session` cookie, every member call then asks the database
+    # for somebody else's rows, and the 403 that comes back is indistinguishable
+    # from a permission bug.  The subject is the caller's own identity, so
+    # returning it to the authenticated owner reveals nothing new.
     result = JSONResponse(content={
         "ok": True,
+        "sub": str(claims.get("sub") or ""),
         "role": str(claims.get("role") or "member"),
         "status": str(claims.get("status") or "active"),
         "expiresAt": int(claims.get("exp") or 0) * 1000,

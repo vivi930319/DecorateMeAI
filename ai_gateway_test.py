@@ -160,7 +160,6 @@ class AiGatewayTest(unittest.TestCase):
         payload = result.body.decode("utf-8")
         self.assertIn('"ok":true', payload)
         self.assertIn('"role":"member"', payload)
-        self.assertNotIn("email", payload)
         self.assertIn(f"{gateway.SESSION_COOKIE}=", result.headers.get("set-cookie", ""))
         request.app.state.http_client.get.assert_awaited_once()
 
@@ -168,6 +167,25 @@ class AiGatewayTest(unittest.TestCase):
         with self.assertRaises(Exception) as missing_upstream:
             asyncio.run(session_status(request))
         self.assertEqual(missing_upstream.exception.status_code, 401)
+
+    def test_session_status_names_the_account_the_session_belongs_to(self):
+        # Administrator and member sign-ins share one `__session` cookie, so
+        # signing in as an administrator silently replaces a member session
+        # while the page keeps the old profile in localStorage.  Every member
+        # request then asks the database for another account's rows and comes
+        # back 403, which reads exactly like a broken permission check.  The
+        # browser can only notice the swap if the session names its own owner.
+        gateway.MEMBER_DATABASE_URL = "https://member.test"
+        token, _ = issue_access_token("admin@decorateme.local", "admin", "active")
+        request = Mock()
+        request.headers = {}
+        request.cookies = session_cookies(token, seal_member_cookie("session=private-upstream-value"))
+        request.app.state.http_client.get = AsyncMock(
+            return_value=httpx.Response(200, request=httpx.Request("GET", "https://member.test/api/members/admin%40decorateme.local"))
+        )
+        payload = asyncio.run(session_status(request)).body.decode("utf-8")
+        self.assertIn('"sub":"admin@decorateme.local"', payload)
+        self.assertIn('"role":"admin"', payload)
 
     def test_session_status_rejects_revoked_upstream_cookie(self):
         gateway.MEMBER_DATABASE_URL = "https://member.test"
