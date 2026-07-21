@@ -693,7 +693,9 @@ function saveCurrentLook(){
                 } catch (_) {}
                 if (typeof showToast === 'function') showToast('已同步到雲端資料庫');
             } else if (r && r.skipped) {
-                // before/after 尚未有可持久化的 http(s) URL，只存本機，絕不把 base64 寫進 String(500) 欄位
+                // 妝後圖還沒有永久網址（通常是渲染還沒完成就按了收藏）。只存本機，
+                // 但要說出來——這裡先前是空的，雲端沒收到而畫面一切正常，沒人察覺得到。
+                if (typeof showToast === 'function') showToast('已收藏到本機；妝容圖尚未產生永久網址，未同步到雲端');
             } else {
                 if (typeof showToast === 'function') showToast('雲端同步失敗（已存本機）' + (r && r.status ? `：HTTP ${r.status}` : '，請重整後重試'));
             }

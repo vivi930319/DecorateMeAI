@@ -1141,10 +1141,19 @@ const Api = {
         if (!baseUrl || !email) return { ok: false };
         // saved_looks 的 before/after 欄位是 String(500) URL；禁止把 File、Blob
         // 或 data/base64 寫入資料庫。圖片必須先由前端或上傳服務取得 http(s) URL。
-        const beforeImageUrl = String(payload?.beforeImageUrl || '').trim();
+        //
+        // 只有妝後圖是必要條件。它由渲染服務產生，一定有網址（/media/render/<hash>）。
+        // 妝前圖是使用者自己上傳的照片，系統裡沒有任何管道能讓它變成網址——Gateway 只有
+        // GET /media/render 與 /media/legacy，沒有上傳端點——所以它永遠是 data:base64。
+        // 先前連妝前圖一起檢查，等於每一筆收藏都在送出前就被擋掉，而且 skipped 分支是空的，
+        // 畫面完全正常卻一筆都沒進資料庫（見 S57）。這裡改成妝前圖沒網址就留空：
+        // 既不把 90 萬字元的 base64 塞進 String(500) 欄位，也不因為它丟掉整筆收藏。
+        // 原始臉部照片不進伺服器，同時也符合既有的隱私方向。
         const afterImageUrl = String(payload?.afterImageUrl || '').trim();
-        if (!payload?.style || !this._isStorableImageUrl(beforeImageUrl) || !this._isStorableImageUrl(afterImageUrl)) {
-            return { ok: false, skipped: true, reason: 'IMAGE_URL_REQUIRED' };
+        const rawBeforeImageUrl = String(payload?.beforeImageUrl || '').trim();
+        const beforeImageUrl = this._isStorableImageUrl(rawBeforeImageUrl) ? rawBeforeImageUrl : '';
+        if (!payload?.style || !this._isStorableImageUrl(afterImageUrl)) {
+            return { ok: false, skipped: true, reason: 'AFTER_IMAGE_URL_REQUIRED' };
         }
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
