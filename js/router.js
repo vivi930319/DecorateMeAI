@@ -2451,23 +2451,16 @@ const PageInit = {
             };
             bindRelatedClicks();
 
-            // 非同步補強：真實色號 + AI 以色找色相似推薦（只有商品 API 來源、且清單本身沒有 hex 時才需要多打一支 API）
-            if (p.source === 'product-api' && p.apiType && p.rawId != null) {
-                if (!p.hex && typeof Api !== 'undefined' && Api.getProductDetail) {
-                    Api.getProductDetail(p.apiType, p.rawId).then(detail => {
-                        if (!detail?.hex || Router.currentPage !== 'products') return;
-                        const box = document.getElementById('pdColorBox');
-                        if (box) box.innerHTML = renderColorBox(detail.hex);
-                    }).catch(() => {});
-                }
-                if (typeof Api !== 'undefined' && Api.getSimilarColorProducts) {
-                    Api.getSimilarColorProducts(p.apiType, p.rawId).then(similar => {
-                        if (!similar?.length || Router.currentPage !== 'products') return;
-                        const box = document.getElementById('pdRelatedBox');
-                        if (!box) return;
-                        box.innerHTML = renderRelatedGrid(similar.slice(0, 3), 'AI 相似色彩推薦');
+            // 以色找色：在本機用 lab 算色差，不打 API（上游那支端點不存在，見 Api.findSimilarShades）。
+            // 標題不再叫「AI 相似色彩推薦」——這是 CIE94 色差公式，不是模型，叫它 AI 是騙人的。
+            if (typeof Api !== 'undefined' && Api.findSimilarShades) {
+                const similar = Api.findSimilarShades(p, apiCatalog, 3);
+                if (similar.length) {
+                    const box = document.getElementById('pdRelatedBox');
+                    if (box) {
+                        box.innerHTML = renderRelatedGrid(similar, '相似色號');
                         bindRelatedClicks();
-                    }).catch(() => {});
+                    }
                 }
             }
         }

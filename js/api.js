@@ -645,46 +645,56 @@ const Api = {
         };
     },
 
-    // 單品詳情：只有這支 API 才有真正的 hex/lab/vector，商品清單 API 沒有
-    async getProductDetail(apiType, rawId) {
-        const baseUrl = this.config.services.product.baseUrl;
-        if (!baseUrl || !apiType || rawId == null) return null;
-        try {
-            const res = await fetch(`${baseUrl}/api/product/${encodeURIComponent(apiType)}/${encodeURIComponent(rawId)}`, { cache: 'no-store' });
-            if (!res.ok) return null;
-            const data = await res.json();
-            if (!data?.success || !data.product) return null;
-            const p = data.product;
-            return {
-                hex: /^#[0-9a-fA-F]{3,8}$/.test(p.hex || '') ? p.hex : null,
-                lab: p.lab && typeof p.lab === 'object' ? p.lab : null,
-                vector: Array.isArray(p.vector) ? p.vector : null,
-                salePageId: p.salepage || null
-            };
-        } catch (_) {
-            return null;
-        }
+    // ═══ 以色找色 ═══
+    //
+    // 在瀏覽器端算。上游沒有 /api/recommend/{type}/{id}（實測 404，那支從來沒回過資料），
+    // 但商品清單 API 每一筆都帶 lab，1041 筆算色差是微秒級，不需要後端也不需要多打請求。
+    //
+    // 只開放唇彩。其他類別的 hex / lab 是從商品圖抽出來的，眼影與眉筆抓到的多半是
+    // 包裝色而不是產品色；全開的話會推出「這支眉筆和那支睫毛膏顏色很像」——比的是包裝盒。
+    // 等 盤點清單.csv 的人工色系盤點完成（目前色系欄位 0/1040）再逐類放行。
+    SHADE_MATCH_CATEGORIES: Object.freeze(['lipsticks']),
+
+    // CIE94（graphics 係數）。CIE76 只是 Lab 上的歐氏距離，對高彩度的紅色會嚴重高估
+    // 色差——而唇彩正好整片集中在高彩度紅粉區，用 CIE76 排出來的順序會偏。
+    // CIEDE2000 更準，但它的 hue 角度分段容易寫錯、又難在這裡驗證；CIE94 修掉了彩度
+    // 權重、沒有角度不連續的問題，對「同類商品之內排序」已經足夠。
+    //
+    // 這個公式是不對稱的（sC / sH 取自參考色的彩度），這裡刻意讓 labRef 是使用者
+    // 正在看的那支商品，符合「跟這支比起來像不像」的語意。
+    _deltaE94(labRef, labOther) {
+        const [L1, a1, b1] = labRef;
+        const [L2, a2, b2] = labOther;
+        const dL = L1 - L2;
+        const C1 = Math.hypot(a1, b1);
+        const C2 = Math.hypot(a2, b2);
+        const dC = C1 - C2;
+        const da = a1 - a2;
+        const db = b1 - b2;
+        // dH² 在數學上非負，但浮點誤差可能讓它變成極小的負數，開根號會得到 NaN
+        const dH2 = Math.max(0, da * da + db * db - dC * dC);
+        const sC = 1 + 0.045 * C1;
+        const sH = 1 + 0.015 * C1;
+        return Math.sqrt(dL * dL + (dC / sC) ** 2 + dH2 / (sH * sH));
     },
 
-    // 以色找色：用 12 維色彩向量算相似度，回傳同類型的相似色號商品
-    async getSimilarColorProducts(apiType, rawId) {
-        const baseUrl = this.config.services.product.baseUrl;
-        if (!baseUrl || !apiType || rawId == null) return [];
-        try {
-            const res = await fetch(`${baseUrl}/api/recommend/${encodeURIComponent(apiType)}/${encodeURIComponent(rawId)}`, { cache: 'no-store' });
-            if (!res.ok) return [];
-            const data = await res.json();
-            if (!data?.success || !Array.isArray(data.recommendations)) return [];
-            return data.recommendations.map(rec => ({
-                ...this._normalizeProduct({
-                    id: rec.id, type: rec.type, name: rec.name, brand: rec.brand,
-                    price: rec.price, image_url: rec.image_url, description: rec.desc, hex: rec.hex
-                }),
-                similarity: rec.similarity ?? null
-            })).filter(Boolean);
-        } catch (_) {
-            return [];
+    // 從已載入的商品清單裡找出色差最小的同類商品。純函式、同步，不打任何 API。
+    findSimilarShades(product, catalog, limit = 3) {
+        if (!product || !Array.isArray(product.lab)) return [];
+        if (!this.SHADE_MATCH_CATEGORIES.includes(String(product.apiType || ''))) return [];
+        const list = Array.isArray(catalog) ? catalog : [];
+        const seen = new Set([String(product.id)]);
+        const scored = [];
+        for (const item of list) {
+            if (!item || !Array.isArray(item.lab)) continue;
+            if (String(item.apiType || '') !== String(product.apiType)) continue;
+            const key = String(item.id);
+            if (seen.has(key)) continue;   // 清單可能混入推薦來源的重複商品
+            seen.add(key);
+            scored.push({ ...item, deltaE: this._deltaE94(product.lab, item.lab) });
         }
+        scored.sort((a, b) => a.deltaE - b.deltaE);
+        return scored.slice(0, Math.max(0, limit));
     },
 
     // 個人化推薦：依賴組員資料庫的登入 session，登入狀態不確定時優雅地回傳空陣列，不影響其他功能
