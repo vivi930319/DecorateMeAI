@@ -4166,14 +4166,41 @@ const PageInit = {
     });
     window.addEventListener('hashchange', routeFromHash);
     window.addEventListener('decorate-me:session-expired', handleSessionExpired);
-    // 中途在同一個分頁登入了另一個帳號（通常是去後台看了一眼）。Api 在收到 403 時
-    // 背景確認出身分不一致才會發這個事件，訊息要講清楚原因，不要只說「登入已過期」——
-    // 使用者剛剛才登入成功，說過期他只會更困惑。
-    window.addEventListener('decorate-me:session-owner-changed', () => handleSessionExpired({
-        title: '登入帳號已變更',
-        message: '這個瀏覽器已經改用另一個帳號登入（可能是在後台登入過）。'
-            + '為避免讀到別人的資料，已登出，請重新登入你要使用的帳號。'
-    }));
+    // 中途在同一個分頁登入了另一個帳號（通常是去後台看了一眼）。
+    //
+    // 不要把使用者登出。session 已經明確說它屬於誰，把本機 profile 換成那個人就好——
+    // 在後台與會員頁之間來回是正常操作，每切一次就強制重新登入太粗暴。
+    // 只有連那個帳號的資料都讀不到時才退回登出，因為那時我們無法確定畫面上是誰的資料。
+    window.addEventListener('decorate-me:session-owner-changed', async (event) => {
+        const sub = (event && event.detail && event.detail.sub) || '';
+        const result = sub && Api.fetchMember ? await Api.fetchMember(sub) : null;
+        if (!result || !result.ok || !result.member) {
+            handleSessionExpired({
+                title: '登入帳號已變更',
+                message: '這個瀏覽器已經改用另一個帳號登入，但讀不到那個帳號的資料。'
+                    + '為避免顯示錯誤的內容，已登出，請重新登入。'
+            });
+            return;
+        }
+        const m = result.member;
+        Auth.setProfile({
+            ...m,
+            email: m.email || sub,
+            name: m.name || String(sub).split('@')[0],
+            phone: m.phone_number || m.phone || '',
+            level: m.level || '一般會員',
+            role: m.role || 'member',
+            status: m.status || 'active'
+        });
+        // 上面為了停掉跨帳號請求而中斷的那批，換完身分要放行下一批。
+        Api._sessionExpiredNotified = false;
+        Router._sessionExpiryHandling = false;
+        if (typeof Api._resetSessionRequests === 'function') Api._resetSessionRequests();
+        showToast(`已切換為 ${m.name || sub} 的帳號`);
+        const page = Router.currentPage;
+        Router.currentPage = null;
+        if (page) Router.go(page); else showApp();
+    });
 
     // 頂部導覽
     document.querySelectorAll('.topbar-nav a, .topbar-user').forEach(a => {

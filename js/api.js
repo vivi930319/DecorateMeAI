@@ -967,7 +967,9 @@ const Api = {
             if (this._sessionExpiredNotified) return;
             this._sessionExpiredNotified = true;
             this._cancelSessionRequests();
-            window.dispatchEvent(new CustomEvent('decorate-me:session-owner-changed'));
+            window.dispatchEvent(new CustomEvent('decorate-me:session-owner-changed', {
+                detail: { sub: session.sub }
+            }));
         } catch (_) {
             // 確認失敗就當作沒發生，維持原本的 403 處理
         } finally {
@@ -1012,6 +1014,25 @@ const Api = {
                 ok: false,
                 error: '連線失敗：' + err.message
             };
+        }
+    },
+
+    // 讀單一會員。身分切換時用它把本機 profile 換成 session 真正屬於的那個人，
+    // 不必把使用者登出重來。
+    async fetchMember(email) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}`, {
+                method: 'GET',
+                credentials: 'include',
+                cache: 'no-store'
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status };
+            return { ok: true, member: data.member || data || null };
+        } catch (_) {
+            return { ok: false };
         }
     },
 
