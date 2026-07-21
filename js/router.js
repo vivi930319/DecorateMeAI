@@ -4176,7 +4176,13 @@ const PageInit = {
     Api.bootstrapConfig().finally(async () => {
         if (Auth.isLoggedIn()) {
             const session = await Api.validateSession();
-            if (session.ok) {
+            if (session.ok && !sessionOwnerMatchesProfile(session)) {
+                handleSessionExpired({
+                    title: '登入帳號已變更',
+                    message: '這個瀏覽器目前登入的是另一個帳號（可能是在後台登入過）。'
+                        + '為避免讀到別人的資料，已登出，請重新登入你要使用的帳號。'
+                });
+            } else if (session.ok) {
                 showApp();
                 routeFromHash();
             } else if (session.status === 401) {
@@ -4205,7 +4211,7 @@ function showApp() {
     Router.go(landing);
 }
 
-function handleSessionExpired() {
+function handleSessionExpired(options) {
     if (Router._sessionExpiryHandling) return;
     Router._sessionExpiryHandling = true;
     if (typeof Api._cancelSessionRequests === 'function') Api._cancelSessionRequests();
@@ -4213,11 +4219,29 @@ function handleSessionExpired() {
     Router.currentPage = null;
     Router._reloadAdmin = null;
     showLogin();
-    showAlert('登入狀態已失效，已停止背景資料載入。請重新登入後再繼續。', {
-        title: '登入已過期',
+    // options 只在身分不一致時帶入；當作事件處理器直接註冊時，收到的是 Event 物件，
+    // 不能拿它的欄位當訊息用，所以這裡只認純物件。
+    const custom = (options && typeof options === 'object' && !(options instanceof Event)) ? options : {};
+    showAlert(custom.message || '登入狀態已失效，已停止背景資料載入。請重新登入後再繼續。', {
+        title: custom.title || '登入已過期',
         type: 'error',
         onOk: function(){ document.getElementById('loginEmail')?.focus(); }
     });
+}
+
+// Gateway 的 admin 與 member 登入共用同一個 __session cookie，所以在後台登入會蓋掉
+// 會員的 session，而 localStorage 的 profile 還停在前一個帳號。此時每一條會員 API
+// 都在跨帳號請求，資料庫回 403，畫面上看起來像權限壞掉、點數不同步、打卡沒加上去
+// ——四個症狀其實是同一個原因（見 S57）。
+//
+// Gateway 現在會在 /auth/session 回 sub，這裡比對出不一致就當作登入失效處理。
+function sessionOwnerMatchesProfile(session) {
+    const sub = String((session && session.sub) || '').trim().toLowerCase();
+    const email = String((Auth.getProfile() || {}).email || '').trim().toLowerCase();
+    // 舊版 Gateway 不回 sub。拿不到就不阻擋——寧可維持原本行為，
+    // 也不要在 Gateway 還沒換版時把所有人擋在登入頁外面。
+    if (!sub || !email) return true;
+    return sub === email;
 }
 
 function showLogin() {

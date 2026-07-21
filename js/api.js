@@ -883,9 +883,12 @@ const Api = {
                 signal: controller?.signal
             });
             if (!res.ok) return { ok: false, status: res.status };
+            // sub 是這個 session 屬於誰。呼叫端要拿它跟本機 profile 比對——admin 與 member
+            // 共用同一個 __session cookie，少了這道比對就會拿舊帳號的 email 去打會員 API。
+            const data = await res.json().catch(() => ({}));
             this._sessionExpiredNotified = false;
             this._resetSessionRequests();
-            return { ok: true };
+            return { ok: true, sub: String(data.sub || ''), role: String(data.role || '') };
         } catch (err) {
             return { ok: false, status: 0, networkFailure: true, error: err.message };
         } finally {
