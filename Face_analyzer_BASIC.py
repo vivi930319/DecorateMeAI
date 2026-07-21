@@ -223,6 +223,35 @@ async def analyze(
         raise HTTPException(status_code=500, detail="臉部分析服務發生錯誤，請稍後再試")
 
 
+def pose_guidance(yaw: float, pitch: float, yaw_limit: float, pitch_limit: float) -> str:
+    """把 yaw／pitch 的角度翻成使用者做得到的動作。
+
+    先前這裡直接把數字丟給使用者（「偏角：yaw=-19.9°, pitch=23.6°」）。沒有人知道
+    yaw 和 pitch 是什麼，所以看到訊息也不知道要動哪裡——線上日誌有人 80 秒內連試三次，
+    pitch 一直停在 23.6~23.8°，他很可能一直在左右轉頭，但超標的其實是抬頭低頭。
+
+    每一句都同時講「你現在的狀態」與「該做的動作」。狀態是使用者在預覽畫面上看得到的，
+    所以萬一左右慣例反了，他靠前半句就能自行修正，不會被指令帶到更錯的方向。
+    """
+    hints = []
+    if abs(yaw) > yaw_limit:
+        # yaw < 0 代表左臉朝鏡頭：沿用 _detect_pose 的 side 判定，PRO 的即時掃描
+        # 也是用同一套慣例在標「左臉／右臉」，兩邊必須一致。
+        # 左臉朝鏡頭 = 頭轉向了自己的右邊，要轉回來就是往自己的左邊轉。
+        if yaw < 0:
+            hints.append("你現在露出的是左臉，請把頭轉向你的左邊，正對鏡頭")
+        else:
+            hints.append("你現在露出的是右臉，請把頭轉向你的右邊，正對鏡頭")
+    if abs(pitch) > pitch_limit:
+        # pitch 的正負號在 InsightFace 不同版本並不一致，這裡不敢斷言是抬頭還是低頭，
+        # 改講使用者一定做得到、而且講錯不了的動作：把下巴放平、把鏡頭移到眼睛高度。
+        # 自拍時這個角度幾乎都是手機拿得比眼睛高或低造成的。
+        hints.append("下巴請放平，把鏡頭移到與眼睛差不多的高度（手機拿太高或太低都會偏）")
+    if not hints:
+        hints.append("請正對鏡頭重拍一張")
+    return "；".join(hints) + "。"
+
+
 def _detect_pose(contents: bytes):
     frame = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
     if frame is None:
@@ -508,7 +537,7 @@ class FaceAnalyzer:
             if strict_angle and hasattr(face, "pose") and face.pose is not None:
                 yaw, pitch = float(face.pose[0]), float(face.pose[1])
                 if abs(yaw) > self.YAW_LIMIT or abs(pitch) > self.PITCH_LIMIT:
-                    raise ValueError(f"請上傳正面照片（偏角：yaw={yaw:.1f}°, pitch={pitch:.1f}°）")
+                    raise ValueError(pose_guidance(yaw, pitch, self.YAW_LIMIT, self.PITCH_LIMIT))
 
         # Step 2：MediaPipe FaceMesh
         mp_face_mesh = mp.solutions.face_mesh
