@@ -168,6 +168,25 @@ class AiGatewayTest(unittest.TestCase):
             asyncio.run(session_status(request))
         self.assertEqual(missing_upstream.exception.status_code, 401)
 
+    def test_only_the_stable_media_path_can_retain_a_render(self):
+        # Saving a look is what promotes its render out of `temporary/`, and the
+        # gateway finds the job to retain by parsing the submitted afterImageUrl.
+        # A look stored before renders moved behind /media/render carries a raw
+        # bucket URL instead, which yields no job id, so nothing is retained and
+        # the lifecycle rule deletes the object two days later — the member opens
+        # the look and the after image is simply gone.
+        job = "0123456789abcdef0123456789abcdef"
+        self.assertEqual(_render_job_id_from_url(f"/media/render/{job}"), job)
+        self.assertEqual(_render_job_id_from_url(f"https://decorate-me.web.app/media/render/{job}"), job)
+
+        for unretainable in (
+            f"https://storage.googleapis.com/decorate-me-renders/temporary/{job}.png",
+            f"https://storage.googleapis.com/decorate-me-renders/rendered/{job}.png",
+            "data:image/jpeg;base64,/9j/4AAQSkZJRg==",
+            "",
+        ):
+            self.assertIsNone(_render_job_id_from_url(unretainable), unretainable)
+
     def test_session_status_names_the_account_the_session_belongs_to(self):
         # Administrator and member sign-ins share one `__session` cookie, so
         # signing in as an administrator silently replaces a member session
