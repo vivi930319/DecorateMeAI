@@ -366,7 +366,7 @@ GET  /api/members/{email}/saved-looks
 下面的網址是 2026-07-21 我們實測 `/health` 為 `200` 的那一組。Quick Tunnel 每次重啟都會換，如果你已經重開過服務，請換成新的並**同時通知我們**（Gateway 的環境變數要跟著改，不改的話線上會員功能全掛）。只用 Demo 測試帳號。
 
 ```powershell
-$dbBase = 'https://programmers-planners-convenient-had.trycloudflare.com'
+$dbBase = 'https://decorative-expects-opposite-shine.trycloudflare.com'
 $email  = 'DEMO_EMAIL'
 $body   = @{ email = $email; password = 'DEMO_PASSWORD' } | ConvertTo-Json
 
