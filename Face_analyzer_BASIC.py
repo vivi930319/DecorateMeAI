@@ -497,8 +497,33 @@ async def get_basic_job_result(
 
 
 class FaceAnalyzer:
-    YAW_LIMIT   = 18.0
-    PITCH_LIMIT = 15.0
+    # 角度門檻。用環境變數覆寫，因為這些數字還在被量測——同學在跑系統性測試，
+    # 有更好的數字時改設定就好，不必動程式重新建置。
+    #
+    # 預設值來自 2026-07-22 在 data/basic_full/grouped/face_shape（386 張，CelebA）
+    # 量到的臉型準確率對 |yaw| 的衰減：
+    #
+    #     0-5°   0.538      5-8°   0.389      8-12°  0.339
+    #    12-18°  0.162     18-25°  0.031
+    #
+    # 五分類的隨機基準是 0.20，**12-18° 那一段已經低於亂猜**。
+    #
+    # 三層，不是兩層：
+    #   |yaw| ≤ 8      正常輸出
+    #   8 < |yaw| ≤ 12  照常輸出，臉型標記可信度低
+    #   12 < |yaw| ≤ 18 **不輸出臉型**（低於隨機，給答案等於誤導），其餘欄位照常
+    #   |yaw| > 18     整張拒絕（維持原本的門檻）
+    #
+    # 拒絕線刻意維持 18 沒有下修。12-18 之間壞掉的只有臉型，膚色、眼型那些照樣有效，
+    # 為了一個欄位把整張照片退掉是把好資料一起丟了，而且會多擋掉真實使用者——
+    # 那個代價換不到東西，因為不輸出臉型就已經解決了誤導的問題。
+    YAW_LIMIT      = float(os.getenv("FACE_YAW_LIMIT", "18.0"))
+    YAW_UNRELIABLE = float(os.getenv("FACE_YAW_UNRELIABLE", "12.0"))
+    YAW_UNCERTAIN  = float(os.getenv("FACE_YAW_UNCERTAIN", "8.0"))
+    # pitch 維持 15：同一批資料顯示它對臉型幾乎沒有影響（0-5° 0.307、12-18° 0.250），
+    # 但那只量了臉型。抬頭低頭會直接改變眼睛的開合，眼型很可能是 pitch 敏感的，
+    # 而我們還沒量。**沒有量過的東西不要放寬。**
+    PITCH_LIMIT   = float(os.getenv("FACE_PITCH_LIMIT", "15.0"))
 
     def __init__(self, image_input, strict_angle=True, brightness_mode="none", brightness_level=1.0, require_insight=True):
         if isinstance(image_input, str):
@@ -510,6 +535,11 @@ class FaceAnalyzer:
 
         if self.frame is None:
             raise FileNotFoundError("圖片讀取失敗")
+
+        # 沒跑 InsightFace（require_insight=False，例如訓練與校正工具）時就沒有角度可用。
+        # 維持 None 而不是 0：0 會被當成「完美正臉」，讓可信度標記靜靜消失。
+        self.pose_yaw = None
+        self.pose_pitch = None
 
         # 手機原圖通常很大，先等比例縮小可以明顯加快 InsightFace / MediaPipe。
         h0, w0 = self.frame.shape[:2]
@@ -553,10 +583,18 @@ class FaceAnalyzer:
 
             face = max(faces, key=lambda f: f.det_score)
 
-            if strict_angle and hasattr(face, "pose") and face.pose is not None:
-                yaw, pitch = float(face.pose[0]), float(face.pose[1])
-                if abs(yaw) > self.YAW_LIMIT or abs(pitch) > self.PITCH_LIMIT:
-                    raise ValueError(pose_guidance(yaw, pitch, self.YAW_LIMIT, self.PITCH_LIMIT))
+            if hasattr(face, "pose") and face.pose is not None:
+                # 角度一律記下來，不論有沒有開 strict_angle——export_json 要靠它決定
+                # 哪些欄位該標「這個角度下不可靠」。先前只在 strict_angle 分支裡讀，
+                # 讀完就丟，後面完全不知道這張臉是正的還是斜的。
+                self.pose_yaw = float(face.pose[0])
+                self.pose_pitch = float(face.pose[1])
+                if strict_angle and (
+                    abs(self.pose_yaw) > self.YAW_LIMIT or abs(self.pose_pitch) > self.PITCH_LIMIT
+                ):
+                    raise ValueError(
+                        pose_guidance(self.pose_yaw, self.pose_pitch, self.YAW_LIMIT, self.PITCH_LIMIT)
+                    )
 
         # Step 2：MediaPipe FaceMesh
         mp_face_mesh = mp.solutions.face_mesh
@@ -1040,10 +1078,47 @@ class FaceAnalyzer:
         except Exception:
             return None
 
+    def _pose_reliability(self) -> dict:
+        """這次拍攝角度，以及哪些欄位在這個角度下不該被當真。
+
+        臉型的判別式幾乎全是水平跨距的比值（hw、額/顴/顎寬、jaw_to_forehead…），
+        轉頭會把水平距離壓縮約 cos(yaw)，而且遠近兩側壓縮程度不同——比值被不對稱
+        扭曲，不是單純縮放能校正的。實測（386 張）也證實了這件事：8-12° 準確率
+        0.339，12-18° 掉到 0.162，低於五分類的隨機基準 0.20。
+
+        膚色刻意不列入：它是區域顏色平均，任何角度都成立。把它一起標成不可靠是
+        白白丟資訊，也會讓這個標記本身失去意義——什麼都標不確定，等於沒標。
+
+        眼型／鼻型／唇型／眉型同樣含水平跨距，理論上也會受影響，但還沒有實測數字，
+        所以先不列。**沒有量過就不要宣稱**，寧可少標也不要標錯。
+        """
+        if self.pose_yaw is None:
+            return {"measured": False, "lowConfidenceFields": [], "suppressedFields": []}
+        yaw = abs(self.pose_yaw)
+        suppressed = ["臉型"] if yaw > self.YAW_UNRELIABLE else []
+        low = ["臉型"] if (not suppressed and yaw > self.YAW_UNCERTAIN) else []
+        if suppressed:
+            hint = "拍攝角度偏斜較多，這張無法判斷臉型；其餘結果仍然有效。想看臉型請正對鏡頭重拍一張。"
+        elif low:
+            hint = "拍攝角度略偏，臉型判斷可能不準，建議正對鏡頭重拍一張。"
+        else:
+            hint = ""
+        return {
+            "measured": True,
+            "yaw": round(self.pose_yaw, 2),
+            "pitch": round(self.pose_pitch, 2) if self.pose_pitch is not None else None,
+            "lowConfidenceFields": low,
+            "suppressedFields": suppressed,
+            "hint": hint,
+        }
+
     def export_json(self, save_path=None):
         lip_L, lip_a, lip_b, season, shade_label, L, a, b = self.get_skin_color()
+        pose_report = self._pose_reliability()
         result = {
             "分析版本": "BASIC",
+            # 角度抑制不在這裡做——MODEL_FIRST 會在後面覆蓋整個 result，
+            # 寫在這裡會被蓋掉。統一放到函式最後，見那裡的說明。
             "臉型": self.get_face_shape(),
             "眉型": self.get_eyebrow_shape(),
             "眼型": self.get_eye_shape(),
@@ -1057,6 +1132,7 @@ class FaceAnalyzer:
             "嘴唇_LAB": {"L": float(lip_L), "a": float(lip_a), "b": float(lip_b)},
             "臉部對稱性": self.get_face_symmetry(),
             "brightnessEnhancement": self.brightness_info,
+            "拍攝角度": pose_report,
         }
 
         # ROI CNN：預設由模型提供五個部位的正式答案，規則式退居 fallback（ROI_MODEL_FIRST）。
@@ -1094,6 +1170,18 @@ class FaceAnalyzer:
                 result["模型分類_dinov2"] = dino
         except Exception:
             logging.getLogger(__name__).exception("ROI 模型預測失敗，改用規則式結果")
+
+        # 角度抑制必須放在最後。MODEL_FIRST 開啟時 apply_model_first() 會用 CNN 的答案
+        # 覆蓋整個 result，寫在前面的抑制會被蓋掉——先前就是這樣，日誌裡看得到
+        # 「規則=無法判斷（拍攝角度偏斜） 模型=圓形臉」，抑制等於沒做。
+        #
+        # 注意這裡抑制的是**模型的**答案，而角度衰減曲線目前只量過規則式。CNN 從
+        # landmark 裁 ROI，斜臉的裁切同樣會失真，但失真多少沒有量過，所以這道抑制
+        # 現在是「合理的預防」而不是「有數據支撐的門檻」。量完再回來調 YAW_UNRELIABLE。
+        if "臉型" in pose_report.get("suppressedFields", []):
+            result["臉型"] = "無法判斷（拍攝角度偏斜）"
+            if isinstance(result.get("分類來源"), dict):
+                result["分類來源"]["臉型"] = "角度抑制"
 
         if save_path:
             with open(save_path, "w", encoding="utf-8") as f:
