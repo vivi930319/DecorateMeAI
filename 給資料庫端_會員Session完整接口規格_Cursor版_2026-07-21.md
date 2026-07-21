@@ -1,4 +1,4 @@
-# 給資料庫端：會員 Session 完整接口規格（Cline 執行版）
+# 給資料庫端：會員 Session 完整接口規格（Cursor 執行版）
 
 > 日期：2026-07-21
 >
@@ -8,30 +8,60 @@
 
 ---
 
-## 〇、給 Cline 的使用方式
+## 〇、給 Cursor 的使用方式
 
-把下面這段貼進 Cline 的輸入框，然後把本檔案一起加入 context：
+### 0.1 先建規則檔（做一次就好）
+
+Cursor 的硬性限制放在規則檔比放在對話裡可靠——對話會被後面的訊息稀釋，規則檔每次都會自動帶進 context。
+
+在專案根目錄建立 `.cursor/rules/member-session.mdc`：
+
+```markdown
+---
+description: 會員 Session 接口修復的硬性限制
+alwaysApply: true
+---
+
+修改會員驗證相關程式時，以下限制違反就是錯的，寧可停下來問人：
+
+- 不可以移除或放寬任何身分驗證
+- 不可以把端點改成公開或不檢查 Session
+- 不可以信任請求 body / query / path 裡的 email、role 欄位來決定身分
+- 不可以為了讓測試通過就回傳假資料或寫死 200
+- 既有的 Flask-Login 與 Bearer JWT 驗證一律保留，只能「多接受一種身分」，
+  不可以替換掉（iOS App 仍在用）
+- 不確定規格就先問，不要自己猜
+```
+
+### 0.2 每個 TASK 的操作方式
+
+用 `Ctrl+I`（Mac 是 `Cmd+I`）開 Agent，把本檔案用 `@` 帶進 context，一次只貼一個 TASK：
 
 ```text
-請閱讀 給資料庫端_會員Session完整接口規格_Cline版_2026-07-21.md。
+@給資料庫端_會員Session完整接口規格_Cursor版_2026-07-21.md
+
 這是外部 Gateway 對本服務的接口契約，本服務目前不符合，導致使用者登入後
 幾秒內被登出。
 
-請依照文件第五節的 TASK 1 到 TASK 6 逐項執行，一次只做一個 TASK。
-每個 TASK 做完後：
+請只做第五節的 TASK 0，不要動其他 TASK 的範圍。
+做完後：
 1. 說明你改了哪些檔案、改了什麼
 2. 執行該 TASK 底下的「驗收」指令並貼出結果
-3. 停下來等我確認，再做下一個 TASK
-
-硬性限制（違反就是錯的，寧可停下來問我）：
-- 不可以移除或放寬任何身分驗證
-- 不可以把端點改成公開或不檢查 Session
-- 不可以信任請求裡的 email、role 欄位來決定身分
-- 不可以為了讓測試過就回傳假資料或寫死 200
-- 不確定就先問，不要自己猜規格
+3. 停下來等我確認
 ```
 
-> Cline 用 DeepSeek 時，請務必維持「一次一個 TASK」。一次丟六個任務容易改到一半就偏掉。
+下一個 TASK 就把 `TASK 0` 換成 `TASK 1`，依此類推。
+
+### 0.3 Cursor 專屬的四個注意事項
+
+| 事項 | 說明 |
+|---|---|
+| **TASK 1 用 Ask 模式，不要用 Agent** | TASK 1 是純盤點、不該改任何程式。Agent 模式會忍不住順手改，用 Ask（唯讀）比較安全 |
+| **不要按 Accept All** | Agent 會一次跨多檔改動。請逐檔看 diff 再 Accept；特別注意它有沒有偷偷把 `@login_required` 整行刪掉 |
+| **開新 Chat 分隔 TASK** | 同一個 Chat 累積六個 TASK 會讓模型混淆前後文。每個 TASK 開新 Chat，規則檔會自動重新帶入 |
+| **驗收指令自己跑** | 別讓 Agent 自己宣稱「測試通過」。第六節的 PowerShell 腳本請人工執行並貼回結果 |
+
+> 模型建議用 Claude 或 GPT 系列的 thinking 模式。這份任務的重點在「不要改壞既有驗證」，推理能力比速度重要。
 
 ---
 
@@ -101,6 +131,28 @@ Gateway 目前只允許以下路徑通過，其他一律 404 擋掉。`{email}` 
 
 **第 3～16 條全部都必須接受同一個登入 Cookie。** 這是這次的核心問題：目前很可能只有第 3 條（或只有登入）是通的。
 
+### 3.1 我們這邊的匿名實測（2026-07-21，Gateway 端直接對你的服務發的）
+
+不需要帳密就能驗的部分我們先跑完了，結果如下。**好消息是錯誤碼與格式已經符合 R5，不用再花時間在 TASK 5。**
+
+| 請求（無 Cookie） | 實測 | 判定 |
+|---|---|---|
+| `GET /health` | `200`，`{"service":"member-database","status":"ok"}` | ✅ 通道與服務是活的 |
+| `GET /api/members/{email}` | `401` JSON | ✅ 符合 R5 |
+| `GET /api/members/{email}/points` | `401` JSON | ✅ **已是 401**，先前記錄的 403 已不復現 |
+| `GET /api/members/{email}/check-in` | `401` JSON | ✅ 符合 R5 |
+| `GET /api/members/{email}/tasks` | `401` JSON | ✅ 符合 R5 |
+| `GET /api/members/{email}/saved-looks` | `401` JSON | ✅ 符合 R5 |
+| `GET /api/members` | `401` JSON | ✅ 符合 R5 |
+| `POST /api/favorites/toggle` | `401` JSON | ✅ 符合 R5 |
+| `GET /api/recommend/personal` | **`404`，而且是 HTML** | ❌ 端點確實不存在（第 15 條），前端有在呼叫 |
+| 假 Cookie → `GET /api/members/{email}/points` | `401` JSON | ✅ TASK 5 驗收已通過 |
+| 不存在帳號 `POST /api/login` | `401` JSON，無 `Set-Cookie` | ✅ 密碼錯誤回 401 正確 |
+
+沒有任何一條回 `500`，也沒有 `302` 轉登入頁——**R5 這關你們已經過了**。
+
+這代表：**剩下的問題百分之百集中在「帶著有效 Cookie 時會不會過」**，也就是 TASK 3。匿名 401 是對的，有效 Cookie 也 401 才是 bug，而這件事我們這邊測不出來——我們沒有 Demo 帳號密碼，需要你們自己跑第六節腳本。
+
 ---
 
 ## 四、Cookie 契約
@@ -156,7 +208,7 @@ X-Forwarded-For: <使用者 IP>
 
 ---
 
-## 五、Cline 任務清單
+## 五、Cursor 任務清單
 
 ### TASK 0：確認 `member_sessions` 在正式資料庫真的存在（最優先）
 
@@ -249,7 +301,8 @@ def resolve_member():
 - 目前確認 401 的是 `check-in`、`tasks`、`points`，但請把第 3～16 條**逐條**檢查，不要只修這三個
 - `member_id` 存的是 `phone_number`，但 URL 路徑用的是 email——比對擁有者時要確認兩邊是同一個欄位，不要拿 phone 去比 email
 - 擁有者不符時回 `403`；但 `role=admin` 必須放行，Gateway 的管理員功能會用管理員身分存取其他會員的路徑
-- `points` 目前在未登入時回 `403`，依 R5 應改成 `401`
+- `points` 的未登入回應先前記錄為 `403`，2026-07-21 實測已經是 `401`，這項不用再改（見 3.1）
+- 第 15 條 `/api/recommend/personal` 實測 `404`，是**整條端點不存在**，不是驗證問題。請先確認要不要補；在補出來以前，前端呼叫它一定失敗
 
 **驗收**：用同一個 Cookie 依序呼叫下列每一條，全部不可以是 401：
 
@@ -276,6 +329,11 @@ GET  /api/members/{email}/saved-looks
 ---
 
 ### TASK 5：統一錯誤狀態碼（對應 R5）
+
+> **2026-07-21 更新：這個 TASK 我們已經替你們驗過了，目前全部通過（見 3.1）。**
+> 匿名與假 Cookie 一律回 `401` JSON，沒有 `500`、沒有 `302`。
+> 除非 TASK 3 改動時不小心破壞了錯誤碼，否則**這個 TASK 可以直接跳過**；
+> 改完 TASK 3 後回頭跑一次下面的驗收確認沒有退步就好。
 
 **做什麼**
 
@@ -305,10 +363,10 @@ GET  /api/members/{email}/saved-looks
 
 ## 六、完整驗收腳本
 
-把 `DB_BASE` 換成你目前的服務網址（Quick Tunnel 每次重啟都會換，先確認現在這一組是活的）。只用 Demo 測試帳號。
+下面的網址是 2026-07-21 我們實測 `/health` 為 `200` 的那一組。Quick Tunnel 每次重啟都會換，如果你已經重開過服務，請換成新的並**同時通知我們**（Gateway 的環境變數要跟著改，不改的話線上會員功能全掛）。只用 Demo 測試帳號。
 
 ```powershell
-$dbBase = 'https://<你目前的服務網址>'
+$dbBase = 'https://programmers-planners-convenient-had.trycloudflare.com'
 $email  = 'DEMO_EMAIL'
 $body   = @{ email = $email; password = 'DEMO_PASSWORD' } | ConvertTo-Json
 
