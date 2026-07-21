@@ -605,7 +605,18 @@ const Api = {
                 || ((typeof product.productUrl === 'string' && product.productUrl && !/^https?:/i.test(product.productUrl)) ? product.productUrl : null),
             sourceUrl: product.sourceUrl || product.source_url
                 || ((typeof product.productUrl === 'string' && /^https?:/i.test(product.productUrl)) ? product.productUrl : ''),
-            hex: /^#[0-9a-fA-F]{3,8}$/.test(product.hex || '') ? product.hex : null,
+            // 商品清單 API 的欄位叫 hex_primary，不是 hex。先前只讀 product.hex，
+            // 於是每一筆都拿到 undefined、色塊一律不顯示——資料一直都在，只是沒接上。
+            hex: (() => {
+                const raw = product.hex || product.hex_primary || '';
+                return /^#[0-9a-fA-F]{3,8}$/.test(raw) ? raw : null;
+            })(),
+            // CIE L*a*b*，以色找色要用的就是它：ΔE 在這個空間才有感知意義。
+            // color_vector / qdrant_vector_12d 是給向量資料庫檢索用的，前 3 維其實就是
+            // hex 的正規化 RGB，後 9 維語意未公開，不拿來算相似度。
+            lab: Array.isArray(product.lab) && product.lab.length === 3 && product.lab.every(n => Number.isFinite(Number(n)))
+                ? product.lab.map(Number)
+                : null,
             tags: product.tags || [],
             sku: product.sku || null,
             shadeName: product.shadeName || product.shade_name || null,

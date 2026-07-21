@@ -2392,7 +2392,8 @@ const PageInit = {
             }
             const area = document.getElementById('productsArea');
             // 這批商品每一筆本身就是一個獨立色號（不是一個商品配多組色號），色票只顯示這支商品自己的真實顏色。
-            // 商品清單 API 沒有 hex，只有單品詳情 API（/api/product/{type}/{id}）才有，先用清單裡有的，沒有就非同步補抓。
+            // 清單 API 本來就給 hex_primary 與 lab，不需要再打單品詳情——
+            // /api/product/{type}/{id} 在上游根本不存在（實測 404），舊註解說的補抓從來沒成功過。
             let related = catalog.filter(x => x.cat === p.cat && String(x.id) !== String(p.id)).slice(0,3);
             if (related.length < 3) related = related.concat(catalog.filter(x => x.cat !== p.cat && String(x.id) !== String(p.id)).slice(0, 3 - related.length));
             const renderColorBox = (hex) => hex
