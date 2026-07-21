@@ -90,14 +90,11 @@ UPSTREAMS = {
             r"render",
             r"render/jobs",
             rf"render/jobs/{RENDER_JOB_ID}",
-            rf"render/jobs/{RENDER_JOB_ID}/signed-url",
-            rf"render/jobs/{RENDER_JOB_ID}/content",
-            rf"render/jobs/{RENDER_JOB_ID}/retain",
-            rf"render/jobs/{RENDER_JOB_ID}/artifact",
-            r"render/media/sign",
-            r"render/media/content",
-            r"render/media",
-            r"render/users/actor_[0-9a-f]{24}",
+            # Ownership-sensitive render routes (signed-url, content, retain,
+            # artifact, media/*, users/*) are deliberately absent.  The Gateway
+            # reaches them through _render_internal_request(), which builds the
+            # upstream URL directly and never consults this allowlist, so the
+            # browser has no reason — and no way — to call them.
         ),
     ),
     "text-suggestion": Upstream(
@@ -343,6 +340,52 @@ def _upstream_cookie_header(response: httpx.Response) -> str:
     return "; ".join(f"{name}={morsel.value}" for name, morsel in jar.items())
 
 
+def _is_cookie_deletion(morsel) -> bool:
+    """A Set-Cookie that clears a name rather than rotating its value."""
+    if not morsel.value:
+        return True
+    max_age = str(morsel.get("max-age") or "").strip()
+    if max_age:
+        try:
+            return int(max_age) <= 0
+        except ValueError:
+            return False
+    return False
+
+
+def merge_upstream_cookies(existing: str, response: httpx.Response) -> str:
+    """Fold a response's Set-Cookie headers into the session cookie jar.
+
+    The member database rotates one cookie at a time and also sets unrelated
+    cookies (CSRF, locale).  Replacing the whole jar with just the names in the
+    latest response silently drops the session cookie, so the next request is
+    rejected upstream and the browser sees a spurious 401.
+    """
+    jar: dict[str, str] = {}
+    for pair in str(existing or "").split(";"):
+        name, _, value = pair.partition("=")
+        if name.strip():
+            jar[name.strip()] = value.strip()
+
+    incoming = SimpleCookie()
+    for value in response.headers.get_list("set-cookie"):
+        try:
+            incoming.load(value)
+        except Exception:
+            continue
+    if not incoming:
+        for name, value in response.cookies.items():
+            jar[name] = value
+        return "; ".join(f"{name}={value}" for name, value in jar.items())
+
+    for name, morsel in incoming.items():
+        if _is_cookie_deletion(morsel):
+            jar.pop(name, None)
+        else:
+            jar[name] = morsel.value
+    return "; ".join(f"{name}={value}" for name, value in jar.items())
+
+
 def seal_member_cookie(cookie_header: str) -> str:
     if not cookie_header:
         return ""
@@ -409,7 +452,7 @@ async def _validate_upstream_member_cookie(request: Request, upstream_cookie: st
             status_code=503,
             detail={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE", "message": "Member authentication is unavailable."}},
         )
-    return _upstream_cookie_header(response) or upstream_cookie
+    return merge_upstream_cookies(upstream_cookie, response) or upstream_cookie
 
 
 async def validate_upstream_member_session(request: Request, claims: dict) -> str:
@@ -1189,17 +1232,25 @@ async def proxy(service: str, path: str, request: Request):
 
     result = Response(content=response_content, status_code=response.status_code, headers=response_headers)
     if service == "member-database":
-        rotated_cookie = _upstream_cookie_header(response)
-        if rotated_cookie:
-            result.set_cookie(
-                key=MEMBER_SESSION_COOKIE,
-                value=seal_member_cookie(rotated_cookie),
-                max_age=SESSION_TTL_SECONDS,
-                httponly=True,
-                secure=IS_PRODUCTION,
-                samesite="lax",
-                path="/",
-            )
+        rotated_cookie = merge_upstream_cookies(upstream_member_cookie, response)
+        if rotated_cookie and rotated_cookie != upstream_member_cookie:
+            try:
+                sealed = seal_member_cookie(rotated_cookie)
+            except HTTPException:
+                # The upstream work already succeeded.  Failing to refresh the
+                # sealed jar must not turn that into an error the caller will
+                # retry; the previous cookie stays valid until it expires.
+                sealed = ""
+            if sealed:
+                result.set_cookie(
+                    key=MEMBER_SESSION_COOKIE,
+                    value=sealed,
+                    max_age=SESSION_TTL_SECONDS,
+                    httponly=True,
+                    secure=IS_PRODUCTION,
+                    samesite="lax",
+                    path="/",
+                )
     return result
 
 

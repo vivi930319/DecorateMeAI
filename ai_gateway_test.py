@@ -1,6 +1,7 @@
 import os
 import unittest
 import asyncio
+from http.cookies import SimpleCookie
 from unittest.mock import AsyncMock, Mock
 
 import httpx
@@ -40,11 +41,24 @@ class AiGatewayTest(unittest.TestCase):
 
         self.assertTrue(is_path_allowed(basic, "v1/face/jobs/JOB-012345abcdef/result"))
         self.assertTrue(is_path_allowed(render, "render/jobs/0123456789abcdef0123456789abcdef"))
-        self.assertTrue(is_path_allowed(render, "render/jobs/0123456789abcdef0123456789abcdef/signed-url"))
-        self.assertTrue(is_path_allowed(render, "render/jobs/0123456789abcdef0123456789abcdef/retain"))
         self.assertFalse(is_path_allowed(basic, "../health"))
         self.assertFalse(is_path_allowed(render, "render/jobs/not-a-job-id"))
         self.assertFalse(is_path_allowed(render, "openapi.json"))
+
+        # The render service does not owner-check these, so they must never be
+        # reachable from a browser session — only from the Gateway itself.
+        job = "0123456789abcdef0123456789abcdef"
+        for internal in (
+            f"render/jobs/{job}/signed-url",
+            f"render/jobs/{job}/content",
+            f"render/jobs/{job}/retain",
+            f"render/jobs/{job}/artifact",
+            "render/media/sign",
+            "render/media/content",
+            "render/media",
+            "render/users/actor_0123456789abcdef01234567",
+        ):
+            self.assertFalse(is_path_allowed(render, internal), internal)
 
     def test_client_key_is_required(self):
         basic = UPSTREAMS["face-basic"]
@@ -142,6 +156,45 @@ class AiGatewayTest(unittest.TestCase):
         with self.assertRaises(Exception) as revoked:
             asyncio.run(session_status(request))
         self.assertEqual(revoked.exception.status_code, 401)
+
+    def test_partial_cookie_rotation_keeps_the_whole_session_jar(self):
+        jar = "session=abc; refresh=def"
+        rotated = gateway.merge_upstream_cookies(
+            jar, httpx.Response(200, headers=[("set-cookie", "csrf=zzz; Path=/")])
+        )
+        self.assertEqual(rotated, "session=abc; refresh=def; csrf=zzz")
+
+        renewed = gateway.merge_upstream_cookies(
+            jar, httpx.Response(200, headers=[("set-cookie", "session=new; Path=/")])
+        )
+        self.assertEqual(renewed, "session=new; refresh=def")
+
+        cleared = gateway.merge_upstream_cookies(
+            jar, httpx.Response(200, headers=[("set-cookie", "refresh=; Max-Age=0; Path=/")])
+        )
+        self.assertEqual(cleared, "session=abc")
+
+    def test_session_preflight_does_not_drop_upstream_cookies(self):
+        # The preflight runs before every private page.  Re-sealing only the
+        # cookies echoed by that one response used to invalidate the session it
+        # had just verified, so the next request 401ed.
+        gateway.MEMBER_DATABASE_URL = "https://member.test"
+        token, _ = issue_access_token("member@example.com", "member", "active")
+        request = Mock()
+        request.headers = {}
+        request.cookies = {
+            "dm_session": token,
+            "dm_member_session": seal_member_cookie("session=abc; refresh=def"),
+        }
+        request.app.state.http_client.get = AsyncMock(
+            return_value=httpx.Response(200, headers=[("set-cookie", "csrf=zzz; Path=/")])
+        )
+        result = asyncio.run(session_status(request))
+
+        resealed = SimpleCookie(result.headers.get("set-cookie", ""))["dm_member_session"].value
+        after = Mock()
+        after.cookies = {"dm_member_session": resealed}
+        self.assertEqual(require_upstream_member_cookie(after), "session=abc; refresh=def; csrf=zzz")
 
     def test_non_admin_and_suspended_admin_are_rejected(self):
         request = Mock()
