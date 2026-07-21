@@ -1017,6 +1017,26 @@ const Api = {
         }
     },
 
+    // 讀回伺服器上的收藏清單。收藏的寫入（toggleRemoteFavorite）一直都在，
+    // 但從來沒有人讀回來，所以換一台裝置登入就看不到自己收藏過的東西——
+    // 「跨裝置同步」只做了寫的那一半。
+    async listRemoteFavorites(email) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false, favorites: [] };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/favorites`, {
+                method: 'GET',
+                credentials: 'include',
+                cache: 'no-store'
+            });
+            if (!res.ok) return { ok: false, status: res.status, favorites: [] };
+            const data = await res.json().catch(() => ({}));
+            return { ok: true, favorites: Array.isArray(data.favorites) ? data.favorites : [] };
+        } catch (_) {
+            return { ok: false, favorites: [] };
+        }
+    },
+
     // 讀單一會員。身分切換時用它把本機 profile 換成 session 真正屬於的那個人，
     // 不必把使用者登出重來。
     async fetchMember(email) {
@@ -2451,6 +2471,31 @@ const Fav = {
             Api.toggleRemoteFavorite(product.rawId, product.apiType).catch(() => {});
         }
         return nowFav;
+    },
+
+    // 把伺服器上的收藏併進本機。伺服器存的是 {item_id, item_type}，
+    // 對應本機 id 的 `api-{item_type}-{item_id}`——與 _normalizeProduct 產生的格式一致。
+    //
+    // 只加不刪。本機可能有「遠端寫入失敗」的收藏（toggle 的遠端呼叫是盡力而為、
+    // 錯誤被吞掉），砍掉就是靜默丟資料。代價是在 A 裝置取消過的收藏，B 裝置下次
+    // 載入會復活一次；比起弄丟收藏，讓使用者再按一次取消是比較輕的錯。
+    mergeRemote(rows) {
+        if (!Array.isArray(rows) || !rows.length) return 0;
+        const arr = this.list();
+        const seen = new Set(arr.map(String));
+        let added = 0;
+        for (const row of rows) {
+            const type = String(row?.item_type ?? row?.itemType ?? '').trim();
+            const id = row?.item_id ?? row?.itemId;
+            if (!type || id == null) continue;
+            const key = `api-${type}-${id}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            arr.push(key);
+            added += 1;
+        }
+        if (added) localStorage.setItem(this._key, JSON.stringify(arr));
+        return added;
     }
 };
 

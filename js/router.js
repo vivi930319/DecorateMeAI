@@ -4214,11 +4214,10 @@ const PageInit = {
         if (Auth.isLoggedIn()) {
             const session = await Api.validateSession();
             if (session.ok && !sessionOwnerMatchesProfile(session)) {
-                handleSessionExpired({
-                    title: '登入帳號已變更',
-                    message: '這個瀏覽器目前登入的是另一個帳號（可能是在後台登入過）。'
-                        + '為避免讀到別人的資料，已登出，請重新登入你要使用的帳號。'
-                });
+                // 跟中途換帳號走同一套處理：接受 session 的身分，不要把人踢掉。
+                window.dispatchEvent(new CustomEvent('decorate-me:session-owner-changed', {
+                    detail: { sub: session.sub }
+                }));
             } else if (session.ok) {
                 showApp();
                 routeFromHash();
@@ -4234,6 +4233,21 @@ const PageInit = {
     });
 })();
 
+// 把伺服器上的收藏拉回本機。登入與啟動各跑一次就夠——收藏的變動都會即時寫回伺服器，
+// 需要補齊的只有「這台裝置還不知道的那些」。
+// 失敗不做任何提示：本機收藏照樣能用，這只是補齊，不是必要條件。
+function syncRemoteFavorites() {
+    const profile = (typeof Auth !== 'undefined' && Auth.getProfile) ? (Auth.getProfile() || {}) : {};
+    if (!profile.email || (typeof isGuest === 'function' && isGuest())) return;
+    if (typeof Api === 'undefined' || !Api.listRemoteFavorites || typeof Fav === 'undefined') return;
+    Api.listRemoteFavorites(profile.email).then(result => {
+        if (!result || !result.ok) return;
+        const added = Fav.mergeRemote(result.favorites);
+        // 只有真的補進東西才重畫，避免每次載入都無謂地重繪收藏頁
+        if (added && Router.currentPage === 'favorites') PageInit.favorites();
+    }).catch(() => {});
+}
+
 function showApp() {
     document.getElementById('auth-layer').innerHTML = '';
     document.getElementById('app').style.display = 'block';
@@ -4242,6 +4256,7 @@ function showApp() {
     updateAdminNav();
     updateCartBadge();
     refreshMemberTheme();
+    syncRemoteFavorites();
     const landing = (typeof AdminStore !== 'undefined' && AdminStore.isAdmin()) ? 'admin' : 'dashboard';
     const homeUrl = `${location.pathname}${location.search}#${landing}`;
     if (location.hash !== `#${landing}`) history.replaceState(null, '', homeUrl);
