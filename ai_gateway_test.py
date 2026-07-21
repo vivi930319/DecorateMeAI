@@ -34,6 +34,11 @@ from ai_gateway import (  # noqa: E402
 )
 
 
+def session_cookies(token: str = "", sealed: str = "") -> dict:
+    """The single cookie Firebase Hosting forwards, carrying both session halves."""
+    return {gateway.SESSION_COOKIE: f"{token}{gateway.SESSION_COOKIE_SEPARATOR}{sealed}"}
+
+
 class AiGatewayTest(unittest.TestCase):
     def test_only_known_routes_are_allowed(self):
         basic = UPSTREAMS["face-basic"]
@@ -114,19 +119,40 @@ class AiGatewayTest(unittest.TestCase):
         token, _ = issue_access_token("admin@example.com", "admin", "active")
         request = Mock()
         request.headers = {}
-        request.cookies = {"dm_session": token}
+        request.cookies = session_cookies(token)
         claims = require_admin_access(request)
         self.assertEqual(claims["sub"], "admin@example.com")
+
+    def test_session_rides_in_the_only_cookie_firebase_forwards(self):
+        # Firebase Hosting drops every cookie except `__session` when it rewrites
+        # to Cloud Run.  Splitting the session across two custom names meant it
+        # never reached this service, so every signed-in request 401ed with
+        # MEMBER_AUTH_REQUIRED while the browser was still sending both (S56).
+        token, _ = issue_access_token("member@example.com", "member", "active")
+        sealed = seal_member_cookie("session=abc; refresh=def")
+
+        # Asserted as a literal, not via the constant: renaming the cookie is
+        # exactly the regression this guards against, and comparing the constant
+        # to itself would still pass.
+        self.assertEqual(gateway.SESSION_COOKIE, "__session")
+
+        response = gateway.JSONResponse(content={})
+        gateway.set_session_cookie(response, token, sealed)
+        written = SimpleCookie(response.headers.get("set-cookie", ""))
+        self.assertEqual(list(written.keys()), ["__session"])
+
+        request = Mock()
+        request.headers = {}
+        request.cookies = {gateway.SESSION_COOKIE: written[gateway.SESSION_COOKIE].value}
+        self.assertEqual(require_member_access(request)["sub"], "member@example.com")
+        self.assertEqual(require_upstream_member_cookie(request), "session=abc; refresh=def")
 
     def test_session_status_requires_both_http_only_sessions(self):
         gateway.MEMBER_DATABASE_URL = "https://member.test"
         token, _ = issue_access_token("member@example.com", "member", "active")
         request = Mock()
         request.headers = {}
-        request.cookies = {
-            "dm_session": token,
-            "dm_member_session": seal_member_cookie("session=private-upstream-value"),
-        }
+        request.cookies = session_cookies(token, seal_member_cookie("session=private-upstream-value"))
         request.app.state.http_client.get = AsyncMock(
             return_value=httpx.Response(200, request=httpx.Request("GET", "https://member.test/api/members/member%40example.com"))
         )
@@ -135,10 +161,10 @@ class AiGatewayTest(unittest.TestCase):
         self.assertIn('"ok":true', payload)
         self.assertIn('"role":"member"', payload)
         self.assertNotIn("email", payload)
-        self.assertIn("dm_member_session=", result.headers.get("set-cookie", ""))
+        self.assertIn(f"{gateway.SESSION_COOKIE}=", result.headers.get("set-cookie", ""))
         request.app.state.http_client.get.assert_awaited_once()
 
-        request.cookies = {"dm_session": token}
+        request.cookies = session_cookies(token)
         with self.assertRaises(Exception) as missing_upstream:
             asyncio.run(session_status(request))
         self.assertEqual(missing_upstream.exception.status_code, 401)
@@ -148,10 +174,7 @@ class AiGatewayTest(unittest.TestCase):
         token, _ = issue_access_token("member@example.com", "member", "active")
         request = Mock()
         request.headers = {}
-        request.cookies = {
-            "dm_session": token,
-            "dm_member_session": seal_member_cookie("session=revoked-upstream-value"),
-        }
+        request.cookies = session_cookies(token, seal_member_cookie("session=revoked-upstream-value"))
         request.app.state.http_client.get = AsyncMock(return_value=httpx.Response(401))
         with self.assertRaises(Exception) as revoked:
             asyncio.run(session_status(request))
@@ -182,18 +205,15 @@ class AiGatewayTest(unittest.TestCase):
         token, _ = issue_access_token("member@example.com", "member", "active")
         request = Mock()
         request.headers = {}
-        request.cookies = {
-            "dm_session": token,
-            "dm_member_session": seal_member_cookie("session=abc; refresh=def"),
-        }
+        request.cookies = session_cookies(token, seal_member_cookie("session=abc; refresh=def"))
         request.app.state.http_client.get = AsyncMock(
             return_value=httpx.Response(200, headers=[("set-cookie", "csrf=zzz; Path=/")])
         )
         result = asyncio.run(session_status(request))
 
-        resealed = SimpleCookie(result.headers.get("set-cookie", ""))["dm_member_session"].value
+        rewritten = SimpleCookie(result.headers.get("set-cookie", ""))[gateway.SESSION_COOKIE].value
         after = Mock()
-        after.cookies = {"dm_member_session": resealed}
+        after.cookies = {gateway.SESSION_COOKIE: rewritten}
         self.assertEqual(require_upstream_member_cookie(after), "session=abc; refresh=def; csrf=zzz")
 
     def test_non_admin_and_suspended_admin_are_rejected(self):
@@ -225,7 +245,7 @@ class AiGatewayTest(unittest.TestCase):
         self.assertNotIn("private-upstream-value", sealed)
 
         request = Mock()
-        request.cookies = {"dm_member_session": sealed}
+        request.cookies = session_cookies("", sealed)
         self.assertEqual(require_upstream_member_cookie(request), upstream)
 
     def test_public_config_never_reveals_upstream_urls(self):

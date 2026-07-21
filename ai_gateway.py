@@ -146,7 +146,16 @@ SESSION_ONLY_MODE = os.getenv("GATEWAY_SESSION_ONLY", "").strip().lower() in {"1
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = max(60, int(os.getenv("GATEWAY_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "600")))
 LOGIN_RATE_LIMIT_MAX_REQUESTS = max(1, int(os.getenv("GATEWAY_LOGIN_RATE_LIMIT_MAX_REQUESTS", "10")))
 IS_PRODUCTION = os.getenv("APP_ENV", "").strip().lower() in {"prod", "production"}
-MEMBER_SESSION_COOKIE = "dm_member_session"
+# Firebase Hosting forwards exactly one cookie to a Cloud Run rewrite: the one
+# named `__session`.  Every other cookie is dropped at the CDN before the request
+# is proxied, which is why the session used to vanish between the browser and
+# this service even though the browser was sending it (S56).  Both halves of the
+# session therefore have to travel inside this single name.
+SESSION_COOKIE = "__session"
+# The gateway access token is a JWT (base64url plus dots) and the sealed upstream
+# jar is a Fernet token (base64 plus padding).  Neither alphabet contains "|", so
+# it can separate them unambiguously.
+SESSION_COOKIE_SEPARATOR = "|"
 MAX_SEALED_MEMBER_SESSION_BYTES = 3500
 LOGIN_LIMIT_COLLECTION = os.getenv("GATEWAY_LOGIN_LIMIT_COLLECTION", "gateway_login_limits")
 PUBLIC_PRODUCT_PATHS = _patterns(r"api/products", r"recommend-products")
@@ -398,8 +407,38 @@ def seal_member_cookie(cookie_header: str) -> str:
     return sealed
 
 
+def read_session_cookie(request: Request) -> tuple[str, str]:
+    """Split `__session` into the gateway access token and the sealed upstream jar."""
+    raw = request.cookies.get(SESSION_COOKIE, "")
+    if not raw:
+        return "", ""
+    token, _, sealed = raw.partition(SESSION_COOKIE_SEPARATOR)
+    return token, sealed
+
+
+def request_access_token(request: Request) -> str:
+    """The gateway access token for this request, from the header or the cookie."""
+    scheme, _, token = request.headers.get("authorization", "").partition(" ")
+    if scheme.lower() == "bearer" and token:
+        return token
+    return read_session_cookie(request)[0]
+
+
+def set_session_cookie(response: Response, access_token: str, sealed_member_cookie: str) -> None:
+    """Write both halves of the session as the single cookie Firebase forwards."""
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=f"{access_token}{SESSION_COOKIE_SEPARATOR}{sealed_member_cookie}",
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        path="/",
+    )
+
+
 def require_upstream_member_cookie(request: Request) -> str:
-    sealed = request.cookies.get(MEMBER_SESSION_COOKIE, "")
+    sealed = read_session_cookie(request)[1]
     if not sealed:
         raise HTTPException(
             status_code=401,
@@ -473,12 +512,8 @@ def opaque_actor_id(subject: str) -> str:
 
 
 def require_member_access(request: Request) -> dict:
-    authorization = request.headers.get("authorization", "")
-    scheme, _, token = authorization.partition(" ")
+    token = request_access_token(request)
     if not token:
-        token = request.cookies.get("dm_session", "")
-        scheme = "bearer" if token else ""
-    if scheme.lower() != "bearer" or not token:
         raise HTTPException(status_code=401, detail={"error": {"code": "MEMBER_AUTH_REQUIRED", "message": "Member sign-in is required."}})
     try:
         return jwt.decode(
@@ -893,32 +928,19 @@ async def login(body: LoginRequest, request: Request):
     if not SESSION_ONLY_MODE:
         payload.update({"accessToken": access_token, "tokenType": "Bearer"})
     result = JSONResponse(content=payload)
-    result.set_cookie(
-        key="dm_session",
-        value=access_token,
-        max_age=SESSION_TTL_SECONDS,
-        httponly=True,
-        secure=IS_PRODUCTION,
-        samesite="lax",
-        path="/",
-    )
-    result.set_cookie(
-        key=MEMBER_SESSION_COOKIE,
-        value=seal_member_cookie(upstream_cookie),
-        max_age=SESSION_TTL_SECONDS,
-        httponly=True,
-        secure=IS_PRODUCTION,
-        samesite="lax",
-        path="/",
-    )
+    set_session_cookie(result, access_token, seal_member_cookie(upstream_cookie))
     return result
 
 
 @app.post("/auth/logout")
 async def logout():
     result = JSONResponse(content={"ok": True})
-    result.delete_cookie(key="dm_session", path="/", secure=IS_PRODUCTION, httponly=True, samesite="lax")
-    result.delete_cookie(key=MEMBER_SESSION_COOKIE, path="/", secure=IS_PRODUCTION, httponly=True, samesite="lax")
+    result.delete_cookie(key=SESSION_COOKIE, path="/", secure=IS_PRODUCTION, httponly=True, samesite="lax")
+    # Browsers that signed in before S56 still carry the two retired cookies.
+    # Nothing reads them any more, but clearing them on the way out keeps stale
+    # credentials from sitting in the jar until they expire on their own.
+    for retired in ("dm_session", "dm_member_session"):
+        result.delete_cookie(key=retired, path="/", secure=IS_PRODUCTION, httponly=True, samesite="lax")
     return result
 
 
@@ -933,15 +955,7 @@ async def session_status(request: Request):
         "status": str(claims.get("status") or "active"),
         "expiresAt": int(claims.get("exp") or 0) * 1000,
     })
-    result.set_cookie(
-        key=MEMBER_SESSION_COOKIE,
-        value=seal_member_cookie(upstream_cookie),
-        max_age=SESSION_TTL_SECONDS,
-        httponly=True,
-        secure=IS_PRODUCTION,
-        samesite="lax",
-        path="/",
-    )
+    set_session_cookie(result, request_access_token(request), seal_member_cookie(upstream_cookie))
     return result
 
 
@@ -1242,15 +1256,7 @@ async def proxy(service: str, path: str, request: Request):
                 # retry; the previous cookie stays valid until it expires.
                 sealed = ""
             if sealed:
-                result.set_cookie(
-                    key=MEMBER_SESSION_COOKIE,
-                    value=sealed,
-                    max_age=SESSION_TTL_SECONDS,
-                    httponly=True,
-                    secure=IS_PRODUCTION,
-                    samesite="lax",
-                    path="/",
-                )
+                set_session_cookie(result, request_access_token(request), sealed)
     return result
 
 
