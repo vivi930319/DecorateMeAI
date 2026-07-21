@@ -42,15 +42,20 @@ try {
     Write-Host "  /api/products 讀取失敗，仍會繼續更新（商品服務可能另外處理）" -ForegroundColor Yellow
 }
 
-# 如果這一步噴 SSLError / CERTIFICATE_VERIFY_FAILED，那是 Avast 攔截 TLS、而 gcloud
-# 自帶的 CA 不認它（Avast 憑證輪替後就會發生，2026-07-21 遇過一次）。
-# 兩個解法：
-#   1. 重新產生 CA bundle 並設定：gcloud config set core/custom_ca_certs_file <路徑>
-#   2. 繞過 gcloud，直接呼叫 Cloud Run Admin API——PowerShell 走 Windows 憑證存放區，
-#      認得 Avast，所以不受影響：
-#        GET/PUT https://asia-east1-run.googleapis.com/apis/serving.knative.dev/v1/namespaces/decorate-me/services/ai-gateway
-#        標頭 Authorization: Bearer $(gcloud auth print-access-token)
-#        只改 spec.template.spec.containers[0].env 裡的兩個 *_DATABASE_URL，其餘原樣送回。
+# 如果這一步噴 SSLError / CERTIFICATE_VERIFY_FAILED，那是 Avast 的「網頁防護 HTTPS
+# 掃描」在攔 TLS，而 gcloud 用的 Python OpenSSL 拒收 Avast 那張根憑證
+# （Basic Constraints 沒標成 critical）。2026-07-21 實測確認：
+#
+#   把 Avast 憑證加進 CA bundle 並設 core/custom_ca_certs_file —— 沒有用。
+#   OpenSSL 是拒絕那張憑證本身，不是找不到它。設了反而讓錯誤訊息更難懂。
+#
+# 有效的兩個解法：
+#   1. 治本：Avast ☰ 選單 → 設定 → 防護 → 核心防護 → 網頁防護 → 取消「啟用 HTTPS 掃描」。
+#      注意要走設定頁，用系統匣圖示的「停用防護」只是暫時的，時間到會自動開回來。
+#   2. 應急：gcloud config set auth/disable_ssl_validation True
+#      （gcloud 不再驗證伺服器憑證，是安全性降級，用完記得 unset。）
+#
+# 另外，Firebase CLI 不受影響——Node 的 TLS 沒有這麼嚴格，前端部署照常。
 Write-Host "更新 AI Gateway..." -ForegroundColor Cyan
 gcloud run services update ai-gateway `
     --region=$region --project=$project `
