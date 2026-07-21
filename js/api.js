@@ -939,7 +939,40 @@ const Api = {
             this._cancelSessionRequests();
             window.dispatchEvent(new CustomEvent('decorate-me:session-expired'));
         }
+        // 403 有可能是「session 已經換成另一個帳號」。admin 與 member 共用同一個
+        // __session cookie，在後台登入會蓋掉會員的 session，而本機 profile 還停在
+        // 前一個人，於是每一條會員請求都在跨帳號要資料，資料庫一律回 403。
+        //
+        // 啟動時已經比對過一次身分，但那只擋得住「開新頁面」；中途在同一個分頁登入
+        // 另一個帳號不會重新載入，所以要在這裡補一道。不擋住回應——呼叫端照樣拿到
+        // 403 自行處理，這裡只負責在背景確認並通知 Router。
+        if (res.status === 403 && !this._sessionExpiredNotified) {
+            this._verifySessionOwner();
+        }
         return res;
+    },
+
+    // 背景確認目前 session 屬於誰，跟本機 profile 不一致就通知 Router 清掉舊身分。
+    // 同一時間只跑一次：多個區塊平行載入會同時吃到 403，不必每一條都去問一次。
+    async _verifySessionOwner() {
+        if (this._sessionOwnerChecking) return;
+        this._sessionOwnerChecking = true;
+        try {
+            const session = await this.validateSession();
+            if (!session.ok || !session.sub) return;
+            const profile = (typeof Auth !== 'undefined' && Auth.getProfile) ? (Auth.getProfile() || {}) : {};
+            const email = String(profile.email || '').trim().toLowerCase();
+            // 拿不到任一邊就不動作——寧可維持現狀，也不要在資訊不足時把人登出。
+            if (!email || session.sub.trim().toLowerCase() === email) return;
+            if (this._sessionExpiredNotified) return;
+            this._sessionExpiredNotified = true;
+            this._cancelSessionRequests();
+            window.dispatchEvent(new CustomEvent('decorate-me:session-owner-changed'));
+        } catch (_) {
+            // 確認失敗就當作沒發生，維持原本的 403 處理
+        } finally {
+            this._sessionOwnerChecking = false;
+        }
     },
 
     async fetchAdminMembers() {

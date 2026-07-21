@@ -4166,6 +4166,14 @@ const PageInit = {
     });
     window.addEventListener('hashchange', routeFromHash);
     window.addEventListener('decorate-me:session-expired', handleSessionExpired);
+    // 中途在同一個分頁登入了另一個帳號（通常是去後台看了一眼）。Api 在收到 403 時
+    // 背景確認出身分不一致才會發這個事件，訊息要講清楚原因，不要只說「登入已過期」——
+    // 使用者剛剛才登入成功，說過期他只會更困惑。
+    window.addEventListener('decorate-me:session-owner-changed', () => handleSessionExpired({
+        title: '登入帳號已變更',
+        message: '這個瀏覽器已經改用另一個帳號登入（可能是在後台登入過）。'
+            + '為避免讀到別人的資料，已登出，請重新登入你要使用的帳號。'
+    }));
 
     // 頂部導覽
     document.querySelectorAll('.topbar-nav a, .topbar-user').forEach(a => {
