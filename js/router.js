@@ -2942,7 +2942,11 @@ const PageInit = {
             if (isGuest() || typeof Tasks === 'undefined') {
                 taskCenter.innerHTML = '<div class="empty-state compact">登入會員後即可查看任務中心</div>';
             } else {
-                const paintTasks = (tasks, remote) => {
+                // 本機任務狀態會先畫一次，資料庫的狀態晚一步覆蓋。中間那段空窗期如果按得下去，
+                // 走的是 Tasks.claim() 的 localStorage 路徑：點數加在瀏覽器裡、toast 說領取成功，
+                // 然後遠端資料一到就把畫面蓋回去，看起來就是「點了沒加上去」。
+                // pending 為真時整批按鈕先鎖住，等資料庫回應再開。
+                const paintTasks = (tasks, remote, pending) => {
                     const normalized = tasks.map(t => {
                         const id = t.id || t.taskId;
                         const meta = taskMeta(id);
@@ -2966,7 +2970,7 @@ const PageInit = {
                                         <b>${escapeHtml(t.title)}</b>
                                         <p>獎勵 ${t.reward} 點</p>
                                     </div>
-                                    <button class="btn-gold btn-sm" data-task-id="${escapeHtml(t.id)}" data-task-remote="${remote ? '1' : '0'}" ${(!t.done || t.claimed) ? 'disabled' : ''}>${t.claimed ? '已領取' : (t.done ? '領取獎勵' : '尚未完成')}</button>
+                                    <button class="btn-gold btn-sm" data-task-id="${escapeHtml(t.id)}" data-task-remote="${remote ? '1' : '0'}" ${(pending || !t.done || t.claimed) ? 'disabled' : ''}>${t.claimed ? '已領取' : (pending ? '讀取中…' : (t.done ? '領取獎勵' : '尚未完成'))}</button>
                                 </div>
                             `).join('')}
                         </div>
@@ -2988,12 +2992,14 @@ const PageInit = {
                         };
                     });
                 };
-                paintTasks(Tasks.status(profile.email), false);
-                if (profile.email && Api.listMemberTasks) {
+                const tasksComingFromDatabase = !!(profile.email && Api.listMemberTasks);
+                paintTasks(Tasks.status(profile.email), false, tasksComingFromDatabase);
+                if (tasksComingFromDatabase) {
                     Api.listMemberTasks(profile.email).then(r => {
-                        if (!r || !r.ok || !r.tasks.length) return;
-                        paintTasks(r.tasks, true);
-                    }).catch(() => {});
+                        // 資料庫沒回任務時解鎖本機清單，否則按鈕會永遠停在「讀取中…」。
+                        if (!r || !r.ok || !r.tasks.length) return paintTasks(Tasks.status(profile.email), false, false);
+                        paintTasks(r.tasks, true, false);
+                    }).catch(() => paintTasks(Tasks.status(profile.email), false, false));
                 }
             }
         }
