@@ -168,6 +168,14 @@ class AiGatewayTest(unittest.TestCase):
             asyncio.run(session_status(request))
         self.assertEqual(missing_upstream.exception.status_code, 401)
 
+    def test_member_routes_cover_both_halves_of_favourites(self):
+        # 收藏的寫與讀是兩條不同的路徑，白名單漏掉讀的那條時，寫入照樣成功、
+        # 讀回永遠拿到 Gateway 的 404——前端把它當成「沒有收藏」靜靜吞掉，
+        # 於是換一台裝置就看不到自己收藏過的東西，畫面上完全沒有異狀。
+        member = UPSTREAMS["member-database"]
+        self.assertTrue(is_path_allowed(member, "api/favorites/toggle"))
+        self.assertTrue(is_path_allowed(member, "api/members/someone%40example.com/favorites"))
+
     def test_only_the_stable_media_path_can_retain_a_render(self):
         # Saving a look is what promotes its render out of `temporary/`, and the
         # gateway finds the job to retain by parsing the submitted afterImageUrl.

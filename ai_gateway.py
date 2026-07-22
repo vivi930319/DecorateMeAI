@@ -121,6 +121,10 @@ UPSTREAMS = {
             r"api/members",
             r"api/members/[^/]+",
             r"api/members/[^/]+/points",
+            # 收藏的「寫」走 api/favorites/toggle，「讀」走這條。少了它，前端把收藏
+            # 同步回本機的那段永遠拿到 Gateway 的 404——寫得進去、讀不回來，
+            # 換裝置就看不到自己收藏過的東西，而且畫面完全正常不會報錯。
+            r"api/members/[^/]+/favorites",
             r"api/members/[^/]+/check-in",
             r"api/members/[^/]+/tasks",
             r"api/members/[^/]+/tasks/[^/]+/claim",
