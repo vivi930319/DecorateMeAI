@@ -413,6 +413,73 @@ function lookImageSrc(value){
   return '';
 }
 
+// 分析結果的「準不準」回饋。
+//
+// 每個五官預設是「準」，使用者只需要動他覺得錯的那幾個——多數人不會逐項確認，
+// 預設成未作答會讓大部分紀錄變成空的。按「這個不準」才展開選單挑正確答案。
+//
+// 不收照片，只記模型答了什麼、使用者說什麼。告知文字要講明這件事：
+// 只寫「幫助我們模型升級」而不說收了什麼，使用者無從判斷要不要按。
+function renderAnalysisFeedback(result, packageId) {
+  const box = document.getElementById('analysisFeedback');
+  if (!box || typeof AnalysisFeedback === 'undefined') return;
+  const fields = Object.keys(AnalysisFeedback.OPTIONS)
+    .filter(field => result && result[field] && !String(result[field]).startsWith('無法判斷'));
+  if (!fields.length) { box.style.display = 'none'; return; }
+
+  const saved = AnalysisFeedback.forPackage(packageId);
+  const corrections = saved ? { ...saved.corrections } : {};
+  const predicted = {};
+  fields.forEach(field => { predicted[field] = result[field]; });
+
+  const draw = () => {
+    box.innerHTML = `
+      <div class="af-head">
+        <b>這些判斷準嗎？</b>
+        <p>覺得哪一項不對就改掉，其餘視為正確。你的回饋會用來改善判斷準確度；
+           <strong>這一步不會上傳你的照片</strong>，只記錄判斷結果與你的修正。</p>
+      </div>
+      <div class="af-rows">${fields.map(field => {
+        const chosen = corrections[field];
+        const current = chosen || predicted[field];
+        return `<div class="af-row${chosen ? ' changed' : ''}">
+          <span class="af-label">${escapeHtml(field)}</span>
+          <span class="af-value">${escapeHtml(current)}</span>
+          <select class="af-select" data-af-field="${escapeHtml(field)}" aria-label="${escapeHtml(field)}正確答案">
+            <option value="">判斷正確</option>
+            ${AnalysisFeedback.OPTIONS[field]
+              .filter(option => option !== predicted[field])
+              .map(option => `<option value="${escapeHtml(option)}"${chosen === option ? ' selected' : ''}>改成 ${escapeHtml(option)}</option>`)
+              .join('')}
+          </select>
+        </div>`;
+      }).join('')}</div>
+      <div class="af-foot">
+        <button class="btn-gold btn-sm" id="afSubmit">送出回饋</button>
+        <span class="af-note" id="afNote">${saved ? '已送出，可再修改' : ''}</span>
+      </div>`;
+
+    box.querySelectorAll('[data-af-field]').forEach(select => {
+      select.onchange = () => {
+        const field = select.dataset.afField;
+        if (select.value) corrections[field] = select.value; else delete corrections[field];
+        draw();
+      };
+    });
+    const submit = document.getElementById('afSubmit');
+    if (submit) submit.onclick = () => {
+      AnalysisFeedback.save(packageId, predicted, corrections);
+      const changed = Object.keys(corrections).length;
+      showToast(changed ? `已記下 ${changed} 項修正，謝謝` : '已記錄「判斷正確」，謝謝');
+      const note = document.getElementById('afNote');
+      if (note) note.textContent = '已送出，可再修改';
+    };
+  };
+
+  draw();
+  box.style.display = 'block';
+}
+
 // 妝容圖載不出來時，把破圖換成看得懂的說明。
 //
 // 渲染圖只有在收藏成功時才會被 retain 保住；沒收藏成功的那些，job 紀錄一小時後
@@ -890,6 +957,7 @@ analysis: `
         </div>
         <div class="skin-box"><div class="skin-title">膚 色 基 準 · M A C</div><div class="skin-row"><div class="skin-swatch" id="skinSwatch"></div><div><div class="skin-name" id="skinName">—</div><div class="skin-lab" id="skinLab"></div></div></div></div>
         <div class="skin-box"><div class="skin-title">唇 色 原 始 值</div><div class="skin-row"><div class="skin-swatch" id="lipSwatch"></div><div><div class="skin-lab" id="lipLab"></div></div></div></div>
+        <div id="analysisFeedback" class="analysis-feedback" style="display:none;"></div>
         <div style="text-align:center;margin-top:20px;"><button class="btn-gold" id="goStyleBtn" style="display:none;">選擇風格 →</button></div>
     </div>
 </div>`,
@@ -2059,6 +2127,7 @@ const PageInit = {
 
                 document.getElementById('goStyleBtn').style.display = 'inline-block';
                 History.add({ ...data, analysisPackageId: Router.analysisPackage.id });
+                renderAnalysisFeedback(data, Router.analysisPackage.id);
             } catch (err) {
                 bar.style.display = 'none'; fill.style.width = '0';
                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {

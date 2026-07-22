@@ -2499,6 +2499,53 @@ const Fav = {
     }
 };
 
+// ═══ 臉部分析回饋 ═══
+//
+// 使用者對五官判斷說「準」或「不準」，不準時可以直接選正確答案。
+// **這一步不收照片。** 只記模型答了什麼、使用者說什麼，兩者都是短字串。
+//
+// 為什麼不順便收照片：訓練需要 (影像, 標籤) 成對，只有標籤是訓練不了模型的。
+// 收照片就是把「原始臉部照片不進伺服器」這個立場整個翻過來，需要明確告知與同意。
+// 所以這裡收的是**弱點訊號**——告訴我們模型在哪些五官、哪些類別上系統性出錯，
+// 再由標註者對那些案例好好標。這也避開了自陳資料的老問題：臉型帶審美價值，
+// 讓使用者自己選，收到的分布會偏向討喜的類別。
+//
+// 目前先排在本機。資料庫端的端點還沒有（見給資料庫端清單 TASK 12），
+// 端點到位前不寫對接程式——對著不存在的端點講話的程式，這個專案已經有過兩批了。
+const AnalysisFeedback = {
+    _key: 'beautyAnalysisFeedback',
+    // 與 models/basic_features_roi/*_classes.json 一致。順序照模型的類別順序，
+    // 不要自己重排——對照 log 與訓練資料都用那個順序。
+    OPTIONS: Object.freeze({
+        '臉型': ['圓形臉', '心形臉', '方形臉', '長形臉', '鵝蛋臉'],
+        '眉型': ['一字眉', '彎月眉', '落尾眉'],
+        '眼型': ['下垂眼', '丹鳳眼', '圓眼', '杏仁眼', '桃花眼', '瞇縫眼', '細長眼', '鳳眼'],
+        '鼻型': ['寬鼻', '標準鼻', '窄鼻'],
+        '嘴型': ['M型唇', '厚唇', '微笑唇', '花瓣唇', '薄唇'],
+    }),
+    list() {
+        try { return JSON.parse(localStorage.getItem(this._key) || '[]'); }
+        catch (_) { return []; }
+    },
+    // 同一個分析包只留一筆：使用者改了又改，最後那次才是他的意思。
+    save(packageId, predicted, corrections) {
+        const rows = this.list().filter(row => row.packageId !== packageId);
+        rows.push({
+            packageId: packageId || null,
+            predicted: predicted || {},
+            corrections: corrections || {},   // 只放使用者實際改過的欄位
+            confirmed: Object.keys(corrections || {}).length === 0,
+            createdAt: new Date().toISOString(),
+        });
+        // 上限避免無限成長；端點到位後會改成送出即清除
+        localStorage.setItem(this._key, JSON.stringify(rows.slice(-50)));
+        return rows.length;
+    },
+    forPackage(packageId) {
+        return this.list().find(row => row.packageId === packageId) || null;
+    }
+};
+
 // ═══ 購物車模組 ═══
 const Cart = {
     _key: 'beautyCart',

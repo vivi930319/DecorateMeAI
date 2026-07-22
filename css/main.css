@@ -1167,6 +1167,40 @@ body[data-member-theme="noir"] ::selection { background:var(--gold); color:#2A22
 }
 .saved-look-photo img.loaded { opacity:1; }
 
+/* 分析結果的「準不準」回饋區。刻意做得安靜——它是邀請不是要求，
+   視覺重量高過「選擇風格」那顆主要按鈕就會擋住主流程。 */
+.analysis-feedback {
+    margin-top:22px; padding:16px 18px;
+    border:1px solid var(--line-gold); border-radius:12px; background:var(--paper);
+}
+.analysis-feedback .af-head b { font-family:var(--cjk); font-size:14px; color:var(--ink); }
+.analysis-feedback .af-head p {
+    margin:6px 0 14px; font-family:var(--sans); font-size:11.5px;
+    line-height:1.6; color:var(--mid);
+}
+.analysis-feedback .af-head strong { color:var(--gold-deep); }
+.analysis-feedback .af-rows { display:flex; flex-direction:column; gap:8px; }
+.analysis-feedback .af-row {
+    display:grid; grid-template-columns:56px 1fr auto; align-items:center; gap:10px;
+    padding:7px 10px; border-radius:8px; background:var(--white);
+}
+.analysis-feedback .af-row.changed { outline:1px solid var(--gold); }
+.analysis-feedback .af-label { font-family:var(--cjk); font-size:12px; color:var(--mid); }
+.analysis-feedback .af-value { font-family:var(--cjk); font-size:13px; color:var(--ink); }
+.analysis-feedback .af-select {
+    font-family:var(--sans); font-size:11.5px; padding:4px 8px;
+    border:1px solid var(--line-gold); border-radius:6px;
+    background:var(--white); color:var(--ink); max-width:150px;
+}
+.analysis-feedback .af-foot {
+    display:flex; align-items:center; gap:12px; margin-top:14px;
+}
+.analysis-feedback .af-note { font-family:var(--sans); font-size:11px; color:var(--lt); }
+@media (max-width:600px) {
+    .analysis-feedback .af-row { grid-template-columns:50px 1fr; }
+    .analysis-feedback .af-select { grid-column:1 / -1; max-width:none; }
+}
+
 /* 圖片載入失敗時取代破圖的說明。用主題變數上色，四個主題都跟著換。 */
 .saved-look-missing {
     display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px;
