@@ -157,33 +157,48 @@ function initAdminDemo() {
     };
     const source = document.getElementById('adminDemoSource');
     if (source) source.textContent = packageData ? '本次工作遮罩摘要' : 'Demo 範例資料';
+    const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
+    const accountName = document.getElementById('adminDemoAccountName');
+    const accountEmail = document.getElementById('adminDemoAccountEmail');
+    const liveTime = document.getElementById('adminDemoLiveTime');
+    if (accountName) accountName.textContent = profile.name || '管理員';
+    if (accountEmail) accountEmail.textContent = profile.email || '未取得 Email';
+    const paintLiveTime = () => { if (liveTime) liveTime.textContent = `更新時間 ${new Date().toLocaleTimeString('zh-TW', { hour:'2-digit', minute:'2-digit', second:'2-digit' })}`; };
+    paintLiveTime();
+    if (panel._liveTimeTimer) window.clearInterval(panel._liveTimeTimer);
+    panel._liveTimeTimer = window.setInterval(paintLiveTime, 1000);
 
     const stages = [
         {
+            presenterTitle: '步驟 1：照片上傳與安全驗證', presenterNote: '系統先驗證檔案格式與大小，照片只進入私人暫存區，不會公開暴露。',
             stage: 'uploaded', progress: 10, note: '照片已進入私人暫存區。',
             publicData: { jobId: 'JOB-DEMO-7C21', status: 'running', stage: 'uploaded', progress: 10 },
             protectedData: { imageObject: 'temporary/USER-***/JOB-***/input.webp', access: 'worker-only', expiresIn: '24h' },
             logData: { jobId: 'JOB-DEMO-7C21', event: 'upload.validated', durationMs: 218 }
         },
         {
+            presenterTitle: '步驟 2：AI 臉部特徵分析', presenterNote: '模型辨識臉型、膚色與五官特徵，完整特徵點只保留在受限的後端工作環境。',
             stage: 'face_analysis', progress: 35, note: '模型正在產生結構化臉部特徵。',
             publicData: { jobId: 'JOB-DEMO-7C21', status: 'running', stage: 'face_analysis', progress: 35 },
             protectedData: { analysisPackage: '[完整特徵已隱藏]', landmarks: '[468 points hidden]', access: 'worker-only' },
             logData: { jobId: 'JOB-DEMO-7C21', event: 'analysis.running', modelVersion: 'basic-roi-v1' }
         },
         {
+            presenterTitle: '步驟 3：產生個人化妝容建議', presenterNote: '分析摘要被轉換成適合使用者的風格與妝容方案，畫面只顯示必要的白名單結果。',
             stage: 'recommendation', progress: 55, note: '分析摘要已轉換為妝容方案。',
             publicData: { faceShape: summary.faceShape, skinTone: summary.skinTone, undertone: summary.undertone, styleId: summary.styleId },
             protectedData: { renderPrompt: '[完整提示詞已隱藏]', promptVersion: 'v3', access: 'worker-only' },
             logData: { jobId: 'JOB-DEMO-7C21', event: 'recommendation.completed', durationMs: 1840 }
         },
         {
+            presenterTitle: '步驟 4：AI 妝容圖片渲染', presenterNote: '渲染服務依照妝容方案生成結果，同時維持人物身分與原始臉部結構。',
             stage: 'rendering', progress: 78, note: '第三方模型正在產生妝容結果圖。',
             publicData: { jobId: 'JOB-DEMO-7C21', status: 'running', stage: 'rendering', progress: 78 },
             protectedData: { inputObject: 'temporary/USER-***/JOB-***/input.webp', resultObject: null, tokenHash: 'sha256:••••••••' },
             logData: { jobId: 'JOB-DEMO-7C21', event: 'render.provider_wait', attempt: 1 }
         },
         {
+            presenterTitle: '步驟 5：成果保存與安全存取', presenterNote: '結果完成後保存於私人空間，使用者查看時才取得短效網址，完整流程可追蹤但不記錄敏感內容。',
             stage: 'completed', progress: 100, note: '結果已保存至私人 GCS，查看時才簽發短效網址。',
             publicData: { recordId: 'LOOK-DEMO-19', status: 'completed', styleId: summary.styleId, signedUrlTtl: '10 minutes' },
             protectedData: { resultObject: 'users/USER-***/renders/LOOK-***.webp', temporaryPayload: 'scheduled_for_deletion', bucket: 'private' },
@@ -191,8 +206,10 @@ function initAdminDemo() {
         }
     ];
     const text = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+    let currentIndex = 0;
     const render = index => {
-        const item = stages[index] || stages[0];
+        currentIndex = Math.max(0, Math.min(stages.length - 1, index));
+        const item = stages[currentIndex] || stages[0];
         text('adminDemoStage', item.stage);
         text('adminDemoProgressText', `${item.progress}%`);
         text('adminDemoStageNote', item.note);
@@ -202,8 +219,9 @@ function initAdminDemo() {
         const bar = document.getElementById('adminDemoProgressBar');
         if (bar) bar.style.width = `${item.progress}%`;
         panel.querySelectorAll('[data-demo-step]').forEach((button, buttonIndex) => {
-            button.classList.toggle('active', buttonIndex === index);
-            button.setAttribute('aria-pressed', String(buttonIndex === index));
+            button.classList.toggle('active', buttonIndex === currentIndex);
+            button.classList.toggle('complete', buttonIndex < currentIndex);
+            button.setAttribute('aria-pressed', String(buttonIndex === currentIndex));
         });
     };
     panel.querySelectorAll('[data-demo-step]').forEach(button => {
@@ -4553,8 +4571,9 @@ async function doLoginAction() {
         return;
     }
     if (AdminStore.getPermission(email, Auth.getProfile()).status === 'suspended') {
-        sessionStorage.removeItem('beautyUser');
-        sessionStorage.removeItem('beautyProfile');
+        // 走 clearSession 而不是自己挑兩個 key 刪。停權的帳號同樣不該把分析資料包
+        // （含照片）留在分頁裡給下一個人，而手動列名一定會漏掉之後新增的東西。
+        Auth.clearSession();
         showAlert('此帳號已被停權，請聯繫管理員', { type:'error' });
         return;
     }

@@ -1957,11 +1957,27 @@ const Auth = {
     },
     isLoggedIn() { return !!this.getUser(); },
     clearSession() {
-        sessionStorage.removeItem('beautyUser');
-        sessionStorage.removeItem('beautyProfile');
-        sessionStorage.removeItem('beautyAuthCreds');
-        sessionStorage.removeItem('memberAccessToken');
-        sessionStorage.removeItem('gatewaySessionToken');
+        // 列舉清除，不要逐一列名——逐一列名正是先前漏掉 beautyAnalysisDraft 的原因。
+        // 那個 key 放的是完整分析資料包，**裡面有使用者上傳的照片**（base64）。
+        // sessionStorage 不會因為重新整理而清空，所以同一個分頁的下一個登入者
+        // 讀得到前一個人的臉。
+        //
+        // 之後任何人新增 sessionStorage 的 key，都會自動被這裡帶走，
+        // 不必記得回來改這個函式。
+        try {
+            const keys = [];
+            for (let i = 0; i < sessionStorage.length; i++) {
+                const key = sessionStorage.key(i);
+                if (key) keys.push(key);
+            }
+            keys.forEach(key => sessionStorage.removeItem(key));
+        } catch (_) {
+            // 隱私模式等情況可能存取失敗；至少把已知的敏感項目移除
+            ['beautyUser', 'beautyProfile', 'beautyAuthCreds', 'beautyAnalysisDraft',
+             'memberAccessToken', 'gatewaySessionToken'].forEach(key => {
+                try { sessionStorage.removeItem(key); } catch (_) {}
+            });
+        }
     },
 
     logout() {
