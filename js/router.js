@@ -413,6 +413,24 @@ function lookImageSrc(value){
   return '';
 }
 
+// 妝容圖載不出來時，把破圖換成看得懂的說明。
+//
+// 渲染圖只有在收藏成功時才會被 retain 保住；沒收藏成功的那些，job 紀錄一小時後
+// 就被清掉，圖片也隨之無法解析（/media/render/<id> 回 404）。但本機收藏仍留著網址，
+// 於是卡片上出現一張永遠載不出來的破圖，使用者完全不知道發生什麼事。
+//
+// 用實際載入失敗來判定，不用網址長相判定——先前只認舊的 replicate.delivery 網址，
+// 換成 /media/render 之後那個判斷就再也沒生效過。
+function markLookImageUnavailable(img){
+  if (!img || img.dataset.lookFailed === '1') return;
+  img.dataset.lookFailed = '1';
+  const holder = img.closest('.saved-look-photo') || img.closest('figure') || img.parentElement;
+  if (!holder) return;
+  holder.innerHTML = '<span class="saved-look-missing">此妝容圖已過期'
+    + '<small>渲染圖只在收藏成功時永久保留</small></span>';
+}
+if (typeof window !== 'undefined') window.markLookImageUnavailable = markLookImageUnavailable;
+
 function openLookModal(item){
   if(!item) return;
   var old=document.getElementById('lookModal'); if(old) old.remove();
@@ -424,8 +442,8 @@ function openLookModal(item){
   var beforeSrc = lookImageSrc(item.beforeImage);
   var afterSrc = lookImageSrc(item.renderedImage);
   var photo = (beforeSrc && afterSrc)
-    ? '<div class="lm-compare-photo"><figure><img src="'+beforeSrc+'" alt="渲染前照片"><figcaption>Before</figcaption></figure><figure><img src="'+afterSrc+'" alt="渲染後照片"><figcaption>After</figcaption></figure></div>'
-    : (afterSrc ? '<img src="'+afterSrc+'" alt="">' : '<span>'+escapeHtml(item.style||'Saved Look')+'</span>');
+    ? '<div class="lm-compare-photo"><figure><img src="'+beforeSrc+'" alt="渲染前照片" onerror="markLookImageUnavailable(this)"><figcaption>Before</figcaption></figure><figure><img src="'+afterSrc+'" alt="渲染後照片" onerror="markLookImageUnavailable(this)"><figcaption>After</figcaption></figure></div>'
+    : (afterSrc ? '<img src="'+afterSrc+'" alt="" onerror="markLookImageUnavailable(this)">' : '<span>'+escapeHtml(item.style||'Saved Look')+'</span>');
   var ts = item.timestamp ? new Date(item.timestamp).toLocaleString('zh-TW') : '';
   var ov=document.createElement('div'); ov.id='lookModal'; ov.className='look-modal';
   ov.innerHTML='<div class="lm-card" role="dialog" aria-modal="true">'
@@ -3119,7 +3137,7 @@ const PageInit = {
                     <button class="look-del" data-del="${index}" aria-label="刪除此妝容">×</button>
                     <div class="saved-look-photo">
                         ${imageSrc
-                            ? `<img src="${imageSrc}" alt="${styleLabel}" onload="this.classList.add('loaded')">${expired}`
+                            ? `<img src="${imageSrc}" alt="${styleLabel}" onload="this.classList.add('loaded')" onerror="markLookImageUnavailable(this)">${expired}`
                             : `<span>${styleLabel}</span>`
                         }
                     </div>
@@ -3558,7 +3576,7 @@ const PageInit = {
                     return `<article class="saved-look-card" data-admin-look-index="${index}" style="cursor:pointer;">
                         <button class="look-del" data-admin-del-look="${index}" aria-label="從資料庫刪除此妝容">×</button>
                         <div class="saved-look-photo">${afterSrc
-                            ? `<img src="${afterSrc}" alt="${escapeHtml(item.style || '妝容')}" onload="this.classList.add('loaded')">`
+                            ? `<img src="${afterSrc}" alt="${escapeHtml(item.style || '妝容')}" onload="this.classList.add('loaded')" onerror="markLookImageUnavailable(this)">`
                             : `<span>${escapeHtml(item.style || 'Look')}</span>`}</div>
                         <div class="saved-look-body">
                             <div class="saved-look-kicker">Saved Look · DB</div>

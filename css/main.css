@@ -1166,6 +1166,15 @@ body[data-member-theme="noir"] ::selection { background:var(--gold); color:#2A22
     text-align:center; backdrop-filter:blur(3px);
 }
 .saved-look-photo img.loaded { opacity:1; }
+
+/* 圖片載入失敗時取代破圖的說明。用主題變數上色，四個主題都跟著換。 */
+.saved-look-missing {
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px;
+    width:100%; height:100%; padding:14px;
+    background:var(--ivory-2); color:var(--mid);
+    font-family:var(--sans); font-size:12px; letter-spacing:.04em; text-align:center;
+}
+.saved-look-missing small { font-size:10.5px; opacity:.78; line-height:1.4; }
 .saved-look-body { min-width:0; }
 .saved-look-kicker {
     font-family:var(--sans);
