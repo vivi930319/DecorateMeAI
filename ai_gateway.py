@@ -166,7 +166,9 @@ PUBLIC_PRODUCT_PATHS = _patterns(r"api/products", r"recommend-products")
 SAVED_LOOK_PATH_RE = re.compile(r"^api/members/([^/]+)/saved-looks(?:/([^/]+))?$")
 MEMBER_PATH_RE = re.compile(r"^api/members/([^/]+)$")
 MEMBER_SCOPE_RE = re.compile(r"^api/members/([^/]+)(?:/|$)")
-STABLE_RENDER_URL_RE = re.compile(r"(?:https://[^/]+)?/media/render/([0-9a-f]{32})(?:[?#].*)?$")
+# 妝前圖的網址多一段 /before，這裡要一起認得——否則從 saved_looks 讀回的
+# beforeImageUrl 解析不出 job id，retain 與刪除都會把它當成不相干的外部網址略過。
+STABLE_RENDER_URL_RE = re.compile(r"(?:https://[^/]+)?/media/render/([0-9a-f]{32})(?:/before)?(?:[?#].*)?$")
 PRIVATE_RENDER_URL_RE = re.compile(
     r"^https://storage\.googleapis\.com/decorate-me-renders/(?:rendered|temporary|retained)/[A-Za-z0-9._/-]+$"
 )
@@ -621,10 +623,13 @@ async def _render_internal_request(
         return None
 
 
-def _safe_render_gateway_url(request: Request, job_id: str) -> str:
+def _safe_render_gateway_url(request: Request, job_id: str, variant: str = "") -> str:
     # Relative URLs keep local development and the formal Firebase origin on
     # the same authenticated path. They also fit the member DB's 500-char field.
-    return f"/media/render/{job_id}"
+    #
+    # variant 只有 "" 與 "/before" 兩種；妝前圖是使用者的原始照片，走同一條
+    # 需驗證的路徑，權限與妝後圖完全相同。
+    return f"/media/render/{job_id}{variant}"
 
 
 def _sanitize_render_payload(request: Request, payload):
@@ -638,6 +643,10 @@ def _sanitize_render_payload(request: Request, payload):
         result["afterImageUrl"] = _safe_render_gateway_url(request, job_id)
         result.pop("replicateTempUrl", None)
         result["isPermanent"] = True
+        # 妝前圖同樣要改寫。渲染服務回的是 GCS 直連網址，那個網址不該進瀏覽器——
+        # 改寫成 /media/render/<job>/before，讀取時才會經過擁有者檢查。
+        if result.get("beforeImageUrl"):
+            result["beforeImageUrl"] = _safe_render_gateway_url(request, job_id, "/before")
     return result
 
 
@@ -781,18 +790,30 @@ async def public_config():
     }
 
 
+@app.get("/media/render/{job_id}/before")
+async def render_media_before(job_id: str, request: Request):
+    """妝前圖。權限與妝後圖完全相同——它是使用者的原始照片，只能更嚴不能更鬆。"""
+    return await _serve_render_media(job_id, request, variant="before")
+
+
 @app.get("/media/render/{job_id}")
 async def render_media(job_id: str, request: Request):
+    return await _serve_render_media(job_id, request, variant="after")
+
+
+async def _serve_render_media(job_id: str, request: Request, variant: str = "after"):
     """Authenticate a member, then redirect to a ten-minute private GCS URL."""
     if not re.fullmatch(RENDER_JOB_ID, job_id):
         raise HTTPException(status_code=404, detail={"error": {"code": "MEDIA_NOT_FOUND", "message": "Render image was not found."}})
+    # variant 只會是這兩個字面值，直接拼進 query 沒有注入空間
+    query = "?variant=before" if variant == "before" else ""
     claims = require_member_access(request)
     is_admin = str(claims.get("role") or "").strip().lower() == "admin"
     owner_id = opaque_actor_id(str(claims.get("sub") or ""))
     response = await _render_internal_request(
         request,
         "GET",
-        f"render/jobs/{job_id}/signed-url",
+        f"render/jobs/{job_id}/signed-url{query}",
         user_id=owner_id,
         admin=is_admin,
     )
@@ -804,7 +825,7 @@ async def render_media(job_id: str, request: Request):
         fallback = await _render_internal_request(
             request,
             "GET",
-            f"render/jobs/{job_id}/content",
+            f"render/jobs/{job_id}/content{query}",
             user_id=owner_id,
             admin=is_admin,
         )

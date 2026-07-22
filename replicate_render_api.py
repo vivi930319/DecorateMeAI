@@ -33,6 +33,7 @@ from replicate_render import (
     download_private_storage_url,
     retain_permanent_storage_url,
     storage_object_name_from_url,
+    upload_bytes_to_permanent_storage,
 )
 
 app = FastAPI()
@@ -441,21 +442,33 @@ def _epoch(value, fallback: float) -> float:
         return fallback
 
 
+def _artifact_is_shared(job: dict, field: str, url: str) -> bool:
+    """有沒有別的 retained job 也指向這個物件（dedup 會讓多個 job 共用一張圖）。"""
+    references = job_store.find_by_field(RENDER_JOBS_COLLECTION, field, url, limit=50)
+    current_id = str(job.get("jobId") or "")
+    return any(
+        str(reference.get("jobId") or "") != current_id and reference.get("retained")
+        for reference in references
+    )
+
+
 def _delete_job_artifact(job: dict, force: bool = False) -> None:
-    url = job.get("afterImageUrl")
-    if url and job.get("isPermanent"):
-        if not force:
-            references = job_store.find_by_field(
-                RENDER_JOBS_COLLECTION, "afterImageUrl", url, limit=50
-            )
-            current_id = str(job.get("jobId") or "")
-            if any(
-                str(reference.get("jobId") or "") != current_id
-                and reference.get("retained")
-                for reference in references
-            ):
-                return
-        delete_permanent_storage_url(url)
+    """刪掉這個 job 的圖片。**妝前圖與妝後圖都要刪。**
+
+    妝前圖是使用者自己的臉。他刪掉收藏之後那張圖若留在 GCS 上，那不是浪費空間，
+    是隱私事故——所以這裡兩個欄位都處理，任何新增的圖片欄位也必須加進來。
+    """
+    after_url = job.get("afterImageUrl")
+    if after_url and job.get("isPermanent"):
+        if force or not _artifact_is_shared(job, "afterImageUrl", after_url):
+            delete_permanent_storage_url(after_url)
+
+    # 妝前圖沒有 isPermanent 這個旗標——它一律由本服務上傳到自己的 bucket，
+    # 而 delete_permanent_storage_url 本身就只肯刪自己 bucket 裡的物件。
+    before_url = job.get("beforeImageUrl")
+    if before_url:
+        if force or not _artifact_is_shared(job, "beforeImageUrl", before_url):
+            delete_permanent_storage_url(before_url)
 
 
 def _cleanup_render_jobs() -> None:
@@ -679,9 +692,22 @@ def _run_render_job(
         return
     try:
         result = call_replicate_render(image, prompt)
+        # 妝前圖：使用者送進來的原圖，先前渲染完就丟掉，所以收藏永遠只有妝後圖。
+        # 存起來才有前後對比。它跟妝後圖共用同一個 job 的擁有者檢查與生命週期，
+        # 不需要另開上傳端點，瀏覽器也不必重傳一次。
+        #
+        # 失敗不影響渲染：拿不到妝前圖只是少一半對比，讓整次渲染失敗才是本末倒置。
+        before_url = None
+        try:
+            before_bytes, before_type = data_url_to_bytes(image)
+            before_url = upload_bytes_to_permanent_storage(before_bytes, before_type)
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).exception("原圖上傳失敗，這次收藏只會有妝後圖")
+
         response = {
             "status": "completed",
             "afterImageUrl": result["afterImageUrl"],
+            "beforeImageUrl": before_url,
             "replicateTempUrl": result.get("replicateTempUrl"),
             "isPermanent": result.get("isPermanent", False),
             "model": result["model"],
@@ -696,6 +722,7 @@ def _run_render_job(
             {
                 **response,
                 "objectName": storage_object_name_from_url(response.get("afterImageUrl")),
+                "beforeObjectName": storage_object_name_from_url(before_url),
                 "progress": 100,
                 "finishedAt": time.time(),
                 "updatedAt": time.time(),
@@ -706,7 +733,10 @@ def _run_render_job(
             _dedup_set(dedup_key, response)  # 只快取成功結果
         else:
             # cleanup 可能已把 job 標成 timeout，避免 late result 留下永久圖片。
+            # 兩張都要刪——妝前圖是使用者的臉，留在 bucket 裡沒有任何紀錄指向它，
+            # 之後也沒人會發現該刪。
             delete_permanent_storage_url(response.get("afterImageUrl"))
+            delete_permanent_storage_url(response.get("beforeImageUrl"))
     except Exception:  # 失敗要寫回 job，不能讓 thread 靜靜死掉
         logging.exception("渲染失敗（job %s）", job_id)
         job_store.patch_if_status(
@@ -857,23 +887,39 @@ async def get_render_job(
     return {**view, "progress": _estimate_progress(job, time.time()), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
 
 
+def _job_media_url(job: dict, variant: str) -> str | None:
+    """取這個 job 的圖片網址。variant 只接受 "after"／"before"，不接受其他值。
+
+    用 query 參數而不是新開路由，是為了不擴大 Gateway 的內部路徑白名單——
+    這兩條端點刻意只有 Gateway 打得到（見 ai_gateway_test 的路由測試），
+    多一條路徑就多一個要記得擋住的地方。
+    """
+    if variant == "before":
+        return job.get("beforeImageUrl")
+    return job.get("afterImageUrl")
+
+
 @app.get("/render/jobs/{job_id}/signed-url")
 async def get_render_signed_url(
     job_id: str,
+    variant: str = Query("after", pattern="^(after|before)$"),
     x_user_id: str | None = Header(default=None),
     x_admin_request: str | None = Header(default=None),
     _=Depends(require_api_key),
 ):
     """Issue a short-lived URL after checking the render's member owner."""
     job = job_store.get(RENDER_JOBS_COLLECTION, job_id)
-    if job is None or job.get("status") != "completed" or not job.get("afterImageUrl"):
+    media_url = _job_media_url(job or {}, variant)
+    if job is None or job.get("status") != "completed" or not media_url:
         raise HTTPException(
             status_code=404,
             detail=error_payload("JOB_NOT_FOUND", "Render image was not found.", retryable=False),
         )
+    # 擁有者檢查對兩種 variant 完全相同——妝前圖是使用者的臉，
+    # 保護只能更嚴，不能因為它「只是原圖」就放寬。
     _require_job_owner(job, x_user_id, x_admin_request)
     try:
-        signed_url = create_signed_storage_url(job.get("afterImageUrl"))
+        signed_url = create_signed_storage_url(media_url)
     except Exception as exc:
         logging.getLogger(__name__).exception("signed render URL creation failed")
         raise HTTPException(
@@ -886,20 +932,22 @@ async def get_render_signed_url(
 @app.get("/render/jobs/{job_id}/content")
 async def get_render_content(
     job_id: str,
+    variant: str = Query("after", pattern="^(after|before)$"),
     x_user_id: str | None = Header(default=None),
     x_admin_request: str | None = Header(default=None),
     _=Depends(require_api_key),
 ):
     """Authenticated private-object fallback when IAM signBlob is unavailable."""
     job = job_store.get(RENDER_JOBS_COLLECTION, job_id)
-    if job is None or job.get("status") != "completed" or not job.get("afterImageUrl"):
+    media_url = _job_media_url(job or {}, variant)
+    if job is None or job.get("status") != "completed" or not media_url:
         raise HTTPException(
             status_code=404,
             detail=error_payload("JOB_NOT_FOUND", "Render image was not found.", retryable=False),
         )
     _require_job_owner(job, x_user_id, x_admin_request)
     try:
-        content, content_type = download_private_storage_url(job.get("afterImageUrl"))
+        content, content_type = download_private_storage_url(media_url)
     except Exception as exc:
         logging.getLogger(__name__).exception("private render image download failed")
         raise HTTPException(
@@ -928,28 +976,41 @@ async def retain_render_job(
             detail=error_payload("JOB_NOT_FOUND", "Render image was not found.", retryable=False),
         )
     _require_job_owner(job, x_user_id, x_admin_request)
+    owner_id = str(job.get("ownerId") or "")
     try:
-        retained_url = retain_permanent_storage_url(
-            job.get("afterImageUrl"),
-            str(job.get("ownerId") or ""),
-            job_id,
-        )
+        retained_url = retain_permanent_storage_url(job.get("afterImageUrl"), owner_id, job_id)
     except Exception as exc:
         logging.getLogger(__name__).exception("retained render copy failed")
         raise HTTPException(
             status_code=503,
             detail=error_payload("RETAIN_FAILED", "Render image could not be retained.", retryable=True),
         ) from exc
-    job_store.patch(
-        RENDER_JOBS_COLLECTION,
-        job_id,
-        {
-            "retained": True,
-            "afterImageUrl": retained_url,
-            "objectName": storage_object_name_from_url(retained_url),
-            "updatedAt": time.time(),
-        },
-    )
+
+    # 妝前圖也要搬進 retained/，否則它留在 temporary/，兩天後被生命週期規則刪掉——
+    # 使用者過幾天回來看到半張對比圖。variant 不能省：目的地名稱只用 job_id 會與
+    # 妝後圖撞名，而 retain 內部的 exists() 檢查會靜默略過，讓妝前圖指向妝後那張。
+    #
+    # 妝前圖失敗不讓整個 retain 失敗：妝後圖已經保住了，收藏本身是成功的，
+    # 為了少一張對比圖把整筆退掉會讓使用者連妝後圖都留不住。
+    retained_before = None
+    if job.get("beforeImageUrl"):
+        try:
+            retained_before = retain_permanent_storage_url(
+                job.get("beforeImageUrl"), owner_id, job_id, variant="-before"
+            )
+        except Exception:  # noqa: BLE001
+            logging.getLogger(__name__).exception("妝前圖 retain 失敗，這筆收藏只會有妝後圖")
+
+    patch = {
+        "retained": True,
+        "afterImageUrl": retained_url,
+        "objectName": storage_object_name_from_url(retained_url),
+        "updatedAt": time.time(),
+    }
+    if retained_before:
+        patch["beforeImageUrl"] = retained_before
+        patch["beforeObjectName"] = storage_object_name_from_url(retained_before)
+    job_store.patch(RENDER_JOBS_COLLECTION, job_id, patch)
     job_store.unset(RENDER_JOBS_COLLECTION, job_id, ["expiresAt"])
     return {"status": "retained", "jobId": job_id}
 

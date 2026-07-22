@@ -6,6 +6,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -163,13 +164,22 @@ def storage_object_name_from_url(url: str | None) -> str | None:
     return object_name
 
 
-def retain_permanent_storage_url(url: str | None, owner_id: str, job_id: str) -> str:
-    """Copy a temporary object to the non-expiring member-owned prefix."""
+def retain_permanent_storage_url(url: str | None, owner_id: str, job_id: str, variant: str = "") -> str:
+    """Copy a temporary object to the non-expiring member-owned prefix.
+
+    `variant` 必須把同一個 job 的不同圖片分開。妝前圖與妝後圖共用 job_id，
+    目的地名稱若只用 job_id 就會撞在一起——而且下面有 `destination.exists()` 檢查，
+    撞到不會報錯，只會**靜默略過複製並回傳既有物件的網址**，
+    結果妝前圖指向妝後圖那張。傳 "-before" 之類的後綴把它們分開。
+    """
     object_name = storage_object_name_from_url(url)
     if not object_name:
         raise ValueError("Render object URL is invalid.")
     if not owner_id.startswith("actor_") or not job_id:
         raise ValueError("Render ownership is invalid.")
+    if variant and not re.fullmatch(r"-[a-z]{1,16}", variant):
+        # 這個值會直接進物件名稱，不能讓呼叫端塞入路徑片段
+        raise ValueError("Render variant is invalid.")
     if object_name.startswith(GCS_RETAINED_PREFIX):
         return str(url)
 
@@ -181,7 +191,7 @@ def retain_permanent_storage_url(url: str | None, owner_id: str, job_id: str) ->
     client = storage.Client()
     bucket = client.bucket(GCS_BUCKET_NAME)
     source = bucket.blob(object_name)
-    destination_name = f"{GCS_RETAINED_PREFIX}{owner_id}/{job_id}{suffix}"
+    destination_name = f"{GCS_RETAINED_PREFIX}{owner_id}/{job_id}{variant}{suffix}"
     destination = bucket.blob(destination_name)
     if not destination.exists(client=client):
         bucket.copy_blob(source, bucket, destination_name)

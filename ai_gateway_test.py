@@ -1,4 +1,5 @@
 import os
+import json
 import unittest
 import asyncio
 from http.cookies import SimpleCookie
@@ -167,6 +168,34 @@ class AiGatewayTest(unittest.TestCase):
         with self.assertRaises(Exception) as missing_upstream:
             asyncio.run(session_status(request))
         self.assertEqual(missing_upstream.exception.status_code, 401)
+
+    def test_before_image_travels_the_same_guarded_path_as_the_after_image(self):
+        # 妝前圖是使用者的原始照片。渲染服務回的是 GCS 直連網址，那個網址一旦進了
+        # 瀏覽器就繞過了擁有者檢查，所以 sanitize 必須把它改寫成需驗證的 Gateway 路徑。
+        job = "0123456789abcdef0123456789abcdef"
+        request = Mock()
+        payload = _sanitize_render_payload(request, {
+            "jobId": job,
+            "afterImageUrl": "https://storage.googleapis.com/decorate-me-renders/temporary/a.png",
+            "beforeImageUrl": "https://storage.googleapis.com/decorate-me-renders/temporary/b.jpg",
+        })
+        self.assertEqual(payload["afterImageUrl"], f"/media/render/{job}")
+        self.assertEqual(payload["beforeImageUrl"], f"/media/render/{job}/before")
+        self.assertNotIn("storage.googleapis.com", json.dumps(payload))
+
+        # 兩種形式都要解析得出 job id，否則刪除收藏時妝前圖那條網址會被當成
+        # 不相干的外部網址略過，使用者的臉就留在 bucket 裡。
+        self.assertEqual(_render_job_id_from_url(f"/media/render/{job}"), job)
+        self.assertEqual(_render_job_id_from_url(f"/media/render/{job}/before"), job)
+
+        # 取圖的內部端點仍然只有 Gateway 打得到，加了 variant 也不例外。
+        render = UPSTREAMS["render-service"]
+        for internal in (
+            f"render/jobs/{job}/signed-url",
+            f"render/jobs/{job}/signed-url?variant=before",
+            f"render/jobs/{job}/content?variant=before",
+        ):
+            self.assertFalse(is_path_allowed(render, internal), internal)
 
     def test_member_routes_cover_both_halves_of_favourites(self):
         # 收藏的寫與讀是兩條不同的路徑，白名單漏掉讀的那條時，寫入照樣成功、
