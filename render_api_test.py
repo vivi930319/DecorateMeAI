@@ -35,6 +35,65 @@ class RenderApiTest(unittest.TestCase):
         render_api._dedup_cache.clear()
         render_api._dedup_inflight.clear()
 
+    def test_dedup_hit_still_carries_a_before_image(self):
+        """去重命中時妝前圖不能消失。
+
+        命中去重會用 _response_from_completed_job 建立一個**新的** job。先前它沒有
+        帶 beforeImageUrl，於是那個新 job 從出生就沒有妝前圖——妝後圖正常出現，
+        所以症狀看起來像「妝前圖偶爾會壞」，實際上是同一張照片同一個風格重渲染
+        必然發生。
+        """
+        completed = {
+            "jobId": "a" * 32,
+            "status": "completed",
+            "afterImageUrl": "https://storage.googleapis.com/decorate-me-renders/temporary/after.png",
+            "beforeImageUrl": "https://storage.googleapis.com/decorate-me-renders/temporary/before.jpg",
+            "isPermanent": True,
+        }
+        response = render_api._response_from_completed_job(completed, TINY_PNG)
+        self.assertEqual(response["beforeImageUrl"], completed["beforeImageUrl"])
+        self.assertEqual(response["afterImageUrl"], completed["afterImageUrl"])
+
+    def test_dedup_hit_on_a_job_without_a_before_image_rebuilds_one(self):
+        """舊 job 沒有妝前圖時，用這次請求的原圖補建。
+
+        妝前圖是 2026-07-22 才開始保存的，在那之前完成的 job 都沒有。放棄快取重新
+        渲染會浪費一次昂貴又緩慢的模型呼叫——去重的目的是省下那個，不是省一次上傳。
+        """
+        uploaded = {}
+
+        def fake_upload(image_bytes, content_type="image/png"):
+            uploaded["bytes"] = image_bytes
+            uploaded["type"] = content_type
+            return "https://storage.googleapis.com/decorate-me-renders/temporary/rebuilt.png"
+
+        original = render_api.upload_bytes_to_permanent_storage
+        render_api.upload_bytes_to_permanent_storage = fake_upload
+        try:
+            response = render_api._response_from_completed_job(
+                {"status": "completed", "afterImageUrl": "https://storage.googleapis.com/decorate-me-renders/temporary/a.png"},
+                TINY_PNG,
+            )
+        finally:
+            render_api.upload_bytes_to_permanent_storage = original
+
+        self.assertTrue(response["beforeImageUrl"].endswith("rebuilt.png"))
+        self.assertGreater(len(uploaded["bytes"]), 0)
+        self.assertEqual(uploaded["type"], "image/png")
+
+    def test_dedup_hit_without_an_image_leaves_the_before_empty(self):
+        """補建失敗或拿不到原圖時，妝前圖留空而不是讓整次渲染失敗。
+
+        少一張對比圖是可以接受的降級；因為補不出妝前圖就讓使用者的渲染整個失敗，
+        代價完全不成比例。
+        """
+        response = render_api._response_from_completed_job(
+            {"status": "completed", "afterImageUrl": "https://storage.googleapis.com/decorate-me-renders/temporary/a.png"},
+            None,
+        )
+        self.assertIsNone(response["beforeImageUrl"])
+        self.assertEqual(response["status"], "completed")
+
     def test_validates_real_image_bytes(self):
         image_bytes, content_type = data_url_to_bytes(TINY_PNG)
         self.assertGreater(len(image_bytes), 0)

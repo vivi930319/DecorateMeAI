@@ -411,10 +411,31 @@ def _durable_dedup_job(key: str) -> dict | None:
     return None
 
 
-def _response_from_completed_job(job: dict) -> dict:
+def _response_from_completed_job(job: dict, image: str | None = None) -> dict:
+    """把一個已完成的 job 轉成新 job 的內容（去重命中時用）。
+
+    `beforeImageUrl` 一定要帶。少了它，命中去重的那次渲染會建立一個從出生就沒有
+    妝前圖的 job，使用者收藏之後永遠只有一半的對比圖——而且因為妝後圖正常出現，
+    看起來像是「妝前圖偶爾會壞」，很難查。
+
+    舊 job 可能本來就沒有妝前圖（那個功能 2026-07-22 才上線）。這種情況用**這次請求
+    的原圖補建**，而不是放棄快取重新渲染：去重存在的目的是省下昂貴又緩慢的模型呼叫，
+    不是省一次圖片上傳。補建出來的是這個 job 自己的物件，不與舊 job 共用，
+    所以刪除時各自獨立，不需要額外的引用計數。
+    """
+    before_url = job.get("beforeImageUrl")
+    if not before_url and image:
+        try:
+            before_bytes, before_type = data_url_to_bytes(image)
+            before_url = upload_bytes_to_permanent_storage(before_bytes, before_type)
+        except Exception:  # noqa: BLE001 — 補建失敗只損失對比圖，不該讓整次渲染失敗
+            logging.getLogger(__name__).exception("命中去重快取時補建妝前圖失敗")
+            before_url = None
     return {
         "status": "completed",
         "afterImageUrl": job.get("afterImageUrl"),
+        "beforeImageUrl": before_url,
+        "beforeObjectName": storage_object_name_from_url(before_url),
         "replicateTempUrl": job.get("replicateTempUrl"),
         "isPermanent": job.get("isPermanent", False),
         "model": job.get("model"),
@@ -599,7 +620,7 @@ async def render(
         return {**cached, "deduped": True}
     durable = _durable_dedup_job(key)
     if durable is not None:
-        response = _response_from_completed_job(durable)
+        response = _response_from_completed_job(durable, req.image)
         _dedup_set(key, response)
         return {**response, "deduped": True}
     if not _dedup_claim(key):
@@ -806,7 +827,7 @@ async def create_render_job(
     durable = _durable_dedup_job(key)
     if durable is not None:
         job = {
-            **_response_from_completed_job(durable),
+            **_response_from_completed_job(durable, req.image),
             "jobId": job_id,
             "progress": 100,
             "createdAt": now,
