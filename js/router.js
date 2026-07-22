@@ -4287,43 +4287,39 @@ const PageInit = {
     });
     window.addEventListener('hashchange', routeFromHash);
     window.addEventListener('decorate-me:session-expired', handleSessionExpired);
-    // 中途在同一個分頁登入了另一個帳號（通常是去後台看了一眼）。
+    // 另一個分頁登入了別的帳號。
     //
-    // 不要把使用者登出。session 已經明確說它屬於誰，把本機 profile 換成那個人就好——
-    // 在後台與會員頁之間來回是正常操作，每切一次就強制重新登入太粗暴。
-    // 只有連那個帳號的資料都讀不到時才退回登出，因為那時我們無法確定畫面上是誰的資料。
-    window.addEventListener('decorate-me:session-owner-changed', async (event) => {
-        const detail = (event && event.detail) || {};
-        const sub = detail.sub || '';
-        // 沒有 sub 就真的不知道現在是誰，那時候登出才有意義。
-        if (!sub) {
-            handleSessionExpired();
-            return;
-        }
-        // 讀得到會員記錄就用它（名字、等級、權限都比較完整）。
-        // 讀不到也不要登出——session 已經明確說了它屬於誰，那就足以停止跨帳號請求，
-        // 而那本來就是這個檢查唯一的目的。admin@decorateme.local 是 Gateway 層的
-        // 管理員，在會員資料表裡根本沒有對應的一筆，先前每次切到後台都會被踢出去。
-        const result = Api.fetchMember ? await Api.fetchMember(sub).catch(() => null) : null;
-        const m = (result && result.ok && result.member) ? result.member : {};
-        Auth.setProfile({
-            ...m,
-            email: m.email || sub,
-            name: m.name || String(sub).split('@')[0],
-            phone: m.phone_number || m.phone || '',
-            level: m.level || (detail.role === 'admin' ? '管理員' : '一般會員'),
-            role: m.role || detail.role || 'member',
-            status: m.status || detail.accountStatus || 'active'
+    // Cookie 是整個網域共用的，sessionStorage 是每個分頁各自的。所以 admin 分頁登入
+    // 會蓋掉整個瀏覽器的 __session，而這個分頁的畫面仍顯示原本的會員——下一次呼叫
+    // 私人 API 時，送出去的其實是 admin 的憑證。
+    //
+    // **不要自動變成 cookie 裡的那個帳號。** 我一度那樣做，那會讓一個會員分頁靜默
+    // 取得 admin 權限、而畫面上還寫著一般會員：收藏可能寫到錯的帳號，畫面顯示的
+    // 身分與 Gateway 實際認證的身分不一致。被登出很煩，帶著別人的權限操作更糟。
+    //
+    // 正確的動作是擋下來：停掉進行中的請求、清掉這個分頁的照片與分析包、講清楚原因。
+    window.addEventListener('decorate-me:session-owner-changed', () => {
+        handleSessionExpired({
+            title: '另一個分頁已切換登入帳號',
+            message: '這個瀏覽器在別的分頁登入了不同的帳號，兩者共用同一份登入憑證。'
+                + '為避免把資料寫到錯誤的帳號，這個分頁已停止動作並清除本機資料，請重新登入。'
         });
-        // 上面為了停掉跨帳號請求而中斷的那批，換完身分要放行下一批。
-        Api._sessionExpiredNotified = false;
-        Router._sessionExpiryHandling = false;
-        if (typeof Api._resetSessionRequests === 'function') Api._resetSessionRequests();
-        showToast(`已切換為 ${m.name || sub} 的帳號`);
-        const page = Router.currentPage;
-        Router.currentPage = null;
-        if (page) Router.go(page); else showApp();
     });
+
+    // 一個分頁登出或換帳號時通知其他分頁，不必等它們自己撞到 403 才發現。
+    // 沒有 BroadcastChannel 的瀏覽器就維持原本的被動偵測。
+    if (typeof BroadcastChannel === 'function') {
+        try {
+            Router._authChannel = new BroadcastChannel('decorate-me-auth');
+            Router._authChannel.onmessage = (event) => {
+                if (!event || !event.data || event.data.type !== 'owner-changed') return;
+                const mine = String((Auth.getProfile() || {}).email || '').trim().toLowerCase();
+                // 只有「換成別人」才要擋；同一個帳號在別的分頁重新登入不影響這裡。
+                if (!mine || String(event.data.sub || '').trim().toLowerCase() === mine) return;
+                window.dispatchEvent(new CustomEvent('decorate-me:session-owner-changed'));
+            };
+        } catch (_) {}
+    }
 
     // 頂部導覽
     document.querySelectorAll('.topbar-nav a, .topbar-user').forEach(a => {

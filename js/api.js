@@ -727,6 +727,9 @@ const Api = {
     async toggleRemoteFavorite(itemId, itemType) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl) return null;
+        const me = (typeof Auth !== 'undefined' && Auth.getProfile) ? (Auth.getProfile() || {}).email : '';
+        const owner = await this.assertSessionOwner(me);
+        if (!owner.ok) return null;
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/favorites/toggle`, {
                 method: 'POST',
@@ -892,6 +895,15 @@ const Api = {
             }
             this._sessionExpiredNotified = false;
             this._resetSessionRequests();
+            // 通知其他分頁：這個瀏覽器的登入身分換人了。它們共用同一份 cookie，
+            // 不講的話要等到下一次 403 才會發現，而那時可能已經帶著別人的憑證寫過東西。
+            try {
+                if (typeof BroadcastChannel === 'function') {
+                    const channel = new BroadcastChannel('decorate-me-auth');
+                    channel.postMessage({ type: 'owner-changed', sub: (data.member && data.member.email) || email });
+                    channel.close();
+                }
+            } catch (_) {}
             return { ok: true, member: data.member || null, expiresAt: data.expiresAt || null };
         } catch (err) {
             return { ok: false, code: 'NETWORK_ERROR', error: err.message };
@@ -1017,6 +1029,31 @@ const Api = {
         }
     },
 
+    // 寫入前確認 cookie 裡的身分就是這個分頁以為的那個人。
+    //
+    // 被動偵測（收到 403 才查）永遠慢一步：第一個寫入請求已經帶著別人的憑證送出去了。
+    // 收藏、刪除、扣點這類會改變資料的動作，必須在送出**之前**先問清楚，
+    // 否則一次誤寫就寫進別人的帳號，事後無法分辨也無法回復。
+    //
+    // 讀取不套這個檢查——多一次往返換不到等值的保護，讀錯了頂多顯示錯誤，
+    // 而那個情況本來就會被 403 偵測接住。
+    async assertSessionOwner(email) {
+        const expected = String(email || '').trim().toLowerCase();
+        if (!expected) return { ok: false, reason: 'NO_LOCAL_IDENTITY' };
+        const session = await this.validateSession();
+        if (!session.ok) return { ok: false, reason: 'SESSION_UNAVAILABLE', status: session.status };
+        // 舊版 Gateway 不回 sub 時無從比對，放行以免整批寫入在部署空窗期全部失敗。
+        if (!session.sub) return { ok: true, unverified: true };
+        if (String(session.sub).trim().toLowerCase() !== expected) {
+            this._cancelSessionRequests();
+            window.dispatchEvent(new CustomEvent('decorate-me:session-owner-changed', {
+                detail: { sub: session.sub, role: session.role }
+            }));
+            return { ok: false, reason: 'OWNER_MISMATCH', sub: session.sub };
+        }
+        return { ok: true };
+    },
+
     // 讀回伺服器上的收藏清單。收藏的寫入（toggleRemoteFavorite）一直都在，
     // 但從來沒有人讀回來，所以換一台裝置登入就看不到自己收藏過的東西——
     // 「跨裝置同步」只做了寫的那一半。
@@ -1135,6 +1172,8 @@ const Api = {
     async checkInMember(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false };
+        const owner = await this.assertSessionOwner(email);
+        if (!owner.ok) return { ok: false, reason: owner.reason };
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/check-in`, {
                 method: 'POST',
@@ -1169,6 +1208,8 @@ const Api = {
     async claimMemberTask(email, taskId) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email || !taskId) return { ok: false };
+        const owner = await this.assertSessionOwner(email);
+        if (!owner.ok) return { ok: false, reason: owner.reason };
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/tasks/${encodeURIComponent(taskId)}/claim`, {
                 method: 'POST',
@@ -1186,6 +1227,8 @@ const Api = {
     async redeemMemberTheme(email, themeId) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email || !themeId) return { ok: false };
+        const owner = await this.assertSessionOwner(email);
+        if (!owner.ok) return { ok: false, reason: owner.reason };
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/theme-shop/${encodeURIComponent(themeId)}/redeem`, {
                 method: 'POST',
@@ -1269,6 +1312,8 @@ const Api = {
             : value;
         const persistedAfterImageUrl = qualify(afterImageUrl);
         const persistedBeforeImageUrl = qualify(beforeImageUrl);
+        const owner = await this.assertSessionOwner(email);
+        if (!owner.ok) return { ok: false, reason: owner.reason };
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
                 method: 'POST',
@@ -1294,6 +1339,8 @@ const Api = {
     async deleteSavedLook(email, id) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email || id == null) return { ok: false };
+        const owner = await this.assertSessionOwner(email);
+        if (!owner.ok) return { ok: false, reason: owner.reason };
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks/${encodeURIComponent(id)}`, {
                 method: 'DELETE',
