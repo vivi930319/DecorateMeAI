@@ -638,6 +638,13 @@ def _sanitize_render_payload(request: Request, payload):
     if not isinstance(payload, dict):
         return payload
     result = {key: _sanitize_render_payload(request, value) for key, value in payload.items()}
+    # 渲染服務的 job 紀錄是整包回來的（_job_view 只濾掉 token），裡面有幾個純內部欄位：
+    # objectName / beforeObjectName 是 GCS 的物件路徑（而且含擁有者的 actor id），
+    # ownerId 是內部識別碼。bucket 是私有的，拿到路徑也開不了，但這些是實作細節，
+    # 瀏覽器不需要、也不該知道——洩漏儲存結構只會幫到想摸清系統的人。
+    for internal in ("objectName", "beforeObjectName", "ownerId"):
+        result.pop(internal, None)
+
     job_id = str(result.get("jobId") or "")
     if re.fullmatch(RENDER_JOB_ID, job_id) and result.get("afterImageUrl"):
         result["afterImageUrl"] = _safe_render_gateway_url(request, job_id)

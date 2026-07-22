@@ -183,6 +183,15 @@ class AiGatewayTest(unittest.TestCase):
         self.assertEqual(payload["beforeImageUrl"], f"/media/render/{job}/before")
         self.assertNotIn("storage.googleapis.com", json.dumps(payload))
 
+        # job 紀錄是整包轉出來的，內部欄位要在這裡濾掉——GCS 物件路徑會連帶
+        # 洩漏擁有者的 actor id 與儲存結構。
+        for internal in ("objectName", "beforeObjectName", "ownerId"):
+            self.assertNotIn(internal, _sanitize_render_payload(request, {
+                "jobId": job, "afterImageUrl": "https://storage.googleapis.com/decorate-me-renders/temporary/a.png",
+                "objectName": "temporary/a.png", "beforeObjectName": "temporary/b.jpg",
+                "ownerId": "actor_deadbeef0123456789abcdef",
+            }))
+
         # 兩種形式都要解析得出 job id，否則刪除收藏時妝前圖那條網址會被當成
         # 不相干的外部網址略過，使用者的臉就留在 bucket 裡。
         self.assertEqual(_render_job_id_from_url(f"/media/render/{job}"), job)
