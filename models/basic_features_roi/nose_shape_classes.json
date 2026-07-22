@@ -1,8 +1,8 @@
 {
   "classes": [
     "寬鼻",
-    "標準鼻",
-    "窄鼻"
+    "標準鼻"
   ],
-  "size": 96
+  "size": 96,
+  "architecture": "mobilenet_v3_small"
 }
