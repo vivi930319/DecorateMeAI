@@ -770,9 +770,14 @@ function saveCurrentLook(){
             style: stored.style || null,
             beforeImageUrl: stored.beforeImageForStorage || null,
             afterImageUrl: stored.renderedImage || null,
+            // 五官要存齊。先前只存臉型、眼型、膚色三項，但收藏的 modal 顯示的是
+            // 臉型／眼型／鼻型／膚色——鼻型從來沒被存過，所以打開收藏永遠顯示「—」。
             analysisSummary: {
                 faceShape: a.faceShape || a['臉型'] || null,
+                browShape: a.browShape || a['眉型'] || null,
                 eyeShape: a.eyeShape || a['眼型'] || null,
+                noseShape: a.noseShape || a['鼻型'] || null,
+                lipShape: a.lipShape || a['嘴型'] || null,
                 skinSeason: (a.skinTone && a.skinTone.season) || (a['膚色'] && a['膚色']['四季型']) || null
             }
         }).then(r => {
@@ -2759,6 +2764,10 @@ const PageInit = {
                             status: 'completed',
                             provider: 'replicate',
                             afterImageUrl: result.afterImageUrl,
+                            // 妝前圖的 Gateway 路徑。少了這行，buildCurrentLookRecord 讀到的
+                            // render.beforeImageUrl 永遠是 undefined，收藏就存不到妝前圖——
+                            // 讀的那一半寫好了、寫的這一半漏掉，功能看起來上線了其實沒有。
+                            beforeImageUrl: result.beforeImageUrl || null,
                             replicateTempUrl: result.replicateTempUrl || null,
                             savedImageId: result.savedImageId || null,
                             error: null
