@@ -914,7 +914,7 @@ const Api = {
             const data = await res.json().catch(() => ({}));
             this._sessionExpiredNotified = false;
             this._resetSessionRequests();
-            return { ok: true, sub: String(data.sub || ''), role: String(data.role || '') };
+            return { ok: true, sub: String(data.sub || ''), role: String(data.role || ''), accountStatus: String(data.status || '') };
         } catch (err) {
             return { ok: false, status: 0, networkFailure: true, error: err.message };
         } finally {
@@ -968,7 +968,7 @@ const Api = {
             this._sessionExpiredNotified = true;
             this._cancelSessionRequests();
             window.dispatchEvent(new CustomEvent('decorate-me:session-owner-changed', {
-                detail: { sub: session.sub }
+                detail: { sub: session.sub, role: session.role, accountStatus: session.accountStatus }
             }));
         } catch (_) {
             // 確認失敗就當作沒發生，維持原本的 403 處理

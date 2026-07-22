@@ -4275,25 +4275,27 @@ const PageInit = {
     // 在後台與會員頁之間來回是正常操作，每切一次就強制重新登入太粗暴。
     // 只有連那個帳號的資料都讀不到時才退回登出，因為那時我們無法確定畫面上是誰的資料。
     window.addEventListener('decorate-me:session-owner-changed', async (event) => {
-        const sub = (event && event.detail && event.detail.sub) || '';
-        const result = sub && Api.fetchMember ? await Api.fetchMember(sub) : null;
-        if (!result || !result.ok || !result.member) {
-            handleSessionExpired({
-                title: '登入帳號已變更',
-                message: '這個瀏覽器已經改用另一個帳號登入，但讀不到那個帳號的資料。'
-                    + '為避免顯示錯誤的內容，已登出，請重新登入。'
-            });
+        const detail = (event && event.detail) || {};
+        const sub = detail.sub || '';
+        // 沒有 sub 就真的不知道現在是誰，那時候登出才有意義。
+        if (!sub) {
+            handleSessionExpired();
             return;
         }
-        const m = result.member;
+        // 讀得到會員記錄就用它（名字、等級、權限都比較完整）。
+        // 讀不到也不要登出——session 已經明確說了它屬於誰，那就足以停止跨帳號請求，
+        // 而那本來就是這個檢查唯一的目的。admin@decorateme.local 是 Gateway 層的
+        // 管理員，在會員資料表裡根本沒有對應的一筆，先前每次切到後台都會被踢出去。
+        const result = Api.fetchMember ? await Api.fetchMember(sub).catch(() => null) : null;
+        const m = (result && result.ok && result.member) ? result.member : {};
         Auth.setProfile({
             ...m,
             email: m.email || sub,
             name: m.name || String(sub).split('@')[0],
             phone: m.phone_number || m.phone || '',
-            level: m.level || '一般會員',
-            role: m.role || 'member',
-            status: m.status || 'active'
+            level: m.level || (detail.role === 'admin' ? '管理員' : '一般會員'),
+            role: m.role || detail.role || 'member',
+            status: m.status || detail.accountStatus || 'active'
         });
         // 上面為了停掉跨帳號請求而中斷的那批，換完身分要放行下一批。
         Api._sessionExpiredNotified = false;
