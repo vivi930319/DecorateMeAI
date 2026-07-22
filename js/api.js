@@ -1211,7 +1211,7 @@ const Api = {
     _isStorableImageUrl(value) {
         const raw = String(value || '').trim();
         if (!raw || raw.length > 500) return false;
-        if (/^\/media\/render\/[0-9a-f]{32}$/.test(raw)) return true;
+        if (/^\/media\/render\/[0-9a-f]{32}(?:\/before)?$/.test(raw)) return true;
         try {
             const url = new URL(raw);
             return url.protocol === 'https:' || url.protocol === 'http:';
@@ -1262,9 +1262,13 @@ const Api = {
         // 所以收藏後的 retain 與日後刪除都照樣解析得到 job id。
         // 注意：本機以 http:// 開發時存進去的網址不符合那個 https 前綴，retain 會失效；
         // 正式站一律 https，不受影響。
-        const persistedAfterImageUrl = afterImageUrl.startsWith('/')
-            ? new URL(afterImageUrl, window.location.origin).href
-            : afterImageUrl;
+        // 兩個欄位用同一套規則。資料庫目前只驗 afterImageUrl，但兩邊存成不同形式
+        // 沒有好處，而且哪天它也開始驗 before，這裡就不必再改一次。
+        const qualify = (value) => value && value.startsWith('/')
+            ? new URL(value, window.location.origin).href
+            : value;
+        const persistedAfterImageUrl = qualify(afterImageUrl);
+        const persistedBeforeImageUrl = qualify(beforeImageUrl);
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
                 method: 'POST',
@@ -1272,7 +1276,7 @@ const Api = {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     style: String(payload.style).slice(0, 120),
-                    beforeImageUrl,
+                    beforeImageUrl: persistedBeforeImageUrl,
                     afterImageUrl: persistedAfterImageUrl,
                     analysisSummary: payload.analysisSummary && typeof payload.analysisSummary === 'object'
                         ? payload.analysisSummary

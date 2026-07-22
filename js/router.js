@@ -678,14 +678,21 @@ function buildCurrentLookRecord(){
     const pkg = Router.analysisPackage || {};
     const render = pkg.render || {};
     const makeupOutput = render.makeupOutput || {};
+    // 畫面顯示用本機的 data URL：已經在記憶體裡，不必再跟伺服器要一次。
     const beforeImage = pkg.images?.front?.compressedDataUrl
         || render.beforeImageUrl
         || render.beforeImageDataUrl
         || '';
+    // 存進資料庫用渲染服務給的 /media/render/<job>/before：data URL 進不了
+    // String(500) 欄位，而這條路徑跟妝後圖走同一套擁有者檢查。
+    // 兩個欄位分開，是因為它們的用途本來就不同——先前只有一個，於是要嘛顯示慢、
+    // 要嘛存不進去，只能二選一。
+    const beforeImageForStorage = render.beforeImageUrl || '';
     const renderedImage = render.afterImageUrl || render.afterImageDataUrl || makeupOutput.imageUrl || makeupOutput.imageDataUrl || '';
     return {
         kind: 'compare',
         title: '妝容對比圖',
+        beforeImageForStorage,
         style: style?.name || '妝容建議',
         advice: style?.advice || {},
         analysis: Router.analysisResult || {},
@@ -761,7 +768,7 @@ function saveCurrentLook(){
         const a = stored.analysis || {};
         Api.createSavedLook(em, {
             style: stored.style || null,
-            beforeImageUrl: stored.beforeImage || null,
+            beforeImageUrl: stored.beforeImageForStorage || null,
             afterImageUrl: stored.renderedImage || null,
             analysisSummary: {
                 faceShape: a.faceShape || a['臉型'] || null,
