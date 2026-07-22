@@ -1108,21 +1108,33 @@ async def delete_member_render_artifacts(
             status_code=403,
             detail=error_payload("FORBIDDEN", "Member artifact deletion is not allowed.", retryable=False),
         )
-    jobs = job_store.find_by_field(RENDER_JOBS_COLLECTION, "ownerId", owner_id, limit=500)
+    # 刪除順序刻意是「先刪物件、再刪紀錄」。反過來的話，物件刪除失敗時 job 文件
+    # 已經不見，那張圖就永遠沒有東西指向它——沒有人知道它存在、也沒有人會再嘗試刪。
+    # 留著紀錄至少能重試。
+    #
+    # 一次只抓一批，刪完再抓下一批，直到沒有為止。先前是單次 limit=500，
+    # 超過的部分完全不會被處理，而且會員資料那邊已經刪掉了，等於留下無主的臉部照片。
     deleted = 0
-    artifact_urls = {
-        str(job.get("afterImageUrl"))
-        for job in jobs
-        if job.get("isPermanent") and job.get("afterImageUrl")
-    }
-    for job in jobs:
-        job_id = job.get("jobId")
-        if not job_id:
-            continue
-        job_store.delete(RENDER_JOBS_COLLECTION, job_id)
-        deleted += 1
-    for artifact_url in artifact_urls:
-        delete_permanent_storage_url(artifact_url)
+    batches = 0
+    while batches < 200:  # 上限只是避免 job_store 異常時無限迴圈
+        jobs = job_store.find_by_field(RENDER_JOBS_COLLECTION, "ownerId", owner_id, limit=200)
+        if not jobs:
+            break
+        batches += 1
+        for job in jobs:
+            job_id = job.get("jobId")
+            if not job_id:
+                continue
+            # 妝後圖與**妝前圖**都要刪。妝前圖是使用者上傳的原始照片，
+            # 帳號都刪了還把他的臉留在儲存空間裡，是這個系統最嚴重的一種失敗。
+            # 妝後圖有 isPermanent 旗標（可能是外部暫存網址），妝前圖一律由本服務
+            # 上傳到自己的 bucket，所以不需要那個判斷。
+            if job.get("isPermanent") and job.get("afterImageUrl"):
+                delete_permanent_storage_url(job.get("afterImageUrl"))
+            if job.get("beforeImageUrl"):
+                delete_permanent_storage_url(job.get("beforeImageUrl"))
+            job_store.delete(RENDER_JOBS_COLLECTION, job_id)
+            deleted += 1
     return {"status": "deleted", "ownerId": owner_id, "jobsDeleted": deleted}
 
 

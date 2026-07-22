@@ -35,6 +35,36 @@ class RenderApiTest(unittest.TestCase):
         render_api._dedup_cache.clear()
         render_api._dedup_inflight.clear()
 
+    def test_member_deletion_removes_before_images_and_every_batch(self):
+        """刪除會員時，妝前圖也要刪，而且不能只處理第一批。
+
+        先前只收集 afterImageUrl，所以使用者刪掉帳號之後，他上傳的原始照片
+        還留在 GCS 上——帳號都不存在了，臉還在。而且單次 limit=500，超過的
+        job 連紀錄都被刪掉，那些圖片就此失去任何追蹤依據。
+        """
+        deleted_urls = []
+        original = render_api.delete_permanent_storage_url
+        render_api.delete_permanent_storage_url = lambda url: deleted_urls.append(url) or True
+        try:
+            for index in range(3):
+                job_store.create(render_api.RENDER_JOBS_COLLECTION, f"job{index}", {
+                    "jobId": f"job{index}", "ownerId": "actor_test", "status": "completed",
+                    "isPermanent": True,
+                    "afterImageUrl": f"https://storage.googleapis.com/decorate-me-renders/retained/after{index}.png",
+                    "beforeImageUrl": f"https://storage.googleapis.com/decorate-me-renders/retained/before{index}.jpg",
+                })
+            import asyncio
+            result = asyncio.run(render_api.delete_member_render_artifacts(
+                "actor_test", x_user_id="actor_test", x_admin_request=None
+            ))
+        finally:
+            render_api.delete_permanent_storage_url = original
+
+        self.assertEqual(result["jobsDeleted"], 3)
+        self.assertEqual(len([u for u in deleted_urls if "before" in u]), 3, deleted_urls)
+        self.assertEqual(len([u for u in deleted_urls if "after" in u]), 3, deleted_urls)
+        self.assertEqual(job_store.find_by_field(render_api.RENDER_JOBS_COLLECTION, "ownerId", "actor_test", limit=10), [])
+
     def test_dedup_hit_still_carries_a_before_image(self):
         """去重命中時妝前圖不能消失。
 
