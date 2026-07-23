@@ -499,6 +499,36 @@ class AiGatewayTest(unittest.TestCase):
         # Ordinary paths are left untouched.
         self.assertEqual(redact_log_path("/api/products"), "/api/products")
 
+    def test_logs_scrub_query_strings_auth_and_upstream_urls(self):
+        # An unhandled exception is often an httpx error whose text embeds the
+        # upstream URL (token in the query) or an auth header. The redacting
+        # formatter must scrub the fully rendered record, traceback included.
+        import logging
+        import sys
+        from api_errors import redact_sensitive, RedactingFormatter
+
+        scrubbed = redact_sensitive(
+            "GET https://db.trycloudflare.com/api/login?token=SECRET failed for user@example.com"
+        )
+        self.assertNotIn("SECRET", scrubbed)
+        self.assertNotIn("user@example.com", scrubbed)
+        self.assertIn("?<redacted>", scrubbed)
+        self.assertIn("<member>", scrubbed)
+        self.assertNotIn("abc.def.ghi", redact_sensitive("Authorization: Bearer abc.def.ghi"))
+        self.assertNotIn("upstreamcookie", redact_sensitive("Cookie: session=upstreamcookie"))
+
+        # The traceback (where httpx smuggles the URL in) is scrubbed too.
+        formatter = RedactingFormatter("%(message)s")
+        try:
+            raise RuntimeError("connect https://up.example.com/x?sid=LEAKED failed")
+        except RuntimeError:
+            record = logging.LogRecord(
+                "t", logging.ERROR, __file__, 1, "unhandled_exception", None, sys.exc_info()
+            )
+        rendered = formatter.format(record)
+        self.assertNotIn("LEAKED", rendered)
+        self.assertIn("?<redacted>", rendered)
+
     def test_session_status_exposes_an_opaque_actor_for_the_tab_to_pin(self):
         gateway.MEMBER_DATABASE_URL = "https://member.test"
         token, _ = issue_access_token("member@example.com", "member", "active")

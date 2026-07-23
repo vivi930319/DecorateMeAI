@@ -17,10 +17,56 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+# ── Sensitive-data scrubbing for logs (messages AND exception tracebacks) ─────
+# An unhandled exception is often an httpx error whose text embeds the upstream
+# request URL — which can carry a token in its query string — or an auth header.
+# These patterns strip those before anything is written to the log store.
+_LOG_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+(?:@|%40)[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", re.IGNORECASE)
+_LOG_URL_QUERY_RE = re.compile(r"(https?://[^\s?#'\"|)>\]]+)\?[^\s#'\"|)>\]]*", re.IGNORECASE)
+# Bearer/Basic credentials are scrubbed before the header rule so the header
+# rule (which only grabs one token) does not consume the scheme and leave the
+# token behind.
+_LOG_SCHEME_RE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._\-=+/]+")
+_LOG_AUTH_RE = re.compile(r"(?i)(authorization|cookie|x-api-key|x-serverless-authorization|x-job-token)(\s*[:=]\s*)\S+")
+
+
+def redact_sensitive(text: str) -> str:
+    """Scrub emails, URL query strings, and auth/cookie/bearer values from log text."""
+    if not text:
+        return text
+    text = _LOG_URL_QUERY_RE.sub(r"\1?<redacted>", text)
+    text = _LOG_SCHEME_RE.sub(r"\1 <redacted>", text)
+    text = _LOG_AUTH_RE.sub(r"\1\2<redacted>", text)
+    text = _LOG_EMAIL_RE.sub("<member>", text)
+    return text
+
+
+class RedactingFormatter(logging.Formatter):
+    """Formatter that scrubs the fully rendered record — message and traceback.
+
+    Scrubbing the final string (rather than just the message) is deliberate: the
+    exception stack trace is where an httpx error quietly brings a URL query or
+    an upstream error body into the log.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_sensitive(super().format(record))
+
+
+def _install_redacting_logging() -> None:
+    root = logging.getLogger()
+    root.setLevel(os.getenv("LOG_LEVEL", "INFO"))
+    formatter = RedactingFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+    if not root.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+    else:
+        for handler in root.handlers:
+            handler.setFormatter(formatter)
+
+
+_install_redacting_logging()
 
 
 def error_payload(code: str, message: str, *, retryable: bool = False, **extra) -> dict:
