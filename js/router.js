@@ -414,7 +414,8 @@ function showToast(msg){
     if (old) old.remove();
     const t = document.createElement('div');
     t.id = 'dmToast'; t.className = 'toast-check';
-    t.innerHTML = '<span class="check-ring"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span><span>'+msg+'</span>';
+    // msg 可能帶入會員名稱、商品名或後端訊息，一律當純文字處理，不進 HTML 解析。
+    t.innerHTML = '<span class="check-ring"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></span><span>'+escapeHtml(msg)+'</span>';
     document.body.appendChild(t);
     void t.offsetWidth; t.classList.add('show');
     setTimeout(()=>{ t.classList.remove('show'); t.style.opacity='0'; setTimeout(()=>t.remove(),500); }, 2400);
@@ -427,6 +428,19 @@ function lookImageSrc(value){
     const url = new URL(raw, window.location.href);
     if (url.protocol === 'http:' || url.protocol === 'https:') return escapeHtml(url.href);
     if (url.protocol === 'data:' && /^data:image\/(?:png|jpe?g|webp|gif);base64,/i.test(raw)) return escapeHtml(raw);
+  } catch (_) {}
+  return '';
+}
+
+// 外部連結（商品來源頁等）只接受 http(s)。escapeHtml 擋得住屬性跳脫，卻擋不住
+// javascript: / data: 這類 scheme——爬蟲抓回來的來源網址是外部可控內容，點下去
+// 就會執行。所以放進 href 之前一定要先驗 scheme，非 http(s) 一律回空字串。
+function safeExternalUrl(value){
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw, window.location.href);
+    if (url.protocol === 'http:' || url.protocol === 'https:') return escapeHtml(url.href);
   } catch (_) {}
   return '';
 }
@@ -598,8 +612,8 @@ function showCartPanel(){
             <header><div><span>Shopping Bag</span><h2>購物車</h2></div><button class="cart-close" aria-label="關閉購物車">×</button></header>
             <div class="cart-items">${rows.length ? rows.map(item => `<article class="cart-item">
                 <div class="cart-thumb">${phBox('', item.product.name, item.product.img)}</div>
-                <div class="cart-item-info"><span>${CAT_EN[item.product.cat] || item.product.cat}</span><h3>${item.product.name}</h3><p>${item.product.price}</p></div>
-                <div class="cart-qty"><button data-cart-minus="${item.id}" aria-label="減少 ${item.product.name}">−</button><b>${item.qty}</b><button data-cart-plus="${item.id}" aria-label="增加 ${item.product.name}">＋</button></div>
+                <div class="cart-item-info"><span>${escapeHtml(CAT_EN[item.product.cat] || item.product.cat)}</span><h3>${escapeHtml(item.product.name)}</h3><p>${escapeHtml(item.product.price)}</p></div>
+                <div class="cart-qty"><button data-cart-minus="${escapeHtml(item.id)}" aria-label="減少 ${escapeHtml(item.product.name)}">−</button><b>${escapeHtml(item.qty)}</b><button data-cart-plus="${escapeHtml(item.id)}" aria-label="增加 ${escapeHtml(item.product.name)}">＋</button></div>
             </article>`).join('') : '<div class="cart-empty">購物車目前是空的</div>'}</div>
             <footer><span>共 ${Cart.count()} 件商品</span><button class="cart-checkout" ${rows.length ? '' : 'disabled'}>前往結帳</button></footer>
         </section>`;
@@ -1320,7 +1334,8 @@ const PageInit = {
         const hr = new Date().getHours();
         const hello = hr < 5 ? '夜深了' : hr < 11 ? '早安' : hr < 14 ? '午安' : hr < 18 ? '下午好' : '晚安';
         const greetEl = document.getElementById('dashGreet');
-        if (greetEl) greetEl.innerHTML = `${hello}，<span class="accent">${user}</span>`;
+        // user 是會員自己設定的名稱，會員可把它設成 HTML／script，這裡一律轉義。
+        if (greetEl) greetEl.innerHTML = `${hello}，<span class="accent">${escapeHtml(user)}</span>`;
         const dEl = document.getElementById('dashDate');
         if (dEl) {
             const now = new Date();
@@ -2412,7 +2427,7 @@ const PageInit = {
                     <div class="prod-grid recommended-grid">${recommendedByCat.slice(0, 8).map((p, i) => `
                         <div class="prod-card reveal-in" data-rec-pid="${escapeHtml(p.id)}" style="animation-delay:${Math.min(i*0.035,0.2)}s">
                             <div class="pc-imgwrap">${phBox('', p.name, p.img)}</div>
-                            <div class="pc-cat">${CAT_EN[p.cat]||p.cat}${p.brand ? ` · ${escapeHtml(p.brand)}` : ''}</div>
+                            <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}${p.brand ? ` · ${escapeHtml(p.brand)}` : ''}</div>
                             <div class="pc-name">${escapeHtml(p.name)}</div>
                             <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
                         </div>`).join('')}
@@ -2466,10 +2481,10 @@ const PageInit = {
                             ${phBox('', p.name, p.img)}
                             <button class="heart-btn pc-heart ${Fav.has(p.id)?'fav':''}" data-fav="${p.id}" aria-label="收藏">${HEART_SVG}</button>
                         </div>
-                        <div class="pc-cat">${CAT_EN[p.cat]||p.cat}</div>
-                        <div class="pc-name">${p.name}</div>
+                        <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}</div>
+                        <div class="pc-name">${escapeHtml(p.name)}</div>
                         ${p.brand ? `<div class="pc-cat">${escapeHtml(p.brand)}</div>` : ''}
-                        <div class="pc-foot"><span class="pc-price">${p.price}</span></div>
+                        <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
                     </div>`).join('') + `</div>`
                     : `<div class="empty-state compact">${isLoadingProducts ? '商品載入中' : '目前沒有商品資料'}</div>`;
                 area.innerHTML = header + content;
@@ -2522,23 +2537,27 @@ const PageInit = {
                     <div class="prod-grid">${items.map(r => `
                         <div class="prod-card reveal-in" data-rel="${r.id}">
                             <div class="pc-imgwrap">${phBox('', r.name, r.img)}</div>
-                            <div class="pc-cat">${CAT_EN[r.cat]||r.cat}${r.similarity != null ? ` · ${r.similarity}% 相似` : ''}</div>
-                            <div class="pc-name">${r.name}</div>
-                            <div class="pc-foot"><span class="pc-price">${r.price}</span></div>
+                            <div class="pc-cat">${escapeHtml(CAT_EN[r.cat]||r.cat)}${r.similarity != null ? ` · ${escapeHtml(r.similarity)}% 相似` : ''}</div>
+                            <div class="pc-name">${escapeHtml(r.name)}</div>
+                            <div class="pc-foot"><span class="pc-price">${escapeHtml(r.price)}</span></div>
                         </div>`).join('')}</div>
                 </div>`;
+            // 分類 key 進 onclick 的 JS 字串裡：escapeHtml 沒用——HTML 解析器會把 &#039;
+            // 還原成 '，在行內事件處理器仍會跳出字串執行。分類本來就是英數 key，這裡先
+            // 收斂成安全字元集，斷掉這條 JS 注入面；顯示文字另外走 escapeHtml。
+            const catToken = String(p.cat || '').replace(/[^a-zA-Z0-9_-]/g, '');
             area.innerHTML = `
                 <div class="pd-top">
-                    <a href="#" class="back-link" onclick="PageInit.products({category:'${p.cat}'});return false;">← ${p.cat}</a>
-                    <button class="pd-close" aria-label="關閉" onclick="PageInit.products({category:'${p.cat}'});return false;">×</button>
+                    <a href="#" class="back-link" onclick="PageInit.products({category:'${catToken}'});return false;">← ${escapeHtml(p.cat)}</a>
+                    <button class="pd-close" aria-label="關閉" onclick="PageInit.products({category:'${catToken}'});return false;">×</button>
                 </div>
                 <div class="pd-wrap">
                     <div class="pd-img">${phBox('', p.name, p.img)}</div>
                     <div class="pd-info">
                         <div class="pd-en">${CAT_EN[p.cat]||'BEAUTY'}</div>
-                        <div class="pd-name">${p.name}</div>
+                        <div class="pd-name">${escapeHtml(p.name)}</div>
                         ${p.brand ? `<div class="pd-en">${escapeHtml(p.brand)}</div>` : ''}
-                        <div class="pd-price-lg">${p.price}</div>
+                        <div class="pd-price-lg">${escapeHtml(p.price)}</div>
                         <div id="pdColorBox">${renderColorBox(p.hex)}</div>
                         <div class="pd-actions">
                             <button class="add-bag" data-bag="${p.id}">加入購物袋</button>
@@ -2606,9 +2625,9 @@ const PageInit = {
                     ${phBox('', p.name, p.img)}
                     <button class="heart-btn pc-heart fav" data-unfav="${p.id}" aria-label="移除收藏">${HEART_SVG}</button>
                 </div>
-                <div class="pc-cat">${CAT_EN[p.cat]||p.cat}</div>
-                <div class="pc-name">${p.name}</div>
-                <div class="pc-foot"><span class="pc-price">${p.price}</span></div>
+                <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}</div>
+                <div class="pc-name">${escapeHtml(p.name)}</div>
+                <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
             </div>
         `).join('') + `</div>`;
         area.querySelectorAll('.prod-card').forEach(card => {
@@ -2944,7 +2963,10 @@ const PageInit = {
         var __av = document.getElementById('profileAvatar');
         if (__av) {
             var __p = profile;
-            if (__p.avatar) { __av.classList.add('has-photo'); __av.innerHTML = '<img src="' + __p.avatar + '" alt="' + (user || '會員') + '">'; }
+            // 大頭貼網址與名稱都可能是會員自訂內容：網址只接受 http(s)／data:image，
+            // 名稱進 alt 屬性一律轉義，避免用 " 跳脫屬性後注入 onerror 之類的事件。
+            var __avatarSrc = lookImageSrc(__p.avatar);
+            if (__avatarSrc) { __av.classList.add('has-photo'); __av.innerHTML = '<img src="' + __avatarSrc + '" alt="' + escapeHtml(user || '會員') + '">'; }
             else { __av.classList.remove('has-photo'); __av.textContent = (user && user !== '訪客') ? user.trim().charAt(0).toUpperCase() : '✦'; }
         }
         const tierCard = document.getElementById('profileTierCard');
@@ -4185,6 +4207,7 @@ const PageInit = {
             if (!crawlerResult || !crawlerEmpty) return;
             const imageUrl = String(product.imageUrls?.[0] || '');
             const safeImageUrl = /^https?:\/\//i.test(imageUrl) ? imageUrl : '';
+            const safeSourceUrl = safeExternalUrl(product.sourceUrl);
             const specs = Object.entries(product.specs || {}).slice(0, 6);
             const missing = product.missingFields || [];
             crawlerEmpty.hidden = true;
@@ -4207,7 +4230,7 @@ const PageInit = {
                         ${missing.length ? `<div class="admin-crawler-missing"><span>缺少欄位</span>${missing.map(field => `<b>${escapeHtml(field)}</b>`).join('')}</div>` : ''}
                         <div class="admin-crawler-result-actions">
                             <button class="admin-primary-button" id="adminUseCrawlerResult" type="button">帶入商品表單</button>
-                            ${product.sourceUrl ? `<a class="admin-secondary-button" href="${escapeHtml(product.sourceUrl)}" target="_blank" rel="noreferrer">查看來源頁</a>` : ''}
+                            ${safeSourceUrl ? `<a class="admin-secondary-button" href="${safeSourceUrl}" target="_blank" rel="noreferrer">查看來源頁</a>` : ''}
                         </div>
                     </div>
                 </article>`;
@@ -4312,10 +4335,11 @@ const PageInit = {
         try {
             Router._authChannel = new BroadcastChannel('decorate-me-auth');
             Router._authChannel.onmessage = (event) => {
-                if (!event || !event.data || event.data.type !== 'owner-changed') return;
+                if (!event || !event.data || !['owner-changed', 'logged-out'].includes(event.data.type)) return;
                 const mine = String((Auth.getProfile() || {}).email || '').trim().toLowerCase();
                 // 只有「換成別人」才要擋；同一個帳號在別的分頁重新登入不影響這裡。
-                if (!mine || String(event.data.sub || '').trim().toLowerCase() === mine) return;
+                if (event.data.type === 'owner-changed'
+                    && (!mine || String(event.data.sub || '').trim().toLowerCase() === mine)) return;
                 window.dispatchEvent(new CustomEvent('decorate-me:session-owner-changed'));
             };
         } catch (_) {}
@@ -4337,9 +4361,11 @@ const PageInit = {
                 window.dispatchEvent(new CustomEvent('decorate-me:session-owner-changed', {
                     detail: { sub: session.sub }
                 }));
-            } else if (session.ok) {
+            } else if (session.ok && Api._pinSession(session)) {
                 showApp();
                 routeFromHash();
+            } else if (session.ok) {
+                handleSessionExpired({ message: '無法安全保存這個分頁的登入身分，請重新登入後再繼續。' });
             } else if (session.status === 401) {
                 handleSessionExpired();
             } else {
@@ -4386,6 +4412,7 @@ function handleSessionExpired(options) {
     if (Router._sessionExpiryHandling) return;
     Router._sessionExpiryHandling = true;
     if (typeof Api._cancelSessionRequests === 'function') Api._cancelSessionRequests();
+    resetCurrentBeautySession();
     if (typeof Auth.clearSession === 'function') Auth.clearSession();
     Router.currentPage = null;
     Router._reloadAdmin = null;
@@ -4408,10 +4435,10 @@ function handleSessionExpired(options) {
 // Gateway 現在會在 /auth/session 回 sub，這裡比對出不一致就當作登入失效處理。
 function sessionOwnerMatchesProfile(session) {
     const sub = String((session && session.sub) || '').trim().toLowerCase();
+    const actorId = String((session && session.actorId) || '').trim();
     const email = String((Auth.getProfile() || {}).email || '').trim().toLowerCase();
-    // 舊版 Gateway 不回 sub。拿不到就不阻擋——寧可維持原本行為，
-    // 也不要在 Gateway 還沒換版時把所有人擋在登入頁外面。
-    if (!sub || !email) return true;
+    // 私人頁面缺少任何一段身分證據都不放行，避免部署空窗或舊快取造成跨帳號資料載入。
+    if (!sub || !actorId || !email) return false;
     return sub === email;
 }
 

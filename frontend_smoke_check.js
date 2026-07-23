@@ -7,6 +7,7 @@ const apiSource = fs.readFileSync(path.join(rootDir, 'js', 'api.js'), 'utf8');
 const routerSource = fs.readFileSync(path.join(rootDir, 'js', 'router.js'), 'utf8');
 const storage = new Map();
 const session = new Map();
+const browserLocation = { origin: 'https://decorate-me.web.app', reload() {} };
 
 function makeStorage(map) {
   return {
@@ -21,9 +22,11 @@ const sandbox = {
   window: {
     DECORATE_ME_CONFIG: {
       aiGatewayUrl: ''
-    }
+    },
+    location: browserLocation
   },
-  location: { reload() {} },
+  location: browserLocation,
+  URL,
   FormData: class FormData {
     append() {}
   },
@@ -99,6 +102,145 @@ for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFac
 }
 if (!routerSource.includes('const session = await Api.validateSession()')) throw new Error('Private pages must validate Gateway session before showApp');
 if (!apiSource.includes('this._cancelSessionRequests();')) throw new Error('Expired sessions must cancel protected request batch');
+
+// ── XSS 與外部 URL scheme 防線（item 7）──────────────────────────
+// 這些欄位都可能帶入會員自訂內容或爬蟲抓回的外部資料，一旦直接進 innerHTML／href
+// 就是注入面。用字串檢查把關鍵修補鎖住，避免日後有人改回未轉義的版本。
+if (!routerSource.includes('escapeHtml(msg)')) throw new Error('showToast must escape its message (XSS)');
+if (!routerSource.includes('<span class="accent">${escapeHtml(user)}</span>')) throw new Error('Dashboard greeting must escape the member name (XSS)');
+if (!routerSource.includes('function safeExternalUrl(')) throw new Error('External links must be scheme-validated via safeExternalUrl');
+if (/href="\$\{escapeHtml\(product\.sourceUrl\)\}"/.test(routerSource)) throw new Error('Crawler source URL must be scheme-validated, not merely HTML-escaped');
+if (routerSource.includes("__av.innerHTML = '<img src=\"' + __p.avatar")) throw new Error('Avatar image URL must be validated via lookImageSrc, not inserted raw');
+
+// ── protected write actor 防線 ────────────────────────────────
+// 每一條會改變資料的請求都必須先確認「cookie 裡的身分」就是這個分頁以為的那個人，
+// 而且只能從 _protectedWrite 這個單一入口進去——否則新增端點時很容易漏掉防線
+// （patchMember 與 deleteMember 就漏過，後台停權／刪除會員在 session 換人後照樣送得出去）。
+// 這一段是非同步的，收在函式裡由檔案最後 await，確保失敗會反映在結束碼上。
+let checkProtectedWriteActor;
+{
+  // assertSessionOwner 只該有「定義」與「_protectedWrite 內部呼叫」兩處。
+  // 多出來的呼叫代表某個寫入端點又自己抄了一份檢查，繞過了統一入口。
+  const ownerCalls = apiSource.match(/this\.assertSessionOwner\(/g) || [];
+  if (ownerCalls.length !== 1) {
+    throw new Error(`Write guard must funnel through _protectedWrite; found ${ownerCalls.length} direct assertSessionOwner call sites`);
+  }
+  for (const method of ['_protectedWrite', '_writeActorEmail', 'assertSessionOwner']) {
+    if (typeof sandbox.Api[method] !== 'function') throw new Error(`Missing Api.${method}`);
+  }
+
+  const events = [];
+  sandbox.window.dispatchEvent = (event) => { events.push(event); return true; };
+  sandbox.CustomEvent = class CustomEvent {
+    constructor(type, init) { this.type = type; this.detail = (init || {}).detail; }
+  };
+
+  let fetchCalls = [];
+  sandbox.fetch = async (url, init) => {
+    fetchCalls.push({ url: String(url), method: (init || {}).method || 'GET', headers: { ...((init || {}).headers || {}) } });
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+
+  const realValidateSession = sandbox.Api.validateSession;
+  const stubSession = (session) => { sandbox.Api.validateSession = async () => session; };
+
+  sandbox.Auth.setProfile({ name: '測試會員', email: 'owner@example.com', level: '一般會員' });
+  sandbox.Api._pinSession({ sub: 'owner@example.com', actorId: 'actor_owner_tab' });
+
+  const run = async () => {
+    // 1) session 屬於別人：寫入必須在送出前就被擋下，一個 request 都不能出去
+    stubSession({ ok: true, sub: 'someone-else@example.com', actorId: 'actor_other_tab', role: 'member' });
+    fetchCalls = [];
+    const blocked = await sandbox.Api.checkInMember('owner@example.com');
+    if (blocked.ok !== false || blocked.blocked !== true) {
+      throw new Error(`Mismatched session must block member writes: ${JSON.stringify(blocked)}`);
+    }
+    if (blocked.reason !== 'OWNER_MISMATCH') throw new Error(`Blocked write must report OWNER_MISMATCH, got ${blocked.reason}`);
+    if (!/登入身分已切換/.test(blocked.error || '')) {
+      throw new Error(`Blocked write must carry a displayable Chinese reason, got: ${blocked.error}`);
+    }
+    if (fetchCalls.length !== 0) {
+      throw new Error(`Blocked write must not reach the network, but sent: ${JSON.stringify(fetchCalls)}`);
+    }
+    if (!events.some(e => e.type === 'decorate-me:session-owner-changed')) {
+      throw new Error('Owner mismatch must notify the Router');
+    }
+
+    // 2) 後台寫入的 actor 是「目前登入的管理員」，不是被操作的那個會員。
+    //    這兩支先前完全沒有防線，是這道統一入口補上的缺口。
+    fetchCalls = [];
+    const blockedPatch = await sandbox.Api.patchMember('victim@example.com', { status: 'suspended' });
+    if (blockedPatch.ok !== false || blockedPatch.blocked !== true) {
+      throw new Error(`Admin patchMember must be guarded by the write actor line: ${JSON.stringify(blockedPatch)}`);
+    }
+    const blockedDelete = await sandbox.Api.deleteMember('victim@example.com');
+    if (blockedDelete.ok !== false || blockedDelete.blocked !== true) {
+      throw new Error(`Admin deleteMember must be guarded by the write actor line: ${JSON.stringify(blockedDelete)}`);
+    }
+    if (fetchCalls.length !== 0) {
+      throw new Error(`Blocked admin writes must not reach the network, but sent: ${JSON.stringify(fetchCalls)}`);
+    }
+
+    // 3) 無法確認 session（Gateway 連不上）時同樣不放行——寧可失敗，也不要寫錯帳號
+    stubSession({ ok: false, status: 0 });
+    fetchCalls = [];
+    const unavailable = await sandbox.Api.deleteSavedLook('owner@example.com', 7);
+    if (unavailable.ok !== false || unavailable.reason !== 'SESSION_UNAVAILABLE') {
+      throw new Error(`Unverifiable session must block writes: ${JSON.stringify(unavailable)}`);
+    }
+    if (fetchCalls.length !== 0) throw new Error('Unverifiable session must not reach the network');
+
+    // 4) 身分相符（含大小寫差異）就正常放行，請求要真的送出去
+    stubSession({ ok: true, sub: 'Owner@Example.com', actorId: 'actor_owner_tab', role: 'member' });
+    fetchCalls = [];
+    const allowed = await sandbox.Api.checkInMember('owner@example.com');
+    if (allowed.ok !== true) throw new Error(`Matching session must allow the write: ${JSON.stringify(allowed)}`);
+    if (fetchCalls.length !== 1 || fetchCalls[0].method !== 'POST') {
+      throw new Error(`Allowed write must issue exactly one POST, got: ${JSON.stringify(fetchCalls)}`);
+    }
+    if (!fetchCalls[0].url.endsWith('/api/members/owner%40example.com/check-in')) {
+      throw new Error(`Allowed write hit the wrong URL: ${fetchCalls[0].url}`);
+    }
+    if (fetchCalls[0].headers['X-Expected-Actor'] !== 'actor_owner_tab') {
+      throw new Error(`Allowed write must carry the pinned opaque actor: ${JSON.stringify(fetchCalls[0])}`);
+    }
+
+    // 5) 缺 sub／actorId 或本分頁沒有綁定 actor 時一律 fail closed。
+    stubSession({ ok: true, sub: 'owner@example.com', actorId: '' });
+    fetchCalls = [];
+    const missingActor = await sandbox.Api.checkInMember('owner@example.com');
+    if (missingActor.ok !== false || missingActor.reason !== 'SESSION_UNAVAILABLE' || fetchCalls.length !== 0) {
+      throw new Error(`Missing actor evidence must block writes: ${JSON.stringify(missingActor)}`);
+    }
+
+    // 6) opaque actor 絕不能被附到第三方網址。
+    fetchCalls = [];
+    await sandbox.Api._protectedFetch('https://example.com/collect', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    if (fetchCalls.length !== 1 || fetchCalls[0].headers['X-Expected-Actor']) {
+      throw new Error(`Third-party requests must not receive X-Expected-Actor: ${JSON.stringify(fetchCalls)}`);
+    }
+
+    // 7) Gateway 回 409 時立即通知 Router，不能等下一個操作才發現換帳號。
+    sandbox.Api._sessionExpiredNotified = false;
+    events.length = 0;
+    sandbox.fetch = async (url, init) => ({ ok: false, status: 409, json: async () => ({}) });
+    await sandbox.Api._protectedFetch('/member-database/api/favorites/toggle', { method: 'POST' });
+    if (!events.some(e => e.type === 'decorate-me:session-owner-changed')) {
+      throw new Error('Gateway 409 must notify the Router of a changed session owner');
+    }
+  };
+
+  checkProtectedWriteActor = async () => {
+    try {
+      await run();
+    } finally {
+      // 後面的檢查共用同一個 sandbox，收尾時把動過的東西還原
+      sandbox.Api.validateSession = realValidateSession;
+      sandbox.fetch = async () => ({ ok: true, json: async () => ({}) });
+      sandbox.Auth.setProfile({ name: '測試會員', email: 'USER@example.com', level: '一般會員' });
+    }
+  };
+}
 
 // ── ImagePipeline ─────────────────────────────────────────────
 for (const method of ['compressForPackage', 'compressInWorker', 'compressOnMainThread', 'canUseWorker']) {
@@ -224,4 +366,9 @@ const mappedBasic = sandbox.AnalysisPackage.fromRawFaceAnalysis({ ...mockRaw, '�
 if (mappedBasic.sidePhotoUsed !== null) throw new Error(`sidePhotoUsed should be null in BASIC mode, got: ${mappedBasic.sidePhotoUsed}`);
 if (mappedBasic.version !== 'BASIC') throw new Error(`version wrong for BASIC mode: ${mappedBasic.version}`);
 
-console.log('frontend smoke check passed');
+checkProtectedWriteActor()
+  .then(() => { console.log('frontend smoke check passed'); })
+  .catch(err => {
+    console.error(err && err.message ? err.message : err);
+    process.exit(1);
+  });

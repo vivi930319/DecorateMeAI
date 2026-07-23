@@ -81,6 +81,15 @@ const USER_ERROR_ZH = Object.freeze({
     FETCH_TIMEOUT: '服務回應逾時，請稍後再試。'
 });
 
+// 寫入防線擋下請求時顯示的說明。這些不是後端回的錯誤——請求根本沒送出去——
+// 所以另外收在這裡，不混進 USER_ERROR_ZH（那份是後端 error code 對照表）。
+const WRITE_BLOCKED_ZH = Object.freeze({
+    NO_LOCAL_IDENTITY: '請先登入後再執行這項操作。',
+    SESSION_UNAVAILABLE: '目前無法確認登入狀態，為避免寫錯帳號已中止這次操作，請稍後再試。',
+    OWNER_MISMATCH: '登入身分已切換成其他帳號，為避免寫錯帳號已中止這次操作，請重新整理後再試。',
+    DEFAULT: '無法確認目前的登入身分，這次操作已中止。'
+});
+
 function localizeUserError(message, code = '', status = 0) {
     const raw = String(message || '').trim();
     const explicitCode = String(code || '').trim().toUpperCase();
@@ -203,6 +212,38 @@ const ApiConfig = {
 const Api = {
     config: ApiConfig,
     _sessionAbortController: typeof AbortController === 'function' ? new AbortController() : null,
+    _expectedActorKey: 'gatewayExpectedActor',
+    _expectedSubjectKey: 'gatewayExpectedSubject',
+
+    _pinnedActor() {
+        try { return String(sessionStorage.getItem(this._expectedActorKey) || '').trim(); }
+        catch (_) { return ''; }
+    },
+
+    _pinnedSubject() {
+        try { return String(sessionStorage.getItem(this._expectedSubjectKey) || '').trim().toLowerCase(); }
+        catch (_) { return ''; }
+    },
+
+    _pinSession(session) {
+        const actorId = String(session?.actorId || '').trim();
+        const sub = String(session?.sub || '').trim().toLowerCase();
+        if (!actorId || !sub) return false;
+        try {
+            sessionStorage.setItem(this._expectedActorKey, actorId);
+            sessionStorage.setItem(this._expectedSubjectKey, sub);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    },
+
+    _clearPinnedSession() {
+        try {
+            sessionStorage.removeItem(this._expectedActorKey);
+            sessionStorage.removeItem(this._expectedSubjectKey);
+        } catch (_) {}
+    },
 
     _resetSessionRequests() {
         this._sessionAbortController = typeof AbortController === 'function' ? new AbortController() : null;
@@ -229,6 +270,66 @@ const Api = {
             else signal.addEventListener('abort', abort, { once: true });
         });
         return combined.signal;
+    },
+
+    _isProtectedGatewayUrl(input) {
+        try {
+            const url = new URL(String(input), window.location.origin);
+            if (url.origin !== window.location.origin) return false;
+            return ['/member-database/', '/face-basic/', '/face-pro/', '/render-service/', '/text-suggestion/', '/admin-api/']
+                .some(prefix => url.pathname.startsWith(prefix));
+        } catch (_) {
+            return false;
+        }
+    },
+
+    _copyHeaders(headers) {
+        const copied = {};
+        if (headers && typeof headers.forEach === 'function') {
+            headers.forEach((value, key) => { copied[key] = value; });
+        } else if (headers && typeof headers === 'object') {
+            Object.assign(copied, headers);
+        }
+        return copied;
+    },
+
+    _notifySessionInvalid(type = 'decorate-me:session-owner-changed', detail = {}) {
+        if (this._sessionExpiredNotified) return;
+        this._sessionExpiredNotified = true;
+        this._cancelSessionRequests();
+        window.dispatchEvent(new CustomEvent(type, { detail }));
+    },
+
+    // 所有受保護的寫入都從這裡送出。X-Expected-Actor 只會送到本站 Gateway，
+    // 絕不附在第三方網址；缺少分頁綁定身分時直接拒絕，不讓 shared cookie 決定寫入者。
+    async _protectedFetch(input, init = {}) {
+        if (!this._sessionAbortController) this._resetSessionRequests();
+        const method = String(init.method || 'GET').toUpperCase();
+        const isWrite = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+        const isProtected = this._isProtectedGatewayUrl(input);
+        const nextInit = {
+            ...init,
+            credentials: isProtected ? 'include' : init.credentials,
+            headers: this._copyHeaders(init.headers),
+            signal: isProtected ? this._sessionSignal(init.signal) : init.signal
+        };
+        if (isWrite && isProtected) {
+            const actorId = this._pinnedActor();
+            if (!actorId) {
+                this._notifySessionInvalid('decorate-me:session-owner-changed', { reason: 'EXPECTED_ACTOR_REQUIRED' });
+                const error = new Error(WRITE_BLOCKED_ZH.SESSION_UNAVAILABLE);
+                error.code = 'EXPECTED_ACTOR_REQUIRED';
+                throw error;
+            }
+            nextInit.headers['X-Expected-Actor'] = actorId;
+        }
+        const res = await fetch(input, nextInit);
+        if (isProtected && res.status === 401) {
+            this._notifySessionInvalid('decorate-me:session-expired');
+        } else if (isProtected && res.status === 409) {
+            this._notifySessionInvalid('decorate-me:session-owner-changed', { reason: 'SESSION_OWNER_CHANGED' });
+        }
+        return res;
     },
 
     // 向 Gateway 取得穩定的同源路徑。上游資料庫的真實網址只留在 Cloud Run，
@@ -323,7 +424,7 @@ const Api = {
     async detectFacePose(file) {
         const fd = new FormData();
         fd.append('file', file);
-        const res = await fetch(this.config.url('faceBasic', 'posePath'), { method: 'POST', body: fd, headers: this._faceHeaders() });
+        const res = await this._protectedFetch(this.config.url('faceBasic', 'posePath'), { method: 'POST', body: fd, headers: this._faceHeaders() });
         if (!res.ok) throw await this._faceError(res, '角度偵測失敗');
         return res.json();
     },
@@ -331,7 +432,7 @@ const Api = {
     async createFaceJob(file) {
         const fd = new FormData();
         fd.append('file', file);
-        const res = await fetch(this.config.url('faceBasic', 'jobPath'), { method: 'POST', body: fd, headers: this._faceHeaders() });
+        const res = await this._protectedFetch(this.config.url('faceBasic', 'jobPath'), { method: 'POST', body: fd, headers: this._faceHeaders() });
         if (!res.ok) throw await this._faceError(res, '建立 BASIC job 失敗');
         return res.json();
     },
@@ -342,21 +443,21 @@ const Api = {
         for (const role of ['left45', 'right45', 'side']) {
             if (files[role]) fd.append(role, files[role]);
         }
-        const res = await fetch(this.config.url('facePro', 'jobPath'), { method: 'POST', body: fd, headers: this._faceHeaders() });
+        const res = await this._protectedFetch(this.config.url('facePro', 'jobPath'), { method: 'POST', body: fd, headers: this._faceHeaders() });
         if (!res.ok) throw await this._faceError(res, '建立 PRO job 失敗');
         return res.json();
     },
 
     async getFaceJob(mode, jobId, resultToken) {
         const service = mode === 'pro' ? 'facePro' : 'faceBasic';
-        const res = await fetch(this.config.jobUrl(service, 'jobStatusPath', jobId), { cache: 'no-store', headers: this._faceJobHeaders(service, resultToken) });
+        const res = await this._protectedFetch(this.config.jobUrl(service, 'jobStatusPath', jobId), { cache: 'no-store', headers: this._faceJobHeaders(service, resultToken) });
         if (!res.ok) throw await this._faceError(res, '查詢 job 失敗');
         return res.json();
     },
 
     async getFaceJobResult(mode, jobId, resultToken) {
         const service = mode === 'pro' ? 'facePro' : 'faceBasic';
-        const res = await fetch(this.config.jobUrl(service, 'jobResultPath', jobId), { cache: 'no-store', headers: this._faceJobHeaders(service, resultToken) });
+        const res = await this._protectedFetch(this.config.jobUrl(service, 'jobResultPath', jobId), { cache: 'no-store', headers: this._faceJobHeaders(service, resultToken) });
         if (!res.ok) throw await this._faceError(res, '取得 job 結果失敗');
         return res.json();
     },
@@ -386,7 +487,7 @@ const Api = {
     async suggestMakeup({ analysisPackage, faceAnalysis, style, userNote }) {
         let res;
         try {
-            res = await fetch(this.config.url('textSuggestion', 'suggestPath'), {
+            res = await this._protectedFetch(this.config.url('textSuggestion', 'suggestPath'), {
                 method: 'POST',
                 headers: this._textSuggestionHeaders(),
                 body: JSON.stringify({ analysisPackage, faceAnalysis, style, language: 'zh-TW', userNote }),
@@ -428,11 +529,11 @@ const Api = {
                 body: JSON.stringify({ image: imageDataUrl, prompt, strength }),
             };
             try {
-                res = await fetch(url, requestInit);
+                res = await this._protectedFetch(url, requestInit);
             } catch (firstErr) {
                 // Cloud Run cold start or transient network hiccups can cause the first browser fetch to fail.
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                res = await fetch(url, requestInit);
+                res = await this._protectedFetch(url, requestInit);
             }
         } catch (err) {
             throw new Error('無法連線到渲染服務：' + err.message);
@@ -475,11 +576,11 @@ const Api = {
                 body: JSON.stringify({ image: imageDataUrl, styleId, analysisPackage, strength }),
             };
             try {
-                submitRes = await fetch(`${baseUrl}/render/jobs`, requestInit);
+                submitRes = await this._protectedFetch(`${baseUrl}/render/jobs`, requestInit);
             } catch (firstErr) {
                 // 冷啟動或瞬斷時第一次 fetch 可能直接失敗，重試一次
                 await new Promise(resolve => setTimeout(resolve, 1500));
-                submitRes = await fetch(`${baseUrl}/render/jobs`, requestInit);
+                submitRes = await this._protectedFetch(`${baseUrl}/render/jobs`, requestInit);
             }
         } catch (err) {
             throw new Error('無法連線到渲染服務：' + err.message);
@@ -511,7 +612,7 @@ const Api = {
             await new Promise(resolve => setTimeout(resolve, 2000));
             let job;
             try {
-                const pollRes = await fetch(pollUrl, { method: 'GET', headers, cache: 'no-store' });
+                const pollRes = await this._protectedFetch(pollUrl, { method: 'GET', headers, cache: 'no-store' });
                 job = await pollRes.json().catch(() => ({}));
                 if (!pollRes.ok) {
                     // 輪詢途中的暫時性錯誤不該直接判死，繼續等下一輪
@@ -727,21 +828,22 @@ const Api = {
     async toggleRemoteFavorite(itemId, itemType) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl) return null;
-        const me = (typeof Auth !== 'undefined' && Auth.getProfile) ? (Auth.getProfile() || {}).email : '';
-        const owner = await this.assertSessionOwner(me);
-        if (!owner.ok) return null;
-        try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/favorites/toggle`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ item_id: itemId, item_type: itemType })
-            });
-            if (!res.ok) return null;
-            return res.json();
-        } catch (_) {
-            return null;
-        }
+        // 收藏是背景同步，呼叫端不看回傳值；擋下或失敗都一律 null，維持既有契約。
+        const result = await this._protectedWrite(this._writeActorEmail(), async () => {
+            try {
+                const res = await this._fetchWithRelogin(`${baseUrl}/api/favorites/toggle`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ item_id: itemId, item_type: itemType })
+                });
+                if (!res.ok) return null;
+                return res.json();
+            } catch (_) {
+                return null;
+            }
+        });
+        return result?.blocked ? null : result;
     },
 
     // 商品管理端點用管理員登入後的 token 驗證，由後端判斷 role=admin。
@@ -797,8 +899,7 @@ const Api = {
         const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
         const timeout = controller ? setTimeout(() => controller.abort(), 30000) : null;
         try {
-            const profile = typeof Auth !== 'undefined' ? (Auth.getProfile() || {}) : {};
-            const res = await fetch(url, {
+            const res = await this._protectedFetch(url, {
                 method: 'POST',
                 credentials: 'include',
                 headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
@@ -895,16 +996,32 @@ const Api = {
             }
             this._sessionExpiredNotified = false;
             this._resetSessionRequests();
+            // 登入回應後立刻由 /auth/session 再確認一次，避免只相信登入 JSON，並把
+            // 不含 email 的 actorId 綁在「這一個分頁」的 sessionStorage。
+            const session = await this.validateSession();
+            const expectedSub = String((data.member && data.member.email) || email || '').trim().toLowerCase();
+            if (!session.ok || !session.sub || !session.actorId
+                || String(session.sub).trim().toLowerCase() !== expectedSub
+                || !this._pinSession(session)) {
+                this._clearPinnedSession();
+                fetch(`${gateway.baseUrl}${gateway.logoutPath}`, { method: 'POST', credentials: 'include' }).catch(() => null);
+                return {
+                    ok: false,
+                    status: session.status || 409,
+                    code: 'SESSION_OWNER_CHANGED',
+                    error: '登入身分確認失敗，請重新登入後再試。'
+                };
+            }
             // 通知其他分頁：這個瀏覽器的登入身分換人了。它們共用同一份 cookie，
             // 不講的話要等到下一次 403 才會發現，而那時可能已經帶著別人的憑證寫過東西。
             try {
                 if (typeof BroadcastChannel === 'function') {
                     const channel = new BroadcastChannel('decorate-me-auth');
-                    channel.postMessage({ type: 'owner-changed', sub: (data.member && data.member.email) || email });
+                    channel.postMessage({ type: 'owner-changed', sub: session.sub });
                     channel.close();
                 }
             } catch (_) {}
-            return { ok: true, member: data.member || null, expiresAt: data.expiresAt || null };
+            return { ok: true, member: data.member || null, expiresAt: data.expiresAt || null, actorId: session.actorId };
         } catch (err) {
             return { ok: false, code: 'NETWORK_ERROR', error: err.message };
         }
@@ -925,8 +1042,13 @@ const Api = {
             // 共用同一個 __session cookie，少了這道比對就會拿舊帳號的 email 去打會員 API。
             const data = await res.json().catch(() => ({}));
             this._sessionExpiredNotified = false;
-            this._resetSessionRequests();
-            return { ok: true, sub: String(data.sub || ''), role: String(data.role || ''), accountStatus: String(data.status || '') };
+            return {
+                ok: true,
+                sub: String(data.sub || ''),
+                actorId: String(data.actorId || ''),
+                role: String(data.role || ''),
+                accountStatus: String(data.status || '')
+            };
         } catch (err) {
             return { ok: false, status: 0, networkFailure: true, error: err.message };
         } finally {
@@ -943,14 +1065,10 @@ const Api = {
             headers: this._memberHeaders(init?.headers || {}),
             signal: this._sessionSignal(init?.signal)
         };
-        const res = await fetch(input, nextInit);
+        const res = await this._protectedFetch(input, nextInit);
         // 多個會員／管理員區塊會平行載入。Session 過期時只通知一次，
         // 由 Router 統一清除舊畫面與自動刷新，避免同一秒產生大量 401 與重複彈窗。
-        if (res.status === 401 && !this._sessionExpiredNotified) {
-            this._sessionExpiredNotified = true;
-            this._cancelSessionRequests();
-            window.dispatchEvent(new CustomEvent('decorate-me:session-expired'));
-        }
+        if (res.status === 401) return res;
         // 403 有可能是「session 已經換成另一個帳號」。admin 與 member 共用同一個
         // __session cookie，在後台登入會蓋掉會員的 session，而本機 profile 還停在
         // 前一個人，於是每一條會員請求都在跨帳號要資料，資料庫一律回 403。
@@ -971,19 +1089,23 @@ const Api = {
         this._sessionOwnerChecking = true;
         try {
             const session = await this.validateSession();
-            if (!session.ok || !session.sub) return;
+            if (!session.ok || !session.sub || !session.actorId) {
+                this._notifySessionInvalid('decorate-me:session-expired');
+                return;
+            }
             const profile = (typeof Auth !== 'undefined' && Auth.getProfile) ? (Auth.getProfile() || {}) : {};
             const email = String(profile.email || '').trim().toLowerCase();
-            // 拿不到任一邊就不動作——寧可維持現狀，也不要在資訊不足時把人登出。
-            if (!email || session.sub.trim().toLowerCase() === email) return;
-            if (this._sessionExpiredNotified) return;
-            this._sessionExpiredNotified = true;
-            this._cancelSessionRequests();
-            window.dispatchEvent(new CustomEvent('decorate-me:session-owner-changed', {
-                detail: { sub: session.sub, role: session.role, accountStatus: session.accountStatus }
-            }));
+            const pinnedActor = this._pinnedActor();
+            const pinnedSubject = this._pinnedSubject();
+            if (email && pinnedActor && pinnedSubject
+                && session.sub.trim().toLowerCase() === email
+                && session.sub.trim().toLowerCase() === pinnedSubject
+                && session.actorId === pinnedActor) return;
+            this._notifySessionInvalid('decorate-me:session-owner-changed', {
+                sub: session.sub, role: session.role, accountStatus: session.accountStatus
+            });
         } catch (_) {
-            // 確認失敗就當作沒發生，維持原本的 403 處理
+            this._notifySessionInvalid('decorate-me:session-expired');
         } finally {
             this._sessionOwnerChecking = false;
         }
@@ -1040,11 +1162,15 @@ const Api = {
     async assertSessionOwner(email) {
         const expected = String(email || '').trim().toLowerCase();
         if (!expected) return { ok: false, reason: 'NO_LOCAL_IDENTITY' };
+        const pinnedActor = this._pinnedActor();
+        const pinnedSubject = this._pinnedSubject();
+        if (!pinnedActor || !pinnedSubject || pinnedSubject !== expected) {
+            return { ok: false, reason: 'SESSION_UNAVAILABLE' };
+        }
         const session = await this.validateSession();
         if (!session.ok) return { ok: false, reason: 'SESSION_UNAVAILABLE', status: session.status };
-        // 舊版 Gateway 不回 sub 時無從比對，放行以免整批寫入在部署空窗期全部失敗。
-        if (!session.sub) return { ok: true, unverified: true };
-        if (String(session.sub).trim().toLowerCase() !== expected) {
+        if (!session.sub || !session.actorId) return { ok: false, reason: 'SESSION_UNAVAILABLE', status: session.status };
+        if (String(session.sub).trim().toLowerCase() !== expected || session.actorId !== pinnedActor) {
             this._cancelSessionRequests();
             window.dispatchEvent(new CustomEvent('decorate-me:session-owner-changed', {
                 detail: { sub: session.sub, role: session.role }
@@ -1052,6 +1178,38 @@ const Api = {
             return { ok: false, reason: 'OWNER_MISMATCH', sub: session.sub };
         }
         return { ok: true };
+    },
+
+    // ═══ 統一的 protected write actor 防線 ═══
+    //
+    // 每一條會改變資料的請求，送出前都要先確認 cookie 裡的身分就是這個分頁以為的那個人。
+    // 這道檢查原本是各寫各的：六個方法各自抄一次 assertSessionOwner + 早退，回傳形狀還有
+    // 三種（null／{ok:false}／{ok:false,reason}），而 patchMember 與 deleteMember 整個漏掉——
+    // 後台的停權與刪除會員，在 session 被另一個帳號蓋掉時照樣送得出去。
+    // 收斂成單一入口之後，「新增一個寫入端點」跟「補上防線」是同一個動作，漏不掉。
+    //
+    // actor 是「執行這次寫入的人」，不是「被寫入的對象」，兩者不一定相同：
+    //   · 會員動自己的資料（簽到、兌換、收藏）—— actor 就是那個 email；
+    //   · 後台動別人的資料（停權、刪除）—— actor 是目前登入的管理員，傳 null
+    //     由這裡取本機 profile；拿被操作的會員 email 去比對只會把正常的後台操作全擋掉。
+    _writeActorEmail() {
+        const profile = (typeof Auth !== 'undefined' && Auth.getProfile) ? (Auth.getProfile() || {}) : {};
+        return String(profile.email || '').trim().toLowerCase();
+    },
+
+    // 擋下時回傳統一形狀：ok:false + blocked:true + 可直接顯示的中文 error。
+    // 呼叫端本來就在看 result.ok / result.error，不必為了這道防線多寫分支。
+    async _protectedWrite(actorEmail, run) {
+        const actor = String(actorEmail || '').trim().toLowerCase() || this._writeActorEmail();
+        const owner = await this.assertSessionOwner(actor);
+        if (owner.ok) return run();
+        return {
+            ok: false,
+            blocked: true,
+            reason: owner.reason,
+            status: owner.status || 0,
+            error: WRITE_BLOCKED_ZH[owner.reason] || WRITE_BLOCKED_ZH.DEFAULT
+        };
     },
 
     // 讀回伺服器上的收藏清單。收藏的寫入（toggleRemoteFavorite）一直都在，
@@ -1096,37 +1254,42 @@ const Api = {
     async patchMember(email, patch) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl) return { ok: false, error: 'memberDatabaseUrl 未設定' };
-        try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}`, {
-                method: 'PATCH',
-                credentials: 'include',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(patch)
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
-            return { ok: true, member: data.member || null };
-        } catch (err) {
-            return { ok: false, error: '連線失敗：' + err.message };
-        }
+        // actor 是操作的人（後台是管理員），不是 email 這個被改的對象——傳 null 取本機 profile。
+        return this._protectedWrite(null, async () => {
+            try {
+                const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}`, {
+                    method: 'PATCH',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(patch)
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
+                return { ok: true, member: data.member || null };
+            } catch (err) {
+                return { ok: false, error: '連線失敗：' + err.message };
+            }
+        });
     },
 
     async deleteMember(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false, error: 'memberDatabaseUrl 或 email 未設定' };
-        try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}`, {
-                method: 'DELETE',
-                credentials: 'include'
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+        return this._protectedWrite(null, async () => {
+            try {
+                const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}`, {
+                    method: 'DELETE',
+                    credentials: 'include'
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+                }
+                return { ok: true, member: data.member || null };
+            } catch (err) {
+                return { ok: false, error: '連線失敗：' + err.message };
             }
-            return { ok: true, member: data.member || null };
-        } catch (err) {
-            return { ok: false, error: '連線失敗：' + err.message };
-        }
+        });
     },
 
     // 會員點數：GET /api/members/{email}/points → { balance, lifetime, transactions[] }。
@@ -1172,20 +1335,20 @@ const Api = {
     async checkInMember(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false };
-        const owner = await this.assertSessionOwner(email);
-        if (!owner.ok) return { ok: false, reason: owner.reason };
-        try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/check-in`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: { 'Content-Type': 'application/json' }
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
-            return { ok: true, ...data };
-        } catch (_) {
-            return { ok: false };
-        }
+        return this._protectedWrite(email, async () => {
+            try {
+                const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/check-in`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+                return { ok: true, ...data };
+            } catch (_) {
+                return { ok: false };
+            }
+        });
     },
 
     async listMemberTasks(email) {
@@ -1208,46 +1371,46 @@ const Api = {
     async claimMemberTask(email, taskId) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email || !taskId) return { ok: false };
-        const owner = await this.assertSessionOwner(email);
-        if (!owner.ok) return { ok: false, reason: owner.reason };
-        try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/tasks/${encodeURIComponent(taskId)}/claim`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: { 'Content-Type': 'application/json' }
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
-            return { ok: true, ...data };
-        } catch (_) {
-            return { ok: false };
-        }
+        return this._protectedWrite(email, async () => {
+            try {
+                const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/tasks/${encodeURIComponent(taskId)}/claim`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+                return { ok: true, ...data };
+            } catch (_) {
+                return { ok: false };
+            }
+        });
     },
 
     async redeemMemberTheme(email, themeId) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email || !themeId) return { ok: false };
-        const owner = await this.assertSessionOwner(email);
-        if (!owner.ok) return { ok: false, reason: owner.reason };
-        try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/theme-shop/${encodeURIComponent(themeId)}/redeem`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: { 'Content-Type': 'application/json' }
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                const code = data?.error?.code || data?.code || '';
-                // 已經擁有不算失敗：點數先前就扣過了，使用者確實有這個主題。
-                // 回成功，呼叫端才會把解鎖同步到本機並套用 —— 否則會卡在
-                // 「伺服器說你有、本機說你沒有」，怎麼按都套用不上。
-                if (/ALREADY_OWNED|already.?owned/i.test(code)) return { ok: true, alreadyOwned: true };
-                return { ok: false, status: res.status, code, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+        return this._protectedWrite(email, async () => {
+            try {
+                const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/theme-shop/${encodeURIComponent(themeId)}/redeem`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    const code = data?.error?.code || data?.code || '';
+                    // 已經擁有不算失敗：點數先前就扣過了，使用者確實有這個主題。
+                    // 回成功，呼叫端才會把解鎖同步到本機並套用 —— 否則會卡在
+                    // 「伺服器說你有、本機說你沒有」，怎麼按都套用不上。
+                    if (/ALREADY_OWNED|already.?owned/i.test(code)) return { ok: true, alreadyOwned: true };
+                    return { ok: false, status: res.status, code, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+                }
+                return { ok: true, ...data };
+            } catch (_) {
+                return { ok: false };
             }
-            return { ok: true, ...data };
-        } catch (_) {
-            return { ok: false };
-        }
+        });
     },
 
     // ═══ 收藏妝容對比圖 saved_looks：跨裝置持久化，走登入 session（本機 localStorage 仍是離線快取，遠端失敗不影響本機） ═══
@@ -1312,44 +1475,44 @@ const Api = {
             : value;
         const persistedAfterImageUrl = qualify(afterImageUrl);
         const persistedBeforeImageUrl = qualify(beforeImageUrl);
-        const owner = await this.assertSessionOwner(email);
-        if (!owner.ok) return { ok: false, reason: owner.reason };
-        try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    style: String(payload.style).slice(0, 120),
-                    beforeImageUrl: persistedBeforeImageUrl,
-                    afterImageUrl: persistedAfterImageUrl,
-                    analysisSummary: payload.analysisSummary && typeof payload.analysisSummary === 'object'
-                        ? payload.analysisSummary
-                        : {}
-                })
-            });
-            if (!res.ok) return { ok: false, status: res.status };
-            const look = await res.json().catch(() => ({}));
-            return { ok: true, look };
-        } catch (_) {
-            return { ok: false };
-        }
+        return this._protectedWrite(email, async () => {
+            try {
+                const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        style: String(payload.style).slice(0, 120),
+                        beforeImageUrl: persistedBeforeImageUrl,
+                        afterImageUrl: persistedAfterImageUrl,
+                        analysisSummary: payload.analysisSummary && typeof payload.analysisSummary === 'object'
+                            ? payload.analysisSummary
+                            : {}
+                    })
+                });
+                if (!res.ok) return { ok: false, status: res.status };
+                const look = await res.json().catch(() => ({}));
+                return { ok: true, look };
+            } catch (_) {
+                return { ok: false };
+            }
+        });
     },
 
     async deleteSavedLook(email, id) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email || id == null) return { ok: false };
-        const owner = await this.assertSessionOwner(email);
-        if (!owner.ok) return { ok: false, reason: owner.reason };
-        try {
-            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks/${encodeURIComponent(id)}`, {
-                method: 'DELETE',
-                credentials: 'include'
-            });
-            return { ok: res.ok, status: res.status };
-        } catch (_) {
-            return { ok: false };
-        }
+        return this._protectedWrite(email, async () => {
+            try {
+                const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks/${encodeURIComponent(id)}`, {
+                    method: 'DELETE',
+                    credentials: 'include'
+                });
+                return { ok: res.ok, status: res.status };
+            } catch (_) {
+                return { ok: false };
+            }
+        });
     },
 
     async patchRemoteProduct(rawId, payload, version) {
@@ -1359,7 +1522,7 @@ const Api = {
         try {
             const headers = this._adminProductHeaders({ 'Content-Type': 'application/json' });
             if (version != null) headers['If-Match'] = String(version);
-            const res = await fetch(`${baseUrl}/products/${encodeURIComponent(rawId)}`, {
+            const res = await this._protectedFetch(`${baseUrl}/products/${encodeURIComponent(rawId)}`, {
                 method: 'PATCH',
                 credentials: 'include',
                 headers,
@@ -1377,7 +1540,7 @@ const Api = {
         const baseUrl = gatewayService('admin-api');
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
         try {
-            const res = await fetch(`${baseUrl}/products`, {
+            const res = await this._protectedFetch(`${baseUrl}/products`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
@@ -1396,7 +1559,7 @@ const Api = {
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
         if (rawId == null) return { ok: false, error: '找不到這筆商品的資料庫 id' };
         try {
-            const res = await fetch(`${baseUrl}/products/${encodeURIComponent(rawId)}`, {
+            const res = await this._protectedFetch(`${baseUrl}/products/${encodeURIComponent(rawId)}`, {
                 method: 'DELETE',
                 credentials: 'include',
                 headers: this._adminProductHeaders()
@@ -1413,7 +1576,7 @@ const Api = {
         const baseUrl = this.config.services.crawler.baseUrl;
         if (!baseUrl) return { ok: false, error: 'crawlerUrl 未設定' };
         try {
-            const res = await fetch(`${baseUrl}/crawler/search-preview`, {
+            const res = await this._protectedFetch(`${baseUrl}/crawler/search-preview`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
@@ -1432,8 +1595,11 @@ const Api = {
         const baseUrl = gatewayService('admin-api');
         if (!baseUrl) return { ok: false, logs: [] };
         try {
-            const res = await fetch(`${baseUrl}/product-audit-logs?limit=${encodeURIComponent(limit)}`, {
-                headers: this._adminProductHeaders(), credentials: 'include', cache: 'no-store'
+            // 走統一的受保護 fetch wrapper：admin-api 是受保護的同源 Gateway 路徑，
+            // 由 wrapper 統一帶 credentials、綁定分頁 session signal，並在 401／403
+            // 時通知 Router 換帳號，不再讓稽核讀取各自處理一套逾期邏輯。
+            const res = await this._fetchWithRelogin(`${baseUrl}/product-audit-logs?limit=${encodeURIComponent(limit)}`, {
+                headers: this._adminProductHeaders(), cache: 'no-store'
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) return { ok: false, logs: [], ...this._productApiError(data, res.status) };
@@ -1458,7 +1624,10 @@ const Api = {
             const fa = analysisPackage?.faceAnalysis
                 || ((analysisPackage?.faceShape || analysisPackage?.skinTone) ? analysisPackage : null);
             const suggestion = analysisPackage?.generativeText?.suggestion || null;
-            const res = await fetch(url, {
+            // 統一走受保護 fetch wrapper。recommend-products 在 Gateway 屬公開商品路徑，
+            // wrapper 不會加 actor header，但會把這條請求綁進分頁的 session 批次，
+            // 換帳號或登出時一併取消，不留背景請求打到舊身分。
+            const res = await this._fetchWithRelogin(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -2032,6 +2201,13 @@ const Auth = {
         fetch(`${gateway.baseUrl}${gateway.logoutPath}`, { method: 'POST', credentials: 'include' })
             .catch(() => null)
             .finally(() => {
+                try {
+                    if (typeof BroadcastChannel === 'function') {
+                        const channel = new BroadcastChannel('decorate-me-auth');
+                        channel.postMessage({ type: 'logged-out' });
+                        channel.close();
+                    }
+                } catch (_) {}
                 this.clearSession();
                 location.reload();
             });
