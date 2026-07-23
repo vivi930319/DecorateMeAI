@@ -525,5 +525,145 @@ class AiGatewayTest(unittest.TestCase):
         self.assertEqual(_render_job_id_from_url(payload["afterImageUrl"]), job_id)
 
 
+def _multi_cookie(*pairs):
+    return {gateway.SESSION_COOKIE: gateway.serialize_session_slots(list(pairs))}
+
+
+def _set_cookie_value(response):
+    jar = SimpleCookie()
+    for name, value in response.raw_headers:
+        if name.decode("latin-1").lower() == "set-cookie":
+            jar.load(value.decode("latin-1"))
+    return jar[gateway.SESSION_COOKIE].value if gateway.SESSION_COOKIE in jar else ""
+
+
+class MultiSessionTest(unittest.TestCase):
+    """Multiple accounts signed in across tabs of one browser (flag on)."""
+
+    def setUp(self):
+        import job_store
+        self._flag = gateway.MULTI_SESSION_ENABLED
+        self._url = gateway.MEMBER_DATABASE_URL
+        self._session_only = gateway.SESSION_ONLY_MODE
+        self._fs, self._cl = job_store.firestore, job_store._client
+        gateway.MULTI_SESSION_ENABLED = True
+        gateway.SESSION_ONLY_MODE = True  # multi-session is cookie/session-only
+        gateway.MEMBER_DATABASE_URL = "https://member.test"
+        job_store.firestore, job_store._client = None, None  # keep the login limiter in memory
+        gateway._login_rate_hits.clear()
+
+    def tearDown(self):
+        import job_store
+        gateway.MULTI_SESSION_ENABLED = self._flag
+        gateway.MEMBER_DATABASE_URL = self._url
+        gateway.SESSION_ONLY_MODE = self._session_only
+        job_store.firestore, job_store._client = self._fs, self._cl
+        gateway._login_rate_hits.clear()
+
+    # ── selection ────────────────────────────────────────────────────────────
+    def test_selector_picks_the_named_account_and_only_its_upstream_cookie(self):
+        tok_a, _ = issue_access_token("a@example.com", "member", "active")
+        tok_b, _ = issue_access_token("b@example.com", "member", "active")
+        request = Mock()
+        request.cookies = _multi_cookie(
+            (tok_a, seal_member_cookie("session=AAA")),
+            (tok_b, seal_member_cookie("session=BBB")),
+        )
+        request.headers = {"x-expected-actor": opaque_actor_id("b@example.com")}
+        account = gateway.select_account(request, for_write=True)
+        self.assertEqual(account["sub"], "b@example.com")
+        self.assertEqual(gateway.unseal_member_cookie(account["sealed"]), "session=BBB")
+
+        request.headers = {"x-expected-actor": opaque_actor_id("a@example.com")}
+        self.assertEqual(gateway.unseal_member_cookie(
+            gateway.select_account(request, for_write=True)["sealed"]), "session=AAA")
+
+    def test_you_can_only_act_as_an_account_signed_in_on_this_browser(self):
+        tok_a, _ = issue_access_token("a@example.com", "member", "active")
+        request = Mock()
+        request.cookies = _multi_cookie((tok_a, seal_member_cookie("session=AAA")))
+        request.headers = {"x-expected-actor": opaque_actor_id("stranger@example.com")}
+        with self.assertRaises(Exception) as raised:
+            gateway.select_account(request, for_write=False)
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(raised.exception.detail["error"]["code"], "ACCOUNT_NOT_AVAILABLE")
+
+    def test_write_without_a_selector_still_fails_closed(self):
+        tok_a, _ = issue_access_token("a@example.com", "member", "active")
+        tok_b, _ = issue_access_token("b@example.com", "member", "active")
+        request = Mock()
+        request.cookies = _multi_cookie((tok_a, "sA"), (tok_b, "sB"))
+        request.headers = {}
+        with self.assertRaises(Exception) as raised:
+            gateway.select_account(request, for_write=True)
+        self.assertEqual(raised.exception.detail["error"]["code"], "EXPECTED_ACTOR_REQUIRED")
+
+    def test_single_account_read_needs_no_selector(self):
+        tok_a, _ = issue_access_token("a@example.com", "member", "active")
+        request = Mock()
+        request.cookies = _multi_cookie((tok_a, "sA"))
+        request.headers = {}
+        self.assertEqual(gateway.select_account(request, for_write=False)["sub"], "a@example.com")
+
+    # ── login accumulation ────────────────────────────────────────────────────
+    def _login(self, request, email):
+        request.app.state.http_client.post = AsyncMock(return_value=httpx.Response(
+            200,
+            json={"success": True, "member": {"email": email, "role": "member", "status": "active"}},
+            headers=[("set-cookie", f"session=up-{email}; Path=/")],
+            request=httpx.Request("POST", "https://member.test/api/login"),
+        ))
+        request.app.state.http_client.get = AsyncMock(return_value=httpx.Response(
+            200, request=httpx.Request("GET", "https://member.test/api/members/x")))
+        from ai_gateway import LoginRequest, login
+        return asyncio.run(login(LoginRequest(email=email, password="password1"), request))
+
+    def test_a_second_login_adds_a_slot_instead_of_replacing(self):
+        request = Mock()
+        request.headers = {}
+        request.client = None
+        request.cookies = {}
+        cookie_a = _set_cookie_value(self._login(request, "a@example.com"))
+        self.assertTrue(cookie_a.startswith(gateway.MULTI_SESSION_PREFIX))
+        request.cookies = {gateway.SESSION_COOKIE: cookie_a}
+        cookie_b = _set_cookie_value(self._login(request, "b@example.com"))
+        probe = Mock()
+        probe.cookies = {gateway.SESSION_COOKIE: cookie_b}
+        subs = sorted(a["sub"] for a in gateway.session_accounts(probe))
+        self.assertEqual(subs, ["a@example.com", "b@example.com"])
+
+    # ── logout is per-account ─────────────────────────────────────────────────
+    def test_logging_out_one_account_keeps_the_others_signed_in(self):
+        tok_a, _ = issue_access_token("a@example.com", "member", "active")
+        tok_b, _ = issue_access_token("b@example.com", "member", "active")
+        request = Mock()
+        request.cookies = _multi_cookie((tok_a, "sA"), (tok_b, "sB"))
+        request.query_params = {"actor": opaque_actor_id("a@example.com")}
+        result = asyncio.run(gateway.logout(request))
+        probe = Mock()
+        probe.cookies = {gateway.SESSION_COOKIE: _set_cookie_value(result)}
+        remaining = [a["sub"] for a in gateway.session_accounts(probe)]
+        self.assertEqual(remaining, ["b@example.com"])
+
+    # ── session status lists the accounts for the switcher ────────────────────
+    def test_session_status_lists_every_signed_in_account(self):
+        tok_a, _ = issue_access_token("a@example.com", "member", "active")
+        tok_b, _ = issue_access_token("b@example.com", "member", "active")
+        request = Mock()
+        request.cookies = _multi_cookie(
+            (tok_a, seal_member_cookie("session=AAA")),
+            (tok_b, seal_member_cookie("session=BBB")),
+        )
+        request.headers = {"x-expected-actor": opaque_actor_id("a@example.com")}
+        request.app.state.http_client.get = AsyncMock(return_value=httpx.Response(
+            200, request=httpx.Request("GET", "https://member.test/api/members/a")))
+        payload = json.loads(asyncio.run(session_status(request)).body.decode("utf-8"))
+        self.assertEqual(payload["sub"], "a@example.com")
+        listed = sorted(a["sub"] for a in payload["accounts"])
+        self.assertEqual(listed, ["a@example.com", "b@example.com"])
+        # No email of another account leaks beyond the caller's own listing intent.
+        self.assertNotIn("session=BBB", asyncio.run(session_status(request)).body.decode("utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

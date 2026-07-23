@@ -191,6 +191,21 @@ SESSION_COOKIE = "__session"
 # it can separate them unambiguously.
 SESSION_COOKIE_SEPARATOR = "|"
 MAX_SEALED_MEMBER_SESSION_BYTES = 3500
+
+# Multi-account (multiple accounts signed in across tabs of one browser).
+# One browser has one `__session` cookie, so multiple accounts must live inside
+# it as several (gateway token, sealed upstream cookie) slots. A per-tab
+# `X-Expected-Actor` selects which slot to act as — the same opaque, email-free
+# actor the tab already pins. When the flag is off, login replaces (one slot) and
+# behaviour is exactly the single-account path; the selection logic still works
+# because it simply sees one slot.
+MULTI_SESSION_ENABLED = os.getenv("GATEWAY_MULTI_SESSION", "").strip().lower() in {"1", "true", "yes", "on"}
+MAX_SESSION_SLOTS = max(1, min(int(os.getenv("GATEWAY_MAX_SESSION_SLOTS", "4")), 8))
+MULTI_SESSION_PREFIX = "v2."
+# A cookie must stay well under the ~4 KB browser limit. Each slot is a JWT plus a
+# Fernet-sealed upstream cookie; this bound decides how many slots can coexist
+# before the oldest is evicted.
+MAX_SESSION_COOKIE_BYTES = max(1024, min(int(os.getenv("GATEWAY_MAX_SESSION_COOKIE_BYTES", "3800")), 4000))
 LOGIN_LIMIT_COLLECTION = os.getenv("GATEWAY_LOGIN_LIMIT_COLLECTION", "gateway_login_limits")
 PUBLIC_PRODUCT_PATHS = _patterns(r"api/products", r"recommend-products")
 SAVED_LOOK_PATH_RE = re.compile(r"^api/members/([^/]+)/saved-looks(?:/([^/]+))?$")
@@ -498,6 +513,16 @@ def require_upstream_member_cookie(request: Request) -> str:
             status_code=401,
             detail={"error": {"code": "MEMBER_SESSION_REQUIRED", "message": "Member sign-in is required."}},
         )
+    return unseal_member_cookie(sealed)
+
+
+def unseal_member_cookie(sealed: str) -> str:
+    """Decrypt one sealed upstream cookie, or 401 if it is missing/invalid."""
+    if not sealed:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"code": "MEMBER_SESSION_REQUIRED", "message": "Member sign-in is required."}},
+        )
     try:
         return _member_cookie_cipher().decrypt(
             sealed.encode("ascii"),
@@ -508,6 +533,157 @@ def require_upstream_member_cookie(request: Request) -> str:
             status_code=401,
             detail={"error": {"code": "MEMBER_SESSION_INVALID", "message": "Member session is invalid or expired."}},
         )
+
+
+# ── Multi-account session slots ──────────────────────────────────────────────
+# The `__session` cookie holds either the legacy single slot ("token|sealed") or
+# the v2 multi-slot form ("v2." + base64url(JSON list of {t, s})). Reading always
+# accepts both; writing uses whichever the caller chose (legacy for single-account
+# so nothing changes until multi-session is switched on).
+
+def read_session_slots(request: Request) -> list[tuple[str, str]]:
+    """Return every (gateway_token, sealed_member_cookie) slot in `__session`."""
+    raw = request.cookies.get(SESSION_COOKIE, "")
+    if not raw:
+        return []
+    if raw.startswith(MULTI_SESSION_PREFIX):
+        try:
+            decoded = base64.urlsafe_b64decode(raw[len(MULTI_SESSION_PREFIX):].encode("ascii")).decode("utf-8")
+            items = json.loads(decoded)
+        except (ValueError, TypeError):
+            # binascii.Error (bad base64) subclasses ValueError; malformed JSON too.
+            return []
+        slots: list[tuple[str, str]] = []
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                token = str(item.get("t") or "")
+                sealed = str(item.get("s") or "")
+                if token:
+                    slots.append((token, sealed))
+        return slots
+    token, _, sealed = raw.partition(SESSION_COOKIE_SEPARATOR)
+    return [(token, sealed)] if token else []
+
+
+def serialize_session_slots(slots: list[tuple[str, str]]) -> str:
+    data = [{"t": token, "s": sealed} for token, sealed in slots]
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(data, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii")
+    return MULTI_SESSION_PREFIX + encoded
+
+
+def set_session_slots(response: Response, slots: list[tuple[str, str]]) -> None:
+    """Write the multi-slot `__session`, evicting the oldest slot until it fits."""
+    kept = slots[-MAX_SESSION_SLOTS:] if len(slots) > MAX_SESSION_SLOTS else list(slots)
+    value = serialize_session_slots(kept)
+    # Never emit a cookie the browser will silently drop: shed oldest accounts
+    # until it fits, but always keep at least the newest one.
+    while len(value) > MAX_SESSION_COOKIE_BYTES and len(kept) > 1:
+        kept = kept[1:]
+        value = serialize_session_slots(kept)
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=value,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _slot_claims(access_token: str) -> dict | None:
+    """Verified claims for a slot's gateway token, or None if invalid/expired."""
+    if not access_token:
+        return None
+    try:
+        return jwt.decode(
+            access_token,
+            SESSION_SECRET,
+            algorithms=["HS256"],
+            audience="decorate-me-ai",
+            issuer="decorate-me-ai-gateway",
+            options={"require": ["exp", "iat", "sub"]},
+        )
+    except jwt.PyJWTError:
+        return None
+
+
+def session_accounts(request: Request) -> list[dict]:
+    """Every signed-in account in this browser's `__session`, invalid slots dropped.
+
+    Newest last. Each entry carries the opaque actor, the subject, the role, plus
+    the raw token and sealed upstream cookie needed to act as that account.
+    """
+    accounts: list[dict] = []
+    seen: set[str] = set()
+    for token, sealed in read_session_slots(request):
+        claims = _slot_claims(token)
+        if not claims:
+            continue
+        sub = str(claims.get("sub") or "").strip().lower()
+        if not sub:
+            continue
+        actor = opaque_actor_id(sub)
+        if actor in seen:
+            # A refreshed login for the same account: keep the newest slot.
+            accounts = [a for a in accounts if a["actorId"] != actor]
+        seen.add(actor)
+        accounts.append({
+            "actorId": actor,
+            "sub": sub,
+            "role": str(claims.get("role") or "member"),
+            "status": str(claims.get("status") or "active"),
+            "token": token,
+            "sealed": sealed,
+            "claims": claims,
+        })
+    return accounts
+
+
+def select_account(request: Request, *, for_write: bool) -> dict:
+    """Pick which signed-in account this request acts as, using `X-Expected-Actor`.
+
+    The selector is the same per-tab opaque actor used for cross-tab isolation;
+    here it also *chooses* the slot, so a request can only ever act as an account
+    that has actually authenticated in this browser. Missing selector on a write
+    fails closed; a selector naming an account that is not signed in here is
+    refused so the tab can prompt that account to sign in again.
+    """
+    accounts = session_accounts(request)
+    if not accounts:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"code": "MEMBER_AUTH_REQUIRED", "message": "Member sign-in is required."}},
+        )
+    selector = str(request.headers.get("x-expected-actor") or "").strip()
+    if selector:
+        for account in accounts:
+            if secrets.compare_digest(selector, account["actorId"]):
+                return account
+        # The tab named an account that is not signed in on this browser (it was
+        # logged out, expired, or never added here). Tell the tab to re-establish
+        # that account rather than silently acting as a different one.
+        raise HTTPException(
+            status_code=409,
+            detail={"error": {"code": "ACCOUNT_NOT_AVAILABLE", "message": "登入帳號已在其他分頁變更，請重新整理頁面後再操作。"}},
+        )
+    if for_write:
+        # A write must name its account so it can never land on the wrong one.
+        raise HTTPException(
+            status_code=409,
+            detail={"error": {"code": "EXPECTED_ACTOR_REQUIRED", "message": "無法確認目前分頁的登入身分，請重新登入後再操作。"}},
+        )
+    if len(accounts) == 1:
+        return accounts[0]
+    # A read with several accounts signed in but no selector is ambiguous.
+    raise HTTPException(
+        status_code=409,
+        detail={"error": {"code": "EXPECTED_ACTOR_REQUIRED", "message": "無法確認目前分頁的登入身分，請重新登入後再操作。"}},
+    )
 
 
 async def _validate_upstream_member_cookie(request: Request, upstream_cookie: str, subject: str) -> str:
@@ -614,13 +790,16 @@ def require_member_access(request: Request) -> dict:
         raise HTTPException(status_code=401, detail={"error": {"code": "MEMBER_AUTH_INVALID", "message": "Member session is invalid or expired."}})
 
 
-def require_admin_access(request: Request) -> dict:
-    claims = require_member_access(request)
+def _require_admin_claims(claims: dict) -> dict:
     if str(claims.get("status") or "active").lower() != "active":
         raise HTTPException(status_code=403, detail={"error": {"code": "ADMIN_SUSPENDED", "message": "Administrator account is suspended."}})
     if str(claims.get("role") or "").lower() != "admin":
         raise HTTPException(status_code=403, detail={"error": {"code": "ADMIN_REQUIRED", "message": "Administrator permission is required."}})
     return claims
+
+
+def require_admin_access(request: Request) -> dict:
+    return _require_admin_claims(require_member_access(request))
 
 
 def validate_product_id(product_id: str) -> str:
@@ -1044,17 +1223,44 @@ async def login(body: LoginRequest, request: Request):
                 detail={"error": {"code": "MEMBER_SESSION_UNUSABLE", "message": "Member authentication session could not be established."}},
             )
         raise
-    payload = {"success": True, "member": member, "expiresAt": expires_at, "actorId": opaque_actor_id(verified_email)}
+    actor_id = opaque_actor_id(verified_email)
+    payload = {"success": True, "member": member, "expiresAt": expires_at, "actorId": actor_id}
     if not SESSION_ONLY_MODE:
         payload.update({"accessToken": access_token, "tokenType": "Bearer"})
     result = JSONResponse(content=payload)
-    set_session_cookie(result, access_token, seal_member_cookie(upstream_cookie))
+    sealed_new = seal_member_cookie(upstream_cookie)
+    if MULTI_SESSION_ENABLED:
+        # Add this account alongside any others already signed in on this browser.
+        # A repeat login for the same account refreshes (replaces) its own slot.
+        slots = [
+            (token, sealed)
+            for token, sealed in read_session_slots(request)
+            if not (_slot_claims(token) and opaque_actor_id(str(_slot_claims(token).get("sub") or "").strip().lower()) == actor_id)
+        ]
+        slots.append((access_token, sealed_new))
+        set_session_slots(result, slots)
+    else:
+        set_session_cookie(result, access_token, sealed_new)
     return result
 
 
 @app.post("/auth/logout")
-async def logout():
+async def logout(request: Request):
     result = JSONResponse(content={"ok": True})
+    # Multi-session: `?actor=<id>` logs out just that one account and leaves the
+    # other accounts on this browser signed in. Without it (or with the flag off)
+    # the whole session is cleared, as before.
+    actor = str(request.query_params.get("actor") or "").strip()
+    remaining: list[tuple[str, str]] = []
+    if MULTI_SESSION_ENABLED and actor:
+        for token, sealed in read_session_slots(request):
+            claims = _slot_claims(token)
+            slot_actor = opaque_actor_id(str(claims.get("sub") or "").strip().lower()) if claims else ""
+            if slot_actor and slot_actor != actor:
+                remaining.append((token, sealed))
+    if remaining:
+        set_session_slots(result, remaining)
+        return result
     result.delete_cookie(key=SESSION_COOKIE, path="/", secure=IS_PRODUCTION, httponly=True, samesite="lax")
     # Browsers that signed in before S56 still carry the two retired cookies.
     # Nothing reads them any more, but clearing them on the way out keeps stale
@@ -1067,28 +1273,70 @@ async def logout():
 @app.get("/auth/session")
 async def session_status(request: Request):
     """Verify both Gateway and upstream member sessions before loading private pages."""
-    claims = require_member_access(request)
-    upstream_cookie = await validate_upstream_member_session(request, claims)
-    # `sub` tells the browser *who* this session belongs to.  Without it a page
-    # that still holds a stale profile in localStorage keeps addressing member
-    # routes as the previous account: signing in as an administrator replaces
-    # the single `__session` cookie, every member call then asks the database
-    # for somebody else's rows, and the 403 that comes back is indistinguishable
-    # from a permission bug.  The subject is the caller's own identity, so
-    # returning it to the authenticated owner reveals nothing new.
+    if not MULTI_SESSION_ENABLED:
+        claims = require_member_access(request)
+        upstream_cookie = await validate_upstream_member_session(request, claims)
+        # `sub` tells the browser *who* this session belongs to.  Without it a page
+        # that still holds a stale profile in localStorage keeps addressing member
+        # routes as the previous account: signing in as an administrator replaces
+        # the single `__session` cookie, every member call then asks the database
+        # for somebody else's rows, and the 403 that comes back is indistinguishable
+        # from a permission bug.  The subject is the caller's own identity, so
+        # returning it to the authenticated owner reveals nothing new.
+        result = JSONResponse(content={
+            "ok": True,
+            "sub": str(claims.get("sub") or ""),
+            "actorId": opaque_actor_id(str(claims.get("sub") or "")),
+            "role": str(claims.get("role") or "member"),
+            "status": str(claims.get("status") or "active"),
+            "expiresAt": int(claims.get("exp") or 0) * 1000,
+        })
+        set_session_cookie(result, request_access_token(request), seal_member_cookie(upstream_cookie))
+        return result
+
+    # Multi-session: report the account this tab selected (or the newest as the
+    # default on a fresh tab) plus the full list of accounts signed in on this
+    # browser, so the frontend can render an account switcher. Only opaque actors
+    # and subjects the caller already owns are returned — no other account's data.
+    accounts = session_accounts(request)
+    if not accounts:
+        require_member_access(request)  # preserves the 401 MEMBER_AUTH_* contract
+    selector = str(request.headers.get("x-expected-actor") or "").strip()
+    account = None
+    if selector:
+        for candidate in accounts:
+            if secrets.compare_digest(selector, candidate["actorId"]):
+                account = candidate
+                break
+        if account is None:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": {"code": "ACCOUNT_NOT_AVAILABLE", "message": "登入帳號已在其他分頁變更，請重新整理頁面後再操作。"}},
+            )
+    else:
+        account = accounts[-1]  # newest signed-in account is the default
+    upstream_cookie = await _validate_upstream_member_cookie(
+        request, unseal_member_cookie(account["sealed"]), account["sub"]
+    )
     result = JSONResponse(content={
         "ok": True,
-        "sub": str(claims.get("sub") or ""),
-        # An opaque, email-free handle for the account this session belongs to.
-        # The tab pins it and echoes it as `X-Expected-Actor` on every write so
-        # a mid-session account swap is refused server-side (SESSION_OWNER_CHANGED)
-        # without ever putting an email in a header a platform log might keep.
-        "actorId": opaque_actor_id(str(claims.get("sub") or "")),
-        "role": str(claims.get("role") or "member"),
-        "status": str(claims.get("status") or "active"),
-        "expiresAt": int(claims.get("exp") or 0) * 1000,
+        "sub": account["sub"],
+        "actorId": account["actorId"],
+        "role": account["role"],
+        "status": account["status"],
+        "expiresAt": int(account["claims"].get("exp") or 0) * 1000,
+        "accounts": [
+            {"actorId": a["actorId"], "sub": a["sub"], "role": a["role"], "status": a["status"]}
+            for a in accounts
+        ],
     })
-    set_session_cookie(result, request_access_token(request), seal_member_cookie(upstream_cookie))
+    sealed = seal_member_cookie(upstream_cookie)
+    rebuilt: list[tuple[str, str]] = []
+    for token, slot_sealed in read_session_slots(request):
+        slot_claims = _slot_claims(token)
+        slot_actor = opaque_actor_id(str(slot_claims.get("sub") or "").strip().lower()) if slot_claims else ""
+        rebuilt.append((account["token"], sealed) if slot_actor == account["actorId"] else (token, slot_sealed))
+    set_session_slots(result, rebuilt)
     return result
 
 
@@ -1139,8 +1387,12 @@ async def verify_otp(request: Request):
 
 
 async def proxy_admin_request(request: Request, upstream_path: str):
-    claims = require_admin_access(request)
-    enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+    if MULTI_SESSION_ENABLED:
+        is_write = str(request.method or "").upper() in STATE_CHANGING_METHODS
+        claims = _require_admin_claims(select_account(request, for_write=is_write)["claims"])
+    else:
+        claims = require_admin_access(request)
+        enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
     if not PRODUCT_DATABASE_URL or not PRODUCT_ADMIN_API_KEY:
         raise HTTPException(status_code=503, detail={"error": {"code": "ADMIN_PROXY_NOT_CONFIGURED", "message": "Admin proxy is not configured."}})
 
@@ -1260,9 +1512,22 @@ async def proxy(service: str, path: str, request: Request):
 
     if not SESSION_ONLY_MODE:
         require_client_api_key(upstream, request.headers.get("x-api-key", ""))
-    claims = require_member_access(request)
-    acting_owner_id = opaque_actor_id(str(claims.get("sub") or ""))
-    enforce_expected_actor(request, acting_owner_id)
+    # `X-Expected-Actor` both isolates and (with multi-session) selects the
+    # account. With multi-session on it chooses which signed-in account to act as;
+    # with it off, behaviour is exactly the single-account path (one slot, header
+    # required on writes, mismatch refused). Flag off is kept byte-identical so it
+    # also covers bearer-token (non session-only) requests unchanged.
+    selected_sealed = ""
+    if MULTI_SESSION_ENABLED:
+        is_write = str(request.method or "").upper() in STATE_CHANGING_METHODS
+        account = select_account(request, for_write=is_write)
+        claims = account["claims"]
+        acting_owner_id = account["actorId"]
+        selected_sealed = account["sealed"]
+    else:
+        claims = require_member_access(request)
+        acting_owner_id = opaque_actor_id(str(claims.get("sub") or ""))
+        enforce_expected_actor(request, acting_owner_id)
     target_email = _authorize_member_path(claims, path) if service == "member-database" else None
     target_owner_id = opaque_actor_id(target_email) if target_email else acting_owner_id
     is_admin = str(claims.get("role") or "").strip().lower() == "admin"
@@ -1276,7 +1541,7 @@ async def proxy(service: str, path: str, request: Request):
         )
     upstream_member_cookie = ""
     if service == "member-database":
-        upstream_member_cookie = require_upstream_member_cookie(request)
+        upstream_member_cookie = unseal_member_cookie(selected_sealed) if MULTI_SESSION_ENABLED else require_upstream_member_cookie(request)
     if not upstream.base_url:
         raise HTTPException(status_code=503, detail={"error": {"code": "NOT_CONFIGURED", "message": "Upstream service is not configured."}})
 
@@ -1421,7 +1686,23 @@ async def proxy(service: str, path: str, request: Request):
                 # sealed jar must not turn that into an error the caller will
                 # retry; the previous cookie stays valid until it expires.
                 sealed = ""
-            if sealed:
+            if sealed and MULTI_SESSION_ENABLED:
+                # Refresh only the acting account's slot; other signed-in
+                # accounts in this browser must keep their sealed cookies.
+                rebuilt: list[tuple[str, str]] = []
+                replaced = False
+                for token, slot_sealed in read_session_slots(request):
+                    slot_claims = _slot_claims(token)
+                    slot_actor = opaque_actor_id(str(slot_claims.get("sub") or "").strip().lower()) if slot_claims else ""
+                    if slot_actor == acting_owner_id:
+                        rebuilt.append((account["token"], sealed))
+                        replaced = True
+                    else:
+                        rebuilt.append((token, slot_sealed))
+                if not replaced:
+                    rebuilt.append((account["token"], sealed))
+                set_session_slots(result, rebuilt)
+            elif sealed:
                 set_session_cookie(result, request_access_token(request), sealed)
     return result
 
