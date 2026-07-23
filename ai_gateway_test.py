@@ -16,9 +16,11 @@ from ai_gateway import (  # noqa: E402
     UPSTREAMS,
     build_upstream_headers,
     client_ip,
+    enforce_expected_actor,
     is_path_allowed,
     issue_access_token,
     opaque_actor_id,
+    proxy,
     public_config,
     require_admin_access,
     require_client_api_key,
@@ -26,6 +28,7 @@ from ai_gateway import (  # noqa: E402
     require_upstream_member_cookie,
     seal_member_cookie,
     session_status,
+    upstream_timeout,
     validate_upstream_member_session,
     _upstream_cookie_header,
     _authorize_member_path,
@@ -351,6 +354,134 @@ class AiGatewayTest(unittest.TestCase):
         with self.assertRaises(Exception) as raised:
             _authorize_member_path(claims, "api/members/other@example.com/saved-looks")
         self.assertEqual(raised.exception.status_code, 403)
+
+    def test_expected_actor_pins_the_tab_to_its_signed_in_account(self):
+        # A tab records its opaque actor at login and echoes it on every write.
+        # Matching the current session is allowed; a stale actor (the cookie was
+        # replaced by another account in the same browser) is refused before the
+        # write can reach the upstream. Missing actor headers fail closed on writes.
+        actor = opaque_actor_id("member@example.com")
+        request = Mock()
+        request.method = "POST"
+
+        request.headers = {"x-expected-actor": actor}
+        enforce_expected_actor(request, actor)  # matching: no raise
+
+        request.headers = {}
+        with self.assertRaises(Exception) as missing:
+            enforce_expected_actor(request, actor)
+        self.assertEqual(missing.exception.status_code, 409)
+        self.assertEqual(missing.exception.detail["error"]["code"], "EXPECTED_ACTOR_REQUIRED")
+
+        request.headers = {"x-expected-actor": opaque_actor_id("intruder@example.com")}
+        with self.assertRaises(Exception) as raised:
+            enforce_expected_actor(request, actor)
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(raised.exception.detail["error"]["code"], "SESSION_OWNER_CHANGED")
+
+        request.method = "GET"
+        request.headers = {}
+        enforce_expected_actor(request, actor)  # safe read: no actor header required
+
+    def test_write_with_a_stale_actor_never_reaches_the_upstream(self):
+        # End to end through the proxy: the 409 fires before any upstream call,
+        # so the wrong account is never touched — not merely detected afterwards.
+        token, _ = issue_access_token("member@example.com", "member", "active")
+        request = Mock()
+        request.method = "POST"
+        request.headers = {
+            "authorization": f"Bearer {token}",
+            "x-expected-actor": opaque_actor_id("intruder@example.com"),
+        }
+        request.cookies = session_cookies(token, seal_member_cookie("session=x"))
+        request.app.state.http_client.request = AsyncMock()
+        with self.assertRaises(Exception) as raised:
+            asyncio.run(proxy("member-database", "api/favorites/toggle", request))
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(raised.exception.detail["error"]["code"], "SESSION_OWNER_CHANGED")
+        request.app.state.http_client.request.assert_not_awaited()
+
+    def test_write_without_expected_actor_never_reaches_the_upstream(self):
+        token, _ = issue_access_token("member@example.com", "member", "active")
+        request = Mock()
+        request.method = "DELETE"
+        request.headers = {"authorization": f"Bearer {token}"}
+        request.cookies = session_cookies(token, seal_member_cookie("session=x"))
+        request.app.state.http_client.request = AsyncMock()
+        with self.assertRaises(Exception) as raised:
+            asyncio.run(proxy("member-database", "api/members/member@example.com/saved-looks/7", request))
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(raised.exception.detail["error"]["code"], "EXPECTED_ACTOR_REQUIRED")
+        request.app.state.http_client.request.assert_not_awaited()
+
+    def test_member_roster_is_administrator_only(self):
+        # The bare roster path returns every account.  `_authorize_member_path`
+        # only guards `api/members/<id>`, so without an explicit gate any signed-in
+        # member could enumerate the whole membership.
+        member_token, _ = issue_access_token("member@example.com", "member", "active")
+        request = Mock()
+        request.method = "GET"
+        request.headers = {"authorization": f"Bearer {member_token}"}
+        request.cookies = session_cookies(member_token, seal_member_cookie("session=x"))
+        with self.assertRaises(Exception) as raised:
+            asyncio.run(proxy("member-database", "api/members", request))
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertEqual(raised.exception.detail["error"]["code"], "ADMIN_REQUIRED")
+
+        # An administrator passes the roster gate; with no upstream configured in
+        # the test environment they land on NOT_CONFIGURED, proving the gate let
+        # them through rather than blocking them.
+        admin_token, _ = issue_access_token("admin@example.com", "admin", "active")
+        request.headers = {"authorization": f"Bearer {admin_token}"}
+        request.cookies = session_cookies(admin_token, seal_member_cookie("session=x"))
+        with self.assertRaises(Exception) as admin_raised:
+            asyncio.run(proxy("member-database", "api/members", request))
+        self.assertNotEqual(admin_raised.exception.detail["error"]["code"], "ADMIN_REQUIRED")
+
+    def test_upstream_timeouts_do_not_hold_the_full_connection_budget(self):
+        # No single read should be able to pin a worker for the ten-minute connect
+        # budget; the external text tunnel and the member DB get the tightest bounds.
+        self.assertLessEqual(upstream_timeout("member-database"), gateway.UPSTREAM_TIMEOUT_SECONDS)
+        self.assertLess(upstream_timeout("text-suggestion"), gateway.UPSTREAM_TIMEOUT_SECONDS)
+        self.assertLess(upstream_timeout("member-database"), upstream_timeout("render-service"))
+        self.assertGreaterEqual(upstream_timeout("text-suggestion"), 5)
+        # An unknown service still gets a bounded default, never the full budget.
+        self.assertLessEqual(upstream_timeout("mystery-service"), gateway.UPSTREAM_TIMEOUT_SECONDS)
+
+    def test_access_log_path_never_carries_a_member_email(self):
+        # Member and saved-look routes put the account's email straight in the
+        # path. The access log must not become a second copy of the membership
+        # list, so any email-bearing segment is masked before it is logged.
+        from api_errors import redact_log_path
+
+        self.assertEqual(
+            redact_log_path("/member-database/api/members/user@example.com/saved-looks"),
+            "/member-database/api/members/<member>/saved-looks",
+        )
+        # The browser sends the URL-encoded form; it must be masked too.
+        self.assertEqual(
+            redact_log_path("/member-database/api/members/user%40example.com/check-in"),
+            "/member-database/api/members/<member>/check-in",
+        )
+        masked = redact_log_path("/member-database/api/members/admin@corp.co/points")
+        self.assertNotIn("admin@corp.co", masked)
+        self.assertNotIn("admin%40corp.co", masked)
+        # Ordinary paths are left untouched.
+        self.assertEqual(redact_log_path("/api/products"), "/api/products")
+
+    def test_session_status_exposes_an_opaque_actor_for_the_tab_to_pin(self):
+        gateway.MEMBER_DATABASE_URL = "https://member.test"
+        token, _ = issue_access_token("member@example.com", "member", "active")
+        request = Mock()
+        request.headers = {}
+        request.cookies = session_cookies(token, seal_member_cookie("session=private-upstream-value"))
+        request.app.state.http_client.get = AsyncMock(
+            return_value=httpx.Response(200, request=httpx.Request("GET", "https://member.test/api/members/member%40example.com"))
+        )
+        payload = json.loads(asyncio.run(session_status(request)).body.decode("utf-8"))
+        self.assertEqual(payload["actorId"], opaque_actor_id("member@example.com"))
+        # The opaque actor must not embed the email it is derived from.
+        self.assertNotIn("member@example.com", payload["actorId"])
 
     def test_render_response_uses_stable_gateway_media_path(self):
         request = Mock()

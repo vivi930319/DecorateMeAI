@@ -473,23 +473,38 @@ def _artifact_is_shared(job: dict, field: str, url: str) -> bool:
     )
 
 
-def _delete_job_artifact(job: dict, force: bool = False) -> None:
+def _delete_job_artifact(job: dict, force: bool = False) -> bool:
     """刪掉這個 job 的圖片。**妝前圖與妝後圖都要刪。**
 
     妝前圖是使用者自己的臉。他刪掉收藏之後那張圖若留在 GCS 上，那不是浪費空間，
     是隱私事故——所以這裡兩個欄位都處理，任何新增的圖片欄位也必須加進來。
     """
+    deleted = True
     after_url = job.get("afterImageUrl")
     if after_url and job.get("isPermanent"):
         if force or not _artifact_is_shared(job, "afterImageUrl", after_url):
-            delete_permanent_storage_url(after_url)
+            deleted = bool(delete_permanent_storage_url(after_url)) and deleted
 
     # 妝前圖沒有 isPermanent 這個旗標——它一律由本服務上傳到自己的 bucket，
     # 而 delete_permanent_storage_url 本身就只肯刪自己 bucket 裡的物件。
     before_url = job.get("beforeImageUrl")
     if before_url:
         if force or not _artifact_is_shared(job, "beforeImageUrl", before_url):
-            delete_permanent_storage_url(before_url)
+            deleted = bool(delete_permanent_storage_url(before_url)) and deleted
+    return deleted
+
+
+def _mark_artifact_delete_failure(job_id: str, message: str) -> None:
+    job_store.patch(
+        RENDER_JOBS_COLLECTION,
+        job_id,
+        {
+            "deletionStatus": "failed",
+            "deletionError": message[:500],
+            "deletionLastAttemptAt": time.time(),
+            "updatedAt": time.time(),
+        },
+    )
 
 
 def _cleanup_render_jobs() -> None:
@@ -530,8 +545,10 @@ def _cleanup_render_jobs() -> None:
                 continue
             finished_at = _epoch(job.get("finishedAt") or job.get("createdAt"), now)
             if now - finished_at > RENDER_JOB_RETENTION_SECONDS:
-                _delete_job_artifact(job)
-                to_delete.append(job_id)
+                if _delete_job_artifact(job):
+                    to_delete.append(job_id)
+                else:
+                    _mark_artifact_delete_failure(job_id, "Expired render artifact deletion failed.")
 
     for job_id in to_delete:
         job_store.delete(RENDER_JOBS_COLLECTION, job_id)
@@ -543,8 +560,10 @@ def _cleanup_render_jobs() -> None:
         for job in ordered[: max(0, len(remaining) - RENDER_JOB_MAX_COUNT)]:
             job_id = job.get("jobId")
             if job_id:
-                _delete_job_artifact(job)
-                job_store.delete(RENDER_JOBS_COLLECTION, job_id)
+                if _delete_job_artifact(job):
+                    job_store.delete(RENDER_JOBS_COLLECTION, job_id)
+                else:
+                    _mark_artifact_delete_failure(job_id, "Render capacity cleanup failed.")
 
 
 @app.get("/health")
@@ -1011,16 +1030,33 @@ async def retain_render_job(
     # 使用者過幾天回來看到半張對比圖。variant 不能省：目的地名稱只用 job_id 會與
     # 妝後圖撞名，而 retain 內部的 exists() 檢查會靜默略過，讓妝前圖指向妝後那張。
     #
-    # 妝前圖失敗不讓整個 retain 失敗：妝後圖已經保住了，收藏本身是成功的，
-    # 為了少一張對比圖把整筆退掉會讓使用者連妝後圖都留不住。
+    # 妝前圖是使用者收藏對比的一半，也是他的原始臉部照片。只保住妝後圖卻把
+    # job 標成 retained 會讓 temporary/ 裡的妝前圖日後被生命週期清掉，形成永久
+    # 的半筆收藏。因此任一張 retain 失敗都保持 job 可重試，不能回報成功。
     retained_before = None
+    if not retained_url:
+        raise HTTPException(
+            status_code=503,
+            detail=error_payload("RETAIN_INCOMPLETE", "Render image retention is incomplete.", retryable=True),
+        )
     if job.get("beforeImageUrl"):
         try:
             retained_before = retain_permanent_storage_url(
                 job.get("beforeImageUrl"), owner_id, job_id, variant="-before"
             )
-        except Exception:  # noqa: BLE001
-            logging.getLogger(__name__).exception("妝前圖 retain 失敗，這筆收藏只會有妝後圖")
+            if not retained_before:
+                raise RuntimeError("before image retention returned no URL")
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).exception("妝前圖 retain 失敗，保留 job 供後續重試")
+            job_store.patch(
+                RENDER_JOBS_COLLECTION,
+                job_id,
+                {"retainStatus": "failed", "retainLastAttemptAt": time.time(), "updatedAt": time.time()},
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=error_payload("RETAIN_INCOMPLETE", "Before and after images could not both be retained.", retryable=True),
+            ) from exc
 
     patch = {
         "retained": True,
@@ -1032,7 +1068,7 @@ async def retain_render_job(
         patch["beforeImageUrl"] = retained_before
         patch["beforeObjectName"] = storage_object_name_from_url(retained_before)
     job_store.patch(RENDER_JOBS_COLLECTION, job_id, patch)
-    job_store.unset(RENDER_JOBS_COLLECTION, job_id, ["expiresAt"])
+    job_store.unset(RENDER_JOBS_COLLECTION, job_id, ["expiresAt", "retainStatus", "retainLastAttemptAt"])
     return {"status": "retained", "jobId": job_id}
 
 
@@ -1052,30 +1088,69 @@ async def delete_owned_render_artifact(
             status_code=409,
             detail=error_payload("JOB_IN_PROGRESS", "A running render job cannot be deleted yet.", retryable=True),
         )
-    _delete_job_artifact(job)
+    if not _delete_job_artifact(job):
+        _mark_artifact_delete_failure(job_id, "Owned render artifact deletion failed.")
+        raise HTTPException(
+            status_code=503,
+            detail=error_payload("ARTIFACT_DELETE_FAILED", "Render image deletion could not be completed.", retryable=True),
+        )
     job_store.delete(RENDER_JOBS_COLLECTION, job_id)
     return {"status": "deleted", "jobId": job_id}
 
 
+def _require_legacy_media_owner(
+    url: str,
+    user_id: str | None,
+    admin_request: str | None,
+) -> tuple[dict, str]:
+    """Resolve a legacy object back to an owned job; a valid bucket URL alone is not authorization."""
+    candidates: list[tuple[dict, str]] = []
+    for field in ("afterImageUrl", "beforeImageUrl"):
+        for job in job_store.find_by_field(RENDER_JOBS_COLLECTION, field, url, limit=50):
+            candidates.append((job, field))
+    if str(admin_request or "").strip() == "1" and candidates:
+        return candidates[0]
+    supplied = str(user_id or "").strip()
+    for job, field in candidates:
+        if supplied and str(job.get("ownerId") or "").strip() == supplied:
+            return job, field
+    raise HTTPException(
+        status_code=404,
+        detail=error_payload("MEDIA_NOT_FOUND", "Render image was not found.", retryable=False),
+    )
+
+
 @app.post("/render/media/sign")
-async def sign_legacy_render_media(req: MediaUrlRequest, _=Depends(require_api_key)):
+async def sign_legacy_render_media(
+    req: MediaUrlRequest,
+    x_user_id: str | None = Header(default=None),
+    x_admin_request: str | None = Header(default=None),
+    _=Depends(require_api_key),
+):
     """Refresh a legacy saved GCS URL after the Gateway verified DB ownership."""
     if not storage_object_name_from_url(req.url):
         raise HTTPException(
             status_code=400,
             detail=error_payload("INVALID_MEDIA_URL", "Render object URL is invalid.", retryable=False),
         )
+    _require_legacy_media_owner(req.url, x_user_id, x_admin_request)
     return {"signedUrl": create_signed_storage_url(req.url), "expiresIn": 600}
 
 
 @app.post("/render/media/content")
-async def get_legacy_render_media(req: MediaUrlRequest, _=Depends(require_api_key)):
+async def get_legacy_render_media(
+    req: MediaUrlRequest,
+    x_user_id: str | None = Header(default=None),
+    x_admin_request: str | None = Header(default=None),
+    _=Depends(require_api_key),
+):
     """Internal authenticated fallback for a legacy saved object URL."""
     if not storage_object_name_from_url(req.url):
         raise HTTPException(
             status_code=400,
             detail=error_payload("INVALID_MEDIA_URL", "Render object URL is invalid.", retryable=False),
         )
+    _require_legacy_media_owner(req.url, x_user_id, x_admin_request)
     content, content_type = download_private_storage_url(req.url)
     return Response(
         content=content,
@@ -1085,15 +1160,31 @@ async def get_legacy_render_media(req: MediaUrlRequest, _=Depends(require_api_ke
 
 
 @app.delete("/render/media")
-async def delete_legacy_render_media(req: MediaUrlRequest, _=Depends(require_api_key)):
+async def delete_legacy_render_media(
+    req: MediaUrlRequest,
+    x_user_id: str | None = Header(default=None),
+    x_admin_request: str | None = Header(default=None),
+    _=Depends(require_api_key),
+):
     """Delete a validated legacy object after its saved-look row was deleted."""
     if not storage_object_name_from_url(req.url):
         raise HTTPException(
             status_code=400,
             detail=error_payload("INVALID_MEDIA_URL", "Render object URL is invalid.", retryable=False),
         )
+    job, field = _require_legacy_media_owner(req.url, x_user_id, x_admin_request)
+    if _artifact_is_shared(job, field, req.url):
+        return {"status": "retained_by_other_record"}
     deleted = delete_permanent_storage_url(req.url)
-    return {"status": "deleted" if deleted else "not_found"}
+    if not deleted:
+        job_id = str(job.get("jobId") or "")
+        if job_id:
+            _mark_artifact_delete_failure(job_id, "Legacy render artifact deletion failed.")
+        raise HTTPException(
+            status_code=503,
+            detail=error_payload("ARTIFACT_DELETE_FAILED", "Render image deletion could not be completed.", retryable=True),
+        )
+    return {"status": "deleted"}
 
 
 @app.delete("/render/users/{owner_id}")
@@ -1116,25 +1207,46 @@ async def delete_member_render_artifacts(
     # 超過的部分完全不會被處理，而且會員資料那邊已經刪掉了，等於留下無主的臉部照片。
     deleted = 0
     batches = 0
+    attempted: set[str] = set()
+    failures: list[str] = []
     while batches < 200:  # 上限只是避免 job_store 異常時無限迴圈
         jobs = job_store.find_by_field(RENDER_JOBS_COLLECTION, "ownerId", owner_id, limit=200)
-        if not jobs:
+        pending = [job for job in jobs if str(job.get("jobId") or "") not in attempted]
+        if not pending:
             break
         batches += 1
-        for job in jobs:
+        for job in pending:
             job_id = job.get("jobId")
             if not job_id:
                 continue
+            attempted.add(str(job_id))
             # 妝後圖與**妝前圖**都要刪。妝前圖是使用者上傳的原始照片，
             # 帳號都刪了還把他的臉留在儲存空間裡，是這個系統最嚴重的一種失敗。
             # 妝後圖有 isPermanent 旗標（可能是外部暫存網址），妝前圖一律由本服務
             # 上傳到自己的 bucket，所以不需要那個判斷。
-            if job.get("isPermanent") and job.get("afterImageUrl"):
-                delete_permanent_storage_url(job.get("afterImageUrl"))
-            if job.get("beforeImageUrl"):
-                delete_permanent_storage_url(job.get("beforeImageUrl"))
+            try:
+                artifacts_deleted = _delete_job_artifact(job, force=True)
+            except Exception as exc:  # noqa: BLE001
+                artifacts_deleted = False
+                logging.getLogger(__name__).exception("member artifact deletion failed job_id=%s", job_id)
+                failure_message = str(exc)
+            else:
+                failure_message = "One or more member render objects could not be deleted."
+            if not artifacts_deleted:
+                failures.append(str(job_id))
+                _mark_artifact_delete_failure(str(job_id), failure_message)
+                continue
             job_store.delete(RENDER_JOBS_COLLECTION, job_id)
             deleted += 1
+    if failures:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                **error_payload("MEMBER_ARTIFACT_DELETE_INCOMPLETE", "Some member images could not be deleted; the records were retained for retry.", retryable=True),
+                "jobsDeleted": deleted,
+                "failedJobIds": failures[:50],
+            },
+        )
     return {"status": "deleted", "ownerId": owner_id, "jobsDeleted": deleted}
 
 
@@ -1158,6 +1270,11 @@ async def delete_render_job(
             status_code=409,
             detail=error_payload("JOB_IN_PROGRESS", "A running render job cannot be deleted yet.", retryable=True),
         )
-    _delete_job_artifact(job)
+    if not _delete_job_artifact(job):
+        _mark_artifact_delete_failure(job_id, "Render job artifact deletion failed.")
+        raise HTTPException(
+            status_code=503,
+            detail=error_payload("ARTIFACT_DELETE_FAILED", "Render image deletion could not be completed.", retryable=True),
+        )
     job_store.delete(RENDER_JOBS_COLLECTION, job_id)
     return {"status": "deleted", "jobId": job_id}

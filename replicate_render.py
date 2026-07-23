@@ -143,7 +143,16 @@ def delete_permanent_storage_url(url: str | None) -> bool:
         storage.Client().bucket(GCS_BUCKET_NAME).blob(blob_name).delete()
         return True
     except Exception as exc:  # noqa: BLE001
-        # Deletion is best effort: GCS lifecycle remains the final safety net.
+        # GCS delete is idempotent for our workflow: an object that is already
+        # gone satisfies the privacy deletion request and must not strand the
+        # ownership record forever.
+        try:
+            from google.api_core.exceptions import NotFound
+
+            if isinstance(exc, NotFound):
+                return True
+        except ImportError:
+            pass
         logging.getLogger(__name__).warning("GCS object deletion failed: %s", exc)
         return False
 

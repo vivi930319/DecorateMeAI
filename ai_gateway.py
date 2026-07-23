@@ -139,6 +139,36 @@ UPSTREAMS = {
 
 MAX_BODY_BYTES = max(1024, int(os.getenv("AI_GATEWAY_MAX_BODY_BYTES", str(13 * 1024 * 1024))))
 UPSTREAM_TIMEOUT_SECONDS = max(10, int(os.getenv("AI_GATEWAY_UPSTREAM_TIMEOUT_SECONDS", "600")))
+
+
+def _timeout_env(name: str, default: int) -> int:
+    # A read never has any business holding the 600-second connect budget the
+    # client is built with: a slow member database or a Quick Tunnel that stops
+    # answering would otherwise pin a worker for ten minutes and starve everyone
+    # else.  Each upstream gets its own bound, capped so a stray env value can
+    # never re-open that window.
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return max(5, min(value, UPSTREAM_TIMEOUT_SECONDS))
+
+
+# Per-service read timeouts.  Face and render are job-based (a quick submit,
+# then polling), so they do not need the long default either.  The external
+# text suggestion upstream is reached over a Quick Tunnel and must never hold a
+# ten-minute connection.
+UPSTREAM_TIMEOUTS = {
+    "face-basic": _timeout_env("AI_GATEWAY_FACE_TIMEOUT_SECONDS", 120),
+    "face-pro": _timeout_env("AI_GATEWAY_FACE_TIMEOUT_SECONDS", 120),
+    "render-service": _timeout_env("AI_GATEWAY_RENDER_TIMEOUT_SECONDS", 120),
+    "text-suggestion": _timeout_env("AI_GATEWAY_TEXT_TIMEOUT_SECONDS", 60),
+    "member-database": _timeout_env("AI_GATEWAY_MEMBER_TIMEOUT_SECONDS", 30),
+}
+
+
+def upstream_timeout(service: str) -> int:
+    return UPSTREAM_TIMEOUTS.get(service, _timeout_env("AI_GATEWAY_DEFAULT_TIMEOUT_SECONDS", 60))
 MEMBER_DATABASE_URL = _service_url("MEMBER_DATABASE_URL")
 PRODUCT_DATABASE_URL = _service_url("PRODUCT_DATABASE_URL")
 PRODUCT_ADMIN_API_KEY = os.getenv("PRODUCT_ADMIN_API_KEY", "")
@@ -166,6 +196,9 @@ PUBLIC_PRODUCT_PATHS = _patterns(r"api/products", r"recommend-products")
 SAVED_LOOK_PATH_RE = re.compile(r"^api/members/([^/]+)/saved-looks(?:/([^/]+))?$")
 MEMBER_PATH_RE = re.compile(r"^api/members/([^/]+)$")
 MEMBER_SCOPE_RE = re.compile(r"^api/members/([^/]+)(?:/|$)")
+# The bare roster path — no member id — returns every account, so it is an
+# administrator-only view rather than the self-scoped `api/members/<id>` route.
+MEMBER_LIST_PATH_RE = re.compile(r"^api/members$")
 # 妝前圖的網址多一段 /before，這裡要一起認得——否則從 saved_looks 讀回的
 # beforeImageUrl 解析不出 job id，retain 與刪除都會把它當成不相干的外部網址略過。
 STABLE_RENDER_URL_RE = re.compile(r"(?:https://[^/]+)?/media/render/([0-9a-f]{32})(?:/before)?(?:[?#].*)?$")
@@ -517,6 +550,38 @@ def opaque_actor_id(subject: str) -> str:
     return f"actor_{digest[:24]}"
 
 
+STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def enforce_expected_actor(request: Request, acting_owner_id: str) -> None:
+    """Reject a write whose tab was pinned to a different signed-in account.
+
+    Every browser tab shares one `__session` cookie, so signing in elsewhere in
+    the same browser silently rebinds this tab's requests to the new account.
+    On login the tab records its opaque actor (see `/auth/session`) and echoes
+    it back as `X-Expected-Actor`.  When the cookie has since been replaced, the
+    actor derived from the *current* session no longer matches, and the write is
+    stopped here — before it can reach the upstream and touch the wrong account.
+
+    Safe reads do not need the header.  State-changing requests fail closed:
+    an older or broken client that omits the pinned actor is refused instead of
+    being allowed to write using whichever shared cookie happens to be current.
+    """
+    if str(request.method or "").upper() not in STATE_CHANGING_METHODS:
+        return
+    expected = str(request.headers.get("x-expected-actor") or "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": {"code": "EXPECTED_ACTOR_REQUIRED", "message": "無法確認目前分頁的登入身分，請重新登入後再操作。"}},
+        )
+    if not secrets.compare_digest(expected, acting_owner_id):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": {"code": "SESSION_OWNER_CHANGED", "message": "登入帳號已在其他分頁變更，請重新整理頁面後再操作。"}},
+        )
+
+
 def require_member_access(request: Request) -> dict:
     token = request_access_token(request)
     if not token:
@@ -664,6 +729,7 @@ async def _sign_legacy_media(request: Request, value: str, owner_id: str) -> str
         request,
         "POST",
         "render/media/sign",
+        user_id=owner_id,
         json_body={"url": value},
     )
     if response is None or not response.is_success:
@@ -730,7 +796,7 @@ async def _delete_saved_media(
     for value in values:
         job_id = _render_job_id_from_url(value)
         if job_id:
-            await _render_internal_request(
+            response = await _render_internal_request(
                 request,
                 "DELETE",
                 f"render/jobs/{job_id}/artifact",
@@ -738,13 +804,20 @@ async def _delete_saved_media(
                 admin=admin,
             )
         elif PRIVATE_RENDER_URL_RE.fullmatch(value):
-            await _render_internal_request(
+            response = await _render_internal_request(
                 request,
                 "DELETE",
                 "render/media",
                 user_id=owner_id,
                 admin=admin,
                 json_body={"url": value},
+            )
+        else:
+            continue
+        if response is None or not response.is_success:
+            raise HTTPException(
+                status_code=503,
+                detail={"error": {"code": "MEDIA_DELETE_INCOMPLETE", "message": "圖片刪除尚未完成，請稍後重試。"}},
             )
 
 
@@ -767,7 +840,7 @@ app.add_middleware(
     allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Accept", "Authorization", "Content-Type", "If-Match", "X-API-Key", "X-Job-Token"],
+    allow_headers=["Accept", "Authorization", "Content-Type", "If-Match", "X-API-Key", "X-Expected-Actor", "X-Job-Token"],
     max_age=3600,
 )
 install_api_error_handling(app, "ai-gateway")
@@ -956,7 +1029,7 @@ async def login(body: LoginRequest, request: Request):
                 detail={"error": {"code": "MEMBER_SESSION_UNUSABLE", "message": "Member authentication session could not be established."}},
             )
         raise
-    payload = {"success": True, "member": member, "expiresAt": expires_at}
+    payload = {"success": True, "member": member, "expiresAt": expires_at, "actorId": opaque_actor_id(verified_email)}
     if not SESSION_ONLY_MODE:
         payload.update({"accessToken": access_token, "tokenType": "Bearer"})
     result = JSONResponse(content=payload)
@@ -991,6 +1064,11 @@ async def session_status(request: Request):
     result = JSONResponse(content={
         "ok": True,
         "sub": str(claims.get("sub") or ""),
+        # An opaque, email-free handle for the account this session belongs to.
+        # The tab pins it and echoes it as `X-Expected-Actor` on every write so
+        # a mid-session account swap is refused server-side (SESSION_OWNER_CHANGED)
+        # without ever putting an email in a header a platform log might keep.
+        "actorId": opaque_actor_id(str(claims.get("sub") or "")),
         "role": str(claims.get("role") or "member"),
         "status": str(claims.get("status") or "active"),
         "expiresAt": int(claims.get("exp") or 0) * 1000,
@@ -1047,6 +1125,7 @@ async def verify_otp(request: Request):
 
 async def proxy_admin_request(request: Request, upstream_path: str):
     claims = require_admin_access(request)
+    enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
     if not PRODUCT_DATABASE_URL or not PRODUCT_ADMIN_API_KEY:
         raise HTTPException(status_code=503, detail={"error": {"code": "ADMIN_PROXY_NOT_CONFIGURED", "message": "Admin proxy is not configured."}})
 
@@ -1167,10 +1246,19 @@ async def proxy(service: str, path: str, request: Request):
     if not SESSION_ONLY_MODE:
         require_client_api_key(upstream, request.headers.get("x-api-key", ""))
     claims = require_member_access(request)
-    target_email = _authorize_member_path(claims, path) if service == "member-database" else None
     acting_owner_id = opaque_actor_id(str(claims.get("sub") or ""))
+    enforce_expected_actor(request, acting_owner_id)
+    target_email = _authorize_member_path(claims, path) if service == "member-database" else None
     target_owner_id = opaque_actor_id(target_email) if target_email else acting_owner_id
     is_admin = str(claims.get("role") or "").strip().lower() == "admin"
+    # The full member roster is an administrator-only view.  `_authorize_member_path`
+    # only guards `api/members/<id>` routes; the bare list path matches nothing
+    # there, so without this any signed-in member could read every account.
+    if service == "member-database" and MEMBER_LIST_PATH_RE.fullmatch(path) and not is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"code": "ADMIN_REQUIRED", "message": "Administrator permission is required."}},
+        )
     upstream_member_cookie = ""
     if service == "member-database":
         upstream_member_cookie = require_upstream_member_cookie(request)
@@ -1209,25 +1297,54 @@ async def proxy(service: str, path: str, request: Request):
                 headers=upstream_headers,
                 timeout=20,
             )
-            if before_delete.is_success:
-                try:
-                    prefetched_media = _saved_media_urls(
-                        before_delete.json(),
-                        saved_match.group(2) if saved_match and saved_match.group(2) else None,
+            if not before_delete.is_success:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"error": {"code": "MEDIA_OWNERSHIP_LOOKUP_FAILED", "message": "無法確認待刪圖片，請稍後重試。"}},
+                )
+            try:
+                prefetched_media = _saved_media_urls(
+                    before_delete.json(),
+                    saved_match.group(2) if saved_match and saved_match.group(2) else None,
+                )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail={"error": {"code": "MEDIA_OWNERSHIP_LOOKUP_FAILED", "message": "無法確認待刪圖片，請稍後重試。"}},
+                ) from exc
+
+            # Privacy-first deletion: remove private media while the member row
+            # still exists and can be retried.  If storage deletion fails, stop
+            # before deleting the database row instead of returning a false
+            # success and leaving untracked face images behind.
+            await _delete_saved_media(request, prefetched_media, target_owner_id, admin=is_admin)
+            if member_match:
+                render_cleanup = await _render_internal_request(
+                    request,
+                    "DELETE",
+                    f"render/users/{target_owner_id}",
+                    user_id=target_owner_id,
+                    admin=is_admin,
+                )
+                if render_cleanup is None or not render_cleanup.is_success:
+                    raise HTTPException(
+                        status_code=503,
+                        detail={"error": {"code": "MEMBER_MEDIA_DELETE_INCOMPLETE", "message": "會員圖片刪除尚未完成，請稍後重試。"}},
                     )
-                except ValueError:
-                    prefetched_media = []
         response = await request.app.state.http_client.request(
             method=request.method,
             url=f"{upstream.base_url}/{path}",
             params=list(request.query_params.multi_items()),
             headers=upstream_headers,
             content=body,
+            timeout=upstream_timeout(service),
         )
     except httpx.TimeoutException:
         return JSONResponse(status_code=504, content={"error": {"code": "UPSTREAM_TIMEOUT", "message": "Upstream service timed out."}})
     except httpx.HTTPError:
         return JSONResponse(status_code=502, content={"error": {"code": "UPSTREAM_UNAVAILABLE", "message": "Upstream service is unavailable."}})
+    except HTTPException:
+        raise
     except Exception:
         return JSONResponse(status_code=503, content={"error": {"code": "IDENTITY_TOKEN_UNAVAILABLE", "message": "Service authentication is unavailable."}})
 
@@ -1265,24 +1382,18 @@ async def proxy(service: str, path: str, request: Request):
                 submitted = {}
             job_id = _render_job_id_from_url(submitted.get("afterImageUrl"))
             if job_id:
-                await _render_internal_request(
+                retained = await _render_internal_request(
                     request,
                     "POST",
                     f"render/jobs/{job_id}/retain",
                     user_id=target_owner_id,
                     admin=is_admin,
                 )
-        elif request.method == "DELETE" and saved_match:
-            await _delete_saved_media(request, prefetched_media, target_owner_id, admin=is_admin)
-        elif request.method == "DELETE" and member_match:
-            await _delete_saved_media(request, prefetched_media, target_owner_id, admin=is_admin)
-            await _render_internal_request(
-                request,
-                "DELETE",
-                f"render/users/{target_owner_id}",
-                user_id=target_owner_id,
-                admin=is_admin,
-            )
+                if retained is None or not retained.is_success:
+                    raise HTTPException(
+                        status_code=503,
+                        detail={"error": {"code": "MEDIA_RETAIN_INCOMPLETE", "message": "妝前與妝後圖片尚未完整保存，請稍後重試。"}},
+                    )
 
     result = Response(content=response_content, status_code=response.status_code, headers=response_headers)
     if service == "member-database":

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 import uuid
 
@@ -30,6 +31,24 @@ def error_payload(code: str, message: str, *, retryable: bool = False, **extra) 
     }
     payload.update(extra)
     return {"error": payload}
+
+
+# A path segment that carries an email — plain (`user@example.com`) or the
+# URL-encoded form (`user%40example.com`) the browser sends. Member routes put
+# the account's email straight in the path (`/api/members/<email>/…`), so the
+# access log would otherwise persist that email to the platform's log store.
+_EMAIL_SEGMENT_RE = re.compile(r"[^/]*(?:@|%40)[^/]*", re.IGNORECASE)
+
+
+def redact_log_path(path: str) -> str:
+    """Return the request path with any email-bearing segment masked.
+
+    The route shape is preserved (so logs stay useful for debugging) while the
+    account identifier is replaced with an opaque placeholder. This keeps the
+    access log free of the emails that appear in member and saved-look paths —
+    logs must never be a second copy of the membership list.
+    """
+    return _EMAIL_SEGMENT_RE.sub("<member>", path or "")
 
 
 def _request_id(request: Request) -> str:
@@ -115,7 +134,7 @@ def install_api_error_handling(app: FastAPI, service_name: str) -> None:
         response.headers["X-Request-ID"] = request_id
         logger.info(
             "request_completed method=%s path=%s status=%s duration_ms=%.1f",
-            request.method, request.url.path, response.status_code, elapsed_ms,
+            request.method, redact_log_path(request.url.path), response.status_code, elapsed_ms,
             extra={"request_id": request_id},
         )
         return response

@@ -173,6 +173,106 @@ class RenderApiTest(unittest.TestCase):
             render_api._require_job_owner({"ownerId": "actor_a"}, "actor_b")
         self.assertEqual(raised.exception.status_code, 403)
 
+    def test_member_deletion_keeps_job_when_object_delete_fails(self):
+        """P0-R7：物件刪不掉時 job 必須保留，才有重試依據。
+
+        先前忽略 delete_permanent_storage_url() 的 False：物件刪除失敗仍照樣刪 job、
+        照樣累加 jobsDeleted，臉部照片就此變成無主檔案，永遠追不回來。
+        """
+        job_store.create(render_api.RENDER_JOBS_COLLECTION, "jobX", {
+            "jobId": "jobX", "ownerId": "actor_keep", "status": "completed",
+            "isPermanent": True,
+            "afterImageUrl": "https://storage.googleapis.com/decorate-me-renders/retained/after.png",
+            "beforeImageUrl": "https://storage.googleapis.com/decorate-me-renders/retained/before.jpg",
+        })
+        original = render_api.delete_permanent_storage_url
+        render_api.delete_permanent_storage_url = lambda url: False
+        try:
+            import asyncio
+            with self.assertRaises(Exception) as raised:
+                asyncio.run(render_api.delete_member_render_artifacts(
+                    "actor_keep", x_user_id="actor_keep", x_admin_request=None
+                ))
+        finally:
+            render_api.delete_permanent_storage_url = original
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(raised.exception.detail["error"]["code"], "MEMBER_ARTIFACT_DELETE_INCOMPLETE")
+        # The record survives for a retry and is flagged, not silently dropped.
+        surviving = job_store.get(render_api.RENDER_JOBS_COLLECTION, "jobX")
+        self.assertIsNotNone(surviving)
+        self.assertEqual(surviving.get("deletionStatus"), "failed")
+
+    def test_retain_keeps_job_retryable_when_before_image_fails(self):
+        """P0-R8：妝前圖 retain 失敗時，不得把 job 標成 retained，也不得移除 TTL。
+
+        只保住妝後圖卻回報成功，temporary/ 裡的妝前圖之後會被生命週期清掉，
+        使用者永遠只剩半張對比圖。任一張失敗都要回 503 並保留 expiresAt 供重試。
+        """
+        job_store.create(render_api.RENDER_JOBS_COLLECTION, "jobR", {
+            "jobId": "jobR", "ownerId": "actor_r", "status": "completed",
+            "afterImageUrl": "https://storage.googleapis.com/decorate-me-renders/temporary/after.png",
+            "beforeImageUrl": "https://storage.googleapis.com/decorate-me-renders/temporary/before.jpg",
+            "expiresAt": 1234567890.0,
+        })
+
+        def fake_retain(url, owner_id, job_id, variant=""):
+            if variant == "-before":
+                return None  # 妝前圖搬移失敗
+            return "https://storage.googleapis.com/decorate-me-renders/retained/after.png"
+
+        original = render_api.retain_permanent_storage_url
+        render_api.retain_permanent_storage_url = fake_retain
+        try:
+            import asyncio
+            with self.assertRaises(Exception) as raised:
+                asyncio.run(render_api.retain_render_job(
+                    "jobR", x_user_id="actor_r", x_admin_request=None
+                ))
+        finally:
+            render_api.retain_permanent_storage_url = original
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(raised.exception.detail["error"]["code"], "RETAIN_INCOMPLETE")
+        job = job_store.get(render_api.RENDER_JOBS_COLLECTION, "jobR")
+        self.assertNotEqual(job.get("retained"), True)
+        self.assertEqual(job.get("expiresAt"), 1234567890.0)  # TTL 保留，圖不會提前被清
+        self.assertEqual(job.get("retainStatus"), "failed")
+
+    def test_legacy_media_owner_blocks_cross_member_sign_read_delete(self):
+        """P0-R9：合法 bucket URL 不等於授權，必須由 job/owner 證明擁有。
+
+        B 會員不能簽名、讀取或刪除 A 會員的物件；owner 與 admin 才放行。
+        三個 legacy 端點共用 _require_legacy_media_owner，這裡直接驗證那道守門。
+        """
+        url = "https://storage.googleapis.com/decorate-me-renders/retained/actor_a/look.png"
+        job_store.create(render_api.RENDER_JOBS_COLLECTION, "jobA", {
+            "jobId": "jobA", "ownerId": "actor_a", "status": "completed",
+            "isPermanent": True, "afterImageUrl": url,
+        })
+
+        # B 會員：拿得到 URL 也不能解析成授權，回 404（不洩漏物件存在）。
+        with self.assertRaises(Exception) as raised:
+            render_api._require_legacy_media_owner(url, "actor_b", None)
+        self.assertEqual(raised.exception.status_code, 404)
+
+        # owner 自己：放行，回傳對應 job 與欄位。
+        job, field = render_api._require_legacy_media_owner(url, "actor_a", None)
+        self.assertEqual(job.get("jobId"), "jobA")
+        self.assertEqual(field, "afterImageUrl")
+
+        # admin：放行（x_admin_request == "1"）。
+        job_admin, _field = render_api._require_legacy_media_owner(url, None, "1")
+        self.assertEqual(job_admin.get("jobId"), "jobA")
+
+        # 端對端：B 會員對 sign 端點也被擋在 404。
+        import asyncio
+        with self.assertRaises(Exception) as sign_raised:
+            asyncio.run(render_api.sign_legacy_render_media(
+                render_api.MediaUrlRequest(url=url), x_user_id="actor_b", x_admin_request=None
+            ))
+        self.assertEqual(sign_raised.exception.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()
