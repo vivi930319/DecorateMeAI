@@ -4,6 +4,10 @@
 !.gitignore
 !.dockerignore
 !.gcloudignore
+# CI 設定要進版控才會在 GitHub 上跑（deny-all 底下目錄要逐層放行）
+!.github/
+!.github/workflows/
+!.github/workflows/ci.yml
 !README.md
 !Face_analyzer_BASIC.py
 

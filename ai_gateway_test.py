@@ -448,6 +448,36 @@ class AiGatewayTest(unittest.TestCase):
         # An unknown service still gets a bounded default, never the full budget.
         self.assertLessEqual(upstream_timeout("mystery-service"), gateway.UPSTREAM_TIMEOUT_SECONDS)
 
+    def test_login_rate_limit_has_an_account_dimension(self):
+        # A distributed brute force uses one account across many IPs; an IP-only
+        # limiter never trips on it. The account dimension must, and it must do so
+        # without ever storing the email itself.
+        from ai_gateway import enforce_login_rate_limit
+        import job_store
+        # Force the in-memory window: without credentials the Firestore client
+        # would block on the metadata server. The durable path is exercised by
+        # job_store's own tests.
+        saved_firestore, saved_client = job_store.firestore, job_store._client
+        job_store.firestore, job_store._client = None, None
+        gateway._login_rate_hits.clear()
+        email = "victim@example.com"
+
+        def req(ip):
+            r = Mock()
+            r.headers = {"x-forwarded-for": f"{ip}, 10.0.0.1"}  # two hops: caller is <ip>
+            r.client = None
+            return r
+
+        for i in range(gateway.LOGIN_RATE_LIMIT_MAX_REQUESTS):
+            enforce_login_rate_limit(req(f"203.0.113.{i}"), email)  # each IP fresh: no IP trip
+        with self.assertRaises(Exception) as raised:
+            enforce_login_rate_limit(req("203.0.113.250"), email)
+        self.assertEqual(raised.exception.status_code, 429)
+        # The limiter keys on a hash, never the raw email.
+        self.assertFalse(any(email in key for key in gateway._login_rate_hits))
+        gateway._login_rate_hits.clear()
+        job_store.firestore, job_store._client = saved_firestore, saved_client
+
     def test_access_log_path_never_carries_a_member_email(self):
         # Member and saved-look routes put the account's email straight in the
         # path. The access log must not become a second copy of the membership

@@ -1,0 +1,46 @@
+name: CI
+
+# 最小 CI：每次 push / PR 都跑後端測試與一次秘密掃描，擋掉資安修補被改回去的回歸。
+# 前端（web_frontend / dev_makeup）是另一個 repo，其 node 檢查與 smoke test 在該 repo 自跑。
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.gateway.txt -r requirements.render.txt
+
+      - name: Run backend tests
+        env:
+          GATEWAY_SESSION_SECRET: ci-session-secret-that-is-at-least-32-bytes
+          GATEWAY_FACE_API_KEY: ci-face-key
+          GATEWAY_RENDER_API_KEY: ci-render-key
+        run: python -m unittest ai_gateway_test.py render_api_test.py
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reject tunnels / upstream keys in deployable code
+        run: |
+          # 只掃會被部署的程式與設定（.py/.js/.json/.html）；歷史文件(.md)裡的舊
+          # Tunnel 網址是紀錄，不是活的秘密。.env 本就不進版控。
+          if git grep -nEI 'https://[A-Za-z0-9-]+\.trycloudflare\.com|(faceApiKey|renderApiKey|textSuggestionApiKey)\s*[:=]' -- '*.py' '*.js' '*.json' '*.html' ; then
+            echo "::error::Deployable code contains a temporary tunnel URL or an upstream key field."
+            exit 1
+          fi
+          echo "No tunnel URLs or upstream key fields in deployable code."

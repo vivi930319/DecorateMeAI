@@ -302,10 +302,14 @@ def client_ip(request: Request) -> str:
     return "unknown"
 
 
-def enforce_login_rate_limit(request: Request) -> None:
-    now = time.time()
-    cutoff = now - LOGIN_RATE_LIMIT_WINDOW_SECONDS
-    key = client_ip(request)
+def _login_quota_exceeded(key: str, now: float) -> int | None:
+    """Return retry-after seconds if this key is over budget, else None.
+
+    Prefers the Firestore-backed shared window so the limit holds across every
+    Cloud Run instance (an in-memory counter is per-instance and is bypassed the
+    moment the service scales out); falls back to an in-process window only when
+    Firestore is unavailable, e.g. local development.
+    """
     durable = job_store.consume_window_quota(
         LOGIN_LIMIT_COLLECTION,
         key,
@@ -315,25 +319,36 @@ def enforce_login_rate_limit(request: Request) -> None:
     )
     if durable is not None:
         allowed, _, retry_after = durable
-        if not allowed:
-            raise HTTPException(
-                status_code=429,
-                headers={"Retry-After": str(retry_after)},
-                detail={"error": {"code": "LOGIN_RATE_LIMITED", "message": "Too many login attempts."}},
-            )
-        return
+        return None if allowed else retry_after
+    cutoff = now - LOGIN_RATE_LIMIT_WINDOW_SECONDS
     with _login_rate_lock:
         bucket = _login_rate_hits.setdefault(key, deque())
         while bucket and bucket[0] <= cutoff:
             bucket.popleft()
         if len(bucket) >= LOGIN_RATE_LIMIT_MAX_REQUESTS:
-            retry_after = max(1, int(bucket[0] + LOGIN_RATE_LIMIT_WINDOW_SECONDS - now))
+            return max(1, int(bucket[0] + LOGIN_RATE_LIMIT_WINDOW_SECONDS - now))
+        bucket.append(now)
+        return None
+
+
+def enforce_login_rate_limit(request: Request, email: str = "") -> None:
+    # Two dimensions, either one tripping is enough to refuse: the caller IP
+    # (stops one host spraying many accounts) and the targeted account (stops a
+    # botnet of many IPs brute-forcing one account, which an IP-only limit misses
+    # entirely). The account key is a hash — the limiter never stores an email.
+    now = time.time()
+    keys = [f"ip:{client_ip(request)}"]
+    normalized = str(email or "").strip().lower()
+    if normalized:
+        keys.append("account:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest())
+    for key in keys:
+        retry_after = _login_quota_exceeded(key, now)
+        if retry_after is not None:
             raise HTTPException(
                 status_code=429,
                 headers={"Retry-After": str(retry_after)},
                 detail={"error": {"code": "LOGIN_RATE_LIMITED", "message": "Too many login attempts."}},
             )
-        bucket.append(now)
 
 
 def issue_access_token(email: str, role: str = "", status: str = "active") -> tuple[str, int]:
@@ -981,7 +996,7 @@ async def login(body: LoginRequest, request: Request):
     # protected by the rate limiter and the member credentials themselves.
     if not SESSION_ONLY_MODE:
         require_any_client_api_key(request.headers.get("x-api-key", ""))
-    enforce_login_rate_limit(request)
+    enforce_login_rate_limit(request, body.email)
     if not MEMBER_DATABASE_URL or not SESSION_SECRET:
         raise HTTPException(status_code=503, detail={"error": {"code": "AUTH_NOT_CONFIGURED", "message": "Member authentication is unavailable."}})
 

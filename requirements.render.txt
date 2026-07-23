@@ -1,8 +1,10 @@
-fastapi
-uvicorn[standard]
-replicate
-requests
-python-dotenv
-google-cloud-storage
-google-cloud-firestore
-pillow
+# Render 服務依賴——鎖定版本，讓 Cloud Build 產出的映像與本機測試一致。
+# 升級時一次改一個、重跑 render_api_test.py 再部署，不要讓上游自動跳版。
+fastapi==0.139.2
+uvicorn[standard]==0.51.0
+replicate==1.0.7
+requests==2.34.2
+python-dotenv==1.2.2
+google-cloud-storage==3.13.0
+google-cloud-firestore==2.27.0
+pillow==12.3.0

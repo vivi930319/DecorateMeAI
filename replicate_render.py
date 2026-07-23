@@ -75,16 +75,66 @@ FALLBACK_ASPECT_RATIO = os.getenv("RENDER_FALLBACK_ASPECT_RATIO", "auto").strip(
 _replicate_client: replicate.Client | None = None
 
 
+# imageUrl 可能來自前端輸入（image_from_frontend_package），所以「伺服器去下載一個
+# 網址」本身就是 SSRF 破口：精心構造的網址能讓渲染服務去讀雲端 metadata
+# （169.254.169.254）或內網位址。因此只允許 https、只允許這些已知圖片 host、只允許
+# 443 埠；其餘一律拒絕。Replicate 的輸出落在 replicate.delivery，永久圖在 GCS。
+_DEFAULT_FETCH_HOSTS = "replicate.delivery,replicate.com,storage.googleapis.com"
+RENDER_FETCH_ALLOWED_HOSTS = tuple(
+    h.strip().lower()
+    for h in os.getenv("RENDER_FETCH_ALLOWED_HOSTS", _DEFAULT_FETCH_HOSTS).split(",")
+    if h.strip()
+)
+
+
+def _fetch_host_is_allowed(host: str) -> bool:
+    host = (host or "").lower()
+    return any(host == allowed or host.endswith("." + allowed) for allowed in RENDER_FETCH_ALLOWED_HOSTS)
+
+
+def fetch_remote_image_bytes(url: str) -> tuple[bytes, str]:
+    """Fetch an image from an allowlisted host, streaming under a hard byte cap.
+
+    Two protections in one place: the host allowlist closes the SSRF hole (a
+    client-supplied URL can no longer make us read internal or metadata
+    addresses), and streaming with an incremental cap means an oversized or
+    endless response is cut off mid-download instead of being pulled whole into
+    memory and only then measured.
+    """
+    parsed = urlsplit(url or "")
+    if parsed.scheme != "https" or not _fetch_host_is_allowed(parsed.hostname or ""):
+        raise ValueError("Image URL host is not permitted.")
+    if parsed.port not in (None, 443):
+        raise ValueError("Image URL port is not permitted.")
+    # allow_redirects=False on purpose: an allowlisted host could 302 to an
+    # internal address, which would re-open the SSRF hole through the redirect.
+    # Replicate and GCS serve their objects directly, so we never need to follow.
+    with requests.get(url, timeout=60, stream=True, allow_redirects=False) as response:
+        if response.is_redirect or response.status_code in (301, 302, 303, 307, 308):
+            raise ValueError("Image URL redirected to an unverified location.")
+        response.raise_for_status()
+        declared = response.headers.get("content-length")
+        if declared is not None and declared.isdigit() and int(declared) > MAX_RENDER_IMAGE_BYTES:
+            raise ValueError(f"Rendered image is too large; limit is {MAX_RENDER_IMAGE_BYTES} bytes.")
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=65536):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > MAX_RENDER_IMAGE_BYTES:
+                raise ValueError(f"Rendered image is too large; limit is {MAX_RENDER_IMAGE_BYTES} bytes.")
+            chunks.append(chunk)
+    content_type = response.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+    return b"".join(chunks), content_type
+
+
 def upload_to_permanent_storage(temp_image_url: str) -> str | None:
     """把 Replicate 暫存網址的圖片下載後傳到 GCS，回傳永久公開網址；任何一步失敗都回傳 None，讓呼叫端 fallback 回暫存網址。"""
     try:
         from google.cloud import storage  # 延遲載入，沒裝套件或沒憑證時不應該讓整個渲染流程掛掉
 
-        response = requests.get(temp_image_url, timeout=60)
-        response.raise_for_status()
-        if len(response.content) > MAX_RENDER_IMAGE_BYTES:
-            raise ValueError(f"Rendered image is too large; limit is {MAX_RENDER_IMAGE_BYTES} bytes.")
-        content_type = response.headers.get("content-type", "image/jpeg").split(";")[0]
+        image_bytes, content_type = fetch_remote_image_bytes(temp_image_url)
         if content_type not in {"image/jpeg", "image/png", "image/webp"}:
             raise ValueError(f"Unsupported rendered image content type: {content_type}")
         ext = mimetypes.guess_extension(content_type) or ".jpg"
@@ -96,7 +146,7 @@ def upload_to_permanent_storage(temp_image_url: str) -> str | None:
             "retentionDays": str(GCS_RENDER_RETENTION_DAYS),
             "createdAt": datetime.now(timezone.utc).isoformat(),
         }
-        blob.upload_from_string(response.content, content_type=content_type)
+        blob.upload_from_string(image_bytes, content_type=content_type)
 
         return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{blob.name}"
     except Exception as exc:  # noqa: BLE001 — 儲存失敗不該讓渲染整支失敗，記錄後照舊回暫存網址
@@ -344,12 +394,8 @@ def data_url_to_bytes(data_url: str) -> tuple[bytes, str]:
 
 
 def url_to_data_url(url: str) -> str:
-    response = requests.get(url, timeout=60)
-    response.raise_for_status()
-    if len(response.content) > MAX_RENDER_IMAGE_BYTES:
-        raise ValueError(f"Downloaded image is too large; limit is {MAX_RENDER_IMAGE_BYTES} bytes.")
-    content_type = response.headers.get("content-type", "image/jpeg").split(";")[0]
-    encoded = base64.b64encode(response.content).decode("ascii")
+    image_bytes, content_type = fetch_remote_image_bytes(url)
+    encoded = base64.b64encode(image_bytes).decode("ascii")
     data_url = f"data:{content_type};base64,{encoded}"
     data_url_to_bytes(data_url)
     return data_url

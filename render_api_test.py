@@ -18,7 +18,7 @@ if "replicate" not in sys.modules:
 import job_store
 import replicate_render_api as render_api
 from api_errors import error_payload
-from replicate_render import data_url_to_bytes, delete_permanent_storage_url
+from replicate_render import data_url_to_bytes, delete_permanent_storage_url, fetch_remote_image_bytes
 
 
 TINY_PNG = (
@@ -167,6 +167,24 @@ class RenderApiTest(unittest.TestCase):
     def test_gcs_delete_rejects_foreign_urls(self):
         self.assertFalse(delete_permanent_storage_url("https://example.com/rendered/image.png"))
         self.assertFalse(delete_permanent_storage_url("https://storage.googleapis.com/another-bucket/rendered/image.png"))
+
+    def test_remote_image_fetch_blocks_ssrf_targets(self):
+        """imageUrl 來自前端，未設白名單就是 SSRF：伺服器會去打內網或 metadata。
+
+        host 驗證要在送出任何請求之前就擋下，所以這裡直接呼叫也不會真的連線。
+        """
+        for bad in (
+            "http://169.254.169.254/latest/meta-data/",   # 雲端 metadata
+            "https://169.254.169.254/latest/meta-data/",  # IP literal 不在白名單
+            "http://localhost/admin",                      # 非 https 也非白名單
+            "https://localhost/admin",
+            "https://evil.example.com/x.png",             # 任意外部 host
+            "file:///etc/passwd",                          # 非 http scheme
+            "https://replicate.delivery.evil.com/x.png",  # 後綴混淆
+            "https://replicate.delivery:8080/x.png",       # 非 443 埠
+        ):
+            with self.assertRaises(ValueError, msg=bad):
+                fetch_remote_image_bytes(bad)
 
     def test_member_owner_check_blocks_cross_member_media(self):
         with self.assertRaises(Exception) as raised:
