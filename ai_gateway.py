@@ -192,19 +192,17 @@ SESSION_COOKIE = "__session"
 SESSION_COOKIE_SEPARATOR = "|"
 MAX_SEALED_MEMBER_SESSION_BYTES = 3500
 
-# Multi-account (multiple accounts signed in across tabs of one browser).
-# One browser has one `__session` cookie, so multiple accounts must live inside
-# it as several (gateway token, sealed upstream cookie) slots. A per-tab
-# `X-Expected-Actor` selects which slot to act as — the same opaque, email-free
-# actor the tab already pins. When the flag is off, login replaces (one slot) and
-# behaviour is exactly the single-account path; the selection logic still works
-# because it simply sees one slot.
+# 多帳號（同一個瀏覽器、跨分頁登入多個帳號）。
+# 一個瀏覽器只有一份 `__session` cookie，所以多個帳號必須共存在它裡面，做成好幾個
+# 「(gateway token, 封裝過的上游 cookie)」槽位。每個分頁用 `X-Expected-Actor`——就是
+# 分頁本來就綁的那個不含 email 的 opaque actor——選出要用哪一個槽位。旗標關掉時，
+# 登入是「覆蓋」（只有一個槽位），行為跟原本單帳號完全一樣；選擇邏輯照樣能用，因為
+# 它只是看到一個槽位而已。
 MULTI_SESSION_ENABLED = os.getenv("GATEWAY_MULTI_SESSION", "").strip().lower() in {"1", "true", "yes", "on"}
 MAX_SESSION_SLOTS = max(1, min(int(os.getenv("GATEWAY_MAX_SESSION_SLOTS", "4")), 8))
 MULTI_SESSION_PREFIX = "v2."
-# A cookie must stay well under the ~4 KB browser limit. Each slot is a JWT plus a
-# Fernet-sealed upstream cookie; this bound decides how many slots can coexist
-# before the oldest is evicted.
+# cookie 必須遠低於瀏覽器約 4 KB 的上限。每個槽位是一個 JWT 加一份 Fernet 封裝的上游
+# cookie；這個上限決定同時能存在幾個槽位，超過就從最舊的開始淘汰。
 MAX_SESSION_COOKIE_BYTES = max(1024, min(int(os.getenv("GATEWAY_MAX_SESSION_COOKIE_BYTES", "3800")), 4000))
 LOGIN_LIMIT_COLLECTION = os.getenv("GATEWAY_LOGIN_LIMIT_COLLECTION", "gateway_login_limits")
 PUBLIC_PRODUCT_PATHS = _patterns(r"api/products", r"recommend-products")
@@ -318,12 +316,11 @@ def client_ip(request: Request) -> str:
 
 
 def _login_quota_exceeded(key: str, now: float) -> int | None:
-    """Return retry-after seconds if this key is over budget, else None.
+    """這個 key 超量的話回傳「還要等幾秒」，否則回 None。
 
-    Prefers the Firestore-backed shared window so the limit holds across every
-    Cloud Run instance (an in-memory counter is per-instance and is bypassed the
-    moment the service scales out); falls back to an in-process window only when
-    Firestore is unavailable, e.g. local development.
+    優先用 Firestore 的共享視窗，讓限流在每一個 Cloud Run instance 之間一致（純記憶體
+    計數是每個 instance 各自算的，服務一擴充就被繞過）；只有在 Firestore 不可用時
+    （例如本機開發）才退回程序內的記憶體視窗。
     """
     durable = job_store.consume_window_quota(
         LOGIN_LIMIT_COLLECTION,
@@ -347,10 +344,9 @@ def _login_quota_exceeded(key: str, now: float) -> int | None:
 
 
 def enforce_login_rate_limit(request: Request, email: str = "") -> None:
-    # Two dimensions, either one tripping is enough to refuse: the caller IP
-    # (stops one host spraying many accounts) and the targeted account (stops a
-    # botnet of many IPs brute-forcing one account, which an IP-only limit misses
-    # entirely). The account key is a hash — the limiter never stores an email.
+    # 兩個維度，任一個超量就拒絕：呼叫端 IP（擋「一台主機狂試很多帳號」）與被鎖定的
+    # 帳號（擋「一群 IP 一起暴力破解同一個帳號」，這種只看 IP 的限流完全抓不到）。
+    # 帳號那把 key 是雜湊過的——限流器從不儲存 email 本身。
     now = time.time()
     keys = [f"ip:{client_ip(request)}"]
     normalized = str(email or "").strip().lower()
@@ -517,7 +513,7 @@ def require_upstream_member_cookie(request: Request) -> str:
 
 
 def unseal_member_cookie(sealed: str) -> str:
-    """Decrypt one sealed upstream cookie, or 401 if it is missing/invalid."""
+    """解開一份封裝過的上游 cookie；缺少或無效就回 401。"""
     if not sealed:
         raise HTTPException(
             status_code=401,
@@ -535,14 +531,13 @@ def unseal_member_cookie(sealed: str) -> str:
         )
 
 
-# ── Multi-account session slots ──────────────────────────────────────────────
-# The `__session` cookie holds either the legacy single slot ("token|sealed") or
-# the v2 multi-slot form ("v2." + base64url(JSON list of {t, s})). Reading always
-# accepts both; writing uses whichever the caller chose (legacy for single-account
-# so nothing changes until multi-session is switched on).
+# ── 多帳號 session 槽位 ───────────────────────────────────────────────────────
+# `__session` cookie 可能是舊的單槽格式（"token|sealed"），也可能是 v2 多槽格式
+# （"v2." + base64url(JSON 的 {t, s} 陣列)）。讀取一律兩種都吃；寫入則看呼叫端選哪種
+# （單帳號用舊格式，所以在多帳號旗標打開之前什麼都不會變）。
 
 def read_session_slots(request: Request) -> list[tuple[str, str]]:
-    """Return every (gateway_token, sealed_member_cookie) slot in `__session`."""
+    """回傳 `__session` 裡的每一個 (gateway_token, 封裝上游 cookie) 槽位。"""
     raw = request.cookies.get(SESSION_COOKIE, "")
     if not raw:
         return []
@@ -551,7 +546,7 @@ def read_session_slots(request: Request) -> list[tuple[str, str]]:
             decoded = base64.urlsafe_b64decode(raw[len(MULTI_SESSION_PREFIX):].encode("ascii")).decode("utf-8")
             items = json.loads(decoded)
         except (ValueError, TypeError):
-            # binascii.Error (bad base64) subclasses ValueError; malformed JSON too.
+            # base64 壞掉會丟 binascii.Error（是 ValueError 的子類），JSON 壞掉也是。
             return []
         slots: list[tuple[str, str]] = []
         if isinstance(items, list):
@@ -576,11 +571,11 @@ def serialize_session_slots(slots: list[tuple[str, str]]) -> str:
 
 
 def set_session_slots(response: Response, slots: list[tuple[str, str]]) -> None:
-    """Write the multi-slot `__session`, evicting the oldest slot until it fits."""
+    """寫出多槽的 `__session`，從最舊的槽位開始淘汰直到大小塞得下。"""
     kept = slots[-MAX_SESSION_SLOTS:] if len(slots) > MAX_SESSION_SLOTS else list(slots)
     value = serialize_session_slots(kept)
-    # Never emit a cookie the browser will silently drop: shed oldest accounts
-    # until it fits, but always keep at least the newest one.
+    # 絕不送出瀏覽器會默默丟掉的過大 cookie：從最舊的帳號開始砍，直到塞得下，
+    # 但至少保留最新的那一個。
     while len(value) > MAX_SESSION_COOKIE_BYTES and len(kept) > 1:
         kept = kept[1:]
         value = serialize_session_slots(kept)
@@ -596,7 +591,7 @@ def set_session_slots(response: Response, slots: list[tuple[str, str]]) -> None:
 
 
 def _slot_claims(access_token: str) -> dict | None:
-    """Verified claims for a slot's gateway token, or None if invalid/expired."""
+    """驗證某個槽位的 gateway token 並回傳 claims；無效或過期則回 None。"""
     if not access_token:
         return None
     try:
@@ -613,10 +608,10 @@ def _slot_claims(access_token: str) -> dict | None:
 
 
 def session_accounts(request: Request) -> list[dict]:
-    """Every signed-in account in this browser's `__session`, invalid slots dropped.
+    """這個瀏覽器 `__session` 裡所有已登入的帳號，無效槽位會被丟掉。
 
-    Newest last. Each entry carries the opaque actor, the subject, the role, plus
-    the raw token and sealed upstream cookie needed to act as that account.
+    最新的排在最後。每一筆帶著 opaque actor、subject（email）、role，以及要以該帳號
+    身分發出請求所需的原始 token 與封裝上游 cookie。
     """
     accounts: list[dict] = []
     seen: set[str] = set()
@@ -629,7 +624,7 @@ def session_accounts(request: Request) -> list[dict]:
             continue
         actor = opaque_actor_id(sub)
         if actor in seen:
-            # A refreshed login for the same account: keep the newest slot.
+            # 同一個帳號重新登入過：只保留最新的槽位。
             accounts = [a for a in accounts if a["actorId"] != actor]
         seen.add(actor)
         accounts.append({
@@ -645,13 +640,12 @@ def session_accounts(request: Request) -> list[dict]:
 
 
 def select_account(request: Request, *, for_write: bool) -> dict:
-    """Pick which signed-in account this request acts as, using `X-Expected-Actor`.
+    """用 `X-Expected-Actor` 選出這個請求要以哪一個已登入帳號的身分執行。
 
-    The selector is the same per-tab opaque actor used for cross-tab isolation;
-    here it also *chooses* the slot, so a request can only ever act as an account
-    that has actually authenticated in this browser. Missing selector on a write
-    fails closed; a selector naming an account that is not signed in here is
-    refused so the tab can prompt that account to sign in again.
+    這個選擇器就是跨分頁隔離用的那個 per-tab opaque actor；在這裡它同時「挑出」槽位，
+    所以一個請求永遠只能以「真的在這個瀏覽器登入過」的帳號身分執行。寫入時缺選擇器
+    一律 fail closed；選擇器指到的帳號若沒登入在這裡，就拒絕，讓分頁去請那個帳號重新
+    登入，而不是默默用成別的帳號。
     """
     accounts = session_accounts(request)
     if not accounts:
@@ -664,22 +658,21 @@ def select_account(request: Request, *, for_write: bool) -> dict:
         for account in accounts:
             if secrets.compare_digest(selector, account["actorId"]):
                 return account
-        # The tab named an account that is not signed in on this browser (it was
-        # logged out, expired, or never added here). Tell the tab to re-establish
-        # that account rather than silently acting as a different one.
+        # 分頁指名的帳號並沒有登入在這個瀏覽器（可能已登出、過期，或根本沒在這裡加過）。
+        # 請分頁重新建立那個帳號，而不是默默用成另一個帳號。
         raise HTTPException(
             status_code=409,
             detail={"error": {"code": "ACCOUNT_NOT_AVAILABLE", "message": "登入帳號已在其他分頁變更，請重新整理頁面後再操作。"}},
         )
     if for_write:
-        # A write must name its account so it can never land on the wrong one.
+        # 寫入一定要指名帳號，才絕不會落到錯的帳號上。
         raise HTTPException(
             status_code=409,
             detail={"error": {"code": "EXPECTED_ACTOR_REQUIRED", "message": "無法確認目前分頁的登入身分，請重新登入後再操作。"}},
         )
     if len(accounts) == 1:
         return accounts[0]
-    # A read with several accounts signed in but no selector is ambiguous.
+    # 讀取時登入了好幾個帳號卻沒帶選擇器，無法判斷要用哪一個。
     raise HTTPException(
         status_code=409,
         detail={"error": {"code": "EXPECTED_ACTOR_REQUIRED", "message": "無法確認目前分頁的登入身分，請重新登入後再操作。"}},
@@ -1230,8 +1223,8 @@ async def login(body: LoginRequest, request: Request):
     result = JSONResponse(content=payload)
     sealed_new = seal_member_cookie(upstream_cookie)
     if MULTI_SESSION_ENABLED:
-        # Add this account alongside any others already signed in on this browser.
-        # A repeat login for the same account refreshes (replaces) its own slot.
+        # 把這個帳號「加」到這個瀏覽器已登入的其他帳號旁邊。
+        # 同一個帳號重複登入，就更新（覆蓋）它自己那一個槽位。
         slots = [
             (token, sealed)
             for token, sealed in read_session_slots(request)
@@ -1247,9 +1240,8 @@ async def login(body: LoginRequest, request: Request):
 @app.post("/auth/logout")
 async def logout(request: Request):
     result = JSONResponse(content={"ok": True})
-    # Multi-session: `?actor=<id>` logs out just that one account and leaves the
-    # other accounts on this browser signed in. Without it (or with the flag off)
-    # the whole session is cleared, as before.
+    # 多帳號：帶 `?actor=<id>` 只登出那一個帳號，這個瀏覽器上的其他帳號維持登入。
+    # 沒帶（或旗標關掉）時，就跟以前一樣把整個 session 清掉。
     actor = str(request.query_params.get("actor") or "").strip()
     remaining: list[tuple[str, str]] = []
     if MULTI_SESSION_ENABLED and actor:
@@ -1294,10 +1286,9 @@ async def session_status(request: Request):
         set_session_cookie(result, request_access_token(request), seal_member_cookie(upstream_cookie))
         return result
 
-    # Multi-session: report the account this tab selected (or the newest as the
-    # default on a fresh tab) plus the full list of accounts signed in on this
-    # browser, so the frontend can render an account switcher. Only opaque actors
-    # and subjects the caller already owns are returned — no other account's data.
+    # 多帳號：回報這個分頁選中的帳號（全新分頁則預設用最新登入的那個），外加這個
+    # 瀏覽器上所有已登入帳號的清單，讓前端可以畫出「帳號切換器」。只回傳 opaque actor
+    # 與呼叫者自己本來就擁有的 subject——不會外洩其他帳號的任何資料。
     accounts = session_accounts(request)
     if not accounts:
         require_member_access(request)  # preserves the 401 MEMBER_AUTH_* contract
@@ -1314,7 +1305,7 @@ async def session_status(request: Request):
                 detail={"error": {"code": "ACCOUNT_NOT_AVAILABLE", "message": "登入帳號已在其他分頁變更，請重新整理頁面後再操作。"}},
             )
     else:
-        account = accounts[-1]  # newest signed-in account is the default
+        account = accounts[-1]  # 全新分頁沒帶選擇器時，預設用最新登入的帳號
     upstream_cookie = await _validate_upstream_member_cookie(
         request, unseal_member_cookie(account["sealed"]), account["sub"]
     )
@@ -1512,11 +1503,10 @@ async def proxy(service: str, path: str, request: Request):
 
     if not SESSION_ONLY_MODE:
         require_client_api_key(upstream, request.headers.get("x-api-key", ""))
-    # `X-Expected-Actor` both isolates and (with multi-session) selects the
-    # account. With multi-session on it chooses which signed-in account to act as;
-    # with it off, behaviour is exactly the single-account path (one slot, header
-    # required on writes, mismatch refused). Flag off is kept byte-identical so it
-    # also covers bearer-token (non session-only) requests unchanged.
+    # `X-Expected-Actor` 同時負責隔離與（多帳號時）選帳號。多帳號打開時，它決定要以
+    # 哪一個已登入帳號的身分執行；關掉時，行為就是原本的單帳號路徑（單槽、寫入要帶
+    # 標頭、對不上就拒絕）。關掉時刻意維持一模一樣，所以連 bearer token（非 session-only）
+    # 的請求也照舊不受影響。
     selected_sealed = ""
     if MULTI_SESSION_ENABLED:
         is_write = str(request.method or "").upper() in STATE_CHANGING_METHODS
@@ -1687,8 +1677,8 @@ async def proxy(service: str, path: str, request: Request):
                 # retry; the previous cookie stays valid until it expires.
                 sealed = ""
             if sealed and MULTI_SESSION_ENABLED:
-                # Refresh only the acting account's slot; other signed-in
-                # accounts in this browser must keep their sealed cookies.
+                # 只更新「正在操作的那個帳號」的槽位；這個瀏覽器上其他已登入帳號的
+                # 封裝 cookie 必須原封不動保留。
                 rebuilt: list[tuple[str, str]] = []
                 replaced = False
                 for token, slot_sealed in read_session_slots(request):

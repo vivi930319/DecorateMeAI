@@ -17,36 +17,34 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
-# ── Sensitive-data scrubbing for logs (messages AND exception tracebacks) ─────
-# An unhandled exception is often an httpx error whose text embeds the upstream
-# request URL — which can carry a token in its query string — or an auth header.
-# These patterns strip those before anything is written to the log store.
+# ── Log 敏感資料遮罩（訊息「與」例外堆疊都要洗）────────────────────────────
+# 未處理的例外通常是 httpx 錯誤，它的文字裡會夾帶上游請求的網址——而網址的
+# query string 可能帶著 token——或是認證標頭。這些內容會透過 traceback 進到 log
+# 儲存區，所以在寫入前一律用下面幾個樣式把它們遮掉。
 _LOG_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+(?:@|%40)[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", re.IGNORECASE)
 _LOG_URL_QUERY_RE = re.compile(r"(https?://[^\s?#'\"|)>\]]+)\?[^\s#'\"|)>\]]*", re.IGNORECASE)
-# Bearer/Basic credentials are scrubbed before the header rule so the header
-# rule (which only grabs one token) does not consume the scheme and leave the
-# token behind.
+# Bearer／Basic 憑證要「先」洗，比標頭規則早一步。標頭規則只會抓一個 token，
+# 若先跑標頭規則會把 scheme（Bearer）吃掉、反而把後面的 token 留在畫面上。
 _LOG_SCHEME_RE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._\-=+/]+")
 _LOG_AUTH_RE = re.compile(r"(?i)(authorization|cookie|x-api-key|x-serverless-authorization|x-job-token)(\s*[:=]\s*)\S+")
 
 
 def redact_sensitive(text: str) -> str:
-    """Scrub emails, URL query strings, and auth/cookie/bearer values from log text."""
+    """把 log 文字中的 email、網址 query string、認證／Cookie／Bearer 值遮掉。"""
     if not text:
         return text
-    text = _LOG_URL_QUERY_RE.sub(r"\1?<redacted>", text)
-    text = _LOG_SCHEME_RE.sub(r"\1 <redacted>", text)
-    text = _LOG_AUTH_RE.sub(r"\1\2<redacted>", text)
-    text = _LOG_EMAIL_RE.sub("<member>", text)
+    text = _LOG_URL_QUERY_RE.sub(r"\1?<redacted>", text)   # 網址 ?後面全部遮掉
+    text = _LOG_SCHEME_RE.sub(r"\1 <redacted>", text)      # Bearer/Basic 的 token
+    text = _LOG_AUTH_RE.sub(r"\1\2<redacted>", text)       # Authorization/Cookie/API key 等的值
+    text = _LOG_EMAIL_RE.sub("<member>", text)             # email 一律換成 <member>
     return text
 
 
 class RedactingFormatter(logging.Formatter):
-    """Formatter that scrubs the fully rendered record — message and traceback.
+    """會把「整筆 log 成品」——訊息＋例外堆疊——都洗過一遍的 formatter。
 
-    Scrubbing the final string (rather than just the message) is deliberate: the
-    exception stack trace is where an httpx error quietly brings a URL query or
-    an upstream error body into the log.
+    刻意洗「最終字串」而不是只洗訊息：例外的 stack trace 正是 httpx 錯誤把網址
+    query 或上游錯誤內容偷偷帶進 log 的地方，只洗訊息會漏掉那一段。
     """
 
     def format(self, record: logging.LogRecord) -> str:
@@ -54,6 +52,8 @@ class RedactingFormatter(logging.Formatter):
 
 
 def _install_redacting_logging() -> None:
+    # 把遮罩 formatter 掛到 root logger：所有服務（Gateway／Face／Render／Ollama）
+    # 共用同一個 root，掛一次就全部涵蓋，不必逐一改每個 logging.exception 呼叫點。
     root = logging.getLogger()
     root.setLevel(os.getenv("LOG_LEVEL", "INFO"))
     formatter = RedactingFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -79,20 +79,19 @@ def error_payload(code: str, message: str, *, retryable: bool = False, **extra) 
     return {"error": payload}
 
 
-# A path segment that carries an email — plain (`user@example.com`) or the
-# URL-encoded form (`user%40example.com`) the browser sends. Member routes put
-# the account's email straight in the path (`/api/members/<email>/…`), so the
-# access log would otherwise persist that email to the platform's log store.
+# 帶 email 的路徑段——純文字（`user@example.com`）或瀏覽器送出的 URL 編碼形式
+# （`user%40example.com`）。會員路由會把帳號 email 直接放進路徑
+# （`/api/members/<email>/…`），不遮的話 access log 就會把 email 永久留在平台
+# 的 log 儲存區。
 _EMAIL_SEGMENT_RE = re.compile(r"[^/]*(?:@|%40)[^/]*", re.IGNORECASE)
 
 
 def redact_log_path(path: str) -> str:
-    """Return the request path with any email-bearing segment masked.
+    """回傳把「帶 email 的路徑段」遮成 <member> 之後的請求路徑。
 
-    The route shape is preserved (so logs stay useful for debugging) while the
-    account identifier is replaced with an opaque placeholder. This keeps the
-    access log free of the emails that appear in member and saved-look paths —
-    logs must never be a second copy of the membership list.
+    路徑結構保留（debug 時仍看得出打的是哪條路由），只把帳號識別碼換成不透明的
+    佔位字。這樣 access log 就不會殘留會員／收藏路徑裡的 email——log 絕不能變成
+    第二份會員名冊。
     """
     return _EMAIL_SEGMENT_RE.sub("<member>", path or "")
 

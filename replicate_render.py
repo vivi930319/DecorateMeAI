@@ -93,22 +93,20 @@ def _fetch_host_is_allowed(host: str) -> bool:
 
 
 def fetch_remote_image_bytes(url: str) -> tuple[bytes, str]:
-    """Fetch an image from an allowlisted host, streaming under a hard byte cap.
+    """從白名單 host 抓一張圖，邊串流邊卡住位元組上限。
 
-    Two protections in one place: the host allowlist closes the SSRF hole (a
-    client-supplied URL can no longer make us read internal or metadata
-    addresses), and streaming with an incremental cap means an oversized or
-    endless response is cut off mid-download instead of being pulled whole into
-    memory and only then measured.
+    一個函式擋兩種攻擊：host 白名單堵住 SSRF（前端塞進來的網址，不能再叫我們去
+    讀內網或雲端 metadata 位址）；串流＋逐塊累加上限，代表超大或無限長的回應會在
+    「下載到一半」就被切斷，而不是整包吞進記憶體之後才發現太大。
     """
     parsed = urlsplit(url or "")
     if parsed.scheme != "https" or not _fetch_host_is_allowed(parsed.hostname or ""):
         raise ValueError("Image URL host is not permitted.")
     if parsed.port not in (None, 443):
         raise ValueError("Image URL port is not permitted.")
-    # allow_redirects=False on purpose: an allowlisted host could 302 to an
-    # internal address, which would re-open the SSRF hole through the redirect.
-    # Replicate and GCS serve their objects directly, so we never need to follow.
+    # 刻意 allow_redirects=False：白名單裡的 host 也可能 302 轉到內網位址，跟著轉
+    # 就等於從轉址重新打開 SSRF 破口。Replicate 與 GCS 都是直接回物件，本來就不需要
+    # 跟隨轉址。
     with requests.get(url, timeout=60, stream=True, allow_redirects=False) as response:
         if response.is_redirect or response.status_code in (301, 302, 303, 307, 308):
             raise ValueError("Image URL redirected to an unverified location.")
