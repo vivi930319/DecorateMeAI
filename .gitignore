@@ -72,7 +72,7 @@ firebase-hosting-full/public/.gitignore
 firebase-hosting-full/public/README.md
 
 # 系統改善清單需要納入版本控制，完成項目才能長期追蹤。
-!系統改善待辦清單_2026-07-18.md
+!系統資安效率流程改善總表.md
 
 # 本機新手教學文件，不上傳 Git
 local_only_notes/
