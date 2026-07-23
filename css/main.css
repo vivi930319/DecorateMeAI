@@ -2432,9 +2432,29 @@ body.admin-mode .main-content,
 .admin-crawler-image { border-color:var(--line-gold); background:var(--ivory); }
 
 /* ═══════════════ 後台專題展示（AI 工作階段資料流向） ═══════════════ */
+.admin-demo-launch { position:relative; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:32px; align-items:center; margin-bottom:22px; padding:28px 30px; overflow:hidden; border:1px solid rgba(164,103,90,.42); border-radius:10px; background:linear-gradient(120deg,#fff 0%,#f8e9e4 58%,#efd4cb 100%); box-shadow:0 12px 34px rgba(112,70,60,.09); }
+.admin-demo-launch::after { content:"DEMO"; position:absolute; right:-12px; bottom:-28px; color:rgba(164,103,90,.07); font:700 92px/1 Jost,sans-serif; letter-spacing:.04em; pointer-events:none; }
+.admin-demo-launch > * { position:relative; z-index:1; }
+.admin-demo-launch-kicker { color:var(--gold-deep); font:600 10px/1.2 Jost,sans-serif; letter-spacing:.15em; }
+.admin-demo-launch h2 { max-width:720px; margin:9px 0 8px; color:var(--ink); font-size:clamp(21px,2.2vw,30px); line-height:1.35; }
+.admin-demo-launch p { max-width:760px; margin:0; color:var(--mid); font-size:13px; line-height:1.75; }
+.admin-demo-launch-flow { display:flex; align-items:center; gap:9px; margin-top:18px; color:var(--ink-soft); font-size:11px; font-weight:600; }
+.admin-demo-launch-flow i { width:22px; height:1px; background:rgba(164,103,90,.42); }
+.admin-demo-launch-action { min-width:210px; display:flex; flex-direction:column; align-items:stretch; gap:9px; }
+.admin-demo-launch-action small { color:var(--gold-deep); font-size:11px; text-align:center; }
+.admin-demo-start-button { min-height:50px; font-size:14px; box-shadow:0 9px 20px rgba(164,103,90,.2); }
+.admin-demo-start-button b { margin-left:9px; font-size:18px; }
 .admin-demo { margin:0; padding:0; border:0; border-radius:0; background:transparent; color:var(--ink); font-family:"Noto Sans TC",Arial,sans-serif; box-shadow:none; }
 .admin-demo[hidden] { display:none !important; }
 .admin-demo-heading,.admin-demo-footer { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
+.admin-demo-account-proof { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); margin-bottom:18px; border:1px solid var(--line-gold); border-radius:7px; background:var(--paper); }
+.admin-demo-account-proof > div { min-width:0; padding:15px 18px; }
+.admin-demo-account-proof > div + div { border-left:1px solid var(--line-gold); }
+.admin-demo-account-proof small { display:block; color:var(--mid); font-size:10px; }
+.admin-demo-account-proof strong { display:block; margin:4px 0 2px; overflow:hidden; color:var(--ink); font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
+.admin-demo-account-proof span { display:block; overflow:hidden; color:var(--mid); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
+.admin-demo-account-proof strong.ok { color:#47745b; }
+.admin-demo-account-proof strong.ok i { display:inline-block; width:7px; height:7px; margin-right:7px; border-radius:50%; background:#5a9b72; }
 .admin-demo-meta { min-height:32px; display:flex; align-items:center; justify-content:space-between; gap:18px; margin-bottom:12px; }
 .admin-demo-meta p { margin:0; color:var(--mid); font-size:12px; line-height:1.6; }
 .admin-demo-heading span { color:var(--gold-deep); font-size:11px; font-weight:600; }
@@ -2449,6 +2469,8 @@ body.admin-mode .main-content,
 .admin-demo-steps button span { font-size:12px; font-weight:500; }
 .admin-demo-steps button:hover { background:rgba(255,255,255,.32); color:var(--ink); }
 .admin-demo-steps button.active { border-bottom-color:var(--gold-deep); background:transparent; color:var(--gold-deep); }
+.admin-demo-steps button.complete { color:var(--gold-deep); }
+.admin-demo-steps button.complete b::after { content:" ✓"; }
 .admin-demo-progress { margin-top:20px; }
 .admin-demo-progress > div:first-child { display:flex; justify-content:space-between; gap:12px; font-size:13px; }
 .admin-demo-progress-track { height:8px; margin-top:9px; border-radius:999px; background:var(--ivory-2); overflow:hidden; }
@@ -2459,5 +2481,5 @@ body.admin-mode .main-content,
 .admin-demo-grid article > span { display:block; padding:11px 14px; border-bottom:1px solid var(--line-gold); background:var(--ivory); color:var(--ink-soft); font-size:12px; font-weight:600; }
 .admin-demo-grid pre { min-height:190px; margin:0; padding:14px; overflow:auto; background:var(--white); color:var(--ink-soft); font:400 12px/1.65 Consolas,monospace; white-space:pre-wrap; word-break:break-word; }
 .admin-demo-footer { align-items:center; margin-top:16px; color:var(--mid); font-size:11px; }
-@media (max-width:900px) { .admin-demo-steps { grid-template-columns:repeat(5,minmax(112px,1fr)); overflow-x:auto; overflow-y:hidden; } .admin-demo-grid { grid-template-columns:1fr; } }
-@media (max-width:600px) { .admin-demo-meta,.admin-demo-heading,.admin-demo-footer { align-items:flex-start; flex-direction:column; } }
+@media (max-width:900px) { .admin-demo-launch { grid-template-columns:1fr; } .admin-demo-launch-action { min-width:0; align-items:flex-start; } .admin-demo-steps { grid-template-columns:repeat(5,minmax(112px,1fr)); overflow-x:auto; overflow-y:hidden; } .admin-demo-grid { grid-template-columns:1fr; } }
+@media (max-width:600px) { .admin-demo-launch { padding:22px 19px; } .admin-demo-launch-flow { align-items:flex-start; flex-direction:column; } .admin-demo-launch-flow i { width:1px; height:10px; margin-left:12px; } .admin-demo-account-proof { grid-template-columns:1fr; } .admin-demo-account-proof > div + div { border-top:1px solid var(--line-gold); border-left:0; } .admin-demo-meta,.admin-demo-heading,.admin-demo-footer { align-items:flex-start; flex-direction:column; } }

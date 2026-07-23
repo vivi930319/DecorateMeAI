@@ -22,6 +22,15 @@
       "img_2.png",
       "img_3.png"
     ],
+    "redirects": [
+      { "source": "/softbaddie.jpg", "destination": "/softbaddie.webp", "type": 301 },
+      { "source": "/千金.png", "destination": "/千金.webp", "type": 301 },
+      { "source": "/港風.png", "destination": "/港風.webp", "type": 301 },
+      { "source": "/韓系亞裔.jpg", "destination": "/韓系亞裔.webp", "type": 301 },
+      { "source": "/病嬌.png", "destination": "/病嬌.webp", "type": 301 },
+      { "source": "/日雜.png", "destination": "/日雜.webp", "type": 301 },
+      { "source": "/男士白開水.png", "destination": "/男士白開水.webp", "type": 301 }
+    ],
     "rewrites": [
       {
         "source": "/public-config",

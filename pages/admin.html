@@ -52,6 +52,21 @@
                     <time id="adminLastSync">尚未同步</time>
                 </div>
 
+                <section class="admin-demo-launch" aria-labelledby="adminDemoLaunchTitle">
+                    <div>
+                        <span class="admin-demo-launch-kicker">GRADUATION PROJECT · LIVE DEMO</span>
+                        <h2 id="adminDemoLaunchTitle">讓老師完整看見 AI 從照片到妝容成果</h2>
+                        <p>五個步驟依序展示上傳驗證、臉部分析、個人化建議、圖片渲染與安全保存；同時保留可驗證的工作狀態與資料保護摘要。</p>
+                        <div class="admin-demo-launch-flow" aria-label="專題展示流程">
+                            <span>01 上傳</span><i></i><span>02 分析</span><i></i><span>03 建議</span><i></i><span>04 渲染</span><i></i><span>05 完成</span>
+                        </div>
+                    </div>
+                    <div class="admin-demo-launch-action">
+                        <small>建議現場從這裡開始</small>
+                        <button class="admin-primary-button admin-demo-start-button" type="button" data-admin-jump="demo">開始專題 Demo <b aria-hidden="true">→</b></button>
+                    </div>
+                </section>
+
                 <div class="admin-summary">
                     <article><span>全部會員</span><b id="adminTotal">—</b><small>資料庫帳號</small></article>
                     <article><span>啟用中</span><b id="adminActive">—</b><small>可正常使用</small></article>
@@ -88,13 +103,19 @@
             <section class="admin-view" data-admin-view="demo" hidden>
                 <div class="admin-view-heading">
                     <div>
+                        <span>PROJECT WORKFLOW</span>
                         <h2>專題展示</h2>
-                        <p>展示一次 AI 工作階段的資料流向，說明哪些資料前端看得到、哪些只留在後端。</p>
+                        <p>顯示目前帳號與五個工作階段，方便現場核對前台操作和後台紀錄。</p>
                     </div>
                 </div>
                 <section class="admin-demo" id="adminDemoPanel" hidden>
+                    <div class="admin-demo-account-proof">
+                        <div><small>目前登入帳號</small><strong id="adminDemoAccountName">管理員</strong><span id="adminDemoAccountEmail">—</span></div>
+                        <div><small>帳號身分</small><strong>管理員</strong><span>已通過會員資料庫驗證</span></div>
+                        <div><small>資料狀態</small><strong class="ok"><i></i>同步中</strong><span id="adminDemoLiveTime">—</span></div>
+                    </div>
                     <div class="admin-demo-meta">
-                        <p>僅顯示白名單摘要；照片、Email、權杖、完整分析包與完整提示詞皆不顯示。</p>
+                        <p>下方僅顯示工作摘要；照片、權杖、完整分析包與完整提示詞不會顯示。</p>
                         <div class="admin-demo-state"><i></i><span id="adminDemoSource">Demo 範例資料</span></div>
                     </div>
                     <div class="admin-demo-steps" id="adminDemoSteps" aria-label="工作階段">
