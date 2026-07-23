@@ -2196,8 +2196,22 @@ const Auth = {
         }
     },
 
+    // 清掉「這一個帳號」殘留在 localStorage 的 PII——sessionStorage 由 clearSession
+    // 處理，但收藏對比圖（beautySuggestions_<email>）帶使用者的臉部照片網址、分析回饋
+    // （beautyAnalysisFeedback）帶五官特徵，這些放在 localStorage，登出／換帳號後仍在，
+    // 共用裝置的下一個人打開 devtools 就讀得到。**只清當前帳號的鍵，不動其他帳號的收藏。**
+    clearAccountLocalPII(email) {
+        try {
+            const em = String(email || '').trim().toLowerCase();
+            if (em) localStorage.removeItem('beautySuggestions_' + em);
+            localStorage.removeItem('beautyAnalysisFeedback');
+        } catch (_) {}
+    },
+
     logout() {
         const gateway = (typeof Api !== 'undefined' && Api.config?.services?.aiGateway) || { baseUrl: '', logoutPath: '/auth/logout' };
+        // profile 還在時先清當前帳號的本機 PII，clearSession 之後 email 就讀不到了
+        try { this.clearAccountLocalPII((this.getProfile() || {}).email); } catch (_) {}
         fetch(`${gateway.baseUrl}${gateway.logoutPath}`, { method: 'POST', credentials: 'include' })
             .catch(() => null)
             .finally(() => {

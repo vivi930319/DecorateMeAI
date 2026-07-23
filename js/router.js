@@ -4413,6 +4413,9 @@ function handleSessionExpired(options) {
     Router._sessionExpiryHandling = true;
     if (typeof Api._cancelSessionRequests === 'function') Api._cancelSessionRequests();
     resetCurrentBeautySession();
+    // 換帳號／過期時，也清掉離開帳號殘留在 localStorage 的 PII（收藏臉圖、分析回饋）。
+    // 必須在 clearSession 之前做，之後就讀不到 email 了；只清當前帳號。
+    try { if (Auth.clearAccountLocalPII) Auth.clearAccountLocalPII((Auth.getProfile() || {}).email); } catch (_) {}
     if (typeof Auth.clearSession === 'function') Auth.clearSession();
     Router.currentPage = null;
     Router._reloadAdmin = null;

@@ -265,6 +265,26 @@ if (!gitignore.includes('config.local.js')) {
   throw new Error('.gitignore must exclude config.local.js');
 }
 
+// ── 登出清當前帳號的 localStorage PII，不動其他帳號（item 5）─────────────
+{
+  if (typeof sandbox.Auth.clearAccountLocalPII !== 'function') {
+    throw new Error('Auth.clearAccountLocalPII must exist to clear per-account PII on logout');
+  }
+  sandbox.localStorage.setItem('beautySuggestions_owner@example.com', '[{"before":"face-photo-url"}]');
+  sandbox.localStorage.setItem('beautySuggestions_other@example.com', '[{"before":"someone-else"}]');
+  sandbox.localStorage.setItem('beautyAnalysisFeedback', '[{"faceShape":"oval"}]');
+  sandbox.Auth.clearAccountLocalPII('Owner@Example.com'); // 大小寫不同也要清到
+  if (sandbox.localStorage.getItem('beautySuggestions_owner@example.com') !== null) {
+    throw new Error('Logout must clear the current account saved-look PII (contains face photo URLs)');
+  }
+  if (sandbox.localStorage.getItem('beautyAnalysisFeedback') !== null) {
+    throw new Error('Logout must clear the analysis feedback PII');
+  }
+  if (sandbox.localStorage.getItem('beautySuggestions_other@example.com') === null) {
+    throw new Error('Logout must NOT touch another account persisted favorites');
+  }
+}
+
 // ── AnalysisPackage 基本結構 ───────────────────────────────────
 const pkg = sandbox.AnalysisPackage.create({ mode: 'basic' });
 if (pkg.schemaVersion !== '2026-06-v1') throw new Error('Bad schemaVersion');
