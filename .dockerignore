@@ -4,6 +4,14 @@
 !Ollama_suggestion.py
 !dev_server_utils.py
 !api_errors.py
+# 上傳圖片共用安全處理（Render／BASIC 都 import）與高風險 Admin 稽核（Gateway import）。
+!image_safety.py
+!admin_audit.py
+# BASIC Dockerfile 會 COPY 這三支；先前漏在 .dockerignore 外，只有 docker build 會踩到
+# （正式部署走 .gcloudignore 不受影響）。
+!mediapipe_ascii.py
+!basic_rule_trees.py
+!rule_features.py
 !cloud_start.py
 !Dockerfile
 !requirements.txt
