@@ -325,6 +325,19 @@ const Api = {
         window.dispatchEvent(new CustomEvent(type, { detail }));
     },
 
+    // 讀 Gateway 發的 CSRF token。它刻意不是 HttpOnly——double-submit 的前提就是
+    // 「自己的 JS 讀得到、別的網域讀不到」。讀不到就回空字串，讓後端去拒絕，
+    // 不要在前端猜一個值出來。
+    _csrfToken() {
+        try {
+            const jar = String((typeof document !== 'undefined' && document.cookie) || '');
+            const hit = jar.split(';').map(part => part.trim()).find(part => part.startsWith('dm_csrf='));
+            return hit ? decodeURIComponent(hit.slice('dm_csrf='.length)) : '';
+        } catch (_) {
+            return '';
+        }
+    },
+
     // 所有受保護的寫入都從這裡送出。X-Expected-Actor 只會送到本站 Gateway，
     // 絕不附在第三方網址；缺少分頁綁定身分時直接拒絕，不讓 shared cookie 決定寫入者。
     async _protectedFetch(input, init = {}) {
@@ -347,6 +360,12 @@ const Api = {
                 throw error;
             }
             nextInit.headers['X-Expected-Actor'] = actorId;
+            // CSRF double-submit：Gateway 登入時發一個非 HttpOnly 的 dm_csrf cookie，
+            // 這裡把它讀出來放回標頭。別的網站送得出請求，但讀不到我們網域的 cookie，
+            // 補不出這個標頭。只加在同源的 Gateway 寫入上——附到第三方網址等於把
+            // token 送給對方，而且會多觸發一次 preflight。
+            const csrfToken = this._csrfToken();
+            if (csrfToken) nextInit.headers['X-CSRF-Token'] = csrfToken;
         }
         const res = await fetch(input, nextInit);
         if (isProtected && res.status === 401) {
