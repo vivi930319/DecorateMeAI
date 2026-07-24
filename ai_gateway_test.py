@@ -366,6 +366,56 @@ class AiGatewayTest(unittest.TestCase):
         self.assertTrue(actor.startswith("actor_"))
         self.assertNotIn("admin", actor.lower())
 
+    def test_admin_writes_need_a_matching_csrf_token(self):
+        """管理端寫入要求 cookie 與標頭帶著同一個 token（double-submit）。
+
+        X-Expected-Actor 擋的是「寫到別人的帳號上」；這一關擋的是「別的網站叫你的
+        瀏覽器寫」。攻擊者的頁面送得出請求，卻讀不到我們網域的 cookie，補不出標頭。
+        """
+        from ai_gateway import CSRF_COOKIE, enforce_csrf
+
+        def req(method, cookie_token=None, header_token=None):
+            r = Mock()
+            r.method = method
+            r.cookies = {CSRF_COOKIE: cookie_token} if cookie_token else {}
+            r.headers = {"x-csrf-token": header_token} if header_token else {}
+            return r
+
+        # 讀取不受影響——CSRF 防的是寫入。
+        enforce_csrf(req("GET"))
+
+        for label, request in (
+            ("兩者皆無", req("DELETE")),
+            ("只有 cookie（攻擊者送得出請求但讀不到 cookie）", req("DELETE", cookie_token="tok")),
+            ("只有標頭", req("DELETE", header_token="tok")),
+            ("兩邊不一致", req("PATCH", cookie_token="tok", header_token="other")),
+        ):
+            with self.subTest(label):
+                with self.assertRaises(Exception) as raised:
+                    enforce_csrf(request)
+                self.assertEqual(raised.exception.status_code, 403)
+                self.assertEqual(raised.exception.detail["error"]["code"], "CSRF_TOKEN_INVALID")
+
+        enforce_csrf(req("POST", cookie_token="tok", header_token="tok"))
+
+    def test_csrf_cookie_must_be_readable_by_our_own_javascript(self):
+        """CSRF cookie 刻意不是 HttpOnly，session cookie 則必須是。
+
+        兩者剛好相反，很容易在複製貼上時弄錯：session 被 JS 讀到就等於 XSS 直接
+        拿到憑證；CSRF token 讀不到則 double-submit 根本無法成立，所有寫入都會 403。
+        """
+        from fastapi import Response as FastApiResponse
+
+        from ai_gateway import CSRF_COOKIE, issue_csrf_cookie
+
+        response = FastApiResponse()
+        token = issue_csrf_cookie(response)
+        header = response.headers.get("set-cookie", "")
+        self.assertIn(f"{CSRF_COOKIE}={token}", header)
+        self.assertNotIn("HttpOnly", header)
+        self.assertIn("SameSite=lax", header)
+        self.assertGreaterEqual(len(token), 32)
+
     def test_unverified_email_is_distinguishable_from_a_wrong_password(self):
         # 「信箱尚未驗證」若被壓成「帳號或密碼錯誤」，使用者會一直重打密碼而永遠
         # 進不去——真正該做的是去收驗證信。資料庫端補上 403 EMAIL_NOT_VERIFIED 後，

@@ -507,6 +507,63 @@ def set_session_cookie(response: Response, access_token: str, sealed_member_cook
     )
 
 
+# ── CSRF：double-submit cookie ───────────────────────────────────────────────
+# session cookie 是 `SameSite=Lax`，這擋得住跨站的簡單表單 POST，但擋不了同站的
+# 子網域、也擋不了 Lax 仍然允許的頂層導覽情境。管理端的寫入（改權限、刪商品、
+# 停權會員）不該只靠 cookie 就成立，所以再要求一個「JS 讀得到 cookie 才拿得到」
+# 的隨機值：攻擊者的頁面送得出請求，但讀不到我們網域的 cookie，補不出這個標頭。
+CSRF_COOKIE = "dm_csrf"
+CSRF_HEADER = "x-csrf-token"
+# 「哪些方法算寫入」跟 X-Expected-Actor 用同一份定義（見下方 enforce_expected_actor）。
+STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def issue_csrf_cookie(response: Response) -> str:
+    """發一個新的 CSRF token 並寫進 cookie（刻意**不是** HttpOnly——前端要讀它）。"""
+    token = secrets.token_urlsafe(32)
+    response.set_cookie(
+        key=CSRF_COOKIE,
+        value=token,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=False,  # 前端必須讀得到才能回填標頭；這正是 double-submit 的運作方式
+        secure=IS_PRODUCTION,
+        samesite="lax",
+        path="/",
+    )
+    return token
+
+
+def _refresh_csrf_cookie(request: Request, response: Response) -> None:
+    """已經登入、但還沒有 CSRF cookie 的瀏覽器，在下一次 `/auth/session` 補發一個。
+
+    這條路徑是為了「上線當下」存在的：這個防護開始生效時，所有人的 session 都還在，
+    但沒有人有 token。少了補發，他們的管理端寫入會一路 403，直到重新登入為止——
+    等於用一次安全性修補換一次全體登出。前端進私有頁前一定會先打 `/auth/session`，
+    所以補發會在他們按下任何按鈕之前就完成。
+    """
+    if not request.cookies.get(CSRF_COOKIE):
+        issue_csrf_cookie(response)
+
+
+def enforce_csrf(request: Request) -> None:
+    """狀態變更請求必須讓標頭與 cookie 帶著同一個 token。
+
+    先前只有 `X-Expected-Actor` 在擋跨帳號寫入——它擋的是「寫到別人的資料上」，
+    不是「別的網站叫你的瀏覽器寫」。兩者是不同的攻擊，需要不同的檢查。
+    """
+    if str(request.method or "").upper() not in STATE_CHANGING_METHODS:
+        return
+    cookie_token = str(request.cookies.get(CSRF_COOKIE) or "")
+    header_token = str(request.headers.get(CSRF_HEADER) or "")
+    if not cookie_token or not header_token or not secret_equals(header_token, cookie_token):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"code": "CSRF_TOKEN_INVALID",
+                              "message": "這次操作的安全驗證失敗，請重新整理頁面後再試。",
+                              "retryable": False}},
+        )
+
+
 def require_upstream_member_cookie(request: Request) -> str:
     sealed = read_session_cookie(request)[1]
     if not sealed:
@@ -737,9 +794,6 @@ async def validate_upstream_member_session(request: Request, claims: dict) -> st
 def opaque_actor_id(subject: str) -> str:
     digest = hashlib.sha256(f"{SESSION_SECRET}:{subject.strip().lower()}".encode("utf-8")).hexdigest()
     return f"actor_{digest[:24]}"
-
-
-STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def enforce_expected_actor(request: Request, acting_owner_id: str) -> None:
@@ -1263,6 +1317,8 @@ async def login(body: LoginRequest, request: Request):
         set_session_slots(result, slots)
     else:
         set_session_cookie(result, access_token, sealed_new)
+    # 每次登入換一個新的 CSRF token，跟 session 同生命週期。
+    issue_csrf_cookie(result)
     return result
 
 
@@ -1283,6 +1339,9 @@ async def logout(request: Request):
         set_session_slots(result, remaining)
         return result
     result.delete_cookie(key=SESSION_COOKIE, path="/", secure=IS_PRODUCTION, httponly=True, samesite="lax")
+    # CSRF token 跟著 session 一起走：留著一個對應不到任何 session 的 token 沒有用處，
+    # 只會讓下一位使用者接手一個舊值。
+    result.delete_cookie(key=CSRF_COOKIE, path="/", secure=IS_PRODUCTION, httponly=False, samesite="lax")
     # Browsers that signed in before S56 still carry the two retired cookies.
     # Nothing reads them any more, but clearing them on the way out keeps stale
     # credentials from sitting in the jar until they expire on their own.
@@ -1313,6 +1372,7 @@ async def session_status(request: Request):
             "expiresAt": int(claims.get("exp") or 0) * 1000,
         })
         set_session_cookie(result, request_access_token(request), seal_member_cookie(upstream_cookie))
+        _refresh_csrf_cookie(request, result)
         return result
 
     # 多帳號：回報這個分頁選中的帳號（全新分頁則預設用最新登入的那個），外加這個
@@ -1357,6 +1417,7 @@ async def session_status(request: Request):
         slot_actor = opaque_actor_id(str(slot_claims.get("sub") or "").strip().lower()) if slot_claims else ""
         rebuilt.append((account["token"], sealed) if slot_actor == account["actorId"] else (token, slot_sealed))
     set_session_slots(result, rebuilt)
+    _refresh_csrf_cookie(request, result)
     return result
 
 
@@ -1425,6 +1486,9 @@ async def verify_otp(request: Request):
 
 
 async def proxy_admin_request(request: Request, upstream_path: str):
+    # 管理端的寫入（改權限、刪商品、停權會員）要多過一關 double-submit CSRF。
+    # `X-Expected-Actor` 擋的是「寫到別人的帳號上」，擋不了「別的網站叫你的瀏覽器寫」。
+    enforce_csrf(request)
     if MULTI_SESSION_ENABLED:
         is_write = str(request.method or "").upper() in STATE_CHANGING_METHODS
         claims = _require_admin_claims(select_account(request, for_write=is_write)["claims"])
@@ -1568,6 +1632,11 @@ async def proxy(service: str, path: str, request: Request):
     target_email = _authorize_member_path(claims, path) if service == "member-database" else None
     target_owner_id = opaque_actor_id(target_email) if target_email else acting_owner_id
     is_admin = str(claims.get("role") or "").strip().lower() == "admin"
+    # 管理員身分做的寫入（停權、刪帳號、改權限）多過一關 CSRF。一般會員寫自己的資料
+    # 不套用：那條路徑已經強制帶 `X-Expected-Actor`（自訂標頭跨站送不出來），再加一層
+    # 只會讓還沒更新的用戶端整批寫入失敗，換不到相應的安全性。
+    if is_admin and str(request.method or "").upper() in STATE_CHANGING_METHODS:
+        enforce_csrf(request)
     # The full member roster is an administrator-only view.  `_authorize_member_path`
     # only guards `api/members/<id>` routes; the bare list path matches nothing
     # there, so without this any signed-in member could read every account.
