@@ -252,8 +252,15 @@ if (sandbox.ImagePipeline.workerPath !== 'js/image-worker.js') {
 
 // ── 本機設定安全預設 ─────────────────────────────────────────
 const configExample = fs.readFileSync(path.join(rootDir, 'config.local.example.js'), 'utf8');
-if (!configExample.includes('allowInsecureOtpBypass: false')) {
-  throw new Error('config.local.example.js must keep allowInsecureOtpBypass disabled by default');
+
+// OTP 不得有任何前端繞過路徑。原本這裡只檢查旗標預設為 false，但那道檢查守錯了
+// 東西：旗標存在本身就是問題，因為它是瀏覽器端的值，devtools 一行就能翻開。
+// 現在改成守「程式碼裡根本沒有繞過」這個更強的不變式。
+if (/DECORATE_ME_CONFIG\?\.allowInsecureOtpBypass|allowOtpBypass/.test(routerSource)) {
+  throw new Error('router.js must not read an OTP bypass flag');
+}
+if (/catch[\s\S]{0,400}?code\.length\s*[<>]=?\s*\d[\s\S]{0,200}?return true/.test(routerSource)) {
+  throw new Error('OTP verification must not fall back to a length check');
 }
 for (const forbidden of ['faceApiKey', 'renderApiKey', 'textSuggestionApiKey', 'trycloudflare.com']) {
   if (configExample.includes(forbidden)) throw new Error(`config.local.example.js must not contain ${forbidden}`);

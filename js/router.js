@@ -4675,7 +4675,7 @@ async function doVerifyOTP() {
     if (!code) { showAlert('請輸入驗證碼'); return; }
     const pending = Router.pendingRegister;
     if (!pending) { showAlert('註冊資料已過期，請重新註冊', { type:'error', onOk: showRegister }); return; }
-    if (!(await verifyOtpWithOptionalBypass(pending.email, code))) return;
+    if (!(await verifyOtp(pending.email, code))) return;
 
     // 以後端為準：驗證碼過了之後，一定要用後端 login 拿到 session 才算真的登入。
     // 假的／不存在的 email 驗不過、或後端沒把帳號設為已驗證，login 就會失敗、進不了 app，
@@ -4751,25 +4751,27 @@ function showForgotVerify(email){
 async function doVerifyForgotOTP(){
     var code = document.getElementById('forgotOtp').value.trim();
     if (!code) { showAlert('請輸入驗證碼'); return; }
-    if (!(await verifyOtpWithOptionalBypass(Router.forgotEmail, code))) return;
+    if (!(await verifyOtp(Router.forgotEmail, code))) return;
     showResetPassword();
 }
 
-async function verifyOtpWithOptionalBypass(email, code) {
-    const allowOtpBypass = !!window.DECORATE_ME_CONFIG?.allowInsecureOtpBypass;
+// 驗證碼一律以後端結果為準，沒有任何繞過路徑。
+//
+// 這裡原本有一個 `allowInsecureOtpBypass` 旗標，開啟時「長度 ≥ 4 就放行」。它從來
+// 不是安全機制：旗標是 `window.DECORATE_ME_CONFIG` 上的瀏覽器端值，在 devtools
+// 打一行就能打開，而攻擊者根本不必經過這個前端。留著它只會讓人誤以為 OTP 有前端
+// 這一道防線，實際上沒有。
+//
+// **真正的閘門在會員資料庫端，而且目前還沒建起來**：註冊後不驗證驗證碼、直接呼叫
+// `POST /api/login` 仍會回 200（追蹤編號 S7）。移除這個旗標並不會修好那件事，
+// 只是不再假裝前端擋得住。修復規格見《給資料庫端_OTP繞過修復規格_2026-07-24》。
+async function verifyOtp(email, code) {
     try {
         await Api.verifyOTP(email, code);
         return true;
     } catch (err) {
-        if (!allowOtpBypass) {
-            showAlert(err?.message || '驗證碼驗證失敗，請稍後再試', { type:'error' });
-            return false;
-        }
-        if (code.length < 4) {
-            showAlert('驗證碼至少 4 碼');
-            return false;
-        }
-        return true;
+        showAlert(err?.message || '驗證碼驗證失敗，請稍後再試', { type: 'error' });
+        return false;
     }
 }
 
