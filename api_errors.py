@@ -81,6 +81,28 @@ def error_payload(code: str, message: str, *, retryable: bool = False, **extra) 
     return {"error": payload}
 
 
+def rate_limited_error(code: str, message: str, retry_after_seconds: int, **extra) -> HTTPException:
+    """所有 429 都用這一個形狀：`Retry-After` 標頭 ＋ 回應內的 `retryAfterSeconds`。
+
+    兩邊都給是有原因的：標頭是 HTTP 的標準做法（代理與瀏覽器看得懂），但瀏覽器的
+    `fetch` 在跨來源時預設讀不到自訂標頭，前端要顯示「請等 43 秒」只能從回應內容拿。
+    先前每個服務各寫各的，Gateway 的登入限流只有標頭、沒有秒數，前端於是只能顯示
+    一句沒有時間的「請稍後再試」——使用者不知道要等多久，就會一直重試。
+    """
+    seconds = max(1, int(retry_after_seconds))
+    return HTTPException(
+        status_code=429,
+        headers={"Retry-After": str(seconds)},
+        detail=error_payload(
+            code,
+            message,
+            retryable=True,
+            retryAfterSeconds=seconds,
+            **extra,
+        ),
+    )
+
+
 # 帶 email 的路徑段——純文字（`user@example.com`）或瀏覽器送出的 URL 編碼形式
 # （`user%40example.com`）。會員路由會把帳號 email 直接放進路徑
 # （`/api/members/<email>/…`），不遮的話 access log 就會把 email 永久留在平台

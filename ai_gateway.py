@@ -19,7 +19,7 @@ import jwt
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from api_errors import install_api_error_handling, secret_equals
+from api_errors import install_api_error_handling, rate_limited_error, secret_equals
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import id_token
@@ -360,10 +360,10 @@ def enforce_login_rate_limit(request: Request, email: str = "") -> None:
     for key in keys:
         retry_after = _login_quota_exceeded(key, now)
         if retry_after is not None:
-            raise HTTPException(
-                status_code=429,
-                headers={"Retry-After": str(retry_after)},
-                detail={"error": {"code": "LOGIN_RATE_LIMITED", "message": "Too many login attempts."}},
+            raise rate_limited_error(
+                "LOGIN_RATE_LIMITED",
+                f"登入嘗試次數過多，請在 {retry_after} 秒後再試。",
+                retry_after,
             )
 
 
@@ -1033,6 +1033,10 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Accept", "Authorization", "Content-Type", "If-Match", "X-API-Key", "X-Expected-Actor", "X-Job-Token"],
+    # 跨來源時瀏覽器預設只讓 JS 讀到少數幾個標頭。不明講的話，前端在非同源情境下
+    # 拿不到 Retry-After（顯示不出「請等 N 秒」），也拿不到 X-Request-ID（回報問題時
+    # 對不上 log）。正式站走同源 rewrite 用不到這行，本機與 App 開發會用到。
+    expose_headers=["Retry-After", "X-Request-ID"],
     max_age=3600,
 )
 install_api_error_handling(app, "ai-gateway")
@@ -1201,7 +1205,15 @@ async def login(body: LoginRequest, request: Request):
     if response.status_code in {401, 403, 404}:
         raise HTTPException(status_code=401, detail={"error": {"code": "INVALID_CREDENTIALS", "message": "Invalid email or password."}})
     if response.status_code == 429:
-        raise HTTPException(status_code=429, detail={"error": {"code": "LOGIN_RATE_LIMITED", "message": "Too many login attempts."}})
+        # 上游自己也在限流時，把它的等待秒數帶回去，別讓前端只拿到一句沒有時間的
+        # 「請稍後再試」。上游沒給就用我們自己的視窗長度當保守估計。
+        upstream_retry = str(response.headers.get("retry-after") or "").strip()
+        retry_after = int(upstream_retry) if upstream_retry.isdigit() else LOGIN_RATE_LIMIT_WINDOW_SECONDS
+        raise rate_limited_error(
+            "LOGIN_RATE_LIMITED",
+            f"登入嘗試次數過多，請在 {retry_after} 秒後再試。",
+            retry_after,
+        )
     if not response.is_success:
         raise HTTPException(status_code=502, detail={"error": {"code": "MEMBER_SERVICE_ERROR", "message": "Member authentication failed."}})
 

@@ -519,6 +519,16 @@ class AiGatewayTest(unittest.TestCase):
         with self.assertRaises(Exception) as raised:
             enforce_login_rate_limit(req("203.0.113.250"), email)
         self.assertEqual(raised.exception.status_code, 429)
+        # Every 429 carries the wait in both places: the Retry-After header for
+        # proxies, and retryAfterSeconds in the body because a cross-origin fetch
+        # cannot read custom headers. Without the body field the frontend can only
+        # say "try again later", and a user with no number keeps retrying.
+        self.assertIn("Retry-After", raised.exception.headers)
+        error = raised.exception.detail["error"]
+        self.assertEqual(error["code"], "LOGIN_RATE_LIMITED")
+        self.assertTrue(error["retryable"])
+        self.assertGreaterEqual(error["retryAfterSeconds"], 1)
+        self.assertEqual(str(error["retryAfterSeconds"]), raised.exception.headers["Retry-After"])
         # The limiter keys on a hash, never the raw email.
         self.assertFalse(any(email in key for key in gateway._login_rate_hits))
         gateway._login_rate_hits.clear()

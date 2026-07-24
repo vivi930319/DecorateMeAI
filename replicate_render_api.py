@@ -19,6 +19,7 @@ from api_errors import (
     enforce_service_api_key,
     error_payload,
     install_api_error_handling,
+    rate_limited_error,
     secret_equals,
 )
 import job_store
@@ -201,17 +202,14 @@ def _rate_limit_key(request: Request, x_user_email: str | None) -> str:
 
 
 def _raise_limit_error(code: str, message: str, retry_after: int, *, window: int, maximum: int) -> None:
-    raise HTTPException(
-        status_code=429,
-        headers={"Retry-After": str(retry_after)},
-        detail=error_payload(
-            code,
-            message,
-            retryable=True,
-            windowSeconds=window,
-            maxRequests=maximum,
-            retryAfterSeconds=retry_after,
-        ),
+    # 形狀統一在 api_errors.rate_limited_error（Retry-After 標頭＋回應內 retryAfterSeconds），
+    # Gateway 的登入限流用的是同一個，前端只要寫一套解析。
+    raise rate_limited_error(
+        code,
+        message,
+        retry_after,
+        windowSeconds=window,
+        maxRequests=maximum,
     )
 
 
