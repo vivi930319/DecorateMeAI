@@ -4616,7 +4616,9 @@ async function doLoginAction() {
         // 這裡不能走下面那個對話框——它會提供「忘記密碼」，把「請稍等」誤導成「你密碼錯了」，
         // 而每一次重試都會把限流視窗往後推。
         if (err.status === 429 || /RATE_LIMITED/i.test(err.code || '')) {
-            showAlert(err.message || '登入嘗試次數過多，請稍後再試。', { type: 'error' });
+            // 兩種來源：Gateway 自己的限流（LOGIN_RATE_LIMITED）或會員資料庫的限流
+            // （MEMBER_SERVICE_RATE_LIMITED）。訊息已由後端帶等待時間，直接顯示即可。
+            showAlert(err.message || '登入頻率過高，請稍後再試。', { type: 'error' });
             return;
         }
         // 其餘未分類的錯誤：只顯示原因，不預設「你還沒註冊」。

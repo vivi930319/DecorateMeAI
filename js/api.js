@@ -62,6 +62,7 @@ const USER_ERROR_ZH = Object.freeze({
     MEMBER_SCOPE_FORBIDDEN: '無法存取其他會員的資料。',
     AUTH_NOT_CONFIGURED: '會員驗證服務尚未完成設定，請聯繫管理員。',
     LOGIN_RATE_LIMITED: '登入嘗試次數過多，請稍後再試。',
+    MEMBER_SERVICE_RATE_LIMITED: '會員服務目前限制登入頻率，請稍後再試。',
     ADMIN_REQUIRED: '只有管理員可以執行這項操作。',
     ADMIN_SUSPENDED: '管理員帳號目前已停權。',
     ADMIN_PROXY_NOT_CONFIGURED: '管理端服務尚未完成設定。',
