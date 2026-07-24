@@ -74,6 +74,9 @@ const USER_ERROR_ZH = Object.freeze({
     MEDIA_UNAVAILABLE: '圖片目前無法讀取，請稍後再試。',
     FACE_ANALYSIS_TIMEOUT: '臉部分析逾時，請稍後再試。',
     FACE_ANALYSIS_ERROR: '臉部分析失敗，請稍後再試。',
+    // 分析成功、只是結果封裝失敗：明確告訴使用者「不需重拍」，否則他會一直換照片，
+    // 而問題根本不在照片。
+    PACKAGE_BUILD_FAILED: '臉部分析已完成，但結果整理失敗，請稍後再試（不需重拍照片）。',
     RENDER_TIMEOUT: '妝容生成逾時，請稍後再試。',
     RENDER_PROVIDER_ERROR: '妝容生成服務處理失敗，請稍後再試。',
     OLLAMA_UNAVAILABLE: '文字建議服務目前無法連線，請稍後再試。',

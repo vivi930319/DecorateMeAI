@@ -4559,19 +4559,27 @@ async function doLoginAction() {
     try {
         const data = await Api.login(email, password);
         const member = data.member || {};
+        // 登入後的 profile 以「後端這次回傳的 member」為準，本機 registered 只在後端
+        // **完全沒有帶這個欄位時**才補。先前是把整包 registered 攤平當底、再逐欄用 `||`
+        // 蓋——`||` 會把後端回的空字串／0 當成沒回，於是資料庫早就改掉的舊 name／phone／age
+        // 又從本機浮回來（例如改過手機號、登入後卻顯示舊號碼）。
+        // hasOwnProperty 分得出「後端回了空值（採信）」與「後端根本沒這個欄位（才回退本機）」。
+        const fromServer = (key, localValue, fallback) =>
+            Object.prototype.hasOwnProperty.call(member, key) ? member[key] : (localValue !== undefined ? localValue : fallback);
         Auth.setProfile({
-            ...registered,
+            // 後端回的其他欄位（會員 id、點數等）照收；只有身分欄位改用 fromServer，
+            // 不再把整包本機 registered 攤平當底。
             ...member,
-            name: member.name || registered.name || email.split('@')[0],
+            name: fromServer('name', registered.name, email.split('@')[0]) || email.split('@')[0],
             email: member.email || email,
-            phone: member.phone_number || registered.phone || '',
-            age: member.age || registered.age || '',
-            level: member.level || registered.level || '一般會員',
-            role: member.role || registered.role || 'member',
-            status: member.status || registered.status || 'active',
+            phone: fromServer('phone_number', registered.phone, ''),
+            age: fromServer('age', registered.age, ''),
+            level: fromServer('level', registered.level, '一般會員'),
+            role: fromServer('role', registered.role, 'member'),
+            status: fromServer('status', registered.status, 'active'),
             allowedPages: Array.isArray(member.allowedPages) ? member.allowedPages : (registered.allowedPages || undefined),
-            vipRequested: !!(member.vipRequested || registered.vipRequested),
-            renderQuota: member.renderQuota || registered.renderQuota || null
+            vipRequested: !!(Object.prototype.hasOwnProperty.call(member, 'vipRequested') ? member.vipRequested : registered.vipRequested),
+            renderQuota: Object.prototype.hasOwnProperty.call(member, 'renderQuota') ? member.renderQuota : (registered.renderQuota || null)
         });
         Router._sessionExpiryHandling = false;
         Api._sessionExpiredNotified = false;
