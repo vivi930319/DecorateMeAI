@@ -1232,6 +1232,52 @@ const Api = {
         }
     },
 
+    // 伺服器端購物車：跨裝置同步用，做法與收藏（listRemoteFavorites / toggleRemoteFavorite）
+    // 完全一致，靠會員資料庫的登入 session；任何失敗都不影響本機 Cart。
+    // GET /api/members/{email}/cart → { items: [ { id, qty } ] }
+    async getRemoteCart(email) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        if (!baseUrl || !email) return { ok: false, items: [] };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/cart`, {
+                method: 'GET',
+                credentials: 'include',
+                cache: 'no-store'
+            });
+            if (!res.ok) return { ok: false, status: res.status, items: [] };
+            const data = await res.json().catch(() => ({}));
+            return { ok: true, items: Array.isArray(data.items) ? data.items : [] };
+        } catch (_) {
+            return { ok: false, items: [] };
+        }
+    },
+
+    // 把整台購物車覆蓋寫回伺服器（POST，last-write-wins）。走 _protectedWrite 沿用
+    // 換帳號防線：分頁身分對不上就擋下，不會把 A 的車寫到 B 帳號。背景同步，呼叫端不看回傳。
+    async saveRemoteCart(items) {
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
+        const email = this._writeActorEmail();
+        if (!baseUrl || !email) return null;
+        const payload = (Array.isArray(items) ? items : [])
+            .map(it => ({ id: String(it.id), qty: Math.max(1, parseInt(it.qty, 10) || 1) }))
+            .filter(it => it.id);
+        const result = await this._protectedWrite(email, async () => {
+            try {
+                const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/cart`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ items: payload })
+                });
+                if (!res.ok) return null;
+                return res.json().catch(() => ({}));
+            } catch (_) {
+                return null;
+            }
+        });
+        return result?.blocked ? null : result;
+    },
+
     // 讀單一會員。身分切換時用它把本機 profile 換成 session 真正屬於的那個人，
     // 不必把使用者登出重來。
     async fetchMember(email) {
@@ -2776,7 +2822,10 @@ const AnalysisFeedback = {
     OPTIONS: Object.freeze({
         '臉型': ['圓形臉', '心形臉', '方形臉', '長形臉', '鵝蛋臉'],
         '眉型': ['一字眉', '彎月眉', '落尾眉'],
-        '眼型': ['下垂眼', '丹鳳眼', '圓眼', '杏仁眼', '桃花眼', '瞇縫眼', '細長眼', '鳳眼'],
+        // 眼型由八類併為六類（2026-07-24 官方分類表）：丹鳳眼併入鳳眼、瞇縫眼併入細長眼。
+        // 那兩個類別的圖檔在標註資料夾裡本來就與合併目標逐位元組相同——合併當初是用
+        // 複製而非搬移，舊資料夾沒刪，於是同一張臉同時掛在兩個類別底下。
+        '眼型': ['細長眼', '桃花眼', '杏仁眼', '圓眼', '鳳眼', '下垂眼'],
         // 窄鼻已併入標準鼻（2026-07-22 重訓）：標註者判斷窄鼻時看的不是鼻翼寬度，
         // 舊的三類模型「標準鼻」召回率只有 0.061，整個類別塌陷進窄鼻。
         '鼻型': ['寬鼻', '標準鼻'],
@@ -2806,13 +2855,25 @@ const AnalysisFeedback = {
 };
 
 // ═══ 購物車模組 ═══
+//
+// 本機 localStorage 是工作副本；登入後每次變更會背景同步整台車回會員資料庫
+// （POST /api/members/{email}/cart，last-write-wins），換裝置／換瀏覽器登入時
+// 由 syncRemoteCart() 讀回。訪客（沒有 email）維持純本機，不同步。
+// 同步全程盡力而為：伺服器連不上時本機購物車照樣能用，不報錯、不擋操作。
 const Cart = {
     _key: 'beautyCart',
+    _pushTimer: null,
+    // 剛登入時設 true：讓 syncRemoteCart 把「登入前的訪客車」與「伺服器車」數量相加合併一次；
+    // 其餘情境（重載、換裝置還原）為 false，以伺服器為準直接取代，避免每次載入都相加造成灌水。
+    _mergeGuestOnce: false,
     list() {
         try { return JSON.parse(localStorage.getItem(this._key) || '[]'); }
         catch (_) { return []; }
     },
-    save(items) { localStorage.setItem(this._key, JSON.stringify(items)); },
+    // 只寫本機、不同步：套用伺服器來的權威資料時用，避免又把剛拉回來的東西推回去。
+    _setLocal(items) { localStorage.setItem(this._key, JSON.stringify(items)); },
+    // 使用者操作造成的變更：寫本機並排程同步回伺服器。
+    save(items) { this._setLocal(items); this._schedulePush(); },
     add(id) {
         const items = this.list();
         const row = items.find(item => String(item.id) === String(id));
@@ -2827,7 +2888,43 @@ const Cart = {
         if (row) row.qty = Math.max(0, row.qty + delta);
         this.save(items.filter(item => item.qty > 0));
     },
-    count() { return this.list().reduce((sum, item) => sum + item.qty, 0); }
+    count() { return this.list().reduce((sum, item) => sum + item.qty, 0); },
+
+    // 只有登入的真實會員才同步；訪客沒有 email，維持純本機。
+    _canSync() {
+        return typeof Auth !== 'undefined' && Auth.isLoggedIn && Auth.isLoggedIn()
+            && !!((Auth.getProfile && Auth.getProfile()) || {}).email
+            && typeof Api !== 'undefined' && !!Api.saveRemoteCart;
+    },
+    // 合併 500ms 內的多次快速加減，只推最後一次整台車，省請求也避免中間態互相覆蓋。
+    _schedulePush() {
+        if (!this._canSync()) return;
+        // 無計時器的環境（如 headless smoke test 沙箱）直接略過背景同步；瀏覽器一定有計時器。
+        if (typeof setTimeout !== 'function') return;
+        if (typeof clearTimeout === 'function') clearTimeout(this._pushTimer);
+        this._pushTimer = setTimeout(() => {
+            Api.saveRemoteCart(this.list()).catch(() => {});
+        }, 500);
+    },
+    // 把伺服器購物車併進本機並回傳結果。
+    //   sum=true ：同商品數量相加（登入時合併訪客車，見 _mergeGuestOnce）。
+    //   sum=false：以伺服器為準直接取代（重載／換裝置還原）。
+    mergeServer(serverItems, sum) {
+        const server = (Array.isArray(serverItems) ? serverItems : [])
+            .map(it => ({ id: String(it.id), qty: Math.max(1, parseInt(it.qty, 10) || 1) }))
+            .filter(it => it.id);
+        if (!sum) { this._setLocal(server); return server; }
+        const byId = new Map(server.map(it => [it.id, { ...it }]));
+        for (const it of this.list()) {
+            const id = String(it.id);
+            const qty = Math.max(1, parseInt(it.qty, 10) || 1);
+            if (byId.has(id)) byId.get(id).qty += qty;
+            else byId.set(id, { id, qty });
+        }
+        const merged = [...byId.values()];
+        this._setLocal(merged);
+        return merged;
+    }
 };
 
 // ═══ 分析紀錄模組 ═══
