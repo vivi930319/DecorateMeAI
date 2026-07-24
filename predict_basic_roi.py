@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 
 import cv2
+import mediapipe_ascii  # noqa: F401  # 必須早於 mediapipe，見該模組說明
 import mediapipe as mp
 import numpy as np
 import onnxruntime as ort

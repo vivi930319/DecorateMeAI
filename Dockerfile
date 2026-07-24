@@ -37,6 +37,9 @@ COPY api_errors.py .
 COPY cloud_start.py .
 COPY job_store.py .
 COPY face_roi.py .
+# 在 Linux 上是 no-op（路徑本來就是 ASCII），但 Face_analyzer_BASIC 會 import 它，
+# 少了這行 image 會在 import 階段就掛掉。
+COPY mediapipe_ascii.py .
 COPY basic_roi_shadow.py .
 # ROI CNN shadow 模型（5 個部位各約 6MB）。BASIC 用它產生 shadow prediction，
 # 正式輸出仍是規則式。缺檔時 basic_roi_shadow 會自動停用，不影響服務啟動。

@@ -7,10 +7,11 @@ import sys
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import mediapipe_ascii  # noqa: F401,E402  # 必須早於 mediapipe，見該模組說明
+import mediapipe as mp  # noqa: E402
 
 from face_roi import ROI_SPECS, roi_bbox
 

@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import mediapipe_ascii  # noqa: F401  # 必須早於 mediapipe，見該模組說明
 import mediapipe as mp
 import json
 import os
