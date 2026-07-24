@@ -57,6 +57,23 @@ PART_TO_FIELD = {
 ENCODER = "mobilenet_v3_small"
 PROVIDER = "roi_cnn"
 
+
+def _retired_labels(part: str, classes: list[str]) -> set[str]:
+    """回傳 `classes` 裡已不在該部位官方分類表中的標籤。
+
+    以 `{part}_classes.json`（CNN 的類別檔，隨每次重訓更新）當作目前的分類表。
+    兩者不一致時代表某一邊沒跟上合併，讓不一致的那一邊安靜地繼續預測，
+    就會在線上出現使用者回饋選項裡根本沒有的類別。
+    """
+    canonical_path = MODEL_DIR / f"{part}_classes.json"
+    if not canonical_path.is_file():
+        return set()
+    try:
+        canonical = set(json.loads(canonical_path.read_text(encoding="utf-8"))["classes"])
+    except Exception:
+        return set()
+    return set(classes) - canonical
+
 # ── DINOv2 shadow ────────────────────────────────────────────────────────────
 # 2026-07-19 的三模型公平比較裡，臉型／眼型／鼻型由 DINOv2 ViT-S/14 + 線性分類器勝出
 # （0.522 / 0.387 / 0.863）。但依當時的部署決策，第一階段**只跑 shadow、不接管正式輸出**：
@@ -185,6 +202,22 @@ def _load_dinov2() -> tuple | None:
                 logger.info("DINOv2 shadow：找不到 %s，跳過這個部位", head_path)
                 continue
             classes = json.loads(meta_path.read_text(encoding="utf-8"))["classes"]
+
+            # 守衛：DINOv2 head 的類別若含目前分類表已淘汰的名稱，就不要載入。
+            #
+            # 2026-07-24 眼型由八類併為六類（丹鳳眼→鳳眼、瞇縫眼→細長眼），CNN 已用
+            # 清理後資料重訓，但 DINOv2 head 沒有跟著重訓。少了這道檢查，只要有人設
+            # ROI_DINOV2_MODEL_FIRST=1，線上就會吐出「丹鳳眼」這種已經不在契約裡的標籤，
+            # 而且前端的回饋選項也沒有它——使用者選不到，看起來只像是模型很爛。
+            retired = _retired_labels(part, classes)
+            if retired:
+                logger.warning(
+                    "DINOv2 shadow：%s 的 head 仍是舊分類（含 %s），與目前的 %s 不一致，"
+                    "跳過。重訓 head 後才會重新啟用。",
+                    part, "、".join(sorted(retired)), meta_path.name.replace("_dinov2", ""),
+                )
+                continue
+
             with np.load(head_path) as data:
                 heads[part] = (
                     data["coef"].astype(np.float32),

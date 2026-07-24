@@ -1,0 +1,24 @@
+{
+  "part": "face_shape",
+  "classes": [
+    "圓形臉",
+    "心形臉",
+    "方形臉",
+    "長形臉",
+    "鵝蛋臉"
+  ],
+  "features": [
+    "height_width",
+    "forehead_norm",
+    "cheek_norm",
+    "jaw_norm",
+    "forehead_to_jaw",
+    "cheek_to_jaw",
+    "chin_to_jaw"
+  ],
+  "max_depth": 4,
+  "train_count": 330,
+  "train_macro": 0.6201,
+  "note": "train_macro 是在訓練資料上的分數，不是泛化估計；泛化請看 rule_cv_results.json（5-fold, identity 切分）",
+  "rules": "|--- height_width <= 1.132\n|   |--- cheek_norm <= 0.948\n|   |   |--- height_width <= 1.106\n|   |   |   |--- class: 心形臉\n|   |   |--- height_width >  1.106\n|   |   |   |--- class: 心形臉\n|   |--- cheek_norm >  0.948\n|   |   |--- chin_to_jaw <= 0.576\n|   |   |   |--- class: 方形臉\n|   |   |--- chin_to_jaw >  0.576\n|   |   |   |--- cheek_to_jaw <= 1.142\n|   |   |   |   |--- class: 圓形臉\n|   |   |   |--- cheek_to_jaw >  1.142\n|   |   |   |   |--- class: 圓形臉\n|--- height_width >  1.132\n|   |--- height_width <= 1.186\n|   |   |--- forehead_to_jaw <= 1.188\n|   |   |   |--- jaw_norm <= 0.893\n|   |   |   |   |--- class: 鵝蛋臉\n|   |   |   |--- jaw_norm >  0.893\n|   |   |   |   |--- class: 圓形臉\n|   |   |--- forehead_to_jaw >  1.188\n|   |   |   |--- height_width <= 1.167\n|   |   |   |   |--- class: 心形臉\n|   |   |   |--- height_width >  1.167\n|   |   |   |   |--- class: 長形臉\n|   |--- height_width >  1.186\n|   |   |--- height_width <= 1.223\n|   |   |   |--- forehead_to_jaw <= 1.178\n|   |   |   |   |--- class: 鵝蛋臉\n|   |   |   |--- forehead_to_jaw >  1.178\n|   |   |   |   |--- class: 長形臉\n|   |   |--- height_width >  1.223\n|   |   |   |--- chin_to_jaw <= 0.600\n|   |   |   |   |--- class: 長形臉\n|   |   |   |--- chin_to_jaw >  0.600\n|   |   |   |   |--- class: 長形臉\n"
+}

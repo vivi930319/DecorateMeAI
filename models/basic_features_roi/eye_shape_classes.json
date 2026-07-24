@@ -1,13 +1,12 @@
 {
   "classes": [
     "下垂眼",
-    "丹鳳眼",
     "圓眼",
     "杏仁眼",
     "桃花眼",
-    "瞇縫眼",
     "細長眼",
     "鳳眼"
   ],
-  "size": 96
+  "size": 96,
+  "architecture": "mobilenet_v3_small"
 }

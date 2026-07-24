@@ -41,6 +41,9 @@ COPY face_roi.py .
 # 少了這行 image 會在 import 階段就掛掉。
 COPY mediapipe_ascii.py .
 COPY basic_roi_shadow.py .
+# 眼型／臉型改由幾何決策樹提供正式答案，這兩支是它的推論路徑與特徵定義。
+COPY basic_rule_trees.py .
+COPY rule_features.py .
 # ROI CNN shadow 模型（5 個部位各約 6MB）。BASIC 用它產生 shadow prediction，
 # 正式輸出仍是規則式。缺檔時 basic_roi_shadow 會自動停用，不影響服務啟動。
 COPY models/basic_features_roi/ ./models/basic_features_roi/

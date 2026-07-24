@@ -1,0 +1,21 @@
+{
+  "part": "eye_shape",
+  "classes": [
+    "下垂眼",
+    "圓眼",
+    "杏仁眼",
+    "桃花眼",
+    "細長眼",
+    "鳳眼"
+  ],
+  "features": [
+    "ear",
+    "angle",
+    "ratio_to_face"
+  ],
+  "max_depth": 4,
+  "train_count": 387,
+  "train_macro": 0.5373,
+  "note": "train_macro 是在訓練資料上的分數，不是泛化估計；泛化請看 rule_cv_results.json（5-fold, identity 切分）",
+  "rules": "|--- angle <= -5.825\n|   |--- ear <= 0.327\n|   |   |--- angle <= -6.772\n|   |   |   |--- ratio_to_face <= 0.224\n|   |   |   |   |--- class: 鳳眼\n|   |   |   |--- ratio_to_face >  0.224\n|   |   |   |   |--- class: 桃花眼\n|   |   |--- angle >  -6.772\n|   |   |   |--- ratio_to_face <= 0.214\n|   |   |   |   |--- class: 細長眼\n|   |   |   |--- ratio_to_face >  0.214\n|   |   |   |   |--- class: 杏仁眼\n|   |--- ear >  0.327\n|   |   |--- ear <= 0.360\n|   |   |   |--- ratio_to_face <= 0.213\n|   |   |   |   |--- class: 杏仁眼\n|   |   |   |--- ratio_to_face >  0.213\n|   |   |   |   |--- class: 圓眼\n|   |   |--- ear >  0.360\n|   |   |   |--- ratio_to_face <= 0.223\n|   |   |   |   |--- class: 圓眼\n|   |   |   |--- ratio_to_face >  0.223\n|   |   |   |   |--- class: 圓眼\n|--- angle >  -5.825\n|   |--- ear <= 0.297\n|   |   |--- ratio_to_face <= 0.210\n|   |   |   |--- ear <= 0.259\n|   |   |   |   |--- class: 細長眼\n|   |   |   |--- ear >  0.259\n|   |   |   |   |--- class: 下垂眼\n|   |   |--- ratio_to_face >  0.210\n|   |   |   |--- angle <= -5.100\n|   |   |   |   |--- class: 細長眼\n|   |   |   |--- angle >  -5.100\n|   |   |   |   |--- class: 細長眼\n|   |--- ear >  0.297\n|   |   |--- angle <= -4.619\n|   |   |   |--- angle <= -5.184\n|   |   |   |   |--- class: 下垂眼\n|   |   |   |--- angle >  -5.184\n|   |   |   |   |--- class: 細長眼\n|   |   |--- angle >  -4.619\n|   |   |   |--- class: 下垂眼\n"
+}

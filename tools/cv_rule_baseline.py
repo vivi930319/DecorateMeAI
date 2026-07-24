@@ -39,15 +39,9 @@ from Face_analyzer_BASIC import FaceAnalyzer  # noqa: E402
 from train_basic_cnn_roi import (  # noqa: E402
     build_part_data, load_cache, split_kfold_by_identity,
 )
-from tools.diagnose_rule_thresholds import (  # noqa: E402
-    brow_features, eye_features, nose_features,
-)
-
-EXTRACT = {
-    "brow_shape": brow_features,
-    "eye_shape": eye_features,
-    "nose_shape": nose_features,
-}
+# 特徵與樹的輸入順序都取自 rule_features——服務端載入同一份定義。
+# 訓練與推論的特徵一旦分家，模型會安靜地變差且極難察覺。
+from rule_features import EXTRACT, TREE_FEATURES  # noqa: E402
 FEATURE_CACHE = Path("data/roi_cache/rule_features.json")
 OUT_PATH = Path("models/basic_features_roi/rule_cv_results.json")
 N_FOLDS = 5
@@ -148,12 +142,19 @@ def cv_threshold(part, feat_name, classes_spec, grid, cache):
                                                  "per_fold_thresholds": chosen})
 
 
-def cv_eye_tree(cache):
+def cv_tree(part, cache):
+    """對任一部位跑「淺決策樹」規則式，與 CNN 同一組 fold。
+
+    用決策樹而不是別的分類器，是因為它學出來的東西**本身就是規則**——可以直接
+    印成 if-else 抄回 `Face_analyzer_BASIC`，維持規則式路徑「看得懂、改得動」的
+    性質。深度限制加上 `min_samples_leaf=8` 是為了不讓它在幾百張圖上長成
+    一棵背答案的樹。
+    """
     from sklearn.model_selection import StratifiedKFold, cross_val_score
     from sklearn.tree import DecisionTreeClassifier
 
-    feats, labels, identities, classes = load_part("eye_shape", cache)
-    names = ["ear", "angle", "ratio_to_face"]
+    feats, labels, identities, classes = load_part(part, cache)
+    names = TREE_FEATURES[part]
     X = np.array([[f[n] for n in names] for f in feats])
     folds = split_kfold_by_identity(labels, identities, N_FOLDS, SEED)
 
@@ -179,7 +180,7 @@ def cv_eye_tree(cache):
         true_all.append(labels[val_idx])
         pred_all.append(pred)
 
-    return _summarise("eye_shape", classes, per_fold, np.concatenate(true_all),
+    return _summarise(f"{part}(tree)", classes, per_fold, np.concatenate(true_all),
                       np.concatenate(pred_all), {"features": names,
                                                  "per_fold_depth": depths})
 
@@ -219,18 +220,23 @@ def main():
     print("=" * 70)
 
     results = {}
-    print("\n[1/3] brow_shape")
-    results["brow_shape"] = cv_threshold(
+
+    # 單一門檻版：只有眉、鼻適用（各只有一個有鑑別力的特徵）。
+    print("\n[1/7] brow_shape（單一門檻）")
+    results["brow_shape_threshold"] = cv_threshold(
         "brow_shape", "tail_ratio", ("一字眉", "落尾眉", "彎月眉"),
         np.arange(-0.06, 0.06, 0.002), cache)
 
-    print("\n[2/3] nose_shape")
-    results["nose_shape"] = cv_threshold(
+    print("\n[2/7] nose_shape（單一門檻）")
+    results["nose_shape_threshold"] = cv_threshold(
         "nose_shape", "ratio_width", ("標準鼻", "寬鼻"),
         np.arange(0.24, 0.40, 0.002), cache)
 
-    print("\n[3/3] eye_shape")
-    results["eye_shape"] = cv_eye_tree(cache)
+    # 決策樹版：五個部位都跑，這樣「規則式 vs CNN」在每個部位都有可比的數字。
+    for i, part in enumerate(("eye_shape", "face_shape", "lip_shape",
+                              "brow_shape", "nose_shape"), start=3):
+        print(f"\n[{i}/7] {part}（決策樹）")
+        results[f"{part}_tree"] = cv_tree(part, cache)
 
     FEATURE_CACHE.parent.mkdir(parents=True, exist_ok=True)
     FEATURE_CACHE.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
@@ -242,24 +248,39 @@ def main():
     print("規則式 vs CNN（同一組 5-fold，可直接比較）")
     print("=" * 70)
     summary_path = Path("models/basic_features_roi/cv_summary.json")
-    cnn = {}
+    cnn, cnn_folds = {}, {}
     if summary_path.is_file():
         raw = json.loads(summary_path.read_text(encoding="utf-8"))
         for part, v in raw.items():
-            if isinstance(v, dict):
-                cnn[part] = v.get("mean_macro") or v.get("cv", {}).get("mean_macro")
-    print(f"  {'部位':14}{'規則式':>10}{'±std':>9}{'CNN':>9}   判定")
-    for part, res in results.items():
-        c = cnn.get(part)
+            if not isinstance(v, dict):
+                continue
+            block = v.get("cv", v)
+            cnn[part] = block.get("mean_macro")
+            cnn_folds[part] = block.get("fold_macro_accuracies", [])
+    print(f"  {'部位':12}{'最佳規則式':>12}{'±std':>8}{'CNN':>9}  勝場   判定")
+    for part in ("face_shape", "brow_shape", "eye_shape", "nose_shape", "lip_shape"):
+        variants = {k: v for k, v in results.items() if k.startswith(part)}
+        if not variants:
+            continue
+        name, res = max(variants.items(), key=lambda kv: kv[1]["mean_macro"])
         rule, std = res["mean_macro"], res["std_macro"]
+        c = cnn.get(part)
         if c is None:
-            verdict = "（找不到 CNN 分數）"
-        elif abs(rule - c) < std:
-            verdict = "差距小於雜訊，打平"
+            print(f"  {part:12}{rule:12.4f}{std:8.4f}{'n/a':>9}   -    （找不到 CNN 分數）")
+            continue
+        # 逐 fold 配對比較：同一個 fold 直接比，比看平均可靠得多。平均值相近時，
+        # 「每個 fold 都贏」和「贏兩個輸三個」是完全不同的結論。
+        diffs = np.array(res["fold_macro_accuracies"]) - np.array(
+            cnn_folds.get(part, [0] * N_FOLDS))
+        wins = int((diffs > 0).sum())
+        if wins >= 4 and abs(diffs.mean()) > diffs.std():
+            verdict = "規則式勝" if diffs.mean() > 0 else "CNN 勝"
+        elif wins <= 1 and abs(diffs.mean()) > diffs.std():
+            verdict = "CNN 勝" if diffs.mean() < 0 else "規則式勝"
         else:
-            verdict = "規則式勝" if rule > c else "CNN 勝"
-        cs = f"{c:.4f}" if c is not None else "  n/a"
-        print(f"  {part:14}{rule:10.4f}{std:9.4f}{cs:>9}   {verdict}")
+            verdict = "差距在雜訊內，不下定論"
+        tag = name.replace(part + "_", "")
+        print(f"  {part:12}{rule:12.4f}{std:8.4f}{c:9.4f}  {wins}/5   {verdict}（{tag}）")
     print(f"\n結果寫入 {OUT_PATH}")
 
 

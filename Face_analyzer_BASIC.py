@@ -15,6 +15,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 import insightface
 from insightface.app import FaceAnalysis as InsightFaceApp
 import basic_roi_shadow
+import basic_rule_trees
 from api_errors import (
     enforce_service_api_key,
     error_payload,
@@ -676,7 +677,13 @@ class FaceAnalyzer:
             pts = self._align_points_by_eyes(pts)
         return float(np.linalg.norm(pts[0] - pts[1]))
 
-    def get_face_shape(self, debug=False):
+    def face_measurements(self) -> dict[str, float] | None:
+        """回傳臉型判斷用的原始量測值（像素單位），量不出來時回 None。
+
+        抽成獨立方法是為了讓「規則判斷」與「機器學習特徵抽取」共用同一份量測。
+        這段沿著臉部外框在多個高度取寬度，邏輯不短；複製第二份到工具腳本裡，
+        兩邊遲早會走樣，屆時比較規則式與模型的分數就是在比兩個不同的東西。
+        """
         oval_indices = self._collect_landmark_indices(self.mp_face_mesh.FACEMESH_FACE_OVAL)
         if len(oval_indices) < 5:
             face_width      = self._dist(234, 454)
@@ -692,7 +699,7 @@ class FaceAnalyzer:
             face_height = float(abs(p152r[1] - p10r[1]))
 
             if face_height < 1e-6:
-                return "未知"
+                return None
 
             y_min = float(np.min(oval_pts_rot[:, 1]))
 
@@ -724,7 +731,24 @@ class FaceAnalyzer:
                 jaw_width   = float(np.median(jaw_samples)) if jaw_samples else self._dist(132, 361)
 
         if face_width < 1e-6 or jaw_width < 1e-6:
+            return None
+
+        return {
+            "face_width": float(face_width),
+            "face_height": float(face_height),
+            "forehead_width": float(forehead_width),
+            "cheekbone_width": float(cheekbone_width),
+            "jaw_width": float(jaw_width),
+            "chin_width": float(self._dist(150, 379)),
+        }
+
+    def get_face_shape(self, debug=False):
+        m = self.face_measurements()
+        if m is None:
             return "未知"
+        face_width, face_height = m["face_width"], m["face_height"]
+        forehead_width, cheekbone_width = m["forehead_width"], m["cheekbone_width"]
+        jaw_width, chin_width = m["jaw_width"], m["chin_width"]
 
         hw = round(face_height / face_width, 3)
         max_w = max(forehead_width, cheekbone_width, jaw_width)
@@ -735,7 +759,6 @@ class FaceAnalyzer:
         forehead_to_jaw = forehead_width / jaw_width
         cheek_to_jaw    = cheekbone_width / jaw_width
         forehead_to_cheek = forehead_width / cheekbone_width if cheekbone_width > 1e-6 else 1.0
-        chin_width      = self._dist(150, 379)
         chin_to_jaw     = chin_width / jaw_width if jaw_width > 1e-6 else 1.0
         all_similar = fw_n > 0.88 and jw_n > 0.88
 
@@ -858,13 +881,19 @@ class FaceAnalyzer:
         # 外加一個恆真條件（桃花眼需 ratio>0.16，而所有人都 >0.194），
         # 導致 96% 的人被判成「桃花眼」。詳見 規則式閾值Bug_完整診斷記錄_新手版.md。
         #
-        # 誠實的限制：7 個類別只靠 ear / angle / ratio_to_face 三個弱特徵，本來就分不乾淨 ——
-        # 這組規則永遠不會輸出「桃花眼」。眼型請優先採用 CNN（見 basic_roi_shadow 的 hybrid）。
+        # 類別名稱依 2026-07-24 的官方分類表：瞇縫眼併入細長眼、丹鳳眼併入鳳眼，眼型六類。
+        #
+        # 這組手寫 if-else 現在只是 fallback：正式答案由 `basic_rule_trees` 的幾何決策樹
+        # 提供（同一套 5-fold 上 0.406 vs CNN 0.332，5/5 fold 全勝）。這裡維持可用，
+        # 是為了樹或模型載入失敗時仍有東西可回。
+        #
+        # 誠實的限制：三個弱特徵（ear / angle / ratio_to_face）分不乾淨六個類別，
+        # 這組規則永遠不會輸出「桃花眼」。
         if ear <= 0.264:
-            return "瞇縫眼"
+            return "細長眼"
         if ear <= 0.327:
             if ratio_to_face <= 0.207: return "下垂眼"
-            return "丹鳳眼" if angle <= -6.947 else "細長眼"
+            return "鳳眼" if angle <= -6.947 else "細長眼"
         if ratio_to_face <= 0.229 and ear <= 0.346:
             return "杏仁眼"
         return "圓眼"
@@ -1201,6 +1230,21 @@ class FaceAnalyzer:
                 result["模型分類_dinov2"] = dino
         except Exception:
             logging.getLogger(__name__).exception("ROI 模型預測失敗，改用規則式結果")
+
+        # 幾何決策樹接手眼型與臉型。放在 CNN 之後，因為在同一套 5-fold 上它贏了：
+        # 眼型 0.406 vs 0.332（5/5 fold）、臉型 0.544 vs 0.477（4/5 fold）。
+        # 其餘三個部位維持 CNN——樹在那裡輸，但差距小於逐 fold 差的標準差，
+        # 屬於傾向而非定論，不值得為此更動既有部署。
+        # 詳見 模型訓練記錄_2026-07-24.md 第 5.3.1 節。
+        try:
+            tree_pred = basic_rule_trees.predict(self)
+            tree_sources = basic_rule_trees.apply(result, tree_pred)
+            if tree_sources:
+                result.setdefault("分類來源", {}).update(tree_sources)
+            if tree_pred and basic_roi_shadow.EXPOSE_IN_RESPONSE:
+                result["模型分類_規則樹"] = tree_pred
+        except Exception:
+            logging.getLogger(__name__).exception("規則樹預測失敗，維持既有答案")
 
         # 角度抑制必須放在最後。MODEL_FIRST 開啟時 apply_model_first() 會用 CNN 的答案
         # 覆蓋整個 result，寫在前面的抑制會被蓋掉——先前就是這樣，日誌裡看得到

@@ -29,15 +29,24 @@ BROW_SHAPE_CODES = {
     "未知": "unknown",
 }
 
+# 官方分類表（2026-07-24）：眼型六類。丹鳳眼併入鳳眼、瞇縫眼併入細長眼。
+#
+# 舊名稱保留成別名而不是刪掉：資料庫與既有分析包裡還存著用舊名稱寫的紀錄，
+# 移除後那些會靜靜地變成 "unknown"。別名指向合併後的同一個代碼，讀舊資料才不會壞。
+#
+# 註：先前這張表**漏了「鳳眼」**，模型輸出鳳眼時會被 `_code` 落到 "unknown"。
+# 一併補上。
 EYE_SHAPE_CODES = {
-    "瞇縫眼": "narrow",
-    "下垂眼": "downturned",
-    "圓眼": "round",
-    "丹鳳眼": "phoenix",
     "細長眼": "slender",
     "桃花眼": "peach_blossom",
     "杏仁眼": "almond",
+    "圓眼": "round",
+    "鳳眼": "phoenix",
+    "下垂眼": "downturned",
     "未知": "unknown",
+    # ── 舊名稱別名（併入上面的類別，僅供讀取歷史資料）──
+    "丹鳳眼": "phoenix",
+    "瞇縫眼": "slender",
 }
 
 NOSE_SHAPE_CODES = {

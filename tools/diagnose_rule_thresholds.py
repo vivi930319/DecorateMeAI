@@ -28,44 +28,12 @@ os.environ.setdefault("ROI_SHADOW_ENABLED", "0")
 
 from Face_analyzer_BASIC import FaceAnalyzer  # noqa: E402
 
-_L_BROW = (46, 53, 52, 65, 55)
-_R_BROW = (276, 283, 282, 295, 285)
-
-
-def brow_features(a: FaceAnalyzer) -> dict[str, float]:
-    def metrics(outer_idx, inner_idx, outline):
-        head = a._pt(outer_idx).astype(np.float32)
-        tail = a._pt(inner_idx).astype(np.float32)
-        width = float(np.linalg.norm(tail - head))
-        if width < 1e-6:
-            return 0.0, 0.0
-        pts = np.array([a._pt(i) for i in outline], dtype=np.float32)
-        peak_y = float(np.min(pts[:, 1]))
-        base_y = (float(head[1]) + float(tail[1])) / 2.0
-        return (base_y - peak_y) / width, (float(head[1]) - float(tail[1])) / width
-
-    la, lt = metrics(46, 55, _L_BROW)
-    ra, rt = metrics(276, 285, _R_BROW)
-    return {"arch_ratio": (la + ra) / 2.0, "tail_ratio": (lt + rt) / 2.0}
-
-
-def eye_features(a: FaceAnalyzer) -> dict[str, float]:
-    face_width = a._dist(234, 454)
-    left = a._eye_side_metrics(133, 33, (157, 158, 159, 160, 161), 145, _L_BROW)
-    left["angle"] = -left["angle"]
-    right = a._eye_side_metrics(362, 263, (385, 386, 387, 388, 398), 374, _R_BROW)
-    eye_width = (left["eye_width"] + right["eye_width"]) / 2.0
-    return {
-        "ear": (left["ear"] + right["ear"]) / 2.0,
-        "angle": (left["angle"] + right["angle"]) / 2.0,
-        "ratio_to_face": eye_width / face_width if face_width > 1e-6 else 0.0,
-    }
-
-
-def nose_features(a: FaceAnalyzer) -> dict[str, float]:
-    face_width = a._dist(234, 454)
-    nose_width = a._dist(129, 358)
-    return {"ratio_width": nose_width / face_width if face_width > 1e-6 else 0.0}
+# 特徵定義集中在專案根目錄的 rule_features.py：服務端也要用，而 Dockerfile
+# 不會 COPY tools/。這裡只做轉出，保持既有 import 路徑可用。
+from rule_features import (  # noqa: E402
+    _L_BROW, _R_BROW, brow_features, eye_features, face_features,
+    lip_features, nose_features,
+)
 
 
 # 每個部位：特徵抽取函式 + 現行閾值。

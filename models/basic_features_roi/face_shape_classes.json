@@ -6,5 +6,6 @@
     "長形臉",
     "鵝蛋臉"
   ],
-  "size": 128
+  "size": 128,
+  "architecture": "mobilenet_v3_small"
 }

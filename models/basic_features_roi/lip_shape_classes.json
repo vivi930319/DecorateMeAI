@@ -7,8 +7,5 @@
     "薄唇"
   ],
   "size": 96,
-  "architecture": "mobilenet_v3_small",
-  "epochs": 20,
-  "train_count": 352,
-  "training_scope": "100_percent"
+  "architecture": "mobilenet_v3_small"
 }
