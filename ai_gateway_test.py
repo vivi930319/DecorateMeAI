@@ -33,7 +33,6 @@ from ai_gateway import (  # noqa: E402
     seal_member_cookie,
     session_status,
     upstream_timeout,
-    validate_upstream_member_session,
     _upstream_cookie_header,
     _authorize_member_path,
     _render_job_id_from_url,

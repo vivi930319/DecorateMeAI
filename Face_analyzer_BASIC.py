@@ -12,7 +12,6 @@ from threading import Lock
 from fastapi import BackgroundTasks, FastAPI, UploadFile, HTTPException, File, Form, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, JSONResponse
-import insightface
 from insightface.app import FaceAnalysis as InsightFaceApp
 import basic_roi_shadow
 import basic_rule_trees
@@ -748,7 +747,6 @@ class FaceAnalyzer:
         hw = round(face_height / face_width, 3)
         max_w = max(forehead_width, cheekbone_width, jaw_width)
         fw_n  = forehead_width / max_w
-        cw_n  = cheekbone_width / max_w
         jw_n  = jaw_width / max_w
         jaw_to_forehead = jaw_width / forehead_width if forehead_width > 1e-6 else 1.0
         forehead_to_jaw = forehead_width / jaw_width

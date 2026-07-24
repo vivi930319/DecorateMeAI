@@ -28,7 +28,54 @@ jobs:
           GATEWAY_SESSION_SECRET: ci-session-secret-that-is-at-least-32-bytes
           GATEWAY_FACE_API_KEY: ci-face-key
           GATEWAY_RENDER_API_KEY: ci-render-key
-        run: python -m unittest ai_gateway_test.py render_api_test.py
+        run: python -m unittest ai_gateway_test.py render_api_test.py image_safety_test.py
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 只挑「會壞掉」的規則，不做風格檢查：語法錯誤、用到不存在的名字、
+      # 永遠為真的比較、沒用到的 import 與區域變數。風格意見進 CI 只會製造噪音，
+      # 讓大家習慣性忽略紅燈——那比沒有 lint 更糟。
+      - name: Lint deployable modules
+        run: |
+          python -m pip install --upgrade pip ruff
+          ruff check --select E9,F63,F7,F82,F401,F841 --output-format concise \
+            ai_gateway.py replicate_render.py replicate_render_api.py \
+            api_errors.py admin_audit.py image_safety.py job_store.py \
+            analysis_package.py dev_server_utils.py cloud_start.py \
+            Face_analyzer_BASIC.py Face_analyzer_PRO.py Ollama_suggestion.py \
+            ai_gateway_test.py render_api_test.py image_safety_test.py
+
+      # 型別檢查是諮詢性的：這份程式從來沒有標註過型別，一次要求全綠等於要求
+      # 停下所有功能開發。先讓它跑起來、看得到報告，之後再逐檔收斂。
+      - name: Type check (advisory)
+        continue-on-error: true
+        run: |
+          pip install mypy
+          mypy --ignore-missing-imports --no-strict-optional \
+            api_errors.py admin_audit.py image_safety.py job_store.py || true
+
+  docker-image-scan:
+    runs-on: ubuntu-latest
+    # 諮詢性，理由同 dependency-audit：base image 的 CVE 多半要等上游出新版，
+    # 擋下部署也修不掉。看得到報告就能決定何時換 digest。
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build gateway image
+        run: docker build -f Dockerfile.gateway -t dm-gateway:ci .
+      - name: Scan gateway image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: dm-gateway:ci
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
 
   dependency-audit:
     runs-on: ubuntu-latest

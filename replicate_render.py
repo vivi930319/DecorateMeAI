@@ -1,7 +1,6 @@
 import argparse
 import base64
 import binascii
-import io
 import json
 import logging
 import mimetypes
@@ -147,7 +146,7 @@ def upload_to_permanent_storage(temp_image_url: str) -> str | None:
         blob.upload_from_string(image_bytes, content_type=content_type)
 
         return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{blob.name}"
-    except Exception as exc:  # noqa: BLE001 — 儲存失敗不該讓渲染整支失敗，記錄後照舊回暫存網址
+    except Exception:  # noqa: BLE001 — 儲存失敗不該讓渲染整支失敗，記錄後照舊回暫存網址
         logging.getLogger(__name__).exception("GCS upload failed; falling back to provider URL")
         return None
 
@@ -167,7 +166,7 @@ def upload_bytes_to_permanent_storage(image_bytes: bytes, content_type: str = "i
         }
         blob.upload_from_string(image_bytes, content_type=content_type)
         return f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{blob.name}"
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logging.getLogger(__name__).exception("GCS byte upload failed")
         return None
 
