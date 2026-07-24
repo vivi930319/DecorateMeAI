@@ -90,8 +90,34 @@ const WRITE_BLOCKED_ZH = Object.freeze({
     DEFAULT: '無法確認目前的登入身分，這次操作已中止。'
 });
 
-function localizeUserError(message, code = '', status = 0) {
+// 把秒數講成人看得懂的等待時間。「請在 900 秒後再試」沒有人會去換算。
+function formatRetryWait(seconds) {
+    const total = Math.max(1, Math.round(Number(seconds) || 0));
+    if (total < 60) return `${total} 秒`;
+    const minutes = Math.ceil(total / 60);
+    if (minutes < 60) return `${minutes} 分鐘`;
+    return `${Math.ceil(minutes / 60)} 小時`;
+}
+if (typeof window !== 'undefined') window.formatRetryWait = formatRetryWait;
+
+// 被限流時，後端一律回 retryAfterSeconds（見 api_errors.rate_limited_error）。
+// 沒有秒數就退回「請稍後再試」——寧可講得模糊，也不要編一個數字出來。
+function retryWaitSuffix(details) {
+    const seconds = Number(details && (details.retryAfterSeconds ?? details.retryAfter)) || 0;
+    return seconds > 0 ? `請在 ${formatRetryWait(seconds)}後再試。` : '請稍後再試。';
+}
+
+function localizeUserError(message, code = '', status = 0, details = null) {
     const raw = String(message || '').trim();
+    // 429 先處理：它的訊息要帶「還要等多久」，所以不能走下面那張固定字串對照表。
+    // 使用者拿不到時間就只能一直重試，而每一次重試都讓視窗往後延。
+    if (status === 429 || /RATE_LIMITED|QUOTA_EXCEEDED/.test(String(code || '').toUpperCase())) {
+        const wait = retryWaitSuffix(details);
+        const upper = String(code || '').trim().toUpperCase();
+        if (upper === 'LOGIN_RATE_LIMITED') return `登入嘗試次數過多，${wait}`;
+        if (upper === 'QUOTA_EXCEEDED') return `今日的生成次數已用完，${wait}`;
+        return `操作次數過多，${wait}`;
+    }
     const explicitCode = String(code || '').trim().toUpperCase();
     // 只有「整句訊息本身就是一個錯誤碼」時才拿它當碼查表。先前是掃句子裡第一個全大寫的字，
     // 任何夾帶大寫單字的訊息都會被誤判成錯誤碼，查到什麼就顯示什麼 —— 使用者會看到
@@ -126,7 +152,6 @@ function localizeUserError(message, code = '', status = 0) {
     if (status === 401) return '登入狀態已失效，請重新登入後再繼續。';
     if (status === 403) return '你沒有執行這項操作的權限。';
     if (status === 404) return '找不到要求的資料。';
-    if (status === 429) return '操作次數過多，請稍後再試。';
     if (status >= 500) return '系統服務暫時異常，請稍後再試。';
 
     // 已經含有中文的訊息通常是前端自己撰寫，只替換少量常見英文片段。
@@ -608,8 +633,15 @@ const Api = {
         if (submitted.resultToken) headers['X-Job-Token'] = submitted.resultToken;
         const pollUrl = `${baseUrl}/render/jobs/${jobId}`;
         const deadline = Date.now() + 5 * 60 * 1000;  // 5 分鐘保險絲，正常 150 秒內一定結束
+        // 指數退避：前幾輪維持 2 秒（多數渲染在這段時間內就有進度可回報），之後每輪
+        // 乘以 1.5 直到 10 秒封頂。固定 2 秒等於一次渲染要打 75 次，其中大半都是
+        // 「還在跑」——那些請求對使用者沒有任何價值，卻是實打實的後端負載與費用。
+        const POLL_MIN_MS = 2000;
+        const POLL_MAX_MS = 10000;
+        let pollDelay = POLL_MIN_MS;
         while (Date.now() < deadline) {
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await new Promise(resolve => setTimeout(resolve, pollDelay));
+            pollDelay = Math.min(POLL_MAX_MS, Math.round(pollDelay * 1.5));
             let job;
             try {
                 const pollRes = await this._protectedFetch(pollUrl, { method: 'GET', headers, cache: 'no-store' });
@@ -617,12 +649,22 @@ const Api = {
                 if (!pollRes.ok) {
                     // 輪詢途中的暫時性錯誤不該直接判死，繼續等下一輪
                     if (pollRes.status === 404) throw new Error('渲染工作不存在或已過期');
+                    // 被限流時就照後端說的時間等，不要繼續照原節奏敲——那只會讓視窗
+                    // 一直重新開始。Retry-After 讀不到（跨來源）就退回自己的退避節奏。
+                    if (pollRes.status === 429) {
+                        const wait = Number(job?.error?.retryAfterSeconds
+                            || pollRes.headers.get('Retry-After')) || 0;
+                        if (wait > 0) pollDelay = Math.min(60000, wait * 1000);
+                        else pollDelay = Math.min(POLL_MAX_MS, pollDelay * 2);
+                    }
                     continue;
                 }
             } catch (err) {
                 if (err.message === '渲染工作不存在或已過期') throw err;
                 continue;  // 網路瞬斷，下一輪再試
             }
+            // 這一輪拿到了正常回應：把節奏收回最小間隔，讓接近完成時的回饋維持即時。
+            pollDelay = POLL_MIN_MS;
 
             emit(job.progress || 0);
             if (job.status === 'completed' && job.afterImageUrl) {
@@ -985,13 +1027,15 @@ const Api = {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                const code = data?.detail?.error?.code || data?.error?.code || `HTTP_${res.status}`;
-                const message = data?.detail?.error?.message || data?.error?.message || '帳號或密碼錯誤';
+                const detail = data?.detail?.error || data?.error || null;
+                const code = detail?.code || `HTTP_${res.status}`;
+                const message = detail?.message || '帳號或密碼錯誤';
                 return {
                     ok: false,
                     status: res.status,
                     code,
-                    error: localizeUserError(message, code, res.status)
+                    // 把整個 error 物件帶進去，被限流時才顯示得出「請在 N 分鐘後再試」。
+                    error: localizeUserError(message, code, res.status, detail)
                 };
             }
             this._sessionExpiredNotified = false;

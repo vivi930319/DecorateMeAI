@@ -54,6 +54,24 @@ if (sandbox.localizeUserError('Member authentication is unavailable.', 'MEMBER_S
 if (sandbox.localizeUserError('Unexpected internal provider detail') !== '系統目前無法完成這項操作，請稍後再試。') {
   throw new Error('Unknown English backend errors must not be shown to users');
 }
+// ── 被限流時要講「還要等多久」──────────────────────────────
+// 只說「請稍後再試」的話，使用者不知道要等多久就會一直重試，而每一次重試都把
+// 限流視窗往後推。後端一律回 retryAfterSeconds，前端必須把它講出來。
+{
+  const rateLimited = sandbox.localizeUserError(
+    '登入嘗試次數過多，請在 300 秒後再試。', 'LOGIN_RATE_LIMITED', 429, { retryAfterSeconds: 300 }
+  );
+  if (!rateLimited.includes('5 分鐘')) {
+    throw new Error(`Rate limited message must tell the user how long to wait, got: ${rateLimited}`);
+  }
+  const noHint = sandbox.localizeUserError('Too many requests', 'RATE_LIMITED', 429);
+  if (!noHint.includes('請稍後再試')) {
+    throw new Error('Rate limited message without a retry hint must still be understandable');
+  }
+  if (sandbox.formatRetryWait(45) !== '45 秒' || sandbox.formatRetryWait(3600) !== '1 小時') {
+    throw new Error('formatRetryWait must round seconds into human units');
+  }
+}
 
 // ── 會員姓名與購物車 ─────────────────────────────────────────
 sandbox.Auth.setProfile({ name: '測試會員', email: 'USER@example.com', level: '一般會員' });

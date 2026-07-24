@@ -387,7 +387,7 @@ const ROUTE_PAGES = new Set(NAV_ORDER);
 function showAlert(msg, opts){
     opts = opts || {};
     if (opts.type === 'error' && typeof localizeUserError === 'function') {
-        msg = localizeUserError(msg, opts.code || '', opts.status || 0);
+        msg = localizeUserError(msg, opts.code || '', opts.status || 0, opts.detail || null);
     }
     var old = document.getElementById("dmAlert"); if (old) old.remove();
     var ov = document.createElement("div");
@@ -632,7 +632,7 @@ function showCartPanel(){
 function showConfirm(msg, opts){
     opts = opts || {};
     if (opts.type === 'error' && typeof localizeUserError === 'function') {
-        msg = localizeUserError(msg, opts.code || '', opts.status || 0);
+        msg = localizeUserError(msg, opts.code || '', opts.status || 0, opts.detail || null);
         if (opts.title && !/[\u3400-\u9fff]/.test(String(opts.title))) {
             opts.title = '操作失敗';
         }
@@ -4602,6 +4602,13 @@ async function doLoginAction() {
         // 跟真正原因無關的錯誤，然後卡在原地。
         if (/SUSPEND|DELET|DISABLED|INACTIVE|BLOCK/i.test(err.code || '') || err.status === 403) {
             showAlert('此帳號已被停權或刪除，無法登入。請聯繫管理員處理，重新註冊不會生效。', { type: 'error' });
+            return;
+        }
+        // 被限流：訊息已經帶了「請在 N 分鐘後再試」（後端回 retryAfterSeconds）。
+        // 這裡不能走下面那個對話框——它會提供「忘記密碼」，把「請稍等」誤導成「你密碼錯了」，
+        // 而每一次重試都會把限流視窗往後推。
+        if (err.status === 429 || /RATE_LIMITED/i.test(err.code || '')) {
+            showAlert(err.message || '登入嘗試次數過多，請稍後再試。', { type: 'error' });
             return;
         }
         // 其餘未分類的錯誤：只顯示原因，不預設「你還沒註冊」。
