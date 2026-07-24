@@ -22,7 +22,22 @@ const RuntimeApiConfig = getRuntimeApiConfig();
 // 正式站用相對路徑：firebase.json 的 rewrites 已把 /face-basic 等路徑導到 ai-gateway，
 // 走同源就不必處理 CORS，Gateway 種的 dm_session（SameSite=Lax）也才送得出去。
 // 本機開發沒有 rewrites，可在 config.local.js 設 aiGatewayUrl 指向 Gateway 絕對網址。
-const AI_GATEWAY_URL = String(RuntimeApiConfig.aiGatewayUrl || '').replace(/\/+$/, '');
+// 未設定、又是從 localhost/127.0.0.1 的開發伺服器打開時，預設指向本機 Gateway（8015，
+// 見 ai_gateway 的 run_dev_server），讓一鍵啟動腳本零設定就能登入。
+// 正式站是從 decorate-me.web.app 開的，命中不了這個判斷，維持同源空字串。
+function _defaultGatewayUrl() {
+    const explicit = String(RuntimeApiConfig.aiGatewayUrl || '').trim();
+    if (explicit) return explicit;
+    try {
+        const host = (typeof location !== 'undefined' && location.hostname) || '';
+        if (host === 'localhost' || host === '127.0.0.1') {
+            const port = String((RuntimeApiConfig.localGatewayPort || 8015));
+            return `http://${host}:${port}`;
+        }
+    } catch (_) {}
+    return '';
+}
+const AI_GATEWAY_URL = _defaultGatewayUrl().replace(/\/+$/, '');
 const gatewayService = name => `${AI_GATEWAY_URL}/${name}`;
 
 // 所有使用者看得到的錯誤訊息在前端統一翻成中文。後端仍保留穩定的英文
