@@ -494,19 +494,83 @@ def compact_face_context(face_analysis: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
+# 每個風格拆成四個固定段落——底妝／眉眼／腮紅修容／唇妝——而不是一長串逗號句。
+# 分段的用意：(1) 模型收到帶標籤的指令，比較不會把「腮紅」的顏色套到嘴唇上；
+# (2) 校妝時看得出每個風格在四個面向各自的設定，改一段不會動到其他段；
+# (3) 跟建議服務的資料包段落（人臉／妝容／推薦／渲染）對得起來。
+# 對外仍提供攤平後的字串（RENDER_STYLE_PROMPTS），dedup key、/health 廣告與既有測試
+# 都還是拿字串用，型別不變。
+RENDER_STYLE_SECTIONS = {
+    "natural": {
+        "base": "a sheer natural base", "eyes": "softly defined eyes with neat natural brows",
+        "cheeks": "subtle blush", "lips": "a natural lip color",
+    },
+    "softBaddie": {
+        "base": "a natural matte base", "eyes": "softly smudged earthy eyes with a lifted liner and defined brows",
+        "cheeks": "rosy mauve blush with soft contour", "lips": "muted mauve lips",
+    },
+    "richGirl": {
+        "base": "a thin luminous base", "eyes": "muted taupe eyeshadow with softly defined brows",
+        "cheeks": "restrained highlight and soft contour", "lips": "a nude rose lip",
+    },
+    "hongKong": {
+        "base": "a natural matte base", "eyes": "warm brown smoky eyes with defined brows",
+        "cheeks": "subtle contour", "lips": "a brick red lip",
+    },
+    "koreanClean": {
+        "base": "a sheer dewy base", "eyes": "light neutral eyeshadow with softly defined straight brows",
+        "cheeks": "peach pink blush", "lips": "a natural MLBB lip",
+    },
+    "yandere": {
+        "base": "a natural pale base", "eyes": "a delicate downturned liner with airy brows",
+        "cheeks": "restrained rosy under-eye blush", "lips": "a blurred berry red lip",
+    },
+    "japaneseClear": {
+        "base": "a thin satin base", "eyes": "soft peach eyeshadow with airy brows",
+        "cheeks": "translucent pink-orange blush", "lips": "a glossy coral lip",
+    },
+    "mensPlain": {
+        "base": "natural skin texture with light spot concealing", "eyes": "subtle eye definition with neat original brows",
+        "cheeks": "no visible blush, only the lightest natural contour", "lips": "a colorless or low-saturation lip",
+    },
+}
+
+# 四段組成一句攤平的描述，給需要字串的舊呼叫端（dedup key、health 廣告、測試）。
+_STYLE_LABEL = {"natural": "natural everyday", "softBaddie": "soft baddie", "richGirl": "refined rich girl",
+                "hongKong": "Hong Kong retro", "koreanClean": "Korean clean", "yandere": "soft yandere-inspired",
+                "japaneseClear": "Japanese clear", "mensPlain": "minimal men's grooming"}
+
+
+def _flatten_style_sections(style_id: str, sections: dict[str, str]) -> str:
+    label = _STYLE_LABEL.get(style_id, style_id)
+    return (f"{label} makeup with {sections['base']}, {sections['eyes']}, "
+            f"{sections['cheeks']}, and {sections['lips']}")
+
+
 RENDER_STYLE_PROMPTS = {
-    "natural": "natural everyday makeup with a sheer base, softly defined eyes, subtle blush, and a natural lip color",
-    "softBaddie": "soft baddie makeup with a natural matte base, softly smudged earthy eyes, lifted liner, rosy mauve blush, and muted mauve lips",
-    "richGirl": "refined rich girl makeup with a thin luminous base, muted taupe eyeshadow, softly defined brows, restrained highlight, and a nude rose lip",
-    "hongKong": "Hong Kong retro makeup with a natural matte base, defined brows, warm brown smoky eyes, subtle contour, and a brick red lip",
-    "koreanClean": "Korean clean makeup with a sheer dewy base, softly defined straight brows, light neutral eyeshadow, peach pink blush, and a natural MLBB lip",
-    "yandere": "soft yandere-inspired makeup with a natural pale base, delicate downturned liner, restrained rosy under-eye blush, and a blurred berry red lip",
-    "japaneseClear": "Japanese clear makeup with a thin satin base, airy brows, soft peach eyeshadow, translucent pink-orange blush, and a glossy coral lip",
-    "mensPlain": "minimal men's grooming makeup with natural skin texture, light spot concealing, neat original brows, subtle eye definition, and a colorless or low-saturation lip",
+    style_id: _flatten_style_sections(style_id, sections)
+    for style_id, sections in RENDER_STYLE_SECTIONS.items()
 }
 
 
-def build_render_prompt(frontend_package: dict[str, Any], face_analysis: dict[str, Any], suggestion: str) -> str:
+def format_makeup_sections(sections: dict[str, str]) -> str:
+    """把四個固定段落排成帶標籤的指令，讓模型分區套色、不會把腮紅色套到唇上。"""
+    ordered = (
+        ("Base", sections.get("base")),
+        ("Brows and eyes", sections.get("eyes")),
+        ("Cheeks and contour", sections.get("cheeks")),
+        ("Lips", sections.get("lips")),
+    )
+    return "; ".join(f"{label}: {value}" for label, value in ordered if value)
+
+
+def build_render_prompt(
+    frontend_package: dict[str, Any],
+    face_analysis: dict[str, Any],
+    suggestion: str,
+    *,
+    makeup_sections: dict[str, str] | None = None,
+) -> str:
     explicit_prompt = first_string(frontend_package, ("renderPrompt", "render_prompt", "imagePrompt", "image_prompt"))
     if explicit_prompt:
         return explicit_prompt
@@ -515,7 +579,11 @@ def build_render_prompt(frontend_package: dict[str, Any], face_analysis: dict[st
     face_context = compact_face_context(face_analysis)
 
     face_desc = f"This person has {face_context}." if face_context else ""
-    makeup_detail = ", ".join(filter(None, [style_hint, suggestion[:300]]))
+    # 有四段結構時，用帶標籤的分段指令；否則沿用攤平字串（Ollama 自由 prompt 走這條）。
+    if makeup_sections:
+        makeup_detail = format_makeup_sections(makeup_sections)
+    else:
+        makeup_detail = ", ".join(filter(None, [style_hint, suggestion[:300]]))
     ollama_line = f"Makeup reference (translated from advisor): {suggestion[:300].strip()}." if suggestion else ""
     parts = [
         "This is a makeup-only edit on the exact person in the input photo.",
@@ -537,10 +605,11 @@ def build_render_prompt(frontend_package: dict[str, Any], face_analysis: dict[st
 def build_server_render_prompt(style_id: str) -> str:
     """Build the public render API prompt from an allowlisted style only."""
     normalized_style_id = (style_id or "natural").strip()
-    style_prompt = RENDER_STYLE_PROMPTS.get(normalized_style_id)
-    if style_prompt is None:
+    sections = RENDER_STYLE_SECTIONS.get(normalized_style_id)
+    if sections is None:
         raise ValueError(f"Unsupported render style: {normalized_style_id}")
-    return build_render_prompt({"style": style_prompt}, {}, "")
+    # 走四段結構：模型會收到 Base/Brows and eyes/Cheeks and contour/Lips 的分段指令。
+    return build_render_prompt({}, {}, "", makeup_sections=sections)
 
 
 # ─── Ollama 個人化渲染指令 ──────────────────────────────────────────────────

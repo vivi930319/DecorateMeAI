@@ -228,6 +228,21 @@ class RenderApiTest(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 422)
         self.assertEqual(raised.exception.detail["error"]["code"], "INVALID_RENDER_STYLE")
 
+    def test_server_prompt_is_organized_into_fixed_sections(self):
+        """每個風格的妝容指令拆成底妝／眉眼／腮紅修容／唇妝四段。
+
+        帶標籤的分段讓模型分區套色（不會把腮紅色套到嘴唇上），也讓校妝時看得出
+        每個風格在四個面向各自的設定。
+        """
+        from replicate_render import build_server_render_prompt
+
+        prompt = build_server_render_prompt("softBaddie")
+        for label in ("Base:", "Brows and eyes:", "Cheeks and contour:", "Lips:"):
+            self.assertIn(label, prompt)
+        # identity lock 仍然疊在最後——分段只改「上什麼妝」，不動「不可以改長相」。
+        self.assertIn("makeup-only edit", prompt)
+        self.assertIn("completely identical to the original", prompt)
+
     def test_inflight_dedup_claim_is_single_owner(self):
         key = render_api._dedup_key(TINY_PNG, "same prompt", 0.35)
         self.assertTrue(render_api._dedup_claim(key))
