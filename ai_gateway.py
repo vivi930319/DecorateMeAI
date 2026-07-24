@@ -19,6 +19,7 @@ import jwt
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from admin_audit import record_admin_action
 from api_errors import install_api_error_handling, rate_limited_error, secret_equals
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -1538,6 +1539,17 @@ async def proxy_admin_request(request: Request, upstream_path: str):
     for header in ("content-type", "cache-control", "retry-after", "x-request-id"):
         if response.headers.get(header):
             response_headers[header] = response.headers[header]
+    # 商品的建立／修改／刪除留一筆稽核。商品 ID 不是個資，可以原樣記；管理員一律
+    # 只記雜湊後的 actorId。成功與失敗都記——「有人試著刪但被擋下」同樣是要知道的事。
+    method = str(request.method or "").upper()
+    if method in STATE_CHANGING_METHODS:
+        record_admin_action(
+            f"product.{ {'POST': 'create', 'PATCH': 'update', 'DELETE': 'delete'}.get(method, method.lower()) }",
+            actor_id=headers["X-Admin-Actor"],
+            target_ref=upstream_path,
+            status_code=response.status_code,
+            request_id=headers["X-Request-ID"],
+        )
     return Response(content=response.content, status_code=response.status_code, headers=response_headers)
 
 
@@ -1780,6 +1792,20 @@ async def proxy(service: str, path: str, request: Request):
                         status_code=503,
                         detail={"error": {"code": "MEDIA_RETAIN_INCOMPLETE", "message": "妝前與妝後圖片尚未完整保存，請稍後重試。"}},
                     )
+
+    # 管理員對「別人的帳號」做的寫入要留稽核：停權、改權限、刪帳號。
+    # 只記雜湊過的 actorId 與同樣雜湊過的對象，不記 email、不記 body——這份紀錄
+    # 保存得比原始資料久，它絕不能自己變成第二份會員名冊。
+    if (service == "member-database" and is_admin
+            and str(request.method or "").upper() in STATE_CHANGING_METHODS
+            and target_owner_id != acting_owner_id):
+        record_admin_action(
+            "member.delete" if request.method == "DELETE" else "member.update",
+            actor_id=acting_owner_id,
+            target_ref=target_owner_id,
+            status_code=response.status_code,
+            request_id=request.headers.get("x-request-id", "")[:128],
+        )
 
     result = Response(content=response_content, status_code=response.status_code, headers=response_headers)
     if service == "member-database":

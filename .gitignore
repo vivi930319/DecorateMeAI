@@ -35,6 +35,8 @@
 !analysis_package.py
 !job_store.py
 !api_errors.py
+# 高風險管理操作的稽核紀錄（只存雜湊 actorId，不存 PII）
+!admin_audit.py
 # 上傳圖片的共用安全處理（分段讀取／magic bytes／EXIF 清除），四個服務共用
 !image_safety.py
 !image_safety_test.py

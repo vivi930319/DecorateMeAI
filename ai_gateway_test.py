@@ -366,6 +366,51 @@ class AiGatewayTest(unittest.TestCase):
         self.assertTrue(actor.startswith("actor_"))
         self.assertNotIn("admin", actor.lower())
 
+    def test_admin_audit_event_carries_no_personal_data(self):
+        """稽核紀錄要能回答「誰刪的」，但本身不能變成第二份會員名冊。
+
+        稽核 log 通常保存得比原始資料久、權限也開得更鬆，所以它一旦寫進 email 或
+        請求 body，外洩的範圍反而比資料庫本身更大。
+        """
+        import admin_audit
+        import job_store
+
+        saved_firestore, saved_client = job_store.firestore, job_store._client
+        job_store.firestore, job_store._client = None, None
+        job_store._memory_jobs.pop(admin_audit.AUDIT_COLLECTION, None)
+        try:
+            actor = opaque_actor_id("admin@decorateme.local")
+            target = opaque_actor_id("victim@example.com")
+            event = admin_audit.record_admin_action(
+                "member.delete",
+                actor_id=actor,
+                target_ref=target,
+                status_code=200,
+                request_id="req-1",
+                # 純量以外的東西（例如整包 body）一律不落地
+                body={"email": "victim@example.com", "password": "hunter2"},
+            )
+            self.assertEqual(event["action"], "member.delete")
+            self.assertEqual(event["outcome"], "success")
+            self.assertNotIn("body", event)
+            blob = json.dumps(event, default=str)
+            for secret in ("victim@example.com", "admin@decorateme.local", "hunter2"):
+                self.assertNotIn(secret, blob)
+            self.assertIn("expiresAt", event)  # Firestore TTL 靠這個欄位到期清除
+
+            stored = admin_audit.recent_admin_actions()
+            self.assertEqual(len(stored), 1)
+            self.assertEqual(stored[0]["eventId"], event["eventId"])
+
+            # 失敗的嘗試同樣要留下——「有人試著刪但被擋下」也是要知道的事。
+            denied = admin_audit.record_admin_action(
+                "product.delete", actor_id=actor, target_ref="/api/products/p1", status_code=403
+            )
+            self.assertEqual(denied["outcome"], "failure")
+        finally:
+            job_store._memory_jobs.pop(admin_audit.AUDIT_COLLECTION, None)
+            job_store.firestore, job_store._client = saved_firestore, saved_client
+
     def test_admin_writes_need_a_matching_csrf_token(self):
         """管理端寫入要求 cookie 與標頭帶著同一個 token（double-submit）。
 
