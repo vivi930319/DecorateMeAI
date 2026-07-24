@@ -23,6 +23,7 @@ from api_errors import (
     secret_equals,
 )
 from dev_server_utils import get_cors_origins, run_dev_server
+from image_safety import sanitize_image_bytes, sanitize_upload
 
 # Cloud Run 上 root logger 預設是 WARNING，logger.info 會被整個丟掉。
 # ROI shadow 的「規則式 vs 模型」對照就是 INFO 等級 —— 少了這行，shadow 照樣消耗 CPU，
@@ -94,32 +95,35 @@ MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(8 * 1024 * 1024)))  # �
 MAX_IMAGE_PIXELS = max(1, int(os.getenv("MAX_IMAGE_PIXELS", "16000000")))
 
 
-def _reject_if_too_large(contents: bytes):
-    if len(contents) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=error_payload(
-                "PAYLOAD_TOO_LARGE",
-                f"上傳檔案過大，上限 {MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
-                retryable=False,
-            ),
-        )
-    frame = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
-    if frame is None:
-        raise HTTPException(
-            status_code=400,
-            detail=error_payload("INVALID_IMAGE", "上傳檔案不是有效的圖片。", retryable=False),
-        )
-    height, width = frame.shape[:2]
-    if height <= 0 or width <= 0 or height * width > MAX_IMAGE_PIXELS:
-        raise HTTPException(
-            status_code=413,
-            detail=error_payload(
-                "IMAGE_DIMENSIONS_TOO_LARGE",
-                f"圖片像素數超過上限 {MAX_IMAGE_PIXELS}。",
-                retryable=False,
-            ),
-        )
+async def _read_clean_image(file, label: str = "上傳檔案") -> bytes:
+    """讀上傳檔案並回傳「驗過、去掉 EXIF／GPS」的位元組。
+
+    細節都在 `image_safety`：分段讀取超限即停、magic bytes 白名單、偽 MIME 檢查、
+    解碼前先卡像素數（擋解壓縮炸彈）、移除中繼資料。這裡只負責把限額帶進去。
+    """
+    contents, _mime = await sanitize_upload(
+        file,
+        max_bytes=MAX_UPLOAD_BYTES,
+        max_pixels=MAX_IMAGE_PIXELS,
+        label=label,
+    )
+    return contents
+
+
+def _reject_if_too_large(contents: bytes) -> bytes:
+    """同步版驗證，給已經拿到 bytes 的呼叫端（例如 PRO 的多張照片流程）。
+
+    回傳去中繼資料後的位元組——舊版只做檢查、不回傳，所以呼叫端請改用回傳值，
+    否則帶著 GPS 的原始照片還是會往下走。
+    """
+    cleaned, _mime = sanitize_image_bytes(
+        contents,
+        max_bytes=MAX_UPLOAD_BYTES,
+        max_pixels=MAX_IMAGE_PIXELS,
+    )
+    return cleaned
+
+
 INSIGHT_DET_SIZE = int(os.getenv("INSIGHT_DET_SIZE", "384"))
 INSIGHT_ALLOWED_MODULES = [
     module.strip()
@@ -233,10 +237,7 @@ async def analyze(
 ):
     # BASIC 同時支援「檔案上傳」與「拍照上傳」：
     # 前端檔案 input 直接送 File；相機拍照則把 canvas/blob 包成 File 後送到同一個欄位。
-    contents = await file.read()
-    if not contents:
-        raise HTTPException(status_code=400, detail="上傳檔案是空的")
-    _reject_if_too_large(contents)
+    contents = await _read_clean_image(file, "上傳照片")
     if brightness_mode not in {"none", "auto", "manual"}:
         raise HTTPException(status_code=400, detail="brightness_mode 必須為 none / auto / manual")
     if not (0.1 <= brightness_level <= 5.0):
@@ -327,10 +328,7 @@ def _detect_pose(contents: bytes):
 
 @app.post("/v1/face/pose")
 async def detect_pose(file: UploadFile = File(...)):
-    contents = await file.read()
-    if not contents:
-        raise HTTPException(status_code=400, detail="上傳檔案是空的")
-    _reject_if_too_large(contents)
+    contents = await _read_clean_image(file, "上傳照片")
     try:
         return _detect_pose(contents)
     except ValueError as e:
@@ -453,10 +451,7 @@ async def create_basic_job(
     brightness_level: float = Form(1.0),
 ):
     _cleanup_jobs()
-    contents = await file.read()
-    if not contents:
-        raise HTTPException(status_code=400, detail={"error": {"message": "上傳檔案是空的"}})
-    _reject_if_too_large(contents)
+    contents = await _read_clean_image(file, "上傳照片")
     if brightness_mode not in {"none", "auto", "manual"}:
         raise HTTPException(status_code=400, detail={"error": {"message": "brightness_mode 必須為 none / auto / manual"}})
     if not (0.1 <= brightness_level <= 5.0):

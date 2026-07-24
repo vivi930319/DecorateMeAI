@@ -34,6 +34,7 @@ COPY Face_analyzer_PRO.py .
 COPY Ollama_suggestion.py .
 COPY dev_server_utils.py .
 COPY api_errors.py .
+COPY image_safety.py .
 COPY cloud_start.py .
 COPY job_store.py .
 COPY face_roi.py .

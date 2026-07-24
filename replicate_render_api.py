@@ -922,6 +922,8 @@ async def get_render_job(
     _=Depends(require_api_key),
     x_job_token: str | None = Header(default=None),
     result_token: str | None = Query(default=None),
+    x_user_id: str | None = Header(default=None),
+    x_admin_request: str | None = Header(default=None),
 ):
     # 這支會被前端每兩秒打一次，所以不掛 rate limit，否則輪詢自己就會把配額燒光
     job = job_store.get(RENDER_JOBS_COLLECTION, job_id)
@@ -931,6 +933,11 @@ async def get_render_job(
             detail={"error": {"code": "JOB_NOT_FOUND", "message": "Render job not found or expired.", "retryable": False}},
         )
     _verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
+    # token 對還不夠，擁有者也要對（P0-8）。建立 job 時沒有會員身分就會被擋成 401，
+    # 所以每個 job 都有 ownerId；Gateway 也一律替 render-service 帶上 X-User-ID。
+    # 少了這一段，一個外流的 job token 就足以讓別人讀到這位會員的渲染結果，
+    # 而簽名網址那條路徑早就在檢查擁有者了——兩條路的門檻不該一鬆一緊。
+    _require_job_owner(job, x_user_id, x_admin_request)
     view = _job_view(job)
     return {**view, "progress": _estimate_progress(job, time.time()), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
 

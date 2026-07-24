@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir -r requirements.render.txt
 
 COPY dev_server_utils.py .
 COPY api_errors.py .
+COPY image_safety.py .
 COPY job_store.py .
 COPY replicate_render.py .
 COPY replicate_render_api.py .

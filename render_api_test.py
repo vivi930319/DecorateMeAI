@@ -141,6 +141,86 @@ class RenderApiTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             data_url_to_bytes("data:image/png;base64,not-valid")
 
+    def test_job_polling_rejects_another_members_token(self):
+        """拿到別人的 job token 也不能讀他的渲染結果（P0-8）。
+
+        簽名網址那條路徑一直有擋擁有者，輪詢這條先前只驗 token——同一份資料
+        兩個入口，門檻卻一鬆一緊。token 只要外流一次（分享連結、log、瀏覽器歷史）
+        就足以把別人的臉部渲染整包讀走。
+        """
+        job_store.create(render_api.RENDER_JOBS_COLLECTION, "job-owned", {
+            "jobId": "job-owned", "ownerId": "actor_owner", "status": "completed",
+            "resultToken": "token-owner",
+            "afterImageUrl": "https://storage.googleapis.com/decorate-me-renders/temporary/a.png",
+        })
+
+        with self.assertRaises(Exception) as raised:
+            asyncio.run(render_api.get_render_job(
+                "job-owned", x_job_token="token-owner", x_user_id="actor_intruder"
+            ))
+        self.assertEqual(raised.exception.status_code, 403)
+
+        # 沒帶會員身分也不行——否則把標頭拿掉就能繞過。
+        with self.assertRaises(Exception) as raised:
+            asyncio.run(render_api.get_render_job("job-owned", x_job_token="token-owner"))
+        self.assertEqual(raised.exception.status_code, 403)
+
+        owner_view = asyncio.run(render_api.get_render_job(
+            "job-owned", x_job_token="token-owner", x_user_id="actor_owner"
+        ))
+        self.assertEqual(owner_view["jobId"], "job-owned")
+
+    def test_job_polling_rejects_a_wrong_token_from_the_owner(self):
+        """擁有者對、token 錯，一樣要擋——兩個條件是 AND 不是 OR。"""
+        job_store.create(render_api.RENDER_JOBS_COLLECTION, "job-owned2", {
+            "jobId": "job-owned2", "ownerId": "actor_owner", "status": "completed",
+            "resultToken": "token-owner",
+        })
+        with self.assertRaises(Exception) as raised:
+            asyncio.run(render_api.get_render_job(
+                "job-owned2", x_job_token="guessed", x_user_id="actor_owner"
+            ))
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_render_input_image_is_stripped_of_metadata(self):
+        """送往第三方供應商的圖必須先去掉 EXIF／GPS（P0-9）。"""
+        import io
+
+        from PIL import Image
+        from PIL.TiffImagePlugin import IFDRational
+        from replicate_render import image_from_frontend_package
+
+        exif = Image.Exif()
+        exif[0x010F] = "TestPhone"
+        exif[0x8825] = {1: "N", 2: (IFDRational(25, 1), IFDRational(2, 1), IFDRational(0, 1))}
+        buffer = io.BytesIO()
+        Image.new("RGB", (24, 24), (9, 9, 9)).save(buffer, format="JPEG", exif=exif)
+        import base64
+
+        raw = buffer.getvalue()
+        self.assertIn(b"TestPhone", raw)
+        data_url = "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
+
+        cleaned_url = image_from_frontend_package({"imageDataUrl": data_url})
+        cleaned = base64.b64decode(cleaned_url.split(",", 1)[1])
+        self.assertNotIn(b"TestPhone", cleaned)
+        with Image.open(io.BytesIO(cleaned)) as image:
+            self.assertFalse(image.info.get("exif"))
+
+    def test_render_rejects_a_forged_image_type(self):
+        """檔頭宣稱 JPEG、內容其實是 PNG 的偽 MIME 上傳要擋下來。"""
+        import base64
+        import io
+
+        from PIL import Image
+
+        png = io.BytesIO()
+        Image.new("RGB", (8, 8)).save(png, format="PNG")
+        forged = b"\xff\xd8\xff\xe0" + png.getvalue()
+        data_url = "data:image/jpeg;base64," + base64.b64encode(forged).decode("ascii")
+        with self.assertRaises(ValueError):
+            data_url_to_bytes(data_url)
+
     def test_render_request_rejects_untrusted_style(self):
         request = render_api.RenderRequest(image=TINY_PNG, styleId="untrusted-prompt")
         with self.assertRaises(Exception) as raised:

@@ -15,8 +15,9 @@ from api_errors import (
     secret_equals,
 )
 import job_store
-from Face_analyzer_BASIC import FaceAnalyzer, _reject_if_too_large
+from Face_analyzer_BASIC import FaceAnalyzer, MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES
 from dev_server_utils import get_cors_origins, run_dev_server
+from image_safety import sanitize_upload
 
 
 app = FastAPI(title="Face Analyzer PRO")
@@ -56,11 +57,17 @@ install_api_error_handling(app, "face-analyzer-pro")
 
 
 async def _read_image(file: UploadFile, label: str) -> bytes:
-    contents = await file.read()
-    if not contents:
-        raise ValueError(f"{label}照片是空的")
-    _reject_if_too_large(contents)
-    return contents
+    """讀一張 PRO 照片：分段讀取、驗格式、卡像素、去掉 EXIF／GPS 後才往下送。
+
+    PRO 一次收最多四張照片，每一張都走同一條路——多角度採集的照片同樣是手機原圖，
+    帶著拍攝地點的機率比正面照更高。
+    """
+    return await sanitize_upload(
+        file,
+        max_bytes=MAX_UPLOAD_BYTES,
+        max_pixels=MAX_IMAGE_PIXELS,
+        label=f"{label}照片",
+    )
 
 
 def _analyze_side_supplementary(side_bytes: bytes) -> dict | None:

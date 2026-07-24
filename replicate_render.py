@@ -360,6 +360,17 @@ def file_to_data_url(path: str) -> str:
 
 
 def data_url_to_bytes(data_url: str) -> tuple[bytes, str]:
+    """解析 data URL，回傳「驗過、去掉 EXIF／GPS」的位元組與 MIME type。
+
+    驗證細節（magic bytes 白名單、偽 MIME、解碼前先卡像素數、移除中繼資料）統一在
+    `image_safety`，跟 Face BASIC／PRO 用同一份實作。這裡只負責 data URL 的外層拆解，
+    並把 `ImageRejected` 翻成呼叫端既有的 `ValueError` 契約。
+
+    回傳的是**清洗後**的位元組：這條路徑的下一站就是第三方渲染供應商，臉部照片的
+    拍攝地點與機身序號不該跟著出去。
+    """
+    from image_safety import ImageRejected, sanitize_image_bytes
+
     if not data_url.startswith("data:") or ";base64," not in data_url:
         raise ValueError("Expected a base64 data URL.")
     header, encoded = data_url.split(",", 1)
@@ -370,33 +381,37 @@ def data_url_to_bytes(data_url: str) -> tuple[bytes, str]:
         image_bytes = base64.b64decode(encoded, validate=True)
     except (ValueError, binascii.Error) as exc:
         raise ValueError("Image data URL contains invalid base64.") from exc
-    if len(image_bytes) > MAX_RENDER_IMAGE_BYTES:
-        raise ValueError(f"Render image is too large; limit is {MAX_RENDER_IMAGE_BYTES} bytes.")
     try:
-        from PIL import Image
+        cleaned, detected_type = sanitize_image_bytes(
+            image_bytes,
+            max_bytes=MAX_RENDER_IMAGE_BYTES,
+            max_pixels=MAX_RENDER_IMAGE_PIXELS,
+            label="Render image",
+        )
+    except ImageRejected as exc:
+        raise ValueError(exc.detail["error"]["message"]) from exc
+    if detected_type != content_type:
+        raise ValueError("Image content type does not match its encoded image format.")
+    return cleaned, content_type
 
-        with Image.open(io.BytesIO(image_bytes)) as image:
-            image.verify()
-        with Image.open(io.BytesIO(image_bytes)) as image:
-            width, height = image.size
-            detected_type = Image.MIME.get(image.format)
-        if width <= 0 or height <= 0 or width * height > MAX_RENDER_IMAGE_PIXELS:
-            raise ValueError(f"Render image dimensions exceed the {MAX_RENDER_IMAGE_PIXELS} pixel limit.")
-        if detected_type and detected_type != content_type:
-            raise ValueError("Image content type does not match its encoded image format.")
-    except ValueError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError("Image data is not a valid JPEG, PNG, or WebP file.") from exc
-    return image_bytes, content_type
+
+def sanitize_data_url(data_url: str) -> str:
+    """回傳同一張圖、但已去除中繼資料的 data URL。
+
+    走 Replicate 的路徑是把 data URL **原封不動**送出去的（`input_images`），所以清洗
+    必須發生在字串本身，只清 `data_url_to_bytes` 的回傳值救不到那條路。
+    """
+    cleaned, content_type = data_url_to_bytes(data_url)
+    encoded = base64.b64encode(cleaned).decode("ascii")
+    return f"data:{content_type};base64,{encoded}"
 
 
 def url_to_data_url(url: str) -> str:
     image_bytes, content_type = fetch_remote_image_bytes(url)
     encoded = base64.b64encode(image_bytes).decode("ascii")
-    data_url = f"data:{content_type};base64,{encoded}"
-    data_url_to_bytes(data_url)
-    return data_url
+    # 直接回清洗過的版本：舊寫法是「驗一次、然後回傳未清洗的原字串」，驗證的結果
+    # 等於被丟掉了。
+    return sanitize_data_url(f"data:{content_type};base64,{encoded}")
 
 
 def image_from_frontend_package(frontend_package: dict[str, Any]) -> str:
@@ -404,7 +419,9 @@ def image_from_frontend_package(frontend_package: dict[str, Any]) -> str:
     if image_data_url:
         if not image_data_url.startswith("data:"):
             raise ValueError("imageDataUrl/image must be a data URL when provided directly.")
-        return image_data_url
+        # 前端直接給的 data URL 是唯一沒經過我們解碼的入口，在這裡清一次，
+        # 後面不管走 Replicate（送 data URL）或 OpenAI（送 bytes）都拿到乾淨的圖。
+        return sanitize_data_url(image_data_url)
 
     image_url = first_string(frontend_package, IMAGE_URL_KEYS)
     if image_url:

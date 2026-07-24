@@ -35,6 +35,9 @@
 !analysis_package.py
 !job_store.py
 !api_errors.py
+# 上傳圖片的共用安全處理（分段讀取／magic bytes／EXIF 清除），四個服務共用
+!image_safety.py
+!image_safety_test.py
 !replicate_render.py
 !replicate_render_api.py
 !requirements.render.txt
