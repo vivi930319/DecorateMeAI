@@ -109,6 +109,104 @@ def assert_result_shape(result, mode):
             raise RuntimeError(f"PRO result has wrong 分析版本: {payload.get('分析版本')}")
 
 
+# 圖片安全層（image_safety.py）的拒絕案例。這幾個是「看起來會過、實際上不該過」的
+# 輸入：偽 MIME、超大檔、解壓縮炸彈。它們失效時服務照樣回 200，沒有 smoke 就不會有人
+# 發現——所以在部署後的實機上也要跑一次（見 issue #28）。
+_SAFETY_REJECTION_CODES = {
+    "PAYLOAD_TOO_LARGE", "EMPTY_UPLOAD", "UNSUPPORTED_IMAGE_TYPE",
+    "INVALID_IMAGE", "IMAGE_TYPE_MISMATCH", "IMAGE_DIMENSIONS_TOO_LARGE",
+    "IMAGE_DECODE_TIMEOUT",
+}
+
+
+def _error_code(payload):
+    """從錯誤回應取出 error code；envelope 是 {\"error\": {\"code\": ...}}。"""
+    if isinstance(payload, dict):
+        err = payload.get("error")
+        if isinstance(err, dict):
+            return err.get("code", "")
+    return ""
+
+
+def _post_raw(url, filename, content_type, data):
+    """送一段原始 bytes 當上傳檔，回 (status_code, json)；不因 4xx 丟例外。"""
+    response = requests.post(url, files={"file": (filename, data, content_type)}, timeout=60)
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {"raw": response.text}
+    return response.status_code, payload
+
+
+def test_image_safety_rejections(base_url):
+    """實機驗證圖片安全層：壞輸入被擋、好輸入放行（走 /v1/face/pose，同一條 _read_clean_image）。"""
+    try:
+        import io
+
+        from PIL import Image
+    except ImportError:
+        print("[SAFETY] Pillow 未安裝，跳過圖片安全拒絕案例")
+        return
+
+    url = f"{base_url}/v1/face/pose"
+
+    def png_bytes(w=16, h=16):
+        buf = io.BytesIO()
+        Image.new("RGB", (w, h), (180, 150, 130)).save(buf, format="PNG")
+        return buf.getvalue()
+
+    # 1) 偽 MIME：JPEG 檔頭黏上 PNG 內容。只看 magic bytes 會過、只看解碼格式也會過，
+    #    兩邊比對才擋得下來。
+    forged = b"\xff\xd8\xff\xe0" + png_bytes()
+    status, payload = _post_raw(url, "forged.jpg", "image/jpeg", forged)
+    code = _error_code(payload)
+    if status != 400 or code not in {"INVALID_IMAGE", "IMAGE_TYPE_MISMATCH"}:
+        raise RuntimeError(f"[SAFETY] 偽 MIME 未被正確擋下：status={status} code={code}")
+    print(f"[SAFETY] fake MIME -> {status} {code}")
+
+    # 2) 不支援的格式：GIF（Pillow 讀得出來，但不在白名單）。
+    gif = io.BytesIO()
+    Image.new("RGB", (16, 16)).save(gif, format="GIF")
+    status, payload = _post_raw(url, "x.gif", "image/gif", gif.getvalue())
+    code = _error_code(payload)
+    if status != 400 or code != "UNSUPPORTED_IMAGE_TYPE":
+        raise RuntimeError(f"[SAFETY] GIF 未被正確擋下：status={status} code={code}")
+    print(f"[SAFETY] gif -> {status} {code}")
+
+    # 3) 超大檔：超過位元組上限（預設 8MB），分段讀取應在超限當下就停。
+    oversized = b"\xff\xd8\xff\xe0" + b"\x00" * (9 * 1024 * 1024)
+    status, payload = _post_raw(url, "big.jpg", "image/jpeg", oversized)
+    code = _error_code(payload)
+    if status != 413 or code != "PAYLOAD_TOO_LARGE":
+        raise RuntimeError(f"[SAFETY] 超大檔未被正確擋下：status={status} code={code}")
+    print(f"[SAFETY] oversized -> {status} {code}")
+
+    # 4) 解壓縮炸彈：小小的 PNG 宣告成天文數字尺寸，解碼前先卡像素數才擋得住。
+    bomb = io.BytesIO()
+    Image.new("L", (12000, 12000)).save(bomb, format="PNG")
+    status, payload = _post_raw(url, "bomb.png", "image/png", bomb.getvalue())
+    code = _error_code(payload)
+    if status != 413 or code != "IMAGE_DIMENSIONS_TOO_LARGE":
+        raise RuntimeError(f"[SAFETY] 解壓縮炸彈未被正確擋下：status={status} code={code}")
+    print(f"[SAFETY] decompression bomb -> {status} {code} ({len(bomb.getvalue())} bytes on the wire)")
+
+    # 5) 空上傳。
+    status, payload = _post_raw(url, "empty.jpg", "image/jpeg", b"")
+    code = _error_code(payload)
+    if status != 400 or code not in {"EMPTY_UPLOAD", "INVALID_IMAGE"}:
+        raise RuntimeError(f"[SAFETY] 空上傳未被正確擋下：status={status} code={code}")
+    print(f"[SAFETY] empty -> {status} {code}")
+
+    # 6) 正向對照：一張正常的合成 PNG 應**通過**安全層。它沒有臉，所以會在臉部偵測
+    #    那一步被拒（400），但錯誤碼**不能**是任何一個圖片安全拒絕碼——那代表安全層
+    #    誤擋了正常圖。
+    status, payload = _post_raw(url, "ok.png", "image/png", png_bytes(64, 64))
+    code = _error_code(payload)
+    if code in _SAFETY_REJECTION_CODES:
+        raise RuntimeError(f"[SAFETY] 正常 PNG 被安全層誤擋：status={status} code={code}")
+    print(f"[SAFETY] valid png passed safety layer -> {status} {code or '(no safety rejection)'}")
+
+
 def test_pose(base_url, image_path):
     print("[BASIC] /v1/face/pose")
     result = post_image(f"{base_url}/v1/face/pose", "file", image_path)
@@ -170,6 +268,7 @@ def main():
 
     print(f"image={image_path}")
     test_pose(args.basic_url, image_path)
+    test_image_safety_rejections(args.basic_url)
     test_service("BASIC", args.basic_url, "/v1/face/analyze/basic", "/v1/face/jobs/basic", "file", image_path)
     # PRO 測試：正面與側面用同一張圖（smoke test 環境無真實側臉）
     test_service("PRO", args.pro_url, "/v1/face/analyze/pro", "/v1/face/jobs/pro", "front", image_path)
