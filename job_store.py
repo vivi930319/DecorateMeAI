@@ -128,6 +128,36 @@ def find_by_field(col: str, field: str, value, limit: int = 10) -> list[dict]:
     return [doc.to_dict() for doc in query.stream() if doc.exists]
 
 
+def peek_window_quota(
+    col: str,
+    key: str,
+    window_seconds: int,
+    maximum: int,
+    now: float | None = None,
+) -> tuple[bool, int, int] | None:
+    """Read the current fixed-window count **without** incrementing it.
+
+    Returns ``(allowed, count, retry_after)`` or ``None`` when Firestore is
+    unavailable. This exists so a login guard can *check* whether a key is over
+    the limit without spending a slot — spending only happens on a failed
+    attempt (see the gateway), so a legitimate sign-in does not count against
+    the caller.
+    """
+    collection = _col(col)
+    if collection is None:
+        return None
+    current_time = time.time() if now is None else float(now)
+    bucket_start = int(current_time // window_seconds) * window_seconds
+    retry_after = max(1, int(bucket_start + window_seconds - current_time))
+    doc_id = hashlib.sha256(f"{key}:{bucket_start}".encode("utf-8")).hexdigest()
+    try:
+        snapshot = collection.document(doc_id).get()
+        count = int((snapshot.to_dict() or {}).get("count") or 0) if snapshot.exists else 0
+    except Exception:
+        return None
+    return count < maximum, count, retry_after
+
+
 def consume_window_quota(
     col: str,
     key: str,

@@ -592,7 +592,7 @@ class AiGatewayTest(unittest.TestCase):
         # A distributed brute force uses one account across many IPs; an IP-only
         # limiter never trips on it. The account dimension must, and it must do so
         # without ever storing the email itself.
-        from ai_gateway import enforce_login_rate_limit
+        from ai_gateway import enforce_login_rate_limit, record_failed_login
         import job_store
         # Force the in-memory window: without credentials the Firestore client
         # would block on the metadata server. The durable path is exercised by
@@ -608,8 +608,11 @@ class AiGatewayTest(unittest.TestCase):
             r.client = None
             return r
 
+        # Only *failed* logins count. Each attempt is from a fresh IP (no IP trip),
+        # but they all target the same account — the account dimension accumulates.
         for i in range(gateway.LOGIN_RATE_LIMIT_MAX_REQUESTS):
-            enforce_login_rate_limit(req(f"203.0.113.{i}"), email)  # each IP fresh: no IP trip
+            enforce_login_rate_limit(req(f"203.0.113.{i}"), email)  # check passes
+            record_failed_login(req(f"203.0.113.{i}"), email)       # then the failure is booked
         with self.assertRaises(Exception) as raised:
             enforce_login_rate_limit(req("203.0.113.250"), email)
         self.assertEqual(raised.exception.status_code, 429)
@@ -627,6 +630,51 @@ class AiGatewayTest(unittest.TestCase):
         self.assertFalse(any(email in key for key in gateway._login_rate_hits))
         gateway._login_rate_hits.clear()
         job_store.firestore, job_store._client = saved_firestore, saved_client
+
+    def test_successful_logins_do_not_count_toward_the_limit(self):
+        # An admin testing repeatedly with the *correct* password must not lock
+        # themselves out. Enforcement only checks; nothing is recorded unless a
+        # login actually fails, so a checker that never records never trips.
+        from ai_gateway import enforce_login_rate_limit
+        import job_store
+        saved_firestore, saved_client = job_store.firestore, job_store._client
+        job_store.firestore, job_store._client = None, None
+        gateway._login_rate_hits.clear()
+
+        def req(ip):
+            r = Mock()
+            r.headers = {"x-forwarded-for": f"{ip}, 10.0.0.1"}
+            r.client = None
+            return r
+
+        # Many more checks than the limit, all from one IP, none recorded: never trips.
+        for _ in range(gateway.LOGIN_RATE_LIMIT_MAX_REQUESTS * 3):
+            enforce_login_rate_limit(req("198.51.100.7"), "admin@example.com")
+        # Checking may create empty buckets, but nothing is ever recorded into them.
+        self.assertTrue(all(len(bucket) == 0 for bucket in gateway._login_rate_hits.values()))
+        gateway._login_rate_hits.clear()
+        job_store.firestore, job_store._client = saved_firestore, saved_client
+
+    def test_unresolvable_ip_does_not_create_a_global_lockout_bucket(self):
+        # Behind Firebase Hosting -> Cloud Run the caller IP can come back
+        # "unknown". Keying a bucket on that would put every user in one bucket,
+        # so a handful of failures anywhere would 429 everyone. When the IP can't
+        # be identified, only the (reliable) account dimension is used.
+        from ai_gateway import _login_rate_keys
+
+        req = Mock()
+        req.headers = {}          # no X-Forwarded-For
+        req.client = None         # no peer address -> client_ip returns "unknown"
+        keys = _login_rate_keys(req, "someone@example.com")
+        self.assertTrue(all(not k.startswith("ip:") for k in keys), keys)
+        self.assertTrue(any(k.startswith("account:") for k in keys), keys)
+
+        # A resolvable IP still contributes its dimension.
+        req2 = Mock()
+        req2.headers = {"x-forwarded-for": "203.0.113.9, 10.0.0.1"}
+        req2.client = None
+        keys2 = _login_rate_keys(req2, "someone@example.com")
+        self.assertIn("ip:203.0.113.9", keys2)
 
     def test_access_log_path_never_carries_a_member_email(self):
         # Member and saved-look routes put the account's email straight in the

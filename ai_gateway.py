@@ -321,19 +321,16 @@ def client_ip(request: Request) -> str:
     return "unknown"
 
 
-def _login_quota_exceeded(key: str, now: float) -> int | None:
-    """這個 key 超量的話回傳「還要等幾秒」，否則回 None。
+def _login_quota_check(key: str, now: float) -> int | None:
+    """這個 key 目前是否超量：超量回「還要等幾秒」，否則 None。**不消耗**任何額度。
 
-    優先用 Firestore 的共享視窗，讓限流在每一個 Cloud Run instance 之間一致（純記憶體
-    計數是每個 instance 各自算的，服務一擴充就被繞過）；只有在 Firestore 不可用時
-    （例如本機開發）才退回程序內的記憶體視窗。
+    只讀不寫是關鍵：登入成功不該計入限流，否則一個正在反覆測試的管理員用**正確**
+    密碼也會把自己鎖住（實測踩到）。額度只在「登入失敗」時才消耗，見
+    `record_failed_login`。
     """
-    durable = job_store.consume_window_quota(
-        LOGIN_LIMIT_COLLECTION,
-        key,
-        LOGIN_RATE_LIMIT_WINDOW_SECONDS,
-        LOGIN_RATE_LIMIT_MAX_REQUESTS,
-        now=now,
+    durable = job_store.peek_window_quota(
+        LOGIN_LIMIT_COLLECTION, key,
+        LOGIN_RATE_LIMIT_WINDOW_SECONDS, LOGIN_RATE_LIMIT_MAX_REQUESTS, now=now,
     )
     if durable is not None:
         allowed, _, retry_after = durable
@@ -345,27 +342,64 @@ def _login_quota_exceeded(key: str, now: float) -> int | None:
             bucket.popleft()
         if len(bucket) >= LOGIN_RATE_LIMIT_MAX_REQUESTS:
             return max(1, int(bucket[0] + LOGIN_RATE_LIMIT_WINDOW_SECONDS - now))
-        bucket.append(now)
         return None
 
 
-def enforce_login_rate_limit(request: Request, email: str = "") -> None:
-    # 兩個維度，任一個超量就拒絕：呼叫端 IP（擋「一台主機狂試很多帳號」）與被鎖定的
-    # 帳號（擋「一群 IP 一起暴力破解同一個帳號」，這種只看 IP 的限流完全抓不到）。
-    # 帳號那把 key 是雜湊過的——限流器從不儲存 email 本身。
-    now = time.time()
-    keys = [f"ip:{client_ip(request)}"]
+def _login_quota_record(key: str, now: float) -> None:
+    """把一次「失敗」的登入記進視窗。跨 instance 一致優先走 Firestore，否則記憶體。"""
+    durable = job_store.consume_window_quota(
+        LOGIN_LIMIT_COLLECTION, key,
+        LOGIN_RATE_LIMIT_WINDOW_SECONDS, LOGIN_RATE_LIMIT_MAX_REQUESTS, now=now,
+    )
+    if durable is not None:
+        return
+    cutoff = now - LOGIN_RATE_LIMIT_WINDOW_SECONDS
+    with _login_rate_lock:
+        bucket = _login_rate_hits.setdefault(key, deque())
+        while bucket and bucket[0] <= cutoff:
+            bucket.popleft()
+        bucket.append(now)
+
+
+def _login_rate_keys(request: Request, email: str) -> list[str]:
+    # 兩個維度：呼叫端 IP（擋「一台主機狂試很多帳號」）與被鎖定的帳號（擋「一群 IP
+    # 一起暴力破解同一個帳號」，只看 IP 抓不到）。帳號那把 key 是雜湊過的——限流器
+    # 從不儲存 email 本身。
+    #
+    # IP 只在「確實辨識得出呼叫端」時才當一個維度。Firebase Hosting → Cloud Run 這條
+    # 路徑上，client_ip 可能因為 X-Forwarded-For 的層數而解不出真正的使用者位址，
+    # 退回 "unknown"。若照樣用 `ip:unknown` 當 key，就會把**所有人**塞進同一個桶——
+    # 十次失敗就讓全站登入一起 429（實測：不同帳號、不同裝置都被擋）。辨識不出來時
+    # 寧可不設 IP 維度，讓「帳號維度」單獨守著；那一維是可靠的（以雜湊帳號為鍵）。
+    keys = []
+    ip = client_ip(request)
+    if ip and ip != "unknown":
+        keys.append(f"ip:{ip}")
     normalized = str(email or "").strip().lower()
     if normalized:
         keys.append("account:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest())
-    for key in keys:
-        retry_after = _login_quota_exceeded(key, now)
+    return keys
+
+
+def enforce_login_rate_limit(request: Request, email: str = "") -> None:
+    """登入前檢查是否已超量（只讀）。額度只在失敗時消耗，成功登入不計入。"""
+    now = time.time()
+    for key in _login_rate_keys(request, email):
+        retry_after = _login_quota_check(key, now)
         if retry_after is not None:
             raise rate_limited_error(
                 "LOGIN_RATE_LIMITED",
                 f"登入嘗試次數過多，請在 {retry_after} 秒後再試。",
                 retry_after,
             )
+
+
+def record_failed_login(request: Request, email: str = "") -> None:
+    """記一次登入失敗。只有「帳密錯誤」這類失敗才呼叫，服務暫時故障（5xx）不算——
+    資料庫掛掉不該把使用者鎖在門外。"""
+    now = time.time()
+    for key in _login_rate_keys(request, email):
+        _login_quota_record(key, now)
 
 
 def issue_access_token(email: str, role: str = "", status: str = "active") -> tuple[str, int]:
@@ -1258,15 +1292,22 @@ async def login(body: LoginRequest, request: Request):
                               "retryable": False}},
         )
     if response.status_code in {401, 403, 404}:
+        # 帳密錯誤才計入限流（這就是暴力破解的樣子）。EMAIL_NOT_VERIFIED 上面已先攔掉，
+        # 不會落到這裡——尚未驗證不是猜密碼，不該累積封鎖。
+        record_failed_login(request, body.email)
         raise HTTPException(status_code=401, detail={"error": {"code": "INVALID_CREDENTIALS", "message": "Invalid email or password."}})
     if response.status_code == 429:
-        # 上游自己也在限流時，把它的等待秒數帶回去，別讓前端只拿到一句沒有時間的
-        # 「請稍後再試」。上游沒給就用我們自己的視窗長度當保守估計。
+        # 這個 429 是**會員資料庫**回的，不是 Gateway 自己的限流。用不同的 code 標出來，
+        # 否則兩層限流長得一模一樣，出事時分不清是哪一層在擋（實測就卡在這：不同帳號、
+        # 不同裝置都被 429，需要先知道是 Gateway 還是 DB 才查得下去）。
+        # 注意：若 DB 是以「呼叫端 IP」限流，而它看到的呼叫端永遠是 Gateway 的單一
+        # egress IP，那它會把所有使用者的登入都算成同一個來源——這需要 DB 端改成
+        # 依 X-Forwarded-For 的真實使用者位址計算（屬資料庫端）。
         upstream_retry = str(response.headers.get("retry-after") or "").strip()
         retry_after = int(upstream_retry) if upstream_retry.isdigit() else LOGIN_RATE_LIMIT_WINDOW_SECONDS
         raise rate_limited_error(
-            "LOGIN_RATE_LIMITED",
-            f"登入嘗試次數過多，請在 {retry_after} 秒後再試。",
+            "MEMBER_SERVICE_RATE_LIMITED",
+            f"會員服務目前限制登入頻率，請在 {retry_after} 秒後再試。",
             retry_after,
         )
     if not response.is_success:
@@ -1277,6 +1318,7 @@ async def login(body: LoginRequest, request: Request):
     except ValueError:
         raise HTTPException(status_code=502, detail={"error": {"code": "MEMBER_SERVICE_ERROR", "message": "Member authentication failed."}})
     if payload.get("success") is False:
+        record_failed_login(request, body.email)
         raise HTTPException(status_code=401, detail={"error": {"code": "INVALID_CREDENTIALS", "message": "Invalid email or password."}})
 
     member = payload.get("member") or payload.get("user")
