@@ -4393,6 +4393,24 @@ function syncRemoteFavorites() {
     }).catch(() => {});
 }
 
+// 把伺服器上的購物車同步回本機。與 syncRemoteFavorites 同一套：登入與啟動各跑一次。
+// Cart._mergeGuestOnce 為 true（剛登入）時，把登入前的訪客車與伺服器車數量相加合併一次，
+// 並把結果推回伺服器讓其他裝置也拿到；否則以伺服器為準直接取代（重載／換裝置還原）。
+// 失敗不提示：本機購物車照樣能用，這只是補齊，不是必要條件。
+function syncRemoteCart() {
+    const profile = (typeof Auth !== 'undefined' && Auth.getProfile) ? (Auth.getProfile() || {}) : {};
+    if (!profile.email || (typeof isGuest === 'function' && isGuest())) return;
+    if (typeof Api === 'undefined' || !Api.getRemoteCart || typeof Cart === 'undefined') return;
+    const sum = !!Cart._mergeGuestOnce;
+    Cart._mergeGuestOnce = false;
+    Api.getRemoteCart(profile.email).then(result => {
+        if (!result || !result.ok) return;
+        const merged = Cart.mergeServer(result.items, sum);
+        if (sum) Api.saveRemoteCart(merged).catch(() => {});
+        updateCartBadge();
+    }).catch(() => {});
+}
+
 function showApp() {
     document.getElementById('auth-layer').innerHTML = '';
     document.getElementById('app').style.display = 'block';
@@ -4402,6 +4420,7 @@ function showApp() {
     updateCartBadge();
     refreshMemberTheme();
     syncRemoteFavorites();
+    syncRemoteCart();
     const landing = (typeof AdminStore !== 'undefined' && AdminStore.isAdmin()) ? 'admin' : 'dashboard';
     const homeUrl = `${location.pathname}${location.search}#${landing}`;
     if (location.hash !== `#${landing}`) history.replaceState(null, '', homeUrl);
@@ -4603,6 +4622,8 @@ async function doLoginAction() {
         showAlert('此帳號已被停權，請聯繫管理員', { type:'error' });
         return;
     }
+    // 剛登入：讓 syncRemoteCart 把登入前的訪客購物車與伺服器車數量相加合併一次。
+    if (typeof Cart !== 'undefined') Cart._mergeGuestOnce = true;
     showApp();
 }
 
@@ -4688,6 +4709,8 @@ async function doVerifyOTP() {
         ? Referral.applyReferral(pending.email, pending.referralCode)
         : { ok: false };
     Router.pendingRegister = null;
+    // 剛註冊登入：同上，把註冊前的訪客購物車與（通常為空的）伺服器車合併一次。
+    if (typeof Cart !== 'undefined') Cart._mergeGuestOnce = true;
     showAlert(
         referralResult.ok ? '帳號已成功建立，推薦碼已套用' : '帳號已成功建立',
         { type:'success', onOk: showApp }
