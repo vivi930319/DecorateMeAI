@@ -14,7 +14,12 @@ from fastapi.responses import RedirectResponse, JSONResponse
 import insightface
 from insightface.app import FaceAnalysis as InsightFaceApp
 import basic_roi_shadow
-from api_errors import error_payload, install_api_error_handling
+from api_errors import (
+    enforce_service_api_key,
+    error_payload,
+    install_api_error_handling,
+    secret_equals,
+)
 from dev_server_utils import get_cors_origins, run_dev_server
 
 # Cloud Run 上 root logger 預設是 WARNING，logger.info 會被整個丟掉。
@@ -51,8 +56,13 @@ app.add_middleware(
 )
 
 # 分析端點加 API key，擋掉直接掃 Cloud Run URL 濫用運算資源。
-# 環境變數 FACE_API_KEY 沒設定時（本機開發）不擋；/health、根路徑、CORS preflight(OPTIONS) 一律放行。
+# /health、根路徑、CORS preflight(OPTIONS) 一律放行。
+#
+# 缺金鑰就「拒絕啟動」（fail closed），本機要免驗證只能明確設 ALLOW_INSECURE_LOCAL_DEV=1（P0-7）。
+# 檢查掛在啟動流程（見 enforce_service_api_key），不是 import 時——本模組同時被
+# 離線訓練／標註工具當函式庫 import，import 就炸會把那些工具一起弄壞。
 FACE_API_KEY = os.getenv("FACE_API_KEY", "")
+enforce_service_api_key(app, "FACE_API_KEY")
 _API_KEY_OPEN_PATHS = {"/health", "/"}
 
 
@@ -60,7 +70,7 @@ _API_KEY_OPEN_PATHS = {"/health", "/"}
 async def _api_key_guard(request, call_next):
     if (FACE_API_KEY and request.method != "OPTIONS"
             and request.url.path not in _API_KEY_OPEN_PATHS):
-        if request.headers.get("x-api-key") != FACE_API_KEY:
+        if not secret_equals(request.headers.get("x-api-key"), FACE_API_KEY):
             return JSONResponse(
                 status_code=401,
                 content={"detail": error_payload("FORBIDDEN", "Invalid or missing API key.", retryable=False)},

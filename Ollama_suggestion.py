@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from api_errors import install_api_error_handling
+from api_errors import enforce_service_api_key, install_api_error_handling, secret_equals
 from dev_server_utils import get_cors_origins, run_dev_server
 
 
@@ -29,11 +29,14 @@ OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
 # 斷在句子中間 —— 六段只生到第五段，「避免事項」「總結與建議」永遠出不來。
 # prompt 要求 350~1050 中文字，中文一個字約 1~2 token，抓 4096 讓它足夠把六段寫完。
 OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "4096"))
+# 缺金鑰就拒絕啟動（fail closed），檢查掛在啟動流程而非 import 時（P0-7）——
+# smoke test 只 import `build_prompt` 這類純函式，不該因為沒帶金鑰就 import 失敗。
 SUGGESTION_API_KEY = os.getenv("SUGGESTION_API_KEY", "")
+enforce_service_api_key(app, "SUGGESTION_API_KEY")
 
 
 def require_api_key(x_api_key: str | None = Header(default=None)):
-    if SUGGESTION_API_KEY and x_api_key != SUGGESTION_API_KEY:
+    if SUGGESTION_API_KEY and not secret_equals(x_api_key, SUGGESTION_API_KEY):
         raise HTTPException(
             status_code=401,
             detail={"error": {"code": "FORBIDDEN", "message": "Invalid or missing API key.", "retryable": False}},

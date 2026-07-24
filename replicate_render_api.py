@@ -15,7 +15,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from api_errors import error_payload, install_api_error_handling
+from api_errors import (
+    enforce_service_api_key,
+    error_payload,
+    install_api_error_handling,
+    secret_equals,
+)
 import job_store
 from dev_server_utils import get_cors_origins
 from replicate_render import (
@@ -47,8 +52,10 @@ app.add_middleware(
 install_api_error_handling(app, "replicate-render")
 
 # 每次渲染都真的花 Replicate 錢，加 API key 擋掉直接掃到 Cloud Run URL 的濫用。
-# 正式環境務必用環境變數設定 RENDER_API_KEY；沒設定時（本機開發）不擋，但會在 /health 標明。
+# 缺金鑰就拒絕啟動（fail closed），檢查掛在啟動流程而非 import 時（P0-7）；
+# /health 仍會標明是否啟用驗證。
 RENDER_API_KEY = os.getenv("RENDER_API_KEY", "")
+enforce_service_api_key(app, "RENDER_API_KEY")
 RENDER_RATE_LIMIT_WINDOW_SECONDS = max(1, int(os.getenv("RENDER_RATE_LIMIT_WINDOW_SECONDS", "3600")))
 RENDER_RATE_LIMIT_MAX_REQUESTS = max(1, int(os.getenv("RENDER_RATE_LIMIT_MAX_REQUESTS", "10")))
 RENDER_QUOTA_WINDOW_SECONDS = max(60, int(os.getenv("RENDER_QUOTA_WINDOW_SECONDS", "86400")))
@@ -170,7 +177,7 @@ def _prune_limit_buckets(buckets: dict[str, deque[float]], now: float, window_se
 
 
 def require_api_key(x_api_key: str | None = Header(default=None)):
-    if RENDER_API_KEY and x_api_key != RENDER_API_KEY:
+    if RENDER_API_KEY and not secret_equals(x_api_key, RENDER_API_KEY):
         raise HTTPException(
             status_code=401,
             detail={"error": {"code": "FORBIDDEN", "message": "Invalid or missing API key.", "retryable": False}},
@@ -707,7 +714,8 @@ def _job_view(job: dict, include_token: bool = False) -> dict:
 
 def _verify_job_token(job: dict, x_job_token: str | None = None, result_token: str | None = None) -> None:
     expected = job.get("resultToken")
-    if expected and (x_job_token or result_token) != expected:
+    # Job token 一樣要固定時間比較，否則可以逐字元試探把別人的 token 猜出來（P0-7）。
+    if expected and not secret_equals(x_job_token or result_token, expected):
         raise HTTPException(
             status_code=403,
             detail={"error": {"code": "FORBIDDEN", "message": "Invalid or missing job token.", "retryable": False}},

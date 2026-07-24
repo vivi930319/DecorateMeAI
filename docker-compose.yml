@@ -8,6 +8,9 @@ services:
       - MAX_IMAGE_SIZE=1280
       - INSIGHT_DET_SIZE=512
       - FACE_API_KEY=${FACE_API_KEY:-}
+      # 本機 compose 沒帶金鑰時免驗證。這個旗標只在這份「本機專用」的檔案裡預設打開，
+      # 且在 APP_ENV=production 下一律失效，所以不會把正式站的驗證關掉（P0-7）。
+      - ALLOW_INSECURE_LOCAL_DEV=${ALLOW_INSECURE_LOCAL_DEV:-1}
       - FACE_JOB_TIMEOUT_SECONDS=180
       - FACE_JOB_RETENTION_SECONDS=3600
       - FACE_JOB_MAX_COUNT=200
@@ -23,6 +26,9 @@ services:
       - MAX_IMAGE_SIZE=1280
       - INSIGHT_DET_SIZE=512
       - FACE_API_KEY=${FACE_API_KEY:-}
+      # 本機 compose 沒帶金鑰時免驗證。這個旗標只在這份「本機專用」的檔案裡預設打開，
+      # 且在 APP_ENV=production 下一律失效，所以不會把正式站的驗證關掉（P0-7）。
+      - ALLOW_INSECURE_LOCAL_DEV=${ALLOW_INSECURE_LOCAL_DEV:-1}
       - FACE_JOB_TIMEOUT_SECONDS=180
       - FACE_JOB_RETENTION_SECONDS=3600
       - FACE_JOB_MAX_COUNT=200
@@ -39,6 +45,7 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-gemma3}
       - SUGGESTION_API_KEY=${SUGGESTION_API_KEY:-}
+      - ALLOW_INSECURE_LOCAL_DEV=${ALLOW_INSECURE_LOCAL_DEV:-1}
     command: ["uvicorn", "Ollama_suggestion:app", "--host", "0.0.0.0", "--port", "8010"]
     restart: always
 
@@ -53,6 +60,7 @@ services:
     environment:
       - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
       - RENDER_API_KEY=${RENDER_API_KEY:-}
+      - ALLOW_INSECURE_LOCAL_DEV=${ALLOW_INSECURE_LOCAL_DEV:-1}
     command: ["uvicorn", "replicate_render_api:app", "--host", "0.0.0.0", "--port", "8020"]
     restart: always
     # 組員尚未交付 replicate_render.py 前，不會隨預設 docker compose up 啟動

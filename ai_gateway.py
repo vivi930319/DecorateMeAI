@@ -19,7 +19,7 @@ import jwt
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from api_errors import install_api_error_handling
+from api_errors import install_api_error_handling, secret_equals
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2 import id_token
@@ -125,6 +125,11 @@ UPSTREAMS = {
             # 同步回本機的那段永遠拿到 Gateway 的 404——寫得進去、讀不回來，
             # 換裝置就看不到自己收藏過的東西，而且畫面完全正常不會報錯。
             r"api/members/[^/]+/favorites",
+            # 購物車跟收藏同一個模式：跨裝置同步靠會員 session。GET 讀回、POST 整台覆蓋。
+            # 授權沿用 _authorize_member_path（MEMBER_SCOPE_RE）——只准存取自己 email
+            # 底下的車，別人的擋 403。少了這條，前端寫得進 localStorage 卻同步不到伺服器，
+            # 換裝置就看不到自己的購物車，而且畫面完全正常不會報錯（跟收藏當初一模一樣的坑）。
+            r"api/members/[^/]+/cart",
             r"api/members/[^/]+/check-in",
             r"api/members/[^/]+/tasks",
             r"api/members/[^/]+/tasks/[^/]+/claim",
@@ -283,13 +288,13 @@ def is_path_allowed(upstream: Upstream, path: str) -> bool:
 
 
 def require_client_api_key(upstream: Upstream, supplied: str) -> None:
-    if upstream.client_api_key and not secrets.compare_digest(supplied, upstream.client_api_key):
+    if upstream.client_api_key and not secret_equals(supplied, upstream.client_api_key):
         raise HTTPException(status_code=401, detail={"error": {"code": "UNAUTHORIZED", "message": "Invalid or missing API key."}})
 
 
 def require_any_client_api_key(supplied: str) -> None:
     expected = {upstream.client_api_key for upstream in UPSTREAMS.values() if upstream.client_api_key}
-    if expected and not any(secrets.compare_digest(supplied, key) for key in expected):
+    if expected and not any(secret_equals(supplied, key) for key in expected):
         raise HTTPException(status_code=401, detail={"error": {"code": "UNAUTHORIZED", "message": "Invalid or missing API key."}})
 
 
@@ -656,7 +661,7 @@ def select_account(request: Request, *, for_write: bool) -> dict:
     selector = str(request.headers.get("x-expected-actor") or "").strip()
     if selector:
         for account in accounts:
-            if secrets.compare_digest(selector, account["actorId"]):
+            if secret_equals(selector, account["actorId"]):
                 return account
         # 分頁指名的帳號並沒有登入在這個瀏覽器（可能已登出、過期，或根本沒在這裡加過）。
         # 請分頁重新建立那個帳號，而不是默默用成另一個帳號。
@@ -759,7 +764,7 @@ def enforce_expected_actor(request: Request, acting_owner_id: str) -> None:
             status_code=409,
             detail={"error": {"code": "EXPECTED_ACTOR_REQUIRED", "message": "無法確認目前分頁的登入身分，請重新登入後再操作。"}},
         )
-    if not secrets.compare_digest(expected, acting_owner_id):
+    if not secret_equals(expected, acting_owner_id):
         raise HTTPException(
             status_code=409,
             detail={"error": {"code": "SESSION_OWNER_CHANGED", "message": "登入帳號已在其他分頁變更，請重新整理頁面後再操作。"}},
@@ -1296,7 +1301,7 @@ async def session_status(request: Request):
     account = None
     if selector:
         for candidate in accounts:
-            if secrets.compare_digest(selector, candidate["actorId"]):
+            if secret_equals(selector, candidate["actorId"]):
                 account = candidate
                 break
         if account is None:

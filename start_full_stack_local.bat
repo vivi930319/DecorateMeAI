@@ -3,6 +3,9 @@ setlocal
 cd /d "%~dp0"
 
 set "PY=%~dp0.venv\Scripts\python.exe"
+rem 服務缺金鑰就拒絕啟動（P0-7）。這支是本機開發腳本，明確打開免驗證旗標；
+rem 該旗標在 APP_ENV=production 下一律失效，不影響正式站。
+set ALLOW_INSECURE_LOCAL_DEV=1
 for /f "usebackq delims=" %%D in (`powershell -NoProfile -Command "[Environment]::GetFolderPath('Desktop')"`) do set "FRONTEND_DIR=%%D\web_frontend"
 
 if not exist "%PY%" (

@@ -6,11 +6,13 @@ iOS clients do not need service-specific parsing rules.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import re
 import time
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -140,6 +142,78 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         ),
         headers={"X-Request-ID": _request_id(request)},
     )
+
+
+# ── 服務金鑰：fail closed 啟動檢查與固定時間比較（P0-7）──────────────────────
+# 四個服務（Face BASIC／PRO、Suggestion、Render）本來各自複製同一段環境變數解析與
+# 金鑰比較，改成共用這一組 helper，之後要調整政策只改這裡一處。
+
+
+def env_flag(name: str) -> bool:
+    """讀布林環境變數；接受 1／true／yes／on（不分大小寫），其餘一律視為關閉。"""
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def is_production() -> bool:
+    """`APP_ENV=prod`／`production` 視為正式環境。"""
+    return os.getenv("APP_ENV", "").strip().lower() in {"prod", "production"}
+
+
+def insecure_local_dev_allowed() -> bool:
+    """本機免驗證旗標是否生效。
+
+    關鍵在後半段：正式環境一律無效。`ALLOW_INSECURE_LOCAL_DEV=1` 若被誤留在
+    Cloud Run，服務會照樣「拒絕啟動」，而不是安靜地起來又把驗證整個關掉——
+    後者正是 P0-7 要消滅的「靜默匿名開放」狀態。
+    """
+    return env_flag("ALLOW_INSECURE_LOCAL_DEV") and not is_production()
+
+
+def secret_equals(provided: str | None, expected: str | None) -> bool:
+    """固定時間比較金鑰／token，避免逐字元試探的 timing attack。
+
+    比 bytes 不比 str：`hmac.compare_digest` 對含非 ASCII 字元的 str 會丟
+    `TypeError`，而 HTTP 標頭是由 latin-1 解出來的，用戶端只要送一個非 ASCII 的
+    `x-api-key` 就會讓守衛炸成 500——本來應該是乾淨的 401。
+    """
+    if not expected:
+        return False
+    return hmac.compare_digest(
+        (provided or "").encode("utf-8", "surrogateescape"),
+        expected.encode("utf-8", "surrogateescape"),
+    )
+
+
+def require_service_api_key(env_name: str) -> None:
+    """缺金鑰就丟 `RuntimeError`（fail closed）。只給啟動流程呼叫，不要在 import 時呼叫。"""
+    if os.getenv(env_name, "") or insecure_local_dev_allowed():
+        return
+    raise RuntimeError(
+        f"{env_name} 未設定，服務拒絕啟動。正式環境必須設定此金鑰；"
+        "本機開發要免驗證請明確設 ALLOW_INSECURE_LOCAL_DEV=1（此旗標在 APP_ENV=production 下無效）。"
+    )
+
+
+def enforce_service_api_key(app: FastAPI, env_name: str) -> None:
+    """把「缺金鑰就拒絕啟動」掛到 app 的啟動流程上，而不是 module import 時。
+
+    刻意不在 import 時檢查：`Face_analyzer_BASIC` 這類模組同時被離線訓練／標註
+    工具當函式庫 import（`train_rf_classifiers.py`、`tools/batch_basic_classify.py`
+    等十餘支），import 就炸會讓這些完全不碰網路的工具也跑不起來，測試同理。
+    掛在啟動流程後，「正式環境漏設金鑰就起不來」照樣成立，import 則維持無副作用。
+
+    用包住 `lifespan_context` 的方式接上去，這樣不管該服務原本有沒有自己的
+    lifespan 都適用（Starlette 在有 lifespan 時會忽略 `on_startup`）。
+    """
+    previous = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def _guarded(scoped_app):
+        require_service_api_key(env_name)
+        async with previous(scoped_app) as state:
+            yield state
+
+    app.router.lifespan_context = _guarded
 
 
 def install_api_error_handling(app: FastAPI, service_name: str) -> None:

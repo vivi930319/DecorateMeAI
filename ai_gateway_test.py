@@ -7,9 +7,13 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 
-os.environ.setdefault("GATEWAY_FACE_API_KEY", "face-client-key")
-os.environ.setdefault("GATEWAY_RENDER_API_KEY", "render-client-key")
-os.environ.setdefault("GATEWAY_SESSION_SECRET", "test-session-secret-that-is-at-least-32-bytes")
+# 這些金鑰是測試自己的 fixture，測項會直接對字面值斷言，所以必須「覆寫」而不是
+# setdefault。用 setdefault 的話，CI 注入的 GATEWAY_FACE_API_KEY 會贏過這裡的值，
+# test_client_key_is_required 就會拿 face-client-key 去比 CI 的金鑰而噴 401——
+# 本機跑得過、CI 一定紅，而且看起來像是被測程式壞掉。
+os.environ["GATEWAY_FACE_API_KEY"] = "face-client-key"
+os.environ["GATEWAY_RENDER_API_KEY"] = "render-client-key"
+os.environ["GATEWAY_SESSION_SECRET"] = "test-session-secret-that-is-at-least-32-bytes"
 
 import ai_gateway as gateway  # noqa: E402
 from ai_gateway import (  # noqa: E402
@@ -216,6 +220,23 @@ class AiGatewayTest(unittest.TestCase):
         member = UPSTREAMS["member-database"]
         self.assertTrue(is_path_allowed(member, "api/favorites/toggle"))
         self.assertTrue(is_path_allowed(member, "api/members/someone%40example.com/favorites"))
+
+    def test_cart_is_proxied_and_scoped_to_its_owner(self):
+        # 購物車跨裝置同步跟收藏同一個模式：白名單漏掉就會「寫得進 localStorage、
+        # 同步不到伺服器」，換裝置車就空了，而且畫面完全正常不會報錯。
+        member = UPSTREAMS["member-database"]
+        self.assertTrue(is_path_allowed(member, "api/members/someone%40example.com/cart"))
+        self.assertTrue(is_path_allowed(member, "api/members/someone@example.com/cart"))
+
+        # 只准碰自己的車：本人放行，別人的擋 403，admin 例外。
+        claims = {"sub": "someone@example.com"}
+        self.assertEqual(
+            _authorize_member_path(claims, "api/members/someone%40example.com/cart"),
+            "someone@example.com",
+        )
+        with self.assertRaises(Exception) as raised:
+            _authorize_member_path(claims, "api/members/other%40example.com/cart")
+        self.assertEqual(raised.exception.status_code, 403)
 
     def test_only_the_stable_media_path_can_retain_a_render(self):
         # Saving a look is what promotes its render out of `temporary/`, and the
@@ -508,7 +529,9 @@ class AiGatewayTest(unittest.TestCase):
         from api_errors import redact_sensitive, RedactingFormatter
 
         scrubbed = redact_sensitive(
-            "GET https://db.trycloudflare.com/api/login?token=SECRET failed for user@example.com"
+            # 主機名刻意用 example.com：CI 的 secret-scan 會擋掉可部署程式碼裡的
+            # trycloudflare 網址，而這只是遮罩測試的樣本，不需要真的長成通道網址。
+            "GET https://db.example.com/api/login?token=SECRET failed for user@example.com"
         )
         self.assertNotIn("SECRET", scrubbed)
         self.assertNotIn("user@example.com", scrubbed)

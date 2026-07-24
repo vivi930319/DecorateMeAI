@@ -8,7 +8,12 @@ from fastapi import BackgroundTasks, FastAPI, File, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from api_errors import error_payload, install_api_error_handling
+from api_errors import (
+    enforce_service_api_key,
+    error_payload,
+    install_api_error_handling,
+    secret_equals,
+)
 import job_store
 from Face_analyzer_BASIC import FaceAnalyzer, _reject_if_too_large
 from dev_server_utils import get_cors_origins, run_dev_server
@@ -28,8 +33,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 分析端點 API key 保護，比照 BASIC；FACE_API_KEY 沒設定不擋，/health、根路徑、OPTIONS 放行。
+# 分析端點 API key 保護，比照 BASIC；/health、根路徑、OPTIONS 放行。
+# 缺金鑰就拒絕啟動（fail closed），檢查掛在啟動流程而非 import 時（P0-7）。
 FACE_API_KEY = os.getenv("FACE_API_KEY", "")
+enforce_service_api_key(app, "FACE_API_KEY")
 _API_KEY_OPEN_PATHS = {"/health", "/"}
 
 
@@ -37,7 +44,7 @@ _API_KEY_OPEN_PATHS = {"/health", "/"}
 async def _api_key_guard(request, call_next):
     if (FACE_API_KEY and request.method != "OPTIONS"
             and request.url.path not in _API_KEY_OPEN_PATHS):
-        if request.headers.get("x-api-key") != FACE_API_KEY:
+        if not secret_equals(request.headers.get("x-api-key"), FACE_API_KEY):
             return JSONResponse(
                 status_code=401,
                 content={"detail": error_payload("FORBIDDEN", "Invalid or missing API key.", retryable=False)},

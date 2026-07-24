@@ -1,7 +1,9 @@
+import asyncio
 import os
 import sys
 import types
 import unittest
+from unittest import mock
 
 
 # Keep this unit test deterministic and offline.
@@ -17,7 +19,13 @@ if "replicate" not in sys.modules:
 
 import job_store
 import replicate_render_api as render_api
-from api_errors import error_payload
+from fastapi import FastAPI
+from api_errors import (
+    enforce_service_api_key,
+    error_payload,
+    require_service_api_key,
+    secret_equals,
+)
 from replicate_render import data_url_to_bytes, delete_permanent_storage_url, fetch_remote_image_bytes
 
 
@@ -290,6 +298,100 @@ class RenderApiTest(unittest.TestCase):
                 render_api.MediaUrlRequest(url=url), x_user_id="actor_b", x_admin_request=None
             ))
         self.assertEqual(sign_raised.exception.status_code, 404)
+
+
+class ServiceApiKeyFailClosedTest(unittest.TestCase):
+    """P0-7／P0-10：正式環境缺金鑰要拒絕啟動，而且免驗證旗標不能在正式環境生效。"""
+
+    KEY_NAME = "DEMO_SERVICE_API_KEY"
+
+    def _env(self, **overrides):
+        """套用指定環境變數，其餘相關變數清空；離開測試時自動還原。"""
+        patcher = mock.patch.dict(os.environ, overrides, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for name in (self.KEY_NAME, "ALLOW_INSECURE_LOCAL_DEV", "APP_ENV"):
+            if name not in overrides:
+                os.environ.pop(name, None)
+
+    def test_missing_key_refuses_to_start(self):
+        # 漏設金鑰時要直接失敗，而不是安靜地起來、開放匿名呼叫。
+        self._env()
+        with self.assertRaises(RuntimeError) as raised:
+            require_service_api_key(self.KEY_NAME)
+        self.assertIn(self.KEY_NAME, str(raised.exception))
+
+    def test_configured_key_starts_normally(self):
+        self._env(**{self.KEY_NAME: "a-real-key"})
+        require_service_api_key(self.KEY_NAME)  # 不應丟例外
+
+    def test_explicit_local_dev_flag_allows_running_without_a_key(self):
+        self._env(ALLOW_INSECURE_LOCAL_DEV="1")
+        require_service_api_key(self.KEY_NAME)  # 不應丟例外
+
+    def test_local_dev_flag_is_ignored_in_production(self):
+        # 這條是整個 P0-7 的重點：旗標被誤留在 Cloud Run 時，服務仍須拒絕啟動，
+        # 否則就會出現「有起來但驗證整個關掉」——正是這項要消滅的靜默匿名開放。
+        for app_env in ("production", "prod", "Production"):
+            with self.subTest(app_env=app_env):
+                self._env(ALLOW_INSECURE_LOCAL_DEV="1", APP_ENV=app_env)
+                with self.assertRaises(RuntimeError):
+                    require_service_api_key(self.KEY_NAME)
+
+    def test_enforcement_happens_at_startup_not_import(self):
+        # 守衛掛在啟動流程上：import 模組（離線訓練工具會這樣用）不受影響，
+        # 真的要起服務時才會因為缺金鑰而失敗。
+        self._env()
+        app = FastAPI()
+        enforce_service_api_key(app, self.KEY_NAME)
+
+        async def _start():
+            async with app.router.lifespan_context(app):
+                pass
+
+        with self.assertRaises(RuntimeError):
+            asyncio.run(_start())
+
+    def test_startup_proceeds_once_the_key_is_configured(self):
+        self._env(**{self.KEY_NAME: "a-real-key"})
+        app = FastAPI()
+        started = []
+
+        @app.on_event("startup")
+        async def _mark_started():
+            started.append(True)
+
+        enforce_service_api_key(app, self.KEY_NAME)
+
+        async def _start():
+            async with app.router.lifespan_context(app):
+                pass
+
+        asyncio.run(_start())
+        self.assertEqual(started, [True])
+
+
+class SecretEqualsTest(unittest.TestCase):
+    """固定時間比較必須對任何輸入都只回 True/False，不能丟例外。"""
+
+    def test_matching_and_mismatching_secrets(self):
+        self.assertTrue(secret_equals("s3cret", "s3cret"))
+        self.assertFalse(secret_equals("wrong", "s3cret"))
+        self.assertFalse(secret_equals("", "s3cret"))
+        self.assertFalse(secret_equals(None, "s3cret"))
+
+    def test_unset_expected_secret_never_matches(self):
+        # 沒設定金鑰時不能因為對方也送空字串就當成通過。
+        self.assertFalse(secret_equals("", ""))
+        self.assertFalse(secret_equals(None, None))
+        self.assertFalse(secret_equals("anything", ""))
+
+    def test_non_ascii_header_is_rejected_not_crashed(self):
+        # 標頭是 latin-1 解出來的，可能含非 ASCII 字元。直接拿 str 比會丟
+        # TypeError，讓本來乾淨的 401 變成 500，所以這裡要比 bytes。
+        self.assertFalse(secret_equals("Ãbc", "s3cret"))
+        self.assertFalse(secret_equals("金鑰", "s3cret"))
+        self.assertTrue(secret_equals("金鑰", "金鑰"))
 
 
 if __name__ == "__main__":
