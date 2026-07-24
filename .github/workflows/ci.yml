@@ -70,12 +70,11 @@ jobs:
       - name: Build gateway image
         run: docker build -f Dockerfile.gateway -t dm-gateway:ci .
       - name: Scan gateway image
-        uses: aquasecurity/trivy-action@v0.28.0
-        with:
-          image-ref: dm-gateway:ci
-          format: table
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
+        # 直接用官方安裝腳本裝 Trivy，不走 marketplace action——那個 action 會在內部
+        # 引用一個已被移除的 setup-trivy tag，版本解析每隔一陣子就壞一次。
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          trivy image --severity HIGH,CRITICAL --ignore-unfixed --no-progress dm-gateway:ci
 
   dependency-audit:
     runs-on: ubuntu-latest
