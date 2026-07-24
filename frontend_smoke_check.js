@@ -73,6 +73,31 @@ if (sandbox.localizeUserError('Unexpected internal provider detail') !== '系統
   }
 }
 
+// ── base64 頭像不落地 ────────────────────────────────────────
+// sessionStorage 不會因重新整理而清空，一張 base64 臉留在裡面等於把上一個人的臉
+// 交給下一個登入者；而且它會反覆撐大每一次 profile 寫入。
+{
+  const dataAvatar = 'data:image/png;base64,AAAABBBBCCCC';
+  sandbox.Auth.setProfile({ name: '頭像測試', email: 'avatar@example.com', avatar: dataAvatar });
+  const storedProfile = session.get('beautyProfile') || '';
+  if (storedProfile.includes('base64') || storedProfile.includes('data:image')) {
+    throw new Error('base64 avatar must never be written to sessionStorage');
+  }
+  const storedMembers = storage.get('beautyRegisteredMembers') || '';
+  if (storedMembers.includes('data:image')) {
+    throw new Error('base64 avatar must never be written to localStorage');
+  }
+  // 本次 session 內仍看得到（記憶體暫存），SPA 導覽不會讓頭像消失。
+  if (sandbox.Auth.getProfile().avatar !== dataAvatar) {
+    throw new Error('data-URL avatar should survive in memory for the session');
+  }
+  // 換成正式網址後，暫存的 base64 要被清掉、網址正常持久化。
+  sandbox.Auth.setProfile({ name: '頭像測試', email: 'avatar@example.com', avatar: 'https://cdn.example.com/a.png' });
+  if (sandbox.Auth.getProfile().avatar !== 'https://cdn.example.com/a.png') {
+    throw new Error('A real avatar URL should be persisted as-is');
+  }
+}
+
 // ── 會員姓名與購物車 ─────────────────────────────────────────
 sandbox.Auth.setProfile({ name: '測試會員', email: 'USER@example.com', level: '一般會員' });
 if (sandbox.Auth.getRegisteredMember('user@example.com')?.name !== '測試會員') {

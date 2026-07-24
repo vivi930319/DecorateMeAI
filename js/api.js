@@ -2266,6 +2266,18 @@ const Auth = {
         localStorage.setItem(this._membersKey, JSON.stringify(members));
     },
     getUser()  { return sessionStorage.getItem('beautyUser') || ''; },
+    // 一張 base64 頭像動輒幾十 KB，先前它跟著整個 profile 被寫進 sessionStorage。
+    // sessionStorage 不會因重新整理而清空，等於把使用者的臉留在分頁裡給下一個人；
+    // 而且它一路被塞進每一次 setProfile 的 JSON，很容易撐爆配額讓寫入靜靜失敗。
+    // 正確的長期做法是上傳到私有物件、只存 object name（待儲存端提供上傳端點）。
+    // 在那之前，data: 頭像只留在這個記憶體欄位裡：本次 session 的 SPA 導覽照樣顯示，
+    // 但不落地、整頁重新整理後就回到後端提供的頭像網址或預設圖示。
+    _volatileAvatar: '',
+    _isPersistableAvatar(value) {
+        const v = String(value || '');
+        // http(s) 或同源 Gateway 媒體路徑可以存；data: base64 一律不存。
+        return !!v && !v.startsWith('data:');
+    },
     getProfile() {
         let profile = {};
         try { profile = JSON.parse(sessionStorage.getItem('beautyProfile') || '{}') || {}; } catch (_) {}
@@ -2274,11 +2286,23 @@ const Auth = {
             profile = safeProfile;
             try { sessionStorage.setItem('beautyProfile', JSON.stringify(profile)); } catch (_) {}
         }
+        // 記憶體裡有本次 session 暫存的 data: 頭像時補回去，讓 SPA 導覽看得到，
+        // 但它從來沒有、也不會進 sessionStorage。
+        if (!this._isPersistableAvatar(profile.avatar) && this._volatileAvatar) {
+            profile = { ...profile, avatar: this._volatileAvatar };
+        }
         return profile;
     },
     setProfile(profile) {
         const safeProfile = { ...(profile || {}) };
         delete safeProfile.password;
+        // base64 頭像不落地：留在記憶體，storage 裡只保留可持久化的頭像網址。
+        if (Object.prototype.hasOwnProperty.call(safeProfile, 'avatar') && !this._isPersistableAvatar(safeProfile.avatar)) {
+            this._volatileAvatar = String(safeProfile.avatar || '');
+            delete safeProfile.avatar;
+        } else if (this._isPersistableAvatar(safeProfile.avatar)) {
+            this._volatileAvatar = '';  // 已有正式網址，清掉暫存的 base64
+        }
         sessionStorage.setItem('beautyProfile', JSON.stringify(safeProfile));
         if (safeProfile?.name) sessionStorage.setItem('beautyUser', safeProfile.name);
         this.saveRegisteredMember(safeProfile);
