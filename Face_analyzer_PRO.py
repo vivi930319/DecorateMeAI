@@ -218,22 +218,36 @@ def _run_pro_job(job_id, front_bytes, angle_bytes):
         {"status": "processing", "stage": "front_analysis", "progress": 30, "startedAt": _now_iso(), "updatedAt": _now_iso()},
     ):
         return
+    # 分析與封裝分開包，理由同 BASIC 的 _run_basic_job：封裝失敗時分析其實已經成功，
+    # 標成 FACE_ANALYSIS_ERROR 會誤導使用者重拍一張本來就分析得出來的照片。
     try:
         front_result = FaceAnalyzer(front_bytes).export_json()
         job_store.patch_if_status(_COL, job_id, {"processing"}, {"stage": "side_analysis", "progress": 65, "updatedAt": _now_iso()})
         side_bytes = angle_bytes.get("side")
         side_result = _analyze_side_supplementary(side_bytes) if side_bytes else None
-        result = _merge_basic_and_pro(front_result, side_result=side_result)
-        job_store.patch_if_status(_COL, job_id, {"processing"}, {
-            "status": "completed", "stage": "done", "progress": 100,
-            "completedAt": _now_iso(), "updatedAt": _now_iso(), "result": result, "error": None,
-        })
     except Exception:
         logging.exception("PRO 臉部分析 job 失敗 job_id=%s", job_id)
         job_store.patch_if_status(_COL, job_id, {"processing"}, {
             "status": "failed", "stage": "failed",
             "completedAt": _now_iso(), "updatedAt": _now_iso(),
             "error": {"code": "FACE_ANALYSIS_ERROR", "message": "臉部分析失敗，請稍後再試", "retryable": True},
+        })
+        return
+
+    try:
+        result = _merge_basic_and_pro(front_result, side_result=side_result)
+        job_store.patch_if_status(_COL, job_id, {"processing"}, {
+            "status": "completed", "stage": "done", "progress": 100,
+            "completedAt": _now_iso(), "updatedAt": _now_iso(), "result": result, "error": None,
+        })
+    except Exception:
+        logging.exception("PRO 分析結果封裝失敗 job_id=%s（分析已成功）", job_id)
+        job_store.patch_if_status(_COL, job_id, {"processing"}, {
+            "status": "failed", "stage": "analysis_completed",
+            "completedAt": _now_iso(), "updatedAt": _now_iso(),
+            "error": {"code": "PACKAGE_BUILD_FAILED",
+                      "message": "臉部分析已完成，但結果封裝失敗，請稍後再試（不需重拍）。",
+                      "retryable": True},
         })
 
 
