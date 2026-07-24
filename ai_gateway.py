@@ -1186,6 +1186,18 @@ async def login(body: LoginRequest, request: Request):
     except httpx.HTTPError:
         raise HTTPException(status_code=503, detail={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE", "message": "Member authentication is unavailable."}})
 
+    # 「信箱尚未驗證」必須與「帳密錯誤」分開，否則使用者只會看到「帳號或密碼錯誤」，
+    # 完全不知道要去收驗證信——照著重試密碼永遠不會成功。
+    #
+    # 這裡刻意只透傳這一個碼，不是把上游的錯誤照單全收：其餘的 401/403/404 仍然
+    # 一律壓成同一句 INVALID_CREDENTIALS，避免用回應差異枚舉哪些信箱已註冊。
+    if response.status_code == 403 and _upstream_error_code(response) == "EMAIL_NOT_VERIFIED":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"code": "EMAIL_NOT_VERIFIED",
+                              "message": "此帳號尚未完成信箱驗證，請至信箱收取驗證碼。",
+                              "retryable": False}},
+        )
     if response.status_code in {401, 403, 404}:
         raise HTTPException(status_code=401, detail={"error": {"code": "INVALID_CREDENTIALS", "message": "Invalid email or password."}})
     if response.status_code == 429:
@@ -1334,6 +1346,24 @@ async def session_status(request: Request):
         rebuilt.append((account["token"], sealed) if slot_actor == account["actorId"] else (token, slot_sealed))
     set_session_slots(result, rebuilt)
     return result
+
+
+def _upstream_error_code(response) -> str:
+    """取出上游 JSON 裡的 error.code；格式不符時回空字串。
+
+    上游壞掉或回了非 JSON 時不能讓登入整個爆掉——取不到就當作沒有，
+    呼叫端會落到一般的錯誤處理。
+    """
+    try:
+        payload = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    error = payload.get("error")
+    if isinstance(error, dict):
+        return str(error.get("code") or "")
+    return str(payload.get("code") or "")
 
 
 async def proxy_public_member_request(request: Request, upstream_path: str):

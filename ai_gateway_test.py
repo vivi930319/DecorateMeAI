@@ -366,6 +366,31 @@ class AiGatewayTest(unittest.TestCase):
         self.assertTrue(actor.startswith("actor_"))
         self.assertNotIn("admin", actor.lower())
 
+    def test_unverified_email_is_distinguishable_from_a_wrong_password(self):
+        # 「信箱尚未驗證」若被壓成「帳號或密碼錯誤」，使用者會一直重打密碼而永遠
+        # 進不去——真正該做的是去收驗證信。資料庫端補上 403 EMAIL_NOT_VERIFIED 後，
+        # 這個碼必須能穿過 Gateway 抵達前端。
+        from ai_gateway import _upstream_error_code
+
+        class _Resp:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def json(self):
+                if self._payload is None:
+                    raise ValueError("not json")
+                return self._payload
+
+        self.assertEqual(
+            _upstream_error_code(_Resp({"error": {"code": "EMAIL_NOT_VERIFIED"}})),
+            "EMAIL_NOT_VERIFIED")
+        self.assertEqual(_upstream_error_code(_Resp({"code": "EMAIL_NOT_VERIFIED"})),
+                         "EMAIL_NOT_VERIFIED")
+        # 上游壞掉或回非 JSON 時不能讓登入整個爆掉，取不到就當作沒有。
+        self.assertEqual(_upstream_error_code(_Resp(None)), "")
+        self.assertEqual(_upstream_error_code(_Resp(["unexpected"])), "")
+        self.assertEqual(_upstream_error_code(_Resp({"error": "not-a-dict"})), "")
+
     def test_member_path_cannot_cross_accounts(self):
         claims = {"sub": "member@example.com", "role": "member"}
         self.assertEqual(
