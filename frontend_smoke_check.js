@@ -116,6 +116,34 @@ if (!sandbox.AdminStore.isAdminProfile({ email: 'admin@example.com', role: 'admi
 if (sandbox.AdminStore.isAdminProfile({ email: 'admin@decorateme.local' })) {
   throw new Error('Admin profile should not trust email naming fallback');
 }
+
+// ── 管理後台只認後端驗過的角色，不認本機 profile ──────────────
+// 實測：未通過 OTP 的亂碼帳號因本機 role 被當成 admin 而晃進管理畫面。
+// isAdmin() 決定「看不看得到管理後台」，必須只信 /auth/session 驗過的角色。
+{
+  // 本機 profile 自稱 admin，但沒有任何後端驗過的 session → 一律不是 admin。
+  sandbox.Api._clearPinnedSession();
+  sandbox.Auth.setProfile({ name: '假管理員', email: 'fake@evil.test', role: 'admin', level: '管理員' });
+  if (sandbox.AdminStore.isAdmin()) {
+    throw new Error('A self-declared admin profile with no verified session must NOT be admin');
+  }
+  // pin 一個後端驗過是 member 的 session：即使本機還寫著 admin，也不是 admin。
+  sandbox.Api._pinSession({ actorId: 'actor_x', sub: 'fake@evil.test', role: 'member' });
+  if (sandbox.AdminStore.isAdmin()) {
+    throw new Error('A verified member must NOT be admin even if the local profile claims admin');
+  }
+  // pin 一個後端驗過是 admin 的 session → 才是 admin。
+  sandbox.Api._pinSession({ actorId: 'actor_a', sub: 'admin@example.com', role: 'admin' });
+  if (!sandbox.AdminStore.isAdmin()) {
+    throw new Error('A backend-verified admin session must be treated as admin');
+  }
+  sandbox.Api._clearPinnedSession();
+  // 清掉 pin 後，回到「非 admin」。
+  if (sandbox.AdminStore.isAdmin()) {
+    throw new Error('Clearing the session must drop admin');
+  }
+  sandbox.Auth.setProfile({ name: '測試會員', email: 'USER@example.com', level: '一般會員' });
+}
 sandbox.Cart.add(1);
 sandbox.Cart.add(1);
 if (sandbox.Cart.count() !== 2 || sandbox.Cart.list()[0].qty !== 2) throw new Error('Cart quantity accumulation failed');

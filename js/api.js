@@ -258,6 +258,11 @@ const Api = {
     _sessionAbortController: typeof AbortController === 'function' ? new AbortController() : null,
     _expectedActorKey: 'gatewayExpectedActor',
     _expectedSubjectKey: 'gatewayExpectedSubject',
+    // 後端 /auth/session 回的角色。這是**唯一可信**的 role 來源——它來自登入時
+    // 由資料庫驗過的會員所簽發的 JWT。本機 profile 的 role/level 是可被竄改的
+    // sessionStorage 值，絕不能拿來決定要不要顯示管理後台。與 actor 綁在一起，
+    // 換帳號時一起失效。
+    _verifiedRoleKey: 'gatewayVerifiedRole',
 
     _pinnedActor() {
         try { return String(sessionStorage.getItem(this._expectedActorKey) || '').trim(); }
@@ -269,6 +274,21 @@ const Api = {
         catch (_) { return ''; }
     },
 
+    // 後端驗證過的角色；只有在這個分頁確實有 pin 過 session（actor 存在）時才回。
+    verifiedRole() {
+        try {
+            if (!this._pinnedActor()) return '';
+            return String(sessionStorage.getItem(this._verifiedRoleKey) || '').trim().toLowerCase();
+        } catch (_) { return ''; }
+    },
+
+    // 後端驗證過「這個分頁的目前帳號是不是管理員」。管理後台的顯示與進入一律靠這個，
+    // 不靠本機 profile。後端本來就會擋掉非管理員的寫入；這道是把「連看都看不到」補上，
+    // 不讓一個把本機 role 改成 admin 的帳號晃進管理畫面。
+    isVerifiedAdmin() {
+        return this.verifiedRole() === 'admin';
+    },
+
     _pinSession(session) {
         const actorId = String(session?.actorId || '').trim();
         const sub = String(session?.sub || '').trim().toLowerCase();
@@ -276,6 +296,7 @@ const Api = {
         try {
             sessionStorage.setItem(this._expectedActorKey, actorId);
             sessionStorage.setItem(this._expectedSubjectKey, sub);
+            sessionStorage.setItem(this._verifiedRoleKey, String(session?.role || '').trim().toLowerCase());
             return true;
         } catch (_) {
             return false;
@@ -286,6 +307,7 @@ const Api = {
         try {
             sessionStorage.removeItem(this._expectedActorKey);
             sessionStorage.removeItem(this._expectedSubjectKey);
+            sessionStorage.removeItem(this._verifiedRoleKey);
         } catch (_) {}
     },
 
@@ -2458,7 +2480,15 @@ const AdminStore = {
         this._syncCurrentProfile(email, { level });
     },
     isAdmin() {
-        return this.isAdminProfile(Auth.getProfile());
+        // 管理後台的顯示與進入，**只**信後端 /auth/session 驗過的角色。
+        //
+        // 本機 profile 的 role/level 是可被竄改的 sessionStorage 值。實測到一個未通過
+        // OTP 的亂碼帳號因為本機 role 被當成 admin 而晃進管理畫面（後端仍擋掉了所有
+        // 寫入，但「連看都不該看到」）。這裡不再有「退回本機 profile」的分支——那個
+        // 分支本身就是洞：沒有有效 session 的帳號只要把本機 role 改成 admin 就能繞過。
+        // 沒有後端驗過的 admin session，就不是 admin。
+        // 注意：session pin 與驗證角色的方法在 Api 物件上（不是 Auth）。
+        return typeof Api.isVerifiedAdmin === 'function' && Api.isVerifiedAdmin();
     },
     defaultPermissions(role) {
         const allowedPages = role === 'admin' ? [...this._defaultPages, 'admin'] : [...this._defaultPages];
