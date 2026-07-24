@@ -551,6 +551,14 @@ CSRF_COOKIE = "dm_csrf"
 CSRF_HEADER = "x-csrf-token"
 # 「哪些方法算寫入」跟 X-Expected-Actor 用同一份定義（見下方 enforce_expected_actor）。
 STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+# HTTP 方法 → 稽核事件動詞。商品與會員兩個稽核點共用同一張表，別各寫各的。
+_METHOD_VERB = {"POST": "create", "PUT": "update", "PATCH": "update", "DELETE": "delete"}
+
+
+def _audit_action(prefix: str, method: str) -> str:
+    """組稽核事件名，例如 `product.delete`／`member.update`。"""
+    verb = _METHOD_VERB.get(str(method or "").upper(), str(method or "").lower())
+    return f"{prefix}.{verb}"
 
 
 def issue_csrf_cookie(response: Response) -> str:
@@ -1586,7 +1594,7 @@ async def proxy_admin_request(request: Request, upstream_path: str):
     method = str(request.method or "").upper()
     if method in STATE_CHANGING_METHODS:
         record_admin_action(
-            f"product.{ {'POST': 'create', 'PATCH': 'update', 'DELETE': 'delete'}.get(method, method.lower()) }",
+            _audit_action("product", method),
             actor_id=headers["X-Admin-Actor"],
             target_ref=upstream_path,
             status_code=response.status_code,
@@ -1842,11 +1850,12 @@ async def proxy(service: str, path: str, request: Request):
             and str(request.method or "").upper() in STATE_CHANGING_METHODS
             and target_owner_id != acting_owner_id):
         record_admin_action(
-            "member.delete" if request.method == "DELETE" else "member.update",
+            _audit_action("member", request.method),
             actor_id=acting_owner_id,
             target_ref=target_owner_id,
             status_code=response.status_code,
-            request_id=request.headers.get("x-request-id", "")[:128],
+            # record_admin_action 內部已把 request_id 截到 128，這裡不必再切一次。
+            request_id=request.headers.get("x-request-id", ""),
         )
 
     result = Response(content=response_content, status_code=response.status_code, headers=response_headers)

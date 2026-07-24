@@ -56,6 +56,18 @@ class ImageRejected(HTTPException):
         self.code = code
 
 
+def _too_many_pixels(label: str, max_pixels: int) -> "ImageRejected":
+    """解壓縮炸彈／超大圖統一回這個 413。四個地方（讀檔頭、尺寸檢查、load、重編碼）
+    都會遇到，收成一個 helper 免得四份訊息各自漂移。"""
+    return ImageRejected(413, "IMAGE_DIMENSIONS_TOO_LARGE", f"{label}的像素數超過上限 {max_pixels}。")
+
+
+# 會夾帶中繼資料、需要清掉的 info 鍵。XMP（Adobe 的中繼資料容器）可以塞經緯度，
+# 而且分兩種鍵：JPEG 走 Pillow 的 `xmp`，PNG 走 `XML:com.adobe.xmp`——兩個都要認，
+# 否則一張「GPS 只藏在 XMP、沒有 EXIF」的 JPEG 會走快速路徑，原封不動送到第三方。
+_METADATA_INFO_KEYS = ("exif", "xmp", "comment", "Comment", "XML:com.adobe.xmp", "icc_profile")
+
+
 def sniff_image_format(data: bytes) -> str | None:
     """只看前幾個位元組判斷格式，回傳 `JPEG`／`PNG`／`WEBP`，都不是就 None。"""
     for prefix, name in _MAGIC_PREFIXES:
@@ -139,18 +151,15 @@ def sanitize_image_bytes(
                 declared_format = probe.format
                 width, height = probe.size
                 has_exif = bool(probe.info.get("exif")) or bool(getattr(probe, "_getexif", lambda: None)())
-                # PNG 的 tEXt／iTXt 也會夾帶任意中繼資料，一併視為要清掉。
-                has_text_chunks = any(
-                    key in probe.info for key in ("comment", "Comment", "XML:com.adobe.xmp", "icc_profile")
+                # EXIF 之外還有 XMP（JPEG 的 GPS 可能只藏在這裡）與 PNG 的 tEXt／iTXt。
+                # 任一存在就代表有中繼資料要清，走重編碼那條路。
+                has_metadata = has_exif or any(
+                    probe.info.get(key) for key in _METADATA_INFO_KEYS
                 ) or bool(getattr(probe, "text", None))
         except UnidentifiedImageError as exc:
             raise ImageRejected(400, "INVALID_IMAGE", f"{label}不是有效的圖片。") from exc
         except Image.DecompressionBombError as exc:
-            raise ImageRejected(
-                413,
-                "IMAGE_DIMENSIONS_TOO_LARGE",
-                f"{label}的像素數超過上限 {max_pixels}。",
-            ) from exc
+            raise _too_many_pixels(label, max_pixels) from exc
         except OSError as exc:
             raise ImageRejected(400, "INVALID_IMAGE", f"{label}不是有效的圖片。") from exc
 
@@ -168,25 +177,17 @@ def sanitize_image_bytes(
                 f"{label}只接受 JPEG／PNG／WebP。",
             )
         if width <= 0 or height <= 0 or width * height > max_pixels:
-            raise ImageRejected(
-                413,
-                "IMAGE_DIMENSIONS_TOO_LARGE",
-                f"{label}的像素數超過上限 {max_pixels}。",
-            )
+            raise _too_many_pixels(label, max_pixels)
 
         mime = ALLOWED_IMAGE_FORMATS[declared_format]
-        if not (has_exif or has_text_chunks):
+        if not has_metadata:
             # 沒有中繼資料可清，就別重新編碼——重編一次是白白損失一次畫質。
             # 但仍要確認真的解得開（前面只讀了檔頭）。
             try:
                 with Image.open(io.BytesIO(data)) as image:
                     image.load()
             except Image.DecompressionBombError as exc:
-                raise ImageRejected(
-                    413,
-                    "IMAGE_DIMENSIONS_TOO_LARGE",
-                    f"{label}的像素數超過上限 {max_pixels}。",
-                ) from exc
+                raise _too_many_pixels(label, max_pixels) from exc
             except Exception as exc:  # noqa: BLE001 - Pillow 解碼失敗的例外型別很雜
                 raise ImageRejected(400, "INVALID_IMAGE", f"{label}無法解碼。") from exc
             return data, mime
@@ -209,11 +210,7 @@ def sanitize_image_bytes(
                         buffer, format="JPEG", quality=95, subsampling=0, optimize=True
                     )
         except Image.DecompressionBombError as exc:
-            raise ImageRejected(
-                413,
-                "IMAGE_DIMENSIONS_TOO_LARGE",
-                f"{label}的像素數超過上限 {max_pixels}。",
-            ) from exc
+            raise _too_many_pixels(label, max_pixels) from exc
         except ImageRejected:
             raise
         except Exception as exc:  # noqa: BLE001

@@ -126,6 +126,29 @@ class SanitizeTest(unittest.TestCase):
 
 
 class ExifTest(unittest.TestCase):
+    def test_strips_gps_hidden_in_jpeg_xmp_with_no_exif(self):
+        """GPS 只藏在 XMP、完全沒有 EXIF 的 JPEG，也必須被清掉。
+
+        這是容易漏的一條：`info["exif"]` 是空的，只看 EXIF 會讓這張圖走「沒有中繼資料」
+        的快速路徑，原封不動送到第三方渲染。座標其實在 XMP 封包裡。
+        """
+        xmp = (
+            b'<?xpacket?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF>'
+            b"<exif:GPSLatitude>25,2N</exif:GPSLatitude></rdf:RDF></x:xmpmeta>"
+        )
+        buffer = io.BytesIO()
+        Image.new("RGB", (16, 16), (20, 30, 40)).save(buffer, format="JPEG", xmp=xmp)
+        original = buffer.getvalue()
+        self.assertFalse(Image.open(io.BytesIO(original)).info.get("exif"), "測試素材本身不該有 EXIF")
+        self.assertTrue(Image.open(io.BytesIO(original)).info.get("xmp"), "測試素材要帶 XMP")
+
+        cleaned, mime = sanitize_image_bytes(original)
+        self.assertEqual(mime, "image/jpeg")
+        self.assertNotEqual(cleaned, original, "帶 XMP 的圖必須重新編碼，不能走快速路徑")
+        self.assertNotIn(b"GPSLatitude", cleaned)
+        with Image.open(io.BytesIO(cleaned)) as image:
+            self.assertFalse(image.info.get("xmp"))
+
     def test_strips_gps_and_camera_metadata(self):
         original = _jpeg_with_gps()
         self.assertTrue(Image.open(io.BytesIO(original)).info.get("exif"), "測試素材本身要帶 EXIF")
