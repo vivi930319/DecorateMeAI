@@ -1180,7 +1180,7 @@ function openMakeupStyleModal(preselectedStyleId) {
         modal.innerHTML = `<div class="makeup-style-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Style</span><h2 id="makeupStyleModalTitle">選擇妝容風格</h2><p>選擇一款風格，接著查看妝容建議。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="makeup-style-grid">${STYLES.map(style=>`<button class="makeup-style-option ${pendingStyleModalSelection===style.id?'selected':''}" type="button" data-style-id="${escapeHtml(style.id)}"><img src="${escapeHtml(style.img)}" alt="${escapeHtml(style.name)}"><span class="makeup-style-option-copy"><b>${escapeHtml(style.name)}</b><small>${style.tags.map(escapeHtml).join(' · ')}</small></span></button>`).join('')}</div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-modal-cancel>稍後再選</button><button class="btn-gold" type="button" data-modal-confirm ${pendingStyleModalSelection?'':'disabled'}>確認風格 →</button></div></div>`;
         modal.querySelectorAll('[data-style-id]').forEach(button=>button.onclick=()=>{pendingStyleModalSelection=button.dataset.styleId;renderOptions();});
         modal.querySelector('.makeup-style-close').onclick=closeMakeupStyleModal; modal.querySelector('[data-modal-cancel]').onclick=closeMakeupStyleModal;
-        modal.querySelector('[data-modal-confirm]').onclick=()=>{if(!pendingStyleModalSelection)return;Router.selectedStyleId=pendingStyleModalSelection;closeMakeupStyleModal();Router.go('style',{fromStyleModal:true,styleId:pendingStyleModalSelection});};
+        modal.querySelector('[data-modal-confirm]').onclick=()=>{if(!pendingStyleModalSelection)return;Router.selectedStyleId=pendingStyleModalSelection;closeMakeupStyleModal();Router.go('suggestion',{generate:true});};
     };
     renderOptions(); modal.classList.add('open');
 }
@@ -1190,6 +1190,76 @@ function openProductRecommendationModal(){
     const cards=products.length?products.slice(0,6).map(p=>{const name=p.name||p.productName||'推薦商品',image=p.imageUrl||p.image_url||p.imageUrls?.[0]||'';return `<article class="recommendation-modal-card">${image?`<img src="${escapeHtml(image)}" alt="${escapeHtml(name)}">`:''}<div><small>${escapeHtml(p.brand||'')}</small><h3>${escapeHtml(name)}</h3></div></article>`;}).join(''):'<div class="empty-state">推薦商品正在整理中，也可以先查看所有商品。</div>';
     modal.innerHTML=`<div class="makeup-style-dialog product-recommendation-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Products</span><h2>個人化商品推薦</h2><p>依照臉部分析與選擇的妝容風格，從現有商品中整理推薦。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="recommendation-modal-grid">${cards}</div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-close>稍後再看</button><button class="btn-gold" type="button" data-all>查看所有商品</button></div></div>`;
     document.body.appendChild(modal);modal.querySelector('.makeup-style-close').onclick=closeProductRecommendationModal;modal.querySelector('[data-close]').onclick=closeProductRecommendationModal;modal.querySelector('[data-all]').onclick=()=>{closeProductRecommendationModal();Router.go('products');};modal.onclick=e=>{if(e.target===modal)closeProductRecommendationModal();};
+}
+
+// 產生妝容建議的核心流程：呼叫 Api.suggestMakeup、切掉 Ollama 偶爾漏拆黏在中文尾巴的
+// 英文渲染指令、把結果寫回 analysisPackage 並存草稿，順便在背景要推薦商品。
+// 這裡刻意完全不碰 DOM —— 風格試妝頁和妝容建議頁都用同一份，各自畫自己的進度條，
+// 進度用 onProgress(百分比, 文字) 回報，要畫在哪裡由呼叫端決定。
+async function runMakeupSuggestion(onProgress) {
+    const notify = typeof onProgress === 'function' ? onProgress : () => {};
+    const style = STYLES.find(s => s.id === Router.selectedStyleId);
+    const pkg = Router.analysisPackage;
+    // 沒有臉部分析就沒有東西可以建議：回報給呼叫端決定怎麼帶路，不在這裡跳頁。
+    if (!pkg || !Router.analysisResult) return { ok: false, missingAnalysis: true };
+    try {
+        const latestAnalysis = getLatestAnalysisResult() || {};
+        notify(45, '等待完整建議中...');
+        const response = await Api.suggestMakeup({
+            analysisPackage: pkg,
+            faceAnalysis: pkg?.faceAnalysis || AnalysisPackage.fromRawFaceAnalysis(latestAnalysis, Router.analyzeMode),
+            style: style?.name || '日常自然妝',
+            userNote: style?.tags?.join('、') || ''
+        });
+        const { suggestion: cleanSuggestion, leakedEnglishPart } = splitOllamaTwoPartSuggestion(response.suggestion);
+        const fullText = cleanSuggestion || '';
+        const ollamaRenderPromptEn = response.renderPromptEn || leakedEnglishPart || '';
+        notify(100, '建議已產生');
+
+        Router.analysisPackage = AnalysisPackage.update(pkg || Router.analysisPackage, {
+            generativeText: {
+                provider: 'ollama',
+                prompt: null,
+                suggestion: fullText || null,
+                model: null,
+                status: 'completed',
+                error: null,
+                fallbackUsed: false,
+                ollamaRenderPromptEn: ollamaRenderPromptEn || null,
+                renderPromptEn: buildRenderPrompt(
+                    pkg?.faceAnalysis || Router.analysisPackage?.faceAnalysis,
+                    Router.selectedStyleId,
+                    fullText,
+                    ollamaRenderPromptEn
+                )
+            },
+            recommendations: {
+                ...(pkg?.recommendations || Router.analysisPackage?.recommendations || {}),
+                style: style?.name || null
+            }
+        });
+        AnalysisDraft.save(Router.analysisPackage);
+
+        Api.recommendProducts(Router.analysisPackage, Router.selectedStyleId).then(rec => {
+            if (!rec?.products?.length) return;
+            Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
+                recommendations: { ...Router.analysisPackage.recommendations, products: rec.products }
+            });
+            AnalysisDraft.save(Router.analysisPackage);
+        }).catch(() => {});
+
+        Router.pendingLook = buildCurrentLookRecord();
+        Router.pendingLookSaved = false;
+        return { ok: true, response };
+    } catch (err) {
+        if (pkg) {
+            Router.analysisPackage = AnalysisPackage.update(pkg, {
+                generativeText: { ...(pkg.generativeText || {}), status: 'failed', error: err.message }
+            });
+            AnalysisDraft.save(Router.analysisPackage);
+        }
+        return { ok: false, error: err };
+    }
 }
 
 const Router = {
@@ -2278,96 +2348,30 @@ const PageInit = {
             btn.textContent = '產生建議中...';
 
             bar.style.display = 'block';
-            fill.style.width = '8%';
-            status.textContent = '產生建議中...';
             status.classList.add('active');
-
-            const style = STYLES.find(s => s.id === Router.selectedStyleId);
-            const pkg = Router.analysisPackage;
+            const paint = (pct, text) => { fill.style.width = `${pct}%`; status.textContent = text; };
+            paint(8, '產生建議中...');
 
             try {
-                if (!pkg || !Router.analysisResult) {
+                const result = await runMakeupSuggestion(paint);
+                if (result.missingAnalysis) {
                     showAlert('目前沒有可用的臉部分析結果，請重新完成臉部分析。', { type:'error' });
                     Router.go('analysis');
                     return;
                 }
-                const latestAnalysis = getLatestAnalysisResult() || {};
-                fill.style.width = '45%';
-                status.textContent = '等待完整建議中...';
-                const response = await Api.suggestMakeup({
-                    analysisPackage: pkg,
-                    faceAnalysis: pkg?.faceAnalysis || AnalysisPackage.fromRawFaceAnalysis(latestAnalysis, Router.analyzeMode),
-                    style: style?.name || '日常自然妝',
-                    userNote: style?.tags?.join('、') || ''
-                });
-                // 防呆：Ollama 有時候會把「第二部分」英文渲染指令漏拆、黏在中文建議尾巴，
-                // 這裡先切乾淨，切下來的內容優先當渲染指令用（後端有正確拆出 renderPromptEn 的話，還是以後端的為準）。
-                const { suggestion: cleanSuggestion, leakedEnglishPart } = splitOllamaTwoPartSuggestion(response.suggestion);
-                const fullText = cleanSuggestion || '';
-                const ollamaRenderPromptEn = response.renderPromptEn || leakedEnglishPart || '';
-
-                fill.style.width = '100%';
-                status.textContent = '建議已產生';
-                setTimeout(() => { bar.style.display = 'none'; fill.style.width = '0'; status.classList.remove('active'); }, 600);
-
-                Router.analysisPackage = AnalysisPackage.update(pkg || Router.analysisPackage, {
-                    generativeText: {
-                        provider: 'ollama',
-                        prompt: null,
-                        suggestion: fullText || null,
-                        model: null,
-                        status: 'completed',
-                        error: null,
-                        fallbackUsed: false,
-                        ollamaRenderPromptEn: ollamaRenderPromptEn || null,
-                        renderPromptEn: buildRenderPrompt(
-                            pkg?.faceAnalysis || Router.analysisPackage?.faceAnalysis,
-                            Router.selectedStyleId,
-                            fullText,
-                            ollamaRenderPromptEn
-                        )
-                    },
-                    recommendations: {
-                        ...(pkg?.recommendations || Router.analysisPackage?.recommendations || {}),
-                        style: style?.name || null
-                    }
-                });
-                AnalysisDraft.save(Router.analysisPackage);
-
-                Api.recommendProducts(
-                    Router.analysisPackage,
-                    Router.selectedStyleId
-                ).then(rec => {
-                    if (!rec?.products?.length) return;
-                    Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
-                        recommendations: {
-                            ...Router.analysisPackage.recommendations,
-                            products: rec.products
-                        }
-                    });
-                    AnalysisDraft.save(Router.analysisPackage);
-                }).catch(() => {});
-
-                Router.pendingLook = buildCurrentLookRecord();
-                Router.pendingLookSaved = false;
-                renderAnalysisResult(response);
-            } catch (err) {
-                bar.style.display = 'none';
-                fill.style.width = '0';
-                status.textContent = '建議產生失敗';
-                status.classList.remove('active');
-                if (pkg) {
-                    Router.analysisPackage = AnalysisPackage.update(pkg, {
-                        generativeText: {
-                            ...(pkg.generativeText || {}),
-                            status: 'failed',
-                            error: err.message
-                        }
-                    });
-                    AnalysisDraft.save(Router.analysisPackage);
+                if (!result.ok) {
+                    bar.style.display = 'none';
+                    fill.style.width = '0';
+                    status.textContent = '建議產生失敗';
+                    status.classList.remove('active');
+                    showAlert('妝容建議失敗：' + result.error.message, { type: 'error' });
+                    renderAnalysisResult(null);
+                    return;
                 }
-                showAlert('妝容建議失敗：' + err.message, { type: 'error' });
-                renderAnalysisResult(null);
+                setTimeout(() => { bar.style.display = 'none'; fill.style.width = '0'; status.classList.remove('active'); }, 600);
+                // 先把結果區填好再跳：使用者從合併頁返回這一頁時不會看到空白。
+                renderAnalysisResult(result.response);
+                Router.go('suggestion');
             } finally {
                 startButtonCooldown(btn, 15, originalText);
             }
@@ -2898,9 +2902,38 @@ const PageInit = {
         setCompareImage('before');
     },
 
-    suggestion() {
+    suggestion(opts) {
         if (!hasStartedJourney()) { renderAnalysisGate("妝容建議"); return; }
+        // 從風格彈窗按「確認風格 →」直接進來的：建議就在這一頁就地產生，
+        // 進度條也畫在這裡，完全不繞去「風格試妝」頁。跑完再自己重畫一次。
+        if (opts && opts.generate) {
+            const area = document.getElementById('suggestionArea');
+            if (!area) return;
+            area.innerHTML = `
+                <div class="loading-bar" style="display:block;"><div class="fill" id="suggestionFill" style="width:8%;"></div></div>
+                <div class="loading-status active" id="suggestionStatus">產生建議中...</div>`;
+            // Ollama 這一段可能跑好幾秒，使用者隨時會切走。進度與重畫都先確認那塊 DOM 還在，
+            // 否則等回應回來時節點早就被換掉了，寫進去會直接炸掉整頁。
+            const stillHere = () => !!document.getElementById('suggestionArea');
+            runMakeupSuggestion((pct, text) => {
+                const fill = document.getElementById('suggestionFill');
+                const status = document.getElementById('suggestionStatus');
+                if (!fill || !status) return;
+                fill.style.width = `${pct}%`;
+                status.textContent = text;
+            }).then(result => {
+                if (result.missingAnalysis) {
+                    showAlert('目前沒有可用的臉部分析結果，請重新完成臉部分析。', { type:'error' });
+                    Router.go('analysis');
+                    return;
+                }
+                if (!result.ok) showAlert('妝容建議失敗：' + result.error.message, { type: 'error' });
+                if (stillHere()) PageInit.suggestion();
+            });
+            return;
+        }
         const style = STYLES.find(s => s.id === Router.selectedStyleId) || STYLES[0];
+        const palette = style.palette || ['#D8B69E', '#B97970', '#7C544A'];
         const r = getLatestAnalysisResult() || {};
         const skin = r['膚色'] || {};
         const pkg = Router.analysisPackage || {};
@@ -2914,6 +2947,7 @@ const PageInit = {
         const renderedImage = render.afterImageUrl || render.afterImageDataUrl || makeupOutput.imageUrl || makeupOutput.imageDataUrl || '';
         const displayImage = renderedImage || beforeImage;
         const area = document.getElementById('suggestionArea');
+        if (!area) return;
         area.innerHTML = `
             <div class="rendered-suggestion-card">
                 <div class="rendered-photo-frame">
@@ -2934,21 +2968,30 @@ const PageInit = {
             <div class="style-intro-card">
                 <h3>${style.name} 專屬妝容建議</h3>
                 <div class="analysis-tags">${style.tags.map(t => `<span class="analysis-tag">${t}</span>`).join('')}</div>
+                <div class="palette-row" style="margin:12px 0;">${palette.map(c => `<span style="background:${c};display:inline-block;width:28px;height:28px;border-radius:50%;margin-right:6px;"></span>`).join('')}</div>
             </div>
             <div class="analysis-section">
-                <h3>五官與膚色摘要</h3>
+                <h3>五官與膚色分析</h3>
                 <div class="analysis-item"><span class="ai-label">臉型</span><span class="ai-value">${r['臉型']||'—'}</span></div>
+                <div class="analysis-item"><span class="ai-label">眉型</span><span class="ai-value">${r['眉型']||'—'}</span></div>
                 <div class="analysis-item"><span class="ai-label">眼型</span><span class="ai-value">${r['眼型']||'—'}</span></div>
                 <div class="analysis-item"><span class="ai-label">鼻型</span><span class="ai-value">${r['鼻型']||'—'}</span></div>
+                <div class="analysis-item"><span class="ai-label">嘴型</span><span class="ai-value">${r['嘴型']||'—'}</span></div>
                 <div class="analysis-item"><span class="ai-label">膚色</span><span class="ai-value">${skin['膚色分級']||'—'} / ${skin['四季型']||'—'}</span></div>
             </div>
-            <div class="analysis-section">
-                <h3>妝容建議</h3>
+            <div class="ollama-panel">
+                <span class="eyebrow">Personalized text · Ollama</span>
+                <h3>${style.name} 專屬妝容建議</h3>
+                <p class="ollama-panel-note">這一段是把本次臉部分析與「${style.name}」一起送給文字建議服務後，為你個人產生的內容。</p>
                 ${aiSuggestion
                     ? `<div class="advice-grid">${renderMakeupAdviceGrid(aiSuggestion)}</div>`
-                    : `<div class="empty-state compact">尚未取得妝容建議，請返回風格頁按「確認風格」。</div>`
+                    : `<div class="empty-state compact">尚未取得妝容建議，請從上方選單重新選擇妝容風格。</div>`
                 }
-                <button class="btn-gold" id="saveSuggestionBtn" style="margin-top:14px;">收藏妝容建議</button>
+                <button class="btn-gold" id="saveSuggestionBtn" style="margin-top:18px;">收藏妝容建議</button>
+            </div>
+            <div style="text-align:center;margin-top:20px;">
+                <button class="btn-outline" onclick="Router.go('compare')" style="margin-right:8px;">查看前後對比</button>
+                <button class="btn-gold" onclick="openProductRecommendationModal()">查看推薦商品 →</button>
             </div>
         `;
         Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
@@ -3121,7 +3164,13 @@ const PageInit = {
                             title: t.title || t.name || meta.title,
                             reward: t.reward ?? 0,
                             done: t.done !== false,
-                            claimed: !!t.claimed
+                            // 資料庫端的「已領取」欄位名稱不保證是 claimed；認不出來就會一直
+                            // 顯示「領取獎勵」，按下去換來 409「這個獎勵已經領取過了」。
+                            // 常見幾種寫法都接受，避免卡在按鈕文字不會變。
+                            // 用 || 不用 ??：後端如果同時給了 claimed:false 和 claimed_at，
+                            // ?? 會停在 false 而看不到後面那個真正的證據。
+                            claimed: !!(t.claimed || t.is_claimed || t.claimedAt || t.claimed_at
+                                || (typeof t.status === 'string' && t.status.toLowerCase() === 'claimed'))
                         };
                     }).filter(t => t.id);
                     const groups = [...new Set(normalized.map(t => t.group))];

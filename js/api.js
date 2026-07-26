@@ -1405,6 +1405,10 @@ const Api = {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         const email = this._writeActorEmail();
         if (!baseUrl || !email) return null;
+        // 上游還沒實作這個寫入端點（回 405/501）。第一次撞到就記下來，之後整個
+        // 分頁生命週期都不再送——否則每次加減數量、每次登入都會再打一次，
+        // console 一整排紅字，看起來像壞掉，其實本機購物車一直是好的。
+        if (this._cartPushUnsupported) return null;
         const payload = (Array.isArray(items) ? items : [])
             .map(it => ({ id: String(it.id), qty: Math.max(1, parseInt(it.qty, 10) || 1) }))
             .filter(it => it.id);
@@ -1416,6 +1420,7 @@ const Api = {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ items: payload })
                 });
+                if (res.status === 405 || res.status === 501) { this._cartPushUnsupported = true; return null; }
                 if (!res.ok) return null;
                 return res.json().catch(() => ({}));
             } catch (_) {
