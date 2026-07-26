@@ -175,6 +175,23 @@ UPSTREAM_TIMEOUTS = {
 
 def upstream_timeout(service: str) -> int:
     return UPSTREAM_TIMEOUTS.get(service, _timeout_env("AI_GATEWAY_DEFAULT_TIMEOUT_SECONDS", 60))
+# 會員資料庫 2026-07-26 的改版新增了 `X-Gateway-Key`（見對方 app.py 的 `_check_gateway_key`），
+# 套用在 /api/login、/api/register、/api/send-otp、/api/verify-otp 四支「登入前」端點上。
+# 對方預設是寬鬆模式（不帶也放行），但一旦切成嚴格模式，沒帶的請求一律 401——2026-07-27
+# 整站無法登入、註冊、收驗證碼就是這樣來的，而商品端點不在他們的清單裡所以還活著。
+#
+# 金鑰目前還沒拿到，所以這裡讀環境變數：沒設就不送，行為與現在完全相同；
+# 拿到之後只要在 Cloud Run 設一個環境變數，不必再重新建置與部署一次映像。
+MEMBER_GATEWAY_KEY = os.getenv("UPSTREAM_MEMBER_API_KEY", "").strip()
+
+
+def with_member_gateway_key(headers: dict[str, str]) -> dict[str, str]:
+    """對會員資料庫的請求補上 `X-Gateway-Key`；未設定金鑰時原樣回傳。"""
+    if MEMBER_GATEWAY_KEY:
+        headers["X-Gateway-Key"] = MEMBER_GATEWAY_KEY
+    return headers
+
+
 MEMBER_DATABASE_URL = _service_url("MEMBER_DATABASE_URL")
 PRODUCT_DATABASE_URL = _service_url("PRODUCT_DATABASE_URL")
 PRODUCT_ADMIN_API_KEY = os.getenv("PRODUCT_ADMIN_API_KEY", "")
@@ -840,7 +857,7 @@ async def _validate_upstream_member_cookie(request: Request, upstream_cookie: st
             status_code=503,
             detail={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE", "message": "Member authentication is unavailable."}},
         )
-    headers = {"Accept": "application/json", "Cookie": upstream_cookie}
+    headers = with_member_gateway_key({"Accept": "application/json", "Cookie": upstream_cookie})
     try:
         response = await request.app.state.http_client.get(
             f"{MEMBER_DATABASE_URL}/api/members/{quote(subject, safe='')}",
@@ -1330,6 +1347,7 @@ async def login(body: LoginRequest, request: Request):
         response = await request.app.state.http_client.post(
             f"{MEMBER_DATABASE_URL}/api/login",
             json={"email": body.email, "password": body.password},
+            headers=with_member_gateway_key({"Accept": "application/json"}),
             timeout=20,
         )
     except httpx.HTTPError:
@@ -1560,7 +1578,10 @@ async def proxy_public_member_request(request: Request, upstream_path: str):
         raise HTTPException(status_code=413, detail={"error": {"code": "PAYLOAD_TOO_LARGE", "message": "Request body is too large."}})
     if not MEMBER_DATABASE_URL:
         raise HTTPException(status_code=503, detail={"error": {"code": "AUTH_NOT_CONFIGURED", "message": "Member authentication is unavailable."}})
-    headers = {"Accept": request.headers.get("accept", "application/json"), "Content-Type": request.headers.get("content-type", "application/json")}
+    headers = with_member_gateway_key({
+        "Accept": request.headers.get("accept", "application/json"),
+        "Content-Type": request.headers.get("content-type", "application/json"),
+    })
     try:
         response = await request.app.state.http_client.post(
             f"{MEMBER_DATABASE_URL}{upstream_path}",

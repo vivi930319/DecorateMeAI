@@ -768,6 +768,31 @@ class AiGatewayTest(unittest.TestCase):
         self.assertEqual(_render_job_id_from_url(payload["afterImageUrl"]), job_id)
 
 
+class MemberGatewayKeyTest(unittest.TestCase):
+    """會員資料庫的 X-Gateway-Key：沒設定就完全不送，設了才帶。"""
+
+    def setUp(self):
+        self._key = gateway.MEMBER_GATEWAY_KEY
+
+    def tearDown(self):
+        gateway.MEMBER_GATEWAY_KEY = self._key
+
+    def test_header_is_absent_until_a_key_is_configured(self):
+        # 金鑰還沒拿到時，行為必須與加這道邏輯之前一模一樣——多送一個空標頭，
+        # 對方的 hmac.compare_digest 會直接判定不符而回 401。
+        gateway.MEMBER_GATEWAY_KEY = ""
+        self.assertEqual(
+            gateway.with_member_gateway_key({"Accept": "application/json"}),
+            {"Accept": "application/json"},
+        )
+
+    def test_header_is_added_once_a_key_is_configured(self):
+        gateway.MEMBER_GATEWAY_KEY = "member-gateway-key"
+        headers = gateway.with_member_gateway_key({"Accept": "application/json"})
+        self.assertEqual(headers["X-Gateway-Key"], "member-gateway-key")
+        self.assertEqual(headers["Accept"], "application/json")
+
+
 def _multi_cookie(*pairs):
     return {gateway.SESSION_COOKIE: gateway.serialize_session_slots(list(pairs))}
 
