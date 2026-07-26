@@ -1,9 +1,9 @@
 # 妝識你的美-DecorateMeAI｜Web 前端
 
-[![Firebase Hosting](https://img.shields.io/badge/firebase-hosting-FFCA28.svg)](https://firebase.google.com/docs/hosting)
-[![JavaScript](https://img.shields.io/badge/javascript-ES6-F7DF1E.svg)](https://developer.mozilla.org/docs/Web/JavaScript)
-[![No Build Step](https://img.shields.io/badge/build-none-lightgrey.svg)](#技術棧)
-[![Node](https://img.shields.io/badge/node-syntax%20check%20%2B%20smoke%20test-339933.svg)](#測試與診斷工具)
+[![Firebase Hosting](https://img.shields.io/badge/firebase-hosting-555555.svg?style=flat-square)](https://firebase.google.com/docs/hosting)
+[![JavaScript](https://img.shields.io/badge/javascript-ES6-555555.svg?style=flat-square)](https://developer.mozilla.org/docs/Web/JavaScript)
+[![No Build Step](https://img.shields.io/badge/build-none-555555.svg?style=flat-square)](#技術棧)
+[![Node](https://img.shields.io/badge/node-syntax%20check%20%2B%20smoke%20test-555555.svg?style=flat-square)](#測試與診斷工具)
 
 > 本分支 `dev_makeup` 是 **妝識你的美（DecorateMeAI）** 的正式 Web 前端與 Firebase Hosting 部署來源。
 > 以原生 JavaScript 撰寫的單頁應用，沒有打包步驟，瀏覽器直接載入原始碼。
