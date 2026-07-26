@@ -352,6 +352,30 @@ const Api = {
         }
     },
 
+    // 只有這兩條路徑是以「會員 session」的身分在講話。text-suggestion、render、face
+    // 都是 AI 上游：它們的 401 說的是「上游拒絕了我們」（例如 Gateway 金鑰沒串上，
+    // 見 issue #34），跟這個人有沒有登入完全無關，卻會在他按下「生成建議」的那一刻
+    // 把他踢回登入頁。真正失效的 session 仍然會在下一次 /auth/session 被攔下。
+    _speaksForMemberSession(input) {
+        try {
+            const url = new URL(String(input), window.location.origin);
+            if (url.origin !== window.location.origin) return false;
+            return ['/member-database/', '/admin-api/'].some(prefix => url.pathname.startsWith(prefix));
+        } catch (_) {
+            return false;
+        }
+    },
+
+    // 讀回應內容裡的錯誤碼。用 clone() 才不會把 body 吃掉——呼叫端還要自己讀一次。
+    async _peekErrorCode(res) {
+        try {
+            const peek = await res.clone().json();
+            return String(peek?.error?.code || peek?.detail?.error?.code || '').toUpperCase();
+        } catch (_) {
+            return '';
+        }
+    },
+
     _copyHeaders(headers) {
         const copied = {};
         if (headers && typeof headers.forEach === 'function') {
@@ -421,23 +445,20 @@ const Api = {
             if (csrfToken) nextInit.headers['X-CSRF-Token'] = csrfToken;
         }
         const res = await fetch(input, nextInit);
-        if (isProtected && res.status === 401) {
+        if (isProtected && res.status === 401 && this._speaksForMemberSession(input)) {
             // 401 同樣不一定是我們的 session 死了。Gateway 會把上游的 401 原樣轉回來——
             // 例如文字建議服務因為缺金鑰而拒絕，那跟會員的登入狀態毫無關係，
             // 卻會害使用者在按下「生成建議」時被登出。只認 Gateway 自己的驗證錯誤碼；
             // 認不出來就不動作，真正失效的 session 會在下一次 /auth/session 被攔下。
+            //
+            // 這裡刻意不收裸的 UNAUTHORIZED。其餘每一個都是 MEMBER_ 開頭、明確在講
+            // 會員身分；UNAUTHORIZED 泛到任何一個上游拒絕都會命中，收了它等於把
+            // 上面那句「只認 Gateway 自己的錯誤碼」整個作廢。
             const sessionCodes = [
                 'MEMBER_AUTH_REQUIRED', 'MEMBER_SESSION_REQUIRED', 'MEMBER_AUTH_INVALID',
-                'MEMBER_SESSION_INVALID', 'MEMBER_SESSION_MISSING', 'UNAUTHORIZED'
+                'MEMBER_SESSION_INVALID', 'MEMBER_SESSION_MISSING'
             ];
-            let code = '';
-            try {
-                const peek = await res.clone().json();
-                code = String(peek?.error?.code || peek?.detail?.error?.code || '').toUpperCase();
-            } catch (_) {
-                code = '';
-            }
-            if (sessionCodes.includes(code)) {
+            if (sessionCodes.includes(await this._peekErrorCode(res))) {
                 this._notifySessionInvalid('decorate-me:session-expired');
             }
         } else if (isProtected && res.status === 409) {
@@ -446,14 +467,7 @@ const Api = {
             // 先前不分青紅皂白就登出，於是「領取一個已經領過的獎勵」＝被踢出去，
             // 而那個狀態其實完全正常。只認 Gateway 自己的錯誤碼。
             const ownerChangeCodes = ['ACCOUNT_NOT_AVAILABLE', 'SESSION_OWNER_CHANGED', 'EXPECTED_ACTOR_REQUIRED'];
-            let code = '';
-            try {
-                const peek = await res.clone().json();
-                code = String(peek?.error?.code || peek?.detail?.error?.code || '').toUpperCase();
-            } catch (_) {
-                code = '';
-            }
-            if (ownerChangeCodes.includes(code)) {
+            if (ownerChangeCodes.includes(await this._peekErrorCode(res))) {
                 this._notifySessionInvalid('decorate-me:session-owner-changed', { reason: 'SESSION_OWNER_CHANGED' });
             }
         }
