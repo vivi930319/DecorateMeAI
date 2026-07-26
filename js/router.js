@@ -4736,8 +4736,14 @@ async function doRegisterAction() {
         submitBtn.textContent = '寄送驗證碼中…';
     }
     try {
-        await Api.register(Router.pendingRegister);
-        await Api.sendOTP(email);
+        // 2026-07-27 後端改版：註冊本身就會寄出驗證碼（回 202、`otpSent: true`、
+        // `registrationPending: true`），會員要驗證成功之後才真的建立。這裡再呼叫一次
+        // sendOTP 會寄出第二封，使用者手上兩組碼卻只有一組有效，還多燒一次寄信配額。
+        // 保留 else 分支是為了相容還沒更新的後端：沒有回報寄出就自己補一次。
+        const registered = await Api.register(Router.pendingRegister);
+        if (!registered || registered.otpSent !== true) {
+            await Api.sendOTP(email);
+        }
     } catch (err) {
         // 信箱已存在：最常見的成因不是「真的註冊過」，而是上一次註冊成功但驗證碼沒收到。
         // 只給「返回登入」等於把人推進死路——未驗證的帳號登入會被擋，他又不能重新註冊。
