@@ -1,10 +1,10 @@
 # 妝識你的美-DecorateMeAI｜後端與 AI Gateway
 
-[![Python Version](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/fastapi-0.139.2-009688.svg)](https://fastapi.tiangolo.com/)
-[![Cloud Run](https://img.shields.io/badge/cloud%20run-asia--east1-4285F4.svg)](https://cloud.google.com/run)
-[![Firestore](https://img.shields.io/badge/firestore-job%20store-FFA000.svg)](https://cloud.google.com/firestore)
-[![Docker Compose](https://img.shields.io/badge/docker--compose-ready-blue.svg)](https://docs.docker.com/compose/)
+[![Python Version](https://img.shields.io/badge/python-3.11-555555.svg?style=flat-square)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/fastapi-0.139.2-555555.svg?style=flat-square)](https://fastapi.tiangolo.com/)
+[![Cloud Run](https://img.shields.io/badge/cloud%20run-asia--east1-555555.svg?style=flat-square)](https://cloud.google.com/run)
+[![Firestore](https://img.shields.io/badge/firestore-job%20store-555555.svg?style=flat-square)](https://cloud.google.com/firestore)
+[![Docker Compose](https://img.shields.io/badge/docker--compose-ready-555555.svg?style=flat-square)](https://docs.docker.com/compose/)
 
 > 本分支 `Isa` 是 **妝識你的美（DecorateMeAI）** 的 Python 後端與 AI Gateway。
 > 內容包含瀏覽器的單一 API 入口、臉部特徵分析（BASIC / PRO）、妝容渲染與私人媒體管線、
