@@ -2430,3 +2430,45 @@ html.intro-off #brand-intro{display:none}
 .auth-form-panel{border-left:0}
 .auth-form-panel:before{content:"";position:absolute;left:0;top:10%;bottom:10%;width:1px;background:linear-gradient(transparent,var(--line-gold),transparent);opacity:.55}
 @media(max-width:820px){.auth-form-panel:before{display:none}}
+
+/* 臉部分析回饋區（.af-*）。這幾個 class 由 renderAnalysisFeedback 產生，
+   先前完全沒有對應樣式，整塊會擠成一段連續文字。 */
+.analysis-feedback { margin-top:18px; padding:22px 24px; background:var(--paper); border:1px solid var(--line-gold); }
+.af-head b { display:block; font-family:var(--cjk); font-size:16px; font-weight:500; letter-spacing:.08em; color:var(--gold-deep); margin-bottom:8px; }
+.af-head p { font-size:12.5px; line-height:1.85; color:var(--mid); margin:0 0 18px; }
+.af-head strong { color:var(--gold-deep); font-weight:500; }
+.af-rows { display:grid; gap:10px; }
+.af-row { display:grid; grid-template-columns:88px 1fr 168px; align-items:center; gap:14px;
+    padding:11px 14px; background:var(--white); border:1px solid var(--line); }
+.af-row.changed { border-color:var(--gold); background:rgba(201,169,110,0.06); }
+.af-label { font-family:var(--sans); font-size:10px; letter-spacing:.24em; text-transform:uppercase; color:var(--gold-deep); }
+.af-value { font-family:var(--cjk); font-size:15px; letter-spacing:.04em; }
+.af-row.changed .af-value { color:var(--gold-deep); }
+.af-select { width:100%; padding:8px 10px; font-family:var(--cjk); font-size:12.5px;
+    background:var(--paper); color:var(--ink-soft); border:1px solid var(--line-gold); cursor:pointer; }
+.af-select:focus { outline:none; border-color:var(--gold); }
+.af-foot { display:flex; align-items:center; gap:14px; margin-top:18px; }
+.af-note { font-size:11.5px; letter-spacing:.06em; color:var(--mid); }
+@media(max-width:760px){
+    .analysis-feedback { padding:18px 16px; }
+    .af-row { grid-template-columns:1fr; gap:8px; }
+    .af-label { letter-spacing:.18em; }
+}
+
+/* 「妝容結果」那顆小標。class 有用在妝容建議頁，但先前沒有任何樣式，
+   會變成一行沒有分隔的裸文字，貼在標題正上方。 */
+.detail-pill { display:inline-block; font-family:var(--sans); font-size:10px; letter-spacing:.28em;
+    text-transform:uppercase; color:var(--gold-deep); padding:5px 12px;
+    border:1px solid var(--gold-dim); background:rgba(201,169,110,0.06); }
+
+/* 服務介面往外擴。1320px 在現在常見的寬螢幕上左右留白過多，
+   內容區被壓得比實際可用寬度窄很多。 */
+.main-content { max-width:1560px; padding-left:64px; padding-right:64px; }
+.topbar-inner { max-width:1560px; }
+@media (max-width:1400px){
+    .main-content { max-width:100%; padding-left:40px; padding-right:40px; }
+    .topbar-inner { max-width:100%; }
+}
+@media (max-width:760px){
+    .main-content { padding-left:18px; padding-right:18px; }
+}
