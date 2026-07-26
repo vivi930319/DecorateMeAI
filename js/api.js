@@ -422,7 +422,24 @@ const Api = {
         }
         const res = await fetch(input, nextInit);
         if (isProtected && res.status === 401) {
-            this._notifySessionInvalid('decorate-me:session-expired');
+            // 401 同樣不一定是我們的 session 死了。Gateway 會把上游的 401 原樣轉回來——
+            // 例如文字建議服務因為缺金鑰而拒絕，那跟會員的登入狀態毫無關係，
+            // 卻會害使用者在按下「生成建議」時被登出。只認 Gateway 自己的驗證錯誤碼；
+            // 認不出來就不動作，真正失效的 session 會在下一次 /auth/session 被攔下。
+            const sessionCodes = [
+                'MEMBER_AUTH_REQUIRED', 'MEMBER_SESSION_REQUIRED', 'MEMBER_AUTH_INVALID',
+                'MEMBER_SESSION_INVALID', 'MEMBER_SESSION_MISSING', 'UNAUTHORIZED'
+            ];
+            let code = '';
+            try {
+                const peek = await res.clone().json();
+                code = String(peek?.error?.code || peek?.detail?.error?.code || '').toUpperCase();
+            } catch (_) {
+                code = '';
+            }
+            if (sessionCodes.includes(code)) {
+                this._notifySessionInvalid('decorate-me:session-expired');
+            }
         } else if (isProtected && res.status === 409) {
             // 409 不一定是換帳號。Gateway 在「這個分頁選的帳號已經不在了」時回 409，
             // 但上游的業務衝突（獎勵已經領過、信箱已註冊）也是 409，而且會被原樣透傳。
