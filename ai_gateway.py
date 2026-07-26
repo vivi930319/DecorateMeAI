@@ -185,6 +185,13 @@ SESSION_TTL_SECONDS = max(300, min(int(os.getenv("GATEWAY_SESSION_TTL_SECONDS", 
 SESSION_ONLY_MODE = os.getenv("GATEWAY_SESSION_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = max(60, int(os.getenv("GATEWAY_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "600")))
 LOGIN_RATE_LIMIT_MAX_REQUESTS = max(1, int(os.getenv("GATEWAY_LOGIN_RATE_LIMIT_MAX_REQUESTS", "10")))
+# 註冊／寄驗證碼／驗驗證碼有自己的額度，**不與登入共用**。共用時的實際後果：有人把
+# 密碼打錯十次，接下來十分鐘全場都不能註冊也收不到驗證碼——註冊一次額度都沒用，
+# 卻要為別人的失敗登入陪葬（2026-07-25 Demo 前實測踩到）。
+# 額度給得比登入寬：這條路徑沒有「猜中就進得去」的東西可以暴力破解，真正要擋的是
+# 拿它當寄信機用，所以看的是次數而不是失敗次數。
+SIGNUP_RATE_LIMIT_WINDOW_SECONDS = max(60, int(os.getenv("GATEWAY_SIGNUP_RATE_LIMIT_WINDOW_SECONDS", "600")))
+SIGNUP_RATE_LIMIT_MAX_REQUESTS = max(1, int(os.getenv("GATEWAY_SIGNUP_RATE_LIMIT_MAX_REQUESTS", "40")))
 IS_PRODUCTION = os.getenv("APP_ENV", "").strip().lower() in {"prod", "production"}
 # Firebase Hosting forwards exactly one cookie to a Cloud Run rewrite: the one
 # named `__session`.  Every other cookie is dropped at the CDN before the request
@@ -321,39 +328,50 @@ def client_ip(request: Request) -> str:
     return "unknown"
 
 
-def _login_quota_check(key: str, now: float) -> int | None:
+def _login_quota_check(
+    key: str,
+    now: float,
+    window: int = LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+    max_requests: int = LOGIN_RATE_LIMIT_MAX_REQUESTS,
+) -> int | None:
     """這個 key 目前是否超量：超量回「還要等幾秒」，否則 None。**不消耗**任何額度。
 
     只讀不寫是關鍵：登入成功不該計入限流，否則一個正在反覆測試的管理員用**正確**
     密碼也會把自己鎖住（實測踩到）。額度只在「登入失敗」時才消耗，見
     `record_failed_login`。
+
+    `window` / `max_requests` 可以覆寫，讓註冊那組用自己的額度——key 已經帶了 scope
+    前綴，兩組不會互相消耗。
     """
     durable = job_store.peek_window_quota(
-        LOGIN_LIMIT_COLLECTION, key,
-        LOGIN_RATE_LIMIT_WINDOW_SECONDS, LOGIN_RATE_LIMIT_MAX_REQUESTS, now=now,
+        LOGIN_LIMIT_COLLECTION, key, window, max_requests, now=now,
     )
     if durable is not None:
         allowed, _, retry_after = durable
         return None if allowed else retry_after
-    cutoff = now - LOGIN_RATE_LIMIT_WINDOW_SECONDS
+    cutoff = now - window
     with _login_rate_lock:
         bucket = _login_rate_hits.setdefault(key, deque())
         while bucket and bucket[0] <= cutoff:
             bucket.popleft()
-        if len(bucket) >= LOGIN_RATE_LIMIT_MAX_REQUESTS:
-            return max(1, int(bucket[0] + LOGIN_RATE_LIMIT_WINDOW_SECONDS - now))
+        if len(bucket) >= max_requests:
+            return max(1, int(bucket[0] + window - now))
         return None
 
 
-def _login_quota_record(key: str, now: float) -> None:
+def _login_quota_record(
+    key: str,
+    now: float,
+    window: int = LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+    max_requests: int = LOGIN_RATE_LIMIT_MAX_REQUESTS,
+) -> None:
     """把一次「失敗」的登入記進視窗。跨 instance 一致優先走 Firestore，否則記憶體。"""
     durable = job_store.consume_window_quota(
-        LOGIN_LIMIT_COLLECTION, key,
-        LOGIN_RATE_LIMIT_WINDOW_SECONDS, LOGIN_RATE_LIMIT_MAX_REQUESTS, now=now,
+        LOGIN_LIMIT_COLLECTION, key, window, max_requests, now=now,
     )
     if durable is not None:
         return
-    cutoff = now - LOGIN_RATE_LIMIT_WINDOW_SECONDS
+    cutoff = now - window
     with _login_rate_lock:
         bucket = _login_rate_hits.setdefault(key, deque())
         while bucket and bucket[0] <= cutoff:
@@ -361,7 +379,7 @@ def _login_quota_record(key: str, now: float) -> None:
         bucket.append(now)
 
 
-def _login_rate_keys(request: Request, email: str) -> list[str]:
+def _login_rate_keys(request: Request, email: str, scope: str = "login") -> list[str]:
     # 兩個維度：呼叫端 IP（擋「一台主機狂試很多帳號」）與被鎖定的帳號（擋「一群 IP
     # 一起暴力破解同一個帳號」，只看 IP 抓不到）。帳號那把 key 是雜湊過的——限流器
     # 從不儲存 email 本身。
@@ -371,13 +389,16 @@ def _login_rate_keys(request: Request, email: str) -> list[str]:
     # 退回 "unknown"。若照樣用 `ip:unknown` 當 key，就會把**所有人**塞進同一個桶——
     # 十次失敗就讓全站登入一起 429（實測：不同帳號、不同裝置都被擋）。辨識不出來時
     # 寧可不設 IP 維度，讓「帳號維度」單獨守著；那一維是可靠的（以雜湊帳號為鍵）。
+    #
+    # `scope` 把不同用途的桶分開。登入與註冊共用一個桶時的實際後果，見
+    # SIGNUP_RATE_LIMIT_* 的註解：十次失敗登入會讓全場都註冊不了。
     keys = []
     ip = client_ip(request)
     if ip and ip != "unknown":
-        keys.append(f"ip:{ip}")
+        keys.append(f"{scope}:ip:{ip}")
     normalized = str(email or "").strip().lower()
     if normalized:
-        keys.append("account:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest())
+        keys.append(f"{scope}:account:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest())
     return keys
 
 
@@ -392,6 +413,33 @@ def enforce_login_rate_limit(request: Request, email: str = "") -> None:
                 f"登入嘗試次數過多，請在 {retry_after} 秒後再試。",
                 retry_after,
             )
+
+
+def enforce_signup_rate_limit(request: Request, email: str = "") -> None:
+    """註冊／寄驗證碼／驗驗證碼的額度。與登入分開，且**這裡就消耗**額度。
+
+    登入是「失敗才算」，因為成功登入不是攻擊。這條路徑相反：要擋的是把它當寄信機用，
+    寄成功才是要算的那一次，所以每一次請求都記。
+
+    有 email 時一併記帳號維度——IP 在 Firebase Hosting → Cloud Run 這條路徑上可能是
+    共用位址（見 `client_ip`），只靠 IP 會把所有人算成同一個來源。
+    """
+    now = time.time()
+    keys = _login_rate_keys(request, email, scope="signup")
+    for key in keys:
+        retry_after = _login_quota_check(
+            key, now, SIGNUP_RATE_LIMIT_WINDOW_SECONDS, SIGNUP_RATE_LIMIT_MAX_REQUESTS
+        )
+        if retry_after is not None:
+            raise rate_limited_error(
+                "MEMBER_SERVICE_RATE_LIMITED",
+                f"操作次數過多，請在 {retry_after} 秒後再試。",
+                retry_after,
+            )
+    for key in keys:
+        _login_quota_record(
+            key, now, SIGNUP_RATE_LIMIT_WINDOW_SECONDS, SIGNUP_RATE_LIMIT_MAX_REQUESTS
+        )
 
 
 def record_failed_login(request: Request, email: str = "") -> None:
@@ -1497,8 +1545,17 @@ async def proxy_public_member_request(request: Request, upstream_path: str):
     register or verify an OTP, but it never learns the member database URL.
     Login attempts and OTP operations share the gateway rate limiter.
     """
-    enforce_login_rate_limit(request)
     body = await request.body()
+    # 從 body 取 email 只為了限流的帳號維度，取不到就退回只有 IP 那一維——這裡不驗證
+    # 格式，也不因為解析失敗就擋下請求，那是上游會員資料庫的判斷。
+    signup_email = ""
+    try:
+        parsed = json.loads(body.decode("utf-8")) if body else {}
+        if isinstance(parsed, dict):
+            signup_email = str(parsed.get("email") or "")
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        signup_email = ""
+    enforce_signup_rate_limit(request, signup_email)
     if len(body) > 256 * 1024:
         raise HTTPException(status_code=413, detail={"error": {"code": "PAYLOAD_TOO_LARGE", "message": "Request body is too large."}})
     if not MEMBER_DATABASE_URL:

@@ -666,15 +666,28 @@ class AiGatewayTest(unittest.TestCase):
         req.headers = {}          # no X-Forwarded-For
         req.client = None         # no peer address -> client_ip returns "unknown"
         keys = _login_rate_keys(req, "someone@example.com")
-        self.assertTrue(all(not k.startswith("ip:") for k in keys), keys)
-        self.assertTrue(any(k.startswith("account:") for k in keys), keys)
+        self.assertTrue(all(":ip:" not in k for k in keys), keys)
+        self.assertTrue(any(k.startswith("login:account:") for k in keys), keys)
 
         # A resolvable IP still contributes its dimension.
         req2 = Mock()
         req2.headers = {"x-forwarded-for": "203.0.113.9, 10.0.0.1"}
         req2.client = None
         keys2 = _login_rate_keys(req2, "someone@example.com")
-        self.assertIn("ip:203.0.113.9", keys2)
+        self.assertIn("login:ip:203.0.113.9", keys2)
+
+    def test_signup_keys_never_collide_with_the_login_bucket(self):
+        # 註冊與登入共用一個桶時：十次失敗登入會讓全場都註冊不了、也收不到驗證碼
+        # （2026-07-25 Demo 前實測踩到）。scope 前綴就是那道隔離，這裡把它釘住。
+        from ai_gateway import _login_rate_keys
+
+        req = Mock()
+        req.headers = {"x-forwarded-for": "203.0.113.9, 10.0.0.1"}
+        req.client = None
+        login_keys = _login_rate_keys(req, "someone@example.com")
+        signup_keys = _login_rate_keys(req, "someone@example.com", scope="signup")
+        self.assertFalse(set(login_keys) & set(signup_keys), (login_keys, signup_keys))
+        self.assertTrue(all(k.startswith("signup:") for k in signup_keys), signup_keys)
 
     def test_access_log_path_never_carries_a_member_email(self):
         # Member and saved-look routes put the account's email straight in the
