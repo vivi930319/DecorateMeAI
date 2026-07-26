@@ -1166,6 +1166,32 @@ profile: `
 
 // ═══ SPA Router ═══
 // 每個 page 是一個 HTML fragment，由 fetch 載入 main-content
+let pendingStyleModalSelection = null;
+function closeMakeupStyleModal() { document.getElementById('makeupStyleModal')?.classList.remove('open'); }
+function openMakeupStyleModal(preselectedStyleId) {
+    if (!hasStartedJourney()) { Router.go('analysis'); return; }
+    let modal = document.getElementById('makeupStyleModal');
+    if (!modal) {
+        modal = document.createElement('div'); modal.id = 'makeupStyleModal'; modal.className = 'makeup-style-modal';
+        modal.setAttribute('role','dialog'); modal.setAttribute('aria-modal','true'); modal.setAttribute('aria-labelledby','makeupStyleModalTitle'); document.body.appendChild(modal);
+    }
+    pendingStyleModalSelection = preselectedStyleId || Router.selectedStyleId || null;
+    const renderOptions = () => {
+        modal.innerHTML = `<div class="makeup-style-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Style</span><h2 id="makeupStyleModalTitle">選擇妝容風格</h2><p>選擇一款風格，接著查看妝容建議。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="makeup-style-grid">${STYLES.map(style=>`<button class="makeup-style-option ${pendingStyleModalSelection===style.id?'selected':''}" type="button" data-style-id="${escapeHtml(style.id)}"><img src="${escapeHtml(style.img)}" alt="${escapeHtml(style.name)}"><span class="makeup-style-option-copy"><b>${escapeHtml(style.name)}</b><small>${style.tags.map(escapeHtml).join(' · ')}</small></span></button>`).join('')}</div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-modal-cancel>稍後再選</button><button class="btn-gold" type="button" data-modal-confirm ${pendingStyleModalSelection?'':'disabled'}>確認風格 →</button></div></div>`;
+        modal.querySelectorAll('[data-style-id]').forEach(button=>button.onclick=()=>{pendingStyleModalSelection=button.dataset.styleId;renderOptions();});
+        modal.querySelector('.makeup-style-close').onclick=closeMakeupStyleModal; modal.querySelector('[data-modal-cancel]').onclick=closeMakeupStyleModal;
+        modal.querySelector('[data-modal-confirm]').onclick=()=>{if(!pendingStyleModalSelection)return;Router.selectedStyleId=pendingStyleModalSelection;closeMakeupStyleModal();Router.go('style',{fromStyleModal:true,styleId:pendingStyleModalSelection});};
+    };
+    renderOptions(); modal.classList.add('open');
+}
+function closeProductRecommendationModal(){document.getElementById('productRecommendationModal')?.remove();}
+function openProductRecommendationModal(){
+    const products=Router.analysisPackage?.recommendations?.products||[],modal=document.createElement('div'); modal.id='productRecommendationModal';modal.className='makeup-style-modal open';modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');
+    const cards=products.length?products.slice(0,6).map(p=>{const name=p.name||p.productName||'推薦商品',image=p.imageUrl||p.image_url||p.imageUrls?.[0]||'';return `<article class="recommendation-modal-card">${image?`<img src="${escapeHtml(image)}" alt="${escapeHtml(name)}">`:''}<div><small>${escapeHtml(p.brand||'')}</small><h3>${escapeHtml(name)}</h3></div></article>`;}).join(''):'<div class="empty-state">推薦商品正在整理中，也可以先查看所有商品。</div>';
+    modal.innerHTML=`<div class="makeup-style-dialog product-recommendation-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Products</span><h2>個人化商品推薦</h2><p>依照臉部分析與選擇的妝容風格，從現有商品中整理推薦。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="recommendation-modal-grid">${cards}</div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-close>稍後再看</button><button class="btn-gold" type="button" data-all>查看所有商品</button></div></div>`;
+    document.body.appendChild(modal);modal.querySelector('.makeup-style-close').onclick=closeProductRecommendationModal;modal.querySelector('[data-close]').onclick=closeProductRecommendationModal;modal.querySelector('[data-all]').onclick=()=>{closeProductRecommendationModal();Router.go('products');};modal.onclick=e=>{if(e.target===modal)closeProductRecommendationModal();};
+}
+
 const Router = {
     currentPage: null,
     analysisResult: null,
@@ -1202,6 +1228,7 @@ const Router = {
 
     async go(page, opts) {
         opts = opts || {};
+        if (page === 'style' && hasStartedJourney() && !opts.fromStyleModal) { openMakeupStyleModal(opts.styleId); return; }
         const adminSession = typeof AdminStore !== 'undefined' && Auth.isLoggedIn() && AdminStore.isAdmin();
         if (adminSession && page !== 'admin') page = 'admin';
         if (!opts.skipLeaveGuard && this.needsLookLeaveGuard(page)) {
@@ -2379,7 +2406,7 @@ const PageInit = {
                 <div style="text-align:center;margin-top:20px;">
                     <button class="btn-outline" onclick="Router.go('compare')" style="margin-right:8px;">查看前後對比</button>
                     <button class="btn-outline" onclick="Router.go('suggestion')" style="margin-right:8px;">查看妝容建議</button>
-                    <button class="btn-gold" onclick="Router.go('products')">查看推薦商品 →</button>
+                    <button class="btn-gold" onclick="openProductRecommendationModal()">查看推薦商品 →</button>
                 </div>
             `;
         }
@@ -4476,16 +4503,17 @@ function showLogin() {
     if (location.hash) history.replaceState(null, '', `${location.pathname}${location.search}`);
     document.getElementById('auth-layer').innerHTML = `
         <div class="auth-overlay">
-            <div class="auth-card">
-                <h2>裝識你的美</h2>
-                <p class="subtitle">Log in to continue your beauty journey</p>
+            <section class="auth-editorial" aria-label="Decorate Me 登入">
+              <div class="auth-brand-panel"><span class="auth-kicker">DECORATE ME</span><h1>裝識<br>你的美</h1><p>從臉部分析開始，保存每一次妝容建議、收藏與專屬風格。</p></div>
+              <div class="auth-form-panel"><div class="auth-card"><span class="auth-kicker">會員登入</span><h2>歡迎回來</h2><p class="auth-description">登入後同步分析紀錄、收藏商品與會員主題。</p>
                 <div class="input-group"><label>電子郵件</label><input type="email" id="loginEmail" placeholder="your@email.com"></div>
                 <div class="input-group"><label>密碼</label><input type="password" id="loginPwd" placeholder="••••••••"></div>
                 <button class="btn-gold btn-full" onclick="doLoginAction()" style="margin-top:8px;">登　入</button>
                 <button class="btn-outline btn-full" onclick="doGuestLogin()" style="margin-top:12px;">訪客登入</button>
                 <div style="margin-top:12px;"><span class="auth-link" onclick="showForgotPassword()">忘記密碼？</span></div>
                 <div style="margin-top:16px;"><span class="auth-link" onclick="showRegister()">還沒有帳號？立即註冊</span></div>
-            </div>
+              </div></div>
+            </section>
         </div>
     `;
 }

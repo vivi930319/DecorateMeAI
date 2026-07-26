@@ -7,12 +7,21 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Serif+TC:wght@300;400;500;700&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/main.css?v=20260723-admin-demo-presenter">
+<link rel="stylesheet" href="css/main.css?v=20260727-clear-dropdown">
+<script>
+(function(){
+    try {
+        if (sessionStorage.getItem('introShown')) document.documentElement.classList.add('intro-off');
+        else sessionStorage.setItem('introShown', '1');
+    } catch (_) {}
+})();
+</script>
+<noscript><style>#brand-intro{display:none!important}</style></noscript>
 </head>
 <body>
 
 <!-- ═══ 進場動畫（金箔光澤橫掃揭曉品牌） ═══ -->
-<div id="brand-intro" data-screen-label="進場">
+<div id="brand-intro" data-screen-label="進場" aria-hidden="true">
     <div class="intro-haze"></div>
     <div class="intro-name">
         <span class="ch">裝</span><span class="ch">識</span><span class="ch">你</span><span class="ch">的</span><span class="ch">美</span>
@@ -21,6 +30,7 @@
     <div class="intro-glint"></div>
     <div class="intro-rule"></div>
     <div class="intro-sub">Decorate Me · Beauty Atelier</div>
+    <div class="intro-skip">點擊或按 ESC 跳過</div>
 </div>
 
 <!-- ═══ 登入頁（未登入時顯示） ═══ -->
@@ -35,10 +45,9 @@
                 <div class="sb-name">裝識你的美</div>
                 <div class="sb-sub">DECORATE ME</div>
             </div>
-            <nav class="topbar-nav">
+            <nav class="topbar-nav" id="topbarDrawer" aria-label="主要選單">
                 <a href="#dashboard" data-page="dashboard" class="active">首頁</a>
                 <a href="#analysis" data-page="analysis">臉部分析</a>
-                <a href="#style" data-page="style">風格試妝</a>
                 <a href="#products" data-page="products">商品推薦</a>
                 <a href="#favorites" data-page="favorites">收藏</a>
                 <a href="#history" data-page="history">分析紀錄</a>
@@ -47,6 +56,7 @@
                 <a href="#profile" data-page="profile">會員中心</a>
                 <a href="#admin" data-page="admin" data-admin-link style="display:none;">管理中台</a>
             </nav>
+            <button class="topbar-menu-backdrop" type="button" aria-label="關閉選單" onclick="closeTopbarMenu()"></button>
             <div class="topbar-right">
                 <button type="button" class="topbar-cart" onclick="showCartPanel()" aria-label="購物車">
                     <span class="cart-symbol" aria-hidden="true">🛒</span>
@@ -57,6 +67,7 @@
                     <span id="sidebarUsername">訪客</span>
                 </button>
                 <button class="topbar-logout" onclick="Auth.logout()" aria-label="登出">登出</button>
+                <button class="topbar-menu-toggle" type="button" aria-label="開啟選單" aria-expanded="false" aria-controls="topbarDrawer" onclick="toggleTopbarMenu()"><span></span><span></span><span></span></button>
             </div>
         </div>
         <div class="gold-stream"></div>
@@ -67,25 +78,37 @@
 </div>
 
 <script>
-// 進場動畫：播放一次後揭曉（每次重整都會播，可改成 sessionStorage 只播一次）
+// 進場動畫：同一分頁只播一次，並尊重系統的「減少動態」設定。
+function toggleTopbarMenu(){
+    var nav=document.getElementById('topbarDrawer'),btn=document.querySelector('.topbar-menu-toggle');
+    var open=!document.body.classList.contains('menu-open');
+    document.body.classList.toggle('menu-open',open);
+    if(btn){btn.setAttribute('aria-expanded',String(open));btn.setAttribute('aria-label',open?'關閉選單':'開啟選單');}
+    if(open) nav?.querySelector('a')?.focus();
+}
+function closeTopbarMenu(){document.body.classList.remove('menu-open');var btn=document.querySelector('.topbar-menu-toggle');if(btn){btn.setAttribute('aria-expanded','false');btn.setAttribute('aria-label','開啟選單');}}
+document.addEventListener('click',function(e){if(e.target.closest&&e.target.closest('#topbarDrawer a'))setTimeout(closeTopbarMenu,0);});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.body.classList.contains('menu-open')){closeTopbarMenu();document.querySelector('.topbar-menu-toggle')?.focus();}});
 (function(){
     var intro = document.getElementById('brand-intro');
     if (!intro) return;
-    // 同一個瀏覽器分頁 session 只播一次；之後重整直接跳過（demo/開發一直重整不用每次等 3.4 秒）
-    try {
-        if (sessionStorage.getItem('introShown')) { intro.style.display = 'none'; return; }
-        sessionStorage.setItem('introShown', '1');
-    } catch (_) {}
-    var DUR = 3400;
-    setTimeout(function(){
+    if (document.documentElement.classList.contains('intro-off')) { intro.remove(); return; }
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var DUR = reduce ? 900 : 3400;
+    var OUT = reduce ? 0 : 1100;
+    var timer, dismissed = false;
+    function dismiss(){
+        if (dismissed) return;
+        dismissed = true;
+        clearTimeout(timer);
+        document.removeEventListener('keydown', onKey);
         intro.classList.add('done');
-        setTimeout(function(){ intro.style.display = 'none'; }, 1100);
-    }, DUR);
-    // 點擊可跳過
-    intro.addEventListener('click', function(){
-        intro.classList.add('done');
-        setTimeout(function(){ intro.style.display = 'none'; }, 700);
-    });
+        setTimeout(function(){ intro.remove(); }, OUT);
+    }
+    function onKey(event){ if (event.key === 'Escape' || event.key === 'Enter' || event.key === ' ') dismiss(); }
+    timer = setTimeout(dismiss, DUR);
+    intro.addEventListener('click', dismiss);
+    document.addEventListener('keydown', onKey);
 })();
 
 // 游標跟隨的金色光暈
@@ -101,11 +124,11 @@
     document.addEventListener('mouseleave', function(){ if(glow) glow.style.opacity = '0'; });
 })();
 </script>
-<script defer src="js/config.js?v=20260723-231345"></script>
-<script defer src="config.local.js?v=20260723-231345" onerror="void 0"></script>
-<script defer src="js/service-endpoints.js?v=20260723-231345"></script>
-<script defer src="js/data.js?v=20260723-231345"></script>
-<script defer src="js/api.js?v=20260723-231345"></script>
-<script defer src="js/router.js?v=20260723-231345"></script>
+<script defer src="js/config.js?v=20260727-010618"></script>
+<script defer src="config.local.js?v=20260727-010618" onerror="void 0"></script>
+<script defer src="js/service-endpoints.js?v=20260727-010618"></script>
+<script defer src="js/data.js?v=20260727-010618"></script>
+<script defer src="js/api.js?v=20260727-010618"></script>
+<script defer src="js/router.js?v=20260727-010618"></script>
 </body>
 </html>
