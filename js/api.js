@@ -424,7 +424,21 @@ const Api = {
         if (isProtected && res.status === 401) {
             this._notifySessionInvalid('decorate-me:session-expired');
         } else if (isProtected && res.status === 409) {
-            this._notifySessionInvalid('decorate-me:session-owner-changed', { reason: 'SESSION_OWNER_CHANGED' });
+            // 409 不一定是換帳號。Gateway 在「這個分頁選的帳號已經不在了」時回 409，
+            // 但上游的業務衝突（獎勵已經領過、信箱已註冊）也是 409，而且會被原樣透傳。
+            // 先前不分青紅皂白就登出，於是「領取一個已經領過的獎勵」＝被踢出去，
+            // 而那個狀態其實完全正常。只認 Gateway 自己的錯誤碼。
+            const ownerChangeCodes = ['ACCOUNT_NOT_AVAILABLE', 'SESSION_OWNER_CHANGED', 'EXPECTED_ACTOR_REQUIRED'];
+            let code = '';
+            try {
+                const peek = await res.clone().json();
+                code = String(peek?.error?.code || peek?.detail?.error?.code || '').toUpperCase();
+            } catch (_) {
+                code = '';
+            }
+            if (ownerChangeCodes.includes(code)) {
+                this._notifySessionInvalid('decorate-me:session-owner-changed', { reason: 'SESSION_OWNER_CHANGED' });
+            }
         }
         return res;
     },

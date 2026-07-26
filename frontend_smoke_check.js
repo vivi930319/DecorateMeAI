@@ -291,13 +291,34 @@ let checkProtectedWriteActor;
       throw new Error(`Third-party requests must not receive X-Expected-Actor: ${JSON.stringify(fetchCalls)}`);
     }
 
-    // 7) Gateway 回 409 時立即通知 Router，不能等下一個操作才發現換帳號。
+    // 7) Gateway 自己的 409（帳號已不在這個瀏覽器上）要立即通知 Router，
+    //    不能等下一個操作才發現換帳號。
     sandbox.Api._sessionExpiredNotified = false;
     events.length = 0;
-    sandbox.fetch = async (url, init) => ({ ok: false, status: 409, json: async () => ({}) });
+    const ownerChange409 = { error: { code: 'ACCOUNT_NOT_AVAILABLE' } };
+    sandbox.fetch = async () => ({
+      ok: false, status: 409,
+      json: async () => ownerChange409,
+      clone: () => ({ json: async () => ownerChange409 })
+    });
     await sandbox.Api._protectedFetch('/member-database/api/favorites/toggle', { method: 'POST' });
     if (!events.some(e => e.type === 'decorate-me:session-owner-changed')) {
       throw new Error('Gateway 409 must notify the Router of a changed session owner');
+    }
+
+    // 8) 上游的業務衝突也是 409（獎勵已領過、信箱已註冊），而且會被原樣透傳。
+    //    那種 409 不可以把人登出——狀態是正常的，只是這次操作不成立。
+    sandbox.Api._sessionExpiredNotified = false;
+    events.length = 0;
+    const business409 = { error: { code: 'ALREADY_CLAIMED' } };
+    sandbox.fetch = async () => ({
+      ok: false, status: 409,
+      json: async () => business409,
+      clone: () => ({ json: async () => business409 })
+    });
+    await sandbox.Api._protectedFetch('/member-database/api/members/a%40b.c/tasks/daily_checkin/claim', { method: 'POST' });
+    if (events.some(e => e.type === 'decorate-me:session-owner-changed')) {
+      throw new Error('A business 409 must not log the member out');
     }
   };
 
