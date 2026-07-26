@@ -4094,8 +4094,10 @@ const PageInit = {
             const shadesRaw = document.getElementById('adminProductShades')?.value.trim();
             const shadesInput = shadesRaw ? shadesRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
             const shades = shadesInput.filter(c => /^#[0-9a-fA-F]{3,8}$/.test(c));
-            if (!name || !brand || !cat || !price || !img || !sourceUrl) {
-                showAlert('請完整填寫商品名稱、品牌、分類、價格、圖片網址與來源網址', { type:'error' });
+            // 來源網址不再是必填：手動建立的商品本來就沒有來源頁，逼人填一個等於逼人亂編。
+            // 爬蟲匯入的商品仍然帶著抓到的來源（隱藏欄位），照樣會一起送出去。
+            if (!name || !brand || !cat || !price || !img) {
+                showAlert('請完整填寫商品名稱、品牌、分類、價格與圖片網址', { type:'error' });
                 return;
             }
             if (shades.length !== shadesInput.length) {
@@ -4110,8 +4112,10 @@ const PageInit = {
                 imageUrls: [img],
                 image_url: img,
                 description: desc || '',
-                sourceUrl,
-                source_url: sourceUrl,
+                // 沒有來源就送 null，不要送空字串——上游對 source_url 有 URL 格式驗證時，
+                // "" 會被當成格式錯誤而擋下整筆新增，null 才是「這個商品沒有來源頁」。
+                sourceUrl: sourceUrl || null,
+                source_url: sourceUrl || null,
                 sku: sku || null,
                 shadeName: shadeName || null,
                 hex: shades[0] || null,
@@ -4505,7 +4509,7 @@ function showRegister() {
                 <div class="input-group"><label>密碼</label><input type="password" id="regPwd" placeholder="••••••••"></div>
                 <div class="input-group"><label>確認密碼</label><input type="password" id="regPwd2" placeholder="••••••••"></div>
                 <div class="input-group"><label>推薦碼（選填）</label><input type="text" id="regReferral" placeholder="朋友的推薦碼"></div>
-                <button class="btn-gold btn-full" onclick="doRegisterAction()" style="margin-top:8px;">註　冊</button>
+                <button class="btn-gold btn-full" id="regSubmitBtn" onclick="doRegisterAction()" style="margin-top:8px;">註　冊</button>
                 <div style="margin-top:16px;"><span class="auth-link" onclick="showLogin()">已有帳號？返回登入</span></div>
             </div>
         </div>
@@ -4649,7 +4653,14 @@ function doGuestLogin() {
     showApp();
 }
 
+// 註冊送出中的旗標。寄驗證碼要繞到外部信箱，實測會慢到使用者以為沒反應而再點一下——
+// 而這一下會送出第二次註冊：第一次已經把帳號建好了，第二次必然回 409 EMAIL_EXISTS，
+// 於是畫面告訴他「此信箱已註冊」，他卻連一次驗證碼都還沒收到，帳號就這樣卡死
+// （不能重註冊、沒有碼可驗、也因為未驗證而不能登入）。擋在送出前最省事。
+let registerInFlight = false;
+
 async function doRegisterAction() {
+    if (registerInFlight) return;
     const name = document.getElementById('regName').value.trim();
     const phone = document.getElementById('regPhone').value.trim();
     const email = document.getElementById('regEmail').value.trim();
@@ -4669,20 +4680,47 @@ async function doRegisterAction() {
     }
 
     Router.pendingRegister = { name, phone, email, age, password, avatar, referralCode, level: '一般會員' };
+    const submitBtn = document.getElementById('regSubmitBtn');
+    const submitLabel = submitBtn ? submitBtn.textContent : '';
+    registerInFlight = true;
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        // 講清楚在等什麼。只是把按鈕變灰，使用者仍然會以為當掉而去重整頁面——
+        // 重整同樣會走到「已註冊但沒收到碼」那個死路。
+        submitBtn.textContent = '寄送驗證碼中…';
+    }
     try {
         await Api.register(Router.pendingRegister);
         await Api.sendOTP(email);
     } catch (err) {
-        // 信箱已存在時給返回登入的出口，不要讓使用者卡在註冊頁反覆重試同一個必然失敗的動作
+        // 信箱已存在：最常見的成因不是「真的註冊過」，而是上一次註冊成功但驗證碼沒收到。
+        // 只給「返回登入」等於把人推進死路——未驗證的帳號登入會被擋，他又不能重新註冊。
+        // 所以主要出口是重寄驗證碼，返回登入退居次要。
         if (err?.code === 'EMAIL_EXISTS') {
             showConfirm(err.message, {
-                title: '此信箱已註冊', type: 'error', okText: '返回登入', cancelText: '取消',
-                onOk: function(){ showLogin(); }
+                title: '此信箱已註冊', type: 'error',
+                okText: '重寄驗證碼', cancelText: '返回登入',
+                onOk: async function () {
+                    try {
+                        await Api.sendOTP(email);
+                    } catch (resendErr) {
+                        showAlert(resendErr?.message || '驗證碼寄送失敗，請稍後再試', { type: 'error' });
+                        return;
+                    }
+                    showVerification(email);
+                },
+                onCancel: function () { showLogin(); }
             });
             return;
         }
         showAlert(err?.message || '註冊或驗證碼發送失敗，請稍後再試', { type:'error' });
         return;
+    } finally {
+        registerInFlight = false;
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = submitLabel;
+        }
     }
     showVerification(email);
 }
