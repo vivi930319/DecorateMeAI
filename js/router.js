@@ -3144,7 +3144,14 @@ const PageInit = {
                             btn.disabled = true;
                             if (btn.dataset.taskRemote === '1' && Api.claimMemberTask) {
                                 const result = await Api.claimMemberTask(profile.email, btn.dataset.taskId).catch(() => null);
-                                if (!result?.ok) { showAlert(result?.error || '任務領取失敗。', { type: 'error' }); btn.disabled = false; return; }
+                                if (!result?.ok) {
+                                    showAlert(result?.error || '任務領取失敗。', { type: 'error' });
+                                    // 409 代表伺服器上已經是「已領取」，畫面卻還顯示可領——
+                                    // 重畫一次讓兩邊一致，否則使用者會一直按同一顆按鈕。
+                                    if (result?.status === 409) { PageInit.profile(); return; }
+                                    btn.disabled = false;
+                                    return;
+                                }
                                 showToast(`任務完成，獲得 ${result.awarded ?? result.reward ?? 0} 點`);
                                 PageInit.profile();
                                 return;

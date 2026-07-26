@@ -1541,7 +1541,22 @@ const Api = {
                     headers: { 'Content-Type': 'application/json' }
                 });
                 const data = await res.json().catch(() => ({}));
-                if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
+                // 領取失敗最常見的是「已經領過了」（409）。原本直接顯示上游的 message，
+                // 而那句話對使用者沒有意義，看起來像系統壞掉——實際上狀態是正常的，
+                // 只是這個獎勵今天已經拿過。逐一對應成看得懂的說法。
+                if (!res.ok) {
+                    const byStatus = {
+                        400: '這個任務還沒完成，現在不能領取。',
+                        403: '你沒有領取這個獎勵的權限。',
+                        404: '找不到這個任務，請重新整理後再試。',
+                        409: '這個獎勵已經領取過了。'
+                    };
+                    return {
+                        ok: false,
+                        status: res.status,
+                        error: byStatus[res.status] || data?.error?.message || data?.message || `任務領取失敗（HTTP ${res.status}）`
+                    };
+                }
                 return { ok: true, ...data };
             } catch (_) {
                 return { ok: false };
