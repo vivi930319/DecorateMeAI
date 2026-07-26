@@ -24,6 +24,10 @@
 !cloud_start.py
 !job_store.py
 !api_errors.py
+# Dockerfile.gateway 會 COPY 這支。漏放行的話 build 會停在
+# 「COPY failed: file not found in build context」，而檔案其實好端端躺在本機——
+# 是 `*` 全擋把它濾掉了，不是檔案不見（2026-07-26 部署時踩到）。
+!admin_audit.py
 !gcs-lifecycle.json
 !analysis_package.py
 !face_roi.py
