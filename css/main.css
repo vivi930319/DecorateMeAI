@@ -2537,7 +2537,12 @@ html.intro-off #brand-intro{display:none}
 /* 金色光暈本身也調亮：原本 .13 的透明度在深底上幾乎看不到。 */
 .cursor-glow { background:radial-gradient(circle, rgba(226,195,116,0.22) 0%, rgba(226,195,116,0.08) 40%, transparent 68%); }
 
-.app-shell > .topbar, .app-shell > .main-content { position:relative; z-index:5; }
+/* 內容要蓋過浮水印那三層（0 / 1 / 3），但**不能碰 .topbar**。
+   給 topbar 加 position:relative + 低 z-index 會讓它變成獨立的堆疊脈絡，
+   裡面 z-index:220 的下拉選單就被關在那一層裡出不來，
+   而排在後面的 .main-content 會直接蓋掉它。topbar 自己原本就是
+   position:sticky; z-index:100，已經在浮水印之上，不需要再動。 */
+.app-shell > .main-content { position:relative; z-index:5; }
 
 @media (max-width:980px){
     .gold-cursor-flow, .watermark-stamp { display:none; }
