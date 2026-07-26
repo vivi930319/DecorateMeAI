@@ -38,7 +38,13 @@
 
 <!-- ═══ 主框架（登入後顯示） ═══ -->
 <div id="app" class="app-shell" style="display:none;">
+    <!-- 品牌浮水印：字樣層在最底，訊號層跟著游標走，右下角是固定的識別章。
+         三層都不吃點擊事件，只有視覺。 -->
+    <div class="brand-watermark" aria-hidden="true"></div>
+    <div class="signal-watermark" aria-hidden="true"></div>
     <div class="cursor-glow" id="cursorGlow"></div>
+    <div class="gold-cursor-flow" id="goldCursorFlow" aria-hidden="true"></div>
+    <div class="watermark-stamp" aria-hidden="true"><i></i><span>DECORATE ME</span></div>
     <header class="topbar">
         <div class="topbar-inner">
             <div class="topbar-brand" onclick="Router.go('dashboard')">
@@ -111,24 +117,34 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     document.addEventListener('keydown', onKey);
 })();
 
-// 游標跟隨的金色光暈
+// 游標跟隨的金色光暈與流標。
+// 位置同時寫進 --wm-x / --wm-y，訊號浮水印用同一組座標，
+// 這樣光暈、流標與浮水印是同一個光源，不會各走各的。
 (function(){
-    var glow = null;
+    var glow = null, flow = null, root = document.documentElement;
     document.addEventListener('mousemove', function(e){
         glow = glow || document.getElementById('cursorGlow');
-        if (!glow) return;
-        glow.style.left = e.clientX + 'px';
-        glow.style.top = e.clientY + 'px';
-        glow.style.opacity = '1';
+        flow = flow || document.getElementById('goldCursorFlow');
+        root.style.setProperty('--wm-x', e.clientX + 'px');
+        root.style.setProperty('--wm-y', e.clientY + 'px');
+        if (glow) {
+            glow.style.left = e.clientX + 'px';
+            glow.style.top = e.clientY + 'px';
+            glow.style.opacity = '1';
+        }
+        if (flow) flow.style.opacity = '1';
     });
-    document.addEventListener('mouseleave', function(){ if(glow) glow.style.opacity = '0'; });
+    document.addEventListener('mouseleave', function(){
+        if (glow) glow.style.opacity = '0';
+        if (flow) flow.style.opacity = '0';
+    });
 })();
 </script>
-<script defer src="js/config.js?v=20260727-025037"></script>
-<script defer src="config.local.js?v=20260727-025037" onerror="void 0"></script>
-<script defer src="js/service-endpoints.js?v=20260727-025037"></script>
-<script defer src="js/data.js?v=20260727-025037"></script>
-<script defer src="js/api.js?v=20260727-025037"></script>
-<script defer src="js/router.js?v=20260727-025037"></script>
+<script defer src="js/config.js?v=20260727-032853"></script>
+<script defer src="config.local.js?v=20260727-032853" onerror="void 0"></script>
+<script defer src="js/service-endpoints.js?v=20260727-032853"></script>
+<script defer src="js/data.js?v=20260727-032853"></script>
+<script defer src="js/api.js?v=20260727-032853"></script>
+<script defer src="js/router.js?v=20260727-032853"></script>
 </body>
 </html>
