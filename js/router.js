@@ -4352,7 +4352,25 @@ const PageInit = {
     // 身分與 Gateway 實際認證的身分不一致。被登出很煩，帶著別人的權限操作更糟。
     //
     // 正確的動作是擋下來：停掉進行中的請求、清掉這個分頁的照片與分析包、講清楚原因。
-    window.addEventListener('decorate-me:session-owner-changed', () => {
+    //
+    // 這裡只處理「有證據」的換帳號：Gateway 回 409，或 validateSession 讀回來的
+    // sub/actorId 與本機對不上。單純「這個分頁沒有 pin」不再送這個事件（見
+    // api.js 的 _protectedFetch），那種情況只擋下該次寫入，不清資料也不強制登出——
+    // 沒有證據卻做最重的處置，換來的是使用者三不五時被踢出去，還被告知一個
+    // 不存在的分頁換了帳號。
+    //
+    // 下面的 EXPECTED_ACTOR_REQUIRED 分支保留成防呆：萬一之後有人又從別處送出
+    // 這個 reason，至少訊息是照實講的，不會再誤導成「別的分頁」。
+    window.addEventListener('decorate-me:session-owner-changed', (event) => {
+        const reason = (event && event.detail && event.detail.reason) || '';
+        if (reason === 'EXPECTED_ACTOR_REQUIRED') {
+            handleSessionExpired({
+                title: '登入狀態已失效',
+                message: '這個分頁目前沒有可用的登入狀態，可能是登入階段已結束或分頁資料被清除。'
+                    + '為避免把資料寫到錯誤的帳號，已停止動作並清除本機資料，請重新登入。'
+            });
+            return;
+        }
         handleSessionExpired({
             title: '另一個分頁已切換登入帳號',
             message: '這個瀏覽器在別的分頁登入了不同的帳號，兩者共用同一份登入憑證。'

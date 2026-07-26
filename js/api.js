@@ -104,6 +104,9 @@ const USER_ERROR_ZH = Object.freeze({
 // 所以另外收在這裡，不混進 USER_ERROR_ZH（那份是後端 error code 對照表）。
 const WRITE_BLOCKED_ZH = Object.freeze({
     NO_LOCAL_IDENTITY: '請先登入後再執行這項操作。',
+    // 只擋這一次寫入，不清資料也不強制登出——說明要讓人知道「重新登入就好」，
+    // 而不是以為系統壞了。
+    NO_SESSION_PIN: '這個分頁的登入狀態已失效，請重新登入後再執行這項操作。',
     SESSION_UNAVAILABLE: '目前無法確認登入狀態，為避免寫錯帳號已中止這次操作，請稍後再試。',
     OWNER_MISMATCH: '登入身分已切換成其他帳號，為避免寫錯帳號已中止這次操作，請重新整理後再試。',
     DEFAULT: '無法確認目前的登入身分，這次操作已中止。'
@@ -395,8 +398,17 @@ const Api = {
         if (isWrite && isProtected) {
             const actorId = this._pinnedActor();
             if (!actorId) {
-                this._notifySessionInvalid('decorate-me:session-owner-changed', { reason: 'EXPECTED_ACTOR_REQUIRED' });
-                const error = new Error(WRITE_BLOCKED_ZH.SESSION_UNAVAILABLE);
+                // 這個分頁沒有 pin 到身分。擋下這次寫入就夠了——沒有 actor 就不可能
+                // 帶著別人的身分寫進去，而「寫錯帳號」正是這道防線唯一要擋的事。
+                //
+                // 以前這裡還會送 session-owner-changed，於是整個分頁被登出、本機資料
+                // 被清空、畫面跳回登入頁。但「沒有 pin」不等於「別人登入了」：重新整理、
+                // sessionStorage 被清、伺服器端登入階段結束都會走到這裡，而這些情況
+                // 一個證據都沒有。沒有證據就做最重的處置，結果是使用者三不五時被踢出去
+                // 並且被告知一個不存在的分頁換了帳號。真正有證據的兩條路（Gateway 回
+                // 409、或 validateSession 讀回來的 sub/actorId 與本機對不上）仍然照舊
+                // 登出，那兩條才是真的有人換了帳號。
+                const error = new Error(WRITE_BLOCKED_ZH.NO_SESSION_PIN);
                 error.code = 'EXPECTED_ACTOR_REQUIRED';
                 throw error;
             }
