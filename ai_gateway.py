@@ -68,6 +68,9 @@ UPSTREAMS = {
             r"v1/face/jobs/basic",
             rf"v1/face/jobs/{FACE_JOB_ID}",
             rf"v1/face/jobs/{FACE_JOB_ID}/result",
+            # 使用者對五官判斷的修正。與 /result 同一套 job token 驗證，
+            # 不放行的話端點做好了也進不來。
+            rf"v1/face/jobs/{FACE_JOB_ID}/feedback",
         ),
     ),
     "face-pro": Upstream(
@@ -80,6 +83,7 @@ UPSTREAMS = {
             r"v1/face/jobs/pro",
             rf"v1/face/jobs/{FACE_JOB_ID}",
             rf"v1/face/jobs/{FACE_JOB_ID}/result",
+            rf"v1/face/jobs/{FACE_JOB_ID}/feedback",
         ),
     ),
     "render-service": Upstream(

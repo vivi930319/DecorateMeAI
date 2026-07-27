@@ -14,6 +14,8 @@ from api_errors import (
     secret_equals,
 )
 import job_store
+import face_feedback
+from pydantic import BaseModel, Field
 from Face_analyzer_BASIC import FaceAnalyzer, MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES
 from dev_server_utils import get_cors_origins, run_dev_server
 from image_safety import sanitize_upload
@@ -378,6 +380,43 @@ async def get_pro_job_result(
         "status": "completed",
         "result": job["result"],
     }
+
+
+class FaceFeedbackIn(BaseModel):
+    packageId: str | None = None
+    predicted: dict = Field(default_factory=dict)
+    corrections: dict = Field(default_factory=dict)
+    # 前端在送出當下就判定好，不要在這裡用 corrections 是否為空去反推。
+    confirmed: bool = False
+
+
+@app.post("/v1/face/jobs/{job_id}/feedback", status_code=204)
+async def submit_pro_job_feedback(
+    job_id: str,
+    payload: FaceFeedbackIn,
+    x_job_token: str | None = Header(default=None),
+    result_token: str | None = Query(default=None),
+):
+    """收下使用者對這個 job 的五官修正。與 BASIC 同一套，詳見 face_feedback.py。
+
+    PRO 與 BASIC 的 job 存在不同集合，但修正共用 face_feedback 那一個——
+    重訓時看的是「哪個部位被改成什麼」，不是它當初走哪一條分析路徑；
+    mode 欄位留著讓需要時還分得出來。
+    """
+    job = job_store.get(_COL, job_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "JOB_NOT_FOUND", "message": "找不到 job"}},
+        )
+    _verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
+    try:
+        face_feedback.save("pro", job_id, payload.model_dump())
+    except face_feedback.FeedbackRejected as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "INVALID_FEEDBACK", "message": str(exc)}},
+        )
 
 
 if __name__ == "__main__":

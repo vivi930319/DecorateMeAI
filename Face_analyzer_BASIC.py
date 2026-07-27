@@ -83,6 +83,8 @@ async def _api_key_guard(request, call_next):
 install_api_error_handling(app, "face-analyzer-basic")
 
 import job_store
+import face_feedback
+from pydantic import BaseModel, Field
 
 _insight_app = None
 _face_mesh = None
@@ -520,6 +522,43 @@ async def get_basic_job_result(
         "status": "completed",
         "result": job["result"],
     }
+
+
+class FaceFeedbackIn(BaseModel):
+    packageId: str | None = None
+    predicted: dict = Field(default_factory=dict)
+    corrections: dict = Field(default_factory=dict)
+    # 前端在送出當下就判定好，不要在這裡用 corrections 是否為空去反推——
+    # 語意留在產生它的那一刻，接收端不做推論。
+    confirmed: bool = False
+
+
+@app.post("/v1/face/jobs/{job_id}/feedback", status_code=204)
+async def submit_basic_job_feedback(
+    job_id: str,
+    payload: FaceFeedbackIn,
+    x_job_token: str | None = Header(default=None),
+    result_token: str | None = Query(default=None),
+):
+    """收下使用者對這個 job 的五官修正。詳見 face_feedback.py 的模組說明。
+
+    驗證與其他 job 路由同一套：要帶得出建 job 時發的 token，才算得上是這個 job 的主人。
+    少了它，任何人都能對別人的 jobId 灌標籤，而這批資料是要拿去重訓的。
+    """
+    job = job_store.get(_COL, job_id)
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "JOB_NOT_FOUND", "message": "找不到 job"}},
+        )
+    _verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
+    try:
+        face_feedback.save("basic", job_id, payload.model_dump())
+    except face_feedback.FeedbackRejected as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": {"code": "INVALID_FEEDBACK", "message": str(exc)}},
+        )
 
 
 class FaceAnalyzer:
