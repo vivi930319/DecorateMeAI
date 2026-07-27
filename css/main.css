@@ -1770,6 +1770,22 @@ body {
 .step-panel.locked h3 { color:var(--mid); }
 @media (max-width:680px){ .step-panel { padding:26px 20px 24px; } .step-actions button { flex:1 1 100%; } }
 .suggestion-footer-actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:24px; }
+
+/* 收藏確認視窗 */
+.save-look-dialog { max-width:720px; }
+.save-look-dialog .compare-preview { margin-top:6px; }
+.save-look-dialog .compare-stage { height:340px; }
+.save-look-meta { margin-top:16px; }
+.save-look-warn { margin-top:12px; padding:12px 14px; border-radius:12px;
+    font-family:var(--cjk); font-size:12.5px; line-height:1.8; color:var(--ink-soft);
+    background:var(--glass); border:1px solid var(--danger); }
+.save-look-prompt { margin-top:12px; }
+.save-look-prompt summary { cursor:pointer; font-family:var(--sans); font-size:11px;
+    letter-spacing:.16em; text-transform:uppercase; color:var(--gold-deep); }
+.save-look-prompt pre { margin-top:10px; padding:12px 14px; border-radius:12px;
+    background:var(--glass); border:1px solid var(--edge); color:var(--mid);
+    font-size:12px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; max-height:200px; overflow:auto; }
+@media (max-width:680px){ .save-look-dialog .compare-stage { height:260px; } }
 .palette-row { display:flex; gap:0; justify-content:center; margin-top:24px; }
 .palette-row span { width:46px; height:46px; border:1px solid var(--edge); box-shadow:0 4px 12px rgba(120,70,66,0.16); }
 .palette-row span:first-child { border-radius:999px 0 0 999px; }

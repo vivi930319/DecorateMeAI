@@ -1184,6 +1184,92 @@ function openMakeupStyleModal(preselectedStyleId) {
     };
     renderOptions(); modal.classList.add('open');
 }
+// 收藏前的確認視窗。妝容對比圖原本是獨立一頁，但那一頁最後只剩「按住對比」是這裡
+// 沒有的——照片、渲染、配額、收藏都已經在妝容建議頁了。兩頁都能渲染又都能收藏，
+// 就是同一套邏輯養在兩個地方，改一邊忘一邊的傷這個專案已經吃過。
+//
+// 所以對比收進這個視窗：按住看妝前、放開回妝後，確認了才真的存。順便把原本只活在
+// 對比圖頁的兩樣東西帶過來——後端實際下的 renderPrompt，以及臨時網址的警告
+// （replicate.delivery 的圖日後會失效，不先講使用者會收藏到一堆打不開的圖）。
+function closeSaveLookModal(){ document.getElementById('saveLookModal')?.remove(); }
+function openSaveLookModal() {
+    if (isGuest()) { promptGuestAuth('收藏妝容對比圖'); return; }
+    const pkg = Router.analysisPackage || {};
+    const rd = pkg.render || {};
+    const mo = rd.makeupOutput || {};
+    const before = pkg.images?.front?.compressedDataUrl || rd.beforeImageUrl || rd.beforeImageDataUrl || '';
+    const after = rd.afterImageUrl || rd.afterImageDataUrl || mo.imageUrl || mo.imageDataUrl || '';
+    const style = STYLES.find(s => s.id === Router.selectedStyleId) || STYLES[0];
+    const prompt = rd.renderPrompt || pkg.generativeText?.renderPromptEn || '';
+    const isTemp = String(after).includes('replicate.delivery');
+
+    const modal = document.createElement('div');
+    modal.id = 'saveLookModal';
+    modal.className = 'makeup-style-modal open';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.innerHTML = `<div class="makeup-style-dialog save-look-dialog">
+        <div class="makeup-style-head">
+            <div><span class="eyebrow">Save</span><h2>收藏這組妝容</h2>
+            <p>${after ? '按住下方按鈕可以看妝前，放開回到妝後。' : '尚未生成妝後圖，收藏的會是目前的原始照片。'}</p></div>
+            <button class="makeup-style-close" type="button" aria-label="關閉">×</button>
+        </div>
+        <div class="compare-preview">
+            <div class="ph compare-stage after" id="saveLookStage">
+                <span class="compare-photo-label" id="saveLookLabel">${after ? '妝後' : '妝前'}</span>
+            </div>
+            <button class="compare-hold-btn" id="saveLookHoldBtn"${after && before ? '' : ' disabled'}>按住看妝前</button>
+        </div>
+        <div class="save-look-meta">
+            <div class="detail-pill">${escapeHtml(style.name)}</div>
+            ${isTemp ? `<p class="save-look-warn">妝後圖目前是臨時網址，收藏後可能日後失效。渲染端改用永久網址後就不會有這個問題。</p>` : ''}
+            ${prompt ? `<details class="save-look-prompt"><summary>這次實際下給模型的指令</summary><pre>${escapeHtml(prompt)}</pre></details>` : ''}
+        </div>
+        <div class="makeup-style-actions">
+            <button class="btn-outline" type="button" data-cancel>取消</button>
+            <button class="btn-gold" type="button" data-confirm>確認收藏</button>
+        </div>
+    </div>`;
+    document.body.appendChild(modal);
+
+    const stage = modal.querySelector('#saveLookStage');
+    const label = modal.querySelector('#saveLookLabel');
+    const paint = (kind) => {
+        const img = kind === 'before' ? before : after;
+        stage.classList.toggle('after', kind !== 'before');
+        stage.classList.toggle('before', kind === 'before');
+        stage.classList.toggle('has-render', !!img);
+        stage.style.backgroundImage = img ? `url("${img}")` : '';
+        stage.style.backgroundSize = img ? 'contain' : '';
+        stage.style.backgroundPosition = img ? 'center' : '';
+        stage.style.backgroundRepeat = img ? 'no-repeat' : '';
+        label.textContent = kind === 'before' ? '妝前' : '妝後';
+    };
+    paint(after ? 'after' : 'before');
+
+    // 按住看妝前、放開回妝後——沿用妝容對比圖頁那套手勢，含鍵盤與手機的處理。
+    const holdBtn = modal.querySelector('#saveLookHoldBtn');
+    const press = (e) => { if (e?.preventDefault) e.preventDefault(); if (after && before) paint('before'); };
+    const release = () => paint(after ? 'after' : 'before');
+    holdBtn.style.touchAction = 'none';
+    holdBtn.style.userSelect = 'none';
+    holdBtn.onpointerdown = press;
+    holdBtn.onpointerup = release;
+    holdBtn.onpointerleave = release;
+    holdBtn.onpointercancel = release;
+    holdBtn.oncontextmenu = (e) => e.preventDefault();
+    holdBtn.onkeydown = (e) => { if (e.key === ' ' || e.key === 'Enter') press(e); };
+    holdBtn.onkeyup = (e) => { if (e.key === ' ' || e.key === 'Enter') release(); };
+
+    modal.querySelector('.makeup-style-close').onclick = closeSaveLookModal;
+    modal.querySelector('[data-cancel]').onclick = closeSaveLookModal;
+    modal.querySelector('[data-confirm]').onclick = () => {
+        closeSaveLookModal();
+        if (saveCurrentLook()) showToast('已收藏妝容對比圖');
+    };
+    modal.onclick = (e) => { if (e.target === modal) closeSaveLookModal(); };
+}
+
 function closeProductRecommendationModal(){document.getElementById('productRecommendationModal')?.remove();}
 function openProductRecommendationModal(){
     const products=Router.analysisPackage?.recommendations?.products||[],modal=document.createElement('div'); modal.id='productRecommendationModal';modal.className='makeup-style-modal open';modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');
@@ -1298,6 +1384,9 @@ async function runMakeupRender(onProgress) {
                 beforeImageUrl: result.beforeImageUrl || null,
                 replicateTempUrl: result.replicateTempUrl || null,
                 savedImageId: result.savedImageId || null,
+                // 後端這次實際下給模型的指令。先前只有妝容對比圖頁把它畫在畫面上、
+                // 沒有存進資料包，所以離開那一頁就再也看不到了。收藏視窗要用。
+                renderPrompt: result.renderPrompt || null,
                 error: null
             }
         });
@@ -2868,24 +2957,10 @@ const PageInit = {
             };
         }
 
+        // 收藏一律走同一個確認視窗。臨時網址警告與 renderPrompt 預覽都在那裡，
+        // 兩邊各寫一份，遲早會有一邊漏掉警告。
         const saveBtn = document.getElementById('compareSaveLookBtn');
-        if (saveBtn) {
-            saveBtn.onclick = () => {
-                const afterUrl = Router.analysisPackage?.render?.afterImageUrl || '';
-                if (afterUrl.includes('replicate.delivery')) {
-                    showAlert('妝後圖片目前是臨時網址，收藏後可能日後失效。渲染端更新後將自動改用永久 URL。', {
-                        type: 'warning',
-                        onOk: () => {
-                            Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
-                            if (saveCurrentLook()) showToast('已收藏（注意：圖片為臨時網址）');
-                        }
-                    });
-                    return;
-                }
-                Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
-                if (saveCurrentLook()) showToast('已收藏妝容對比圖');
-            };
-        }
+        if (saveBtn) saveBtn.onclick = openSaveLookModal;
 
         function setCompareImage(kind) {
             const pkg = Router.analysisPackage || {};
@@ -2990,7 +3065,7 @@ const PageInit = {
         Router.pendingLookSaved = false;
         // 收藏鍵只有在建議已經產生時才存在（Step 1 還沒跑就沒有東西可收藏）。
         const saveBtn = document.getElementById('saveSuggestionBtn');
-        if (saveBtn) saveBtn.onclick = () => { if (saveCurrentLook()) showToast('已收藏妝容建議'); };
+        if (saveBtn) saveBtn.onclick = openSaveLookModal;
 
         // Step 1：就地產生 Ollama 建議，不換頁——換走的話使用者就看不到自己在哪一步了。
         const genBtn = document.getElementById('genSuggestionBtn');
