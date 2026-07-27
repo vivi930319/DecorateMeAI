@@ -2931,23 +2931,17 @@ const PageInit = {
         const area = document.getElementById('suggestionArea');
         if (!area) return;
         area.innerHTML = `
-            <div class="rendered-suggestion-card">
-                <div class="rendered-photo-frame" id="suggestionPhotoFrame">
-                    ${displayImage
-                        ? `<img src="${displayImage}" alt="${renderedImage ? `${style.name} 渲染後妝容照片` : `${style.name} 原始照片`}">`
-                        : `<div class="rendered-photo-placeholder">
-                            <span>妝後照片</span>
-                            <b>${style.name}</b>
-                        </div>`
-                    }
+            <div class="compare-layout">
+                <div class="compare-preview">
+                    <div class="ph compare-stage ${renderedImage ? 'after' : 'before'}" id="suggestionStage">
+                        <span class="compare-photo-label" id="suggestionPhotoLabel">${renderedImage ? '妝後' : '妝前'}</span>
+                    </div>
+                    <button class="compare-hold-btn" id="suggestionToggleBtn"${renderedImage ? '' : ' disabled'}>看妝前</button>
                 </div>
-                <div class="rendered-photo-copy">
-                    <div class="detail-pill" id="suggestionPhotoPill">${renderedImage ? '妝後' : '妝前'}</div>
+                <div class="analysis-section">
+                    <div class="detail-pill">妝容結果</div>
                     <h3 id="suggestionPhotoTitle">${renderedImage ? `${style.name} 渲染後妝容照片` : `${style.name} 原始照片`}</h3>
                     <p id="suggestionPhotoNote">${renderedImage ? '這張照片來自目前分析資料包的妝容結果。' : beforeImage ? '尚未取得妝容圖片，這裡先顯示目前分析資料包內的原始照片。' : '尚未取得妝容圖片。'}</p>
-                    <div class="suggestion-render-actions">
-                        <button class="btn-outline btn-sm" id="suggestionToggleBtn"${renderedImage ? '' : ' disabled'}>看妝前</button>
-                    </div>
                 </div>
             </div>
             <div class="style-intro-card">
@@ -3030,8 +3024,8 @@ const PageInit = {
         // 妝前／妝後切換。圖片來源與妝容對比圖頁同一組，但這裡是單純的按鈕點擊切換
         // ——對比圖頁那個是「按住看另一張」，在這一頁沒有照片並排，按住看不出所以然。
         // 沒有妝後圖時按鈕停用，切過去只會是空白。
-        const photoFrame = document.getElementById('suggestionPhotoFrame');
-        const photoPill = document.getElementById('suggestionPhotoPill');
+        const stage = document.getElementById('suggestionStage');
+        const photoLabel = document.getElementById('suggestionPhotoLabel');
         const photoTitle = document.getElementById('suggestionPhotoTitle');
         const photoNote = document.getElementById('suggestionPhotoNote');
         const toggleBtn = document.getElementById('suggestionToggleBtn');
@@ -3053,10 +3047,22 @@ const PageInit = {
             const imgs = photoSources();
             const isAfter = photoView === 'after';
             const showing = isAfter ? imgs.after : imgs.before;
-            photoFrame.innerHTML = showing
-                ? `<img src="${showing}" alt="${escapeHtml(style.name)} ${isAfter ? '渲染後妝容照片' : '原始照片'}">`
-                : `<div class="rendered-photo-placeholder"><span>妝後照片</span><b>${escapeHtml(style.name)}</b></div>`;
-            photoPill.textContent = isAfter ? '妝後' : '妝前';
+            // 跟妝容對比圖頁同一套：圖片走 background-image，沒有圖時讓 class 的漸層底露出來。
+            stage.classList.toggle('after', isAfter);
+            stage.classList.toggle('before', !isAfter);
+            stage.classList.toggle('has-render', !!showing);
+            if (showing) {
+                stage.style.backgroundImage = `url("${showing}")`;
+                stage.style.backgroundSize = 'contain';
+                stage.style.backgroundPosition = 'center';
+                stage.style.backgroundRepeat = 'no-repeat';
+            } else {
+                stage.style.backgroundImage = '';
+                stage.style.backgroundSize = '';
+                stage.style.backgroundPosition = '';
+                stage.style.backgroundRepeat = '';
+            }
+            photoLabel.textContent = isAfter ? '妝後' : '妝前';
             photoTitle.textContent = `${style.name} ${isAfter ? '渲染後妝容照片' : '原始照片'}`;
             photoNote.textContent = isAfter
                 ? '這張照片來自目前分析資料包的妝容結果。'
