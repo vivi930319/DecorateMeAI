@@ -558,8 +558,8 @@ const Api = {
     },
 
     // 後端建 job 時發 resultToken，之後查詢 job 狀態/結果必須帶 X-Job-Token，否則回 403
-    _faceJobHeaders(service, resultToken) {
-        const headers = { ...this._faceHeaders() };
+    _faceJobHeaders(service, resultToken, extra = {}) {
+        const headers = { ...this._faceHeaders(), ...extra };
         if (resultToken) headers['X-Job-Token'] = resultToken;
         return headers;
     },
@@ -604,14 +604,16 @@ const Api = {
     // confirmed 讓後端知道這一筆要不要留：使用者說判斷正確的那些，後端拿去核對完就可以
     // 丟掉、不必占空間；使用者真的改過的才是要留下來重訓的資料。判斷寫在這裡而不是讓
     // 後端自己數 corrections 是否為空，是為了讓語意留在送出的那一刻，不靠對方推論。
-    async sendAnalysisFeedback({ mode, jobId, packageId, predicted, corrections }) {
+    async sendAnalysisFeedback({ mode, jobId, resultToken, packageId, predicted, corrections }) {
         if (!jobId) return { ok: false, reason: 'no-job' };
         const service = mode === 'pro' ? 'facePro' : 'faceBasic';
         const fixes = corrections || {};
         try {
             const res = await this._protectedFetch(this.config.jobUrl(service, 'jobFeedbackPath', jobId), {
                 method: 'POST',
-                headers: this._gatewayHeaders({ 'Content-Type': 'application/json' }),
+                // 跟查 job 同一套憑證：token 證明這個 job 是這個瀏覽器建的，
+                // 否則任何人都能對別人的 jobId 灌回饋，訓練資料就髒了。
+                headers: this._faceJobHeaders(service, resultToken, { 'Content-Type': 'application/json' }),
                 body: JSON.stringify({
                     packageId: packageId || null,
                     predicted: predicted || {},

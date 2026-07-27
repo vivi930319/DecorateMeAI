@@ -572,6 +572,7 @@ function renderAnalysisFeedback(result, packageId) {
           Api.sendAnalysisFeedback({
               mode: Router.analyzeMode,
               jobId: Router.analysisPackage?.async?.jobId,
+              resultToken: Router.analysisPackage?.async?.resultToken,
               packageId,
               predicted,
               corrections
@@ -2466,6 +2467,10 @@ const PageInit = {
                     async: {
                         ...Router.analysisPackage.async,
                         jobId: job.jobId,
+                        // 建 job 時才拿得到，之後查 job 一律要它（X-Job-Token，沒帶會 403）。
+                        // 回饋是使用者看完結果才送的，中間可能重新整理過，所以要存下來——
+                        // 不存的話回饋那一支就沒有東西可以證明「這個 job 是我的」。
+                        resultToken: job.resultToken || null,
                         progress: job.progress || 0,
                         stage: job.stage || 'upload'
                     }
