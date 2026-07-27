@@ -1262,6 +1262,73 @@ async function runMakeupSuggestion(onProgress) {
     }
 }
 
+// 產生妝後圖的核心流程：權限與照片檢查、呼叫 Api.renderMakeupAsync、把結果寫回
+// analysisPackage 並存草稿。跟 runMakeupSuggestion 一樣完全不碰 DOM——妝容對比圖頁
+// 與妝容建議頁都用它，各自畫自己的進度與配額。
+// 擋下來的原因用 reason 回報，讓呼叫端決定要跳註冊、跳分析還是只顯示訊息。
+async function runMakeupRender(onProgress) {
+    const notify = typeof onProgress === 'function' ? onProgress : () => {};
+    if (typeof isGuest === 'function' && isGuest()) return { ok: false, reason: 'guest' };
+    const profile = Auth.getProfile();
+    if (typeof AdminStore !== 'undefined' && !AdminStore.canRender(profile)) return { ok: false, reason: 'plan' };
+
+    const pkg = Router.analysisPackage;
+    const imageDataUrl = pkg?.images?.front?.compressedDataUrl || pkg?.images?.front?.dataUrl || '';
+    if (!imageDataUrl) return { ok: false, reason: 'no-photo' };
+
+    // 只挑後端會讀的兩塊，不整包送——資料包裡有 base64 圖片，整包送 payload 會爆炸。
+    const styleId = Router.selectedStyleId || pkg?.render?.styleId || 'natural';
+    const renderPackage = { faceAnalysis: pkg?.faceAnalysis || null, render: { styleId } };
+
+    try {
+        const result = await Api.renderMakeupAsync({
+            imageDataUrl,
+            styleId,
+            analysisPackage: renderPackage,
+            onProgress: p => notify(p)
+        });
+        Router.analysisPackage = AnalysisPackage.update(pkg, {
+            render: {
+                ...(pkg.render || {}),
+                status: 'completed',
+                provider: 'replicate',
+                afterImageUrl: result.afterImageUrl,
+                // 妝前圖的 Gateway 路徑。少了這行，buildCurrentLookRecord 讀到的
+                // render.beforeImageUrl 永遠是 undefined，收藏就存不到妝前圖。
+                beforeImageUrl: result.beforeImageUrl || null,
+                replicateTempUrl: result.replicateTempUrl || null,
+                savedImageId: result.savedImageId || null,
+                error: null
+            }
+        });
+        AnalysisDraft.save(Router.analysisPackage);
+        return { ok: true, result };
+    } catch (err) {
+        return { ok: false, error: err };
+    }
+}
+
+// 渲染配額要顯示的那一句。妝容對比圖頁與妝容建議頁都要講同一件事，
+// 各寫一份遲早會講得不一樣，所以文字在這裡產生，兩邊只負責塞進自己的元素。
+function renderQuotaText() {
+    if (typeof isGuest === 'function' && isGuest()) return '訪客無法使用 AI 渲染，請先註冊會員';
+    const profile = Auth.getProfile();
+    const remaining = AdminStore.getRemainingRenders(profile);
+    const dailyLimit = AdminStore.getDailyRenderLimit(profile);
+    const resetAt = profile?.renderQuota?.resetAt;
+    if (remaining === Infinity || dailyLimit === Infinity) return 'AI 妝容渲染：無限次';
+    if (remaining != null && dailyLimit != null && resetAt) return `AI 妝容渲染：今天還剩 ${remaining} / ${dailyLimit} 次`;
+    return 'AI 妝容渲染：依你的會員方案提供每日次數';
+}
+
+// 被 runMakeupRender 擋下來時要對使用者說什麼、帶他去哪。兩頁共用，免得各寫一套講法。
+function handleRenderBlocked(reason) {
+    if (reason === 'guest') { promptGuestAuth('AI 渲染妝容'); return true; }
+    if (reason === 'plan') { showAlert('你目前的方案無法使用 AI 妝容渲染。', { type: 'error' }); return true; }
+    if (reason === 'no-photo') { showAlert('尚未上傳照片，請先完成臉部分析。', { type: 'error' }); return true; }
+    return false;
+}
+
 const Router = {
     currentPage: null,
     analysisResult: null,
@@ -2736,50 +2803,11 @@ const PageInit = {
         const renderStatus = document.getElementById('compareRenderStatus');
         const renderQuotaEl = document.getElementById('compareRenderQuota');
         const refreshRenderQuota = () => {
-            if (!renderQuotaEl) return;
-            const quotaProfile = Auth.getProfile();
-            const remaining = AdminStore.getRemainingRenders(quotaProfile);
-            const dailyLimit = AdminStore.getDailyRenderLimit(quotaProfile);
-            const resetAt = quotaProfile?.renderQuota?.resetAt;
-            if (isGuest()) {
-                renderQuotaEl.textContent = '訪客無法使用 AI 渲染，請先註冊會員';
-                return;
-            }
-            if (remaining === Infinity || dailyLimit === Infinity) {
-                renderQuotaEl.textContent = 'AI 妝容渲染：無限次';
-                return;
-            }
-            if (remaining != null && dailyLimit != null && resetAt) {
-                renderQuotaEl.textContent = `AI 妝容渲染：今天還剩 ${remaining} / ${dailyLimit} 次`;
-                return;
-            }
-            renderQuotaEl.textContent = 'AI 妝容渲染：依你的會員方案提供每日次數';
+            if (renderQuotaEl) renderQuotaEl.textContent = renderQuotaText();
         };
         refreshRenderQuota();
         if (renderBtn) {
             renderBtn.onclick = async () => {
-                const profile = Auth.getProfile();
-                if (isGuest()) {
-                    promptGuestAuth('AI 渲染妝容');
-                    return;
-                }
-                if (!AdminStore.canRender(profile)) {
-                    showAlert('你目前的方案無法使用 AI 妝容渲染。', { type: 'error' });
-                    return;
-                }
-                let pkg = Router.analysisPackage;
-                const imageDataUrl = pkg?.images?.front?.compressedDataUrl || pkg?.images?.front?.dataUrl || '';
-                if (!imageDataUrl) { showAlert('尚未上傳照片，請先完成臉部分析。', { type: 'error' }); return; }
-                // 2026-07-20 移除 renderApiKey 檢查：渲染改走 Gateway（session-only）後，
-                // 前端不再持有也不再送 render 金鑰，這個檢查只會平白擋住渲染按鈕。
-                // 2026-07-15 對齊後端接口：前端不再自己組 prompt（後端會忽略），只送結構化資料。
-                // 只挑後端會讀的兩塊，不整包送——資料包裡有 base64 圖片，整包送 payload 會爆炸。
-                const styleId = Router.selectedStyleId || pkg?.render?.styleId || 'natural';
-                const renderPackage = {
-                    faceAnalysis: pkg?.faceAnalysis || null,
-                    render: { styleId }
-                };
-
                 renderBtn.disabled = true;
                 renderBtn.textContent = '渲染中...';
                 renderStatus.style.display = 'block';
@@ -2806,12 +2834,10 @@ const PageInit = {
                 }, 40);
 
                 try {
-                    const result = await Api.renderMakeupAsync({
-                        imageDataUrl,
-                        styleId,
-                        analysisPackage: renderPackage,
-                        onProgress: (p) => { targetProgress = Math.max(targetProgress, p); }
-                    });
+                    const outcome = await runMakeupRender(p => { targetProgress = Math.max(targetProgress, p); });
+                    if (!outcome.ok && handleRenderBlocked(outcome.reason)) { renderStatus.style.display = 'none'; return; }
+                    if (!outcome.ok) throw outcome.error;
+                    const result = outcome.result;
                     targetProgress = 100;
                     // 顯示後端這次實際下給模型的指令（renderPrompt 由後端組：Ollama 個人化或 styleId 白名單）
                     const promptPreviewEl = document.getElementById('comparePromptPreview');
@@ -2826,22 +2852,6 @@ const PageInit = {
                     if (!result.renderQuota && renderQuotaEl) {
                         renderQuotaEl.textContent = '妝容渲染完成！剩餘次數稍後更新。';
                     }
-                    Router.analysisPackage = AnalysisPackage.update(pkg, {
-                        render: {
-                            ...(pkg.render || {}),
-                            status: 'completed',
-                            provider: 'replicate',
-                            afterImageUrl: result.afterImageUrl,
-                            // 妝前圖的 Gateway 路徑。少了這行，buildCurrentLookRecord 讀到的
-                            // render.beforeImageUrl 永遠是 undefined，收藏就存不到妝前圖——
-                            // 讀的那一半寫好了、寫的這一半漏掉，功能看起來上線了其實沒有。
-                            beforeImageUrl: result.beforeImageUrl || null,
-                            replicateTempUrl: result.replicateTempUrl || null,
-                            savedImageId: result.savedImageId || null,
-                            error: null
-                        }
-                    });
-                    AnalysisDraft.save(Router.analysisPackage);
                     Router.compareBaseline = 'after';  // 渲染完成後，基準改成成果圖：按住看原圖、放開回成果
                     showAfter();
                     renderStatus.textContent = '渲染完成！';
@@ -2950,7 +2960,7 @@ const PageInit = {
         if (!area) return;
         area.innerHTML = `
             <div class="rendered-suggestion-card">
-                <div class="rendered-photo-frame">
+                <div class="rendered-photo-frame" id="suggestionPhotoFrame">
                     ${displayImage
                         ? `<img src="${displayImage}" alt="${renderedImage ? `${style.name} 渲染後妝容照片` : `${style.name} 原始照片`}">`
                         : `<div class="rendered-photo-placeholder">
@@ -2960,9 +2970,15 @@ const PageInit = {
                     }
                 </div>
                 <div class="rendered-photo-copy">
-                    <div class="detail-pill">妝容結果</div>
-                    <h3>${renderedImage ? `${style.name} 渲染後妝容照片` : `${style.name} 原始照片`}</h3>
-                    <p>${renderedImage ? '這張照片來自目前分析資料包的妝容結果。' : beforeImage ? '尚未取得妝容圖片，這裡先顯示目前分析資料包內的原始照片。' : '尚未取得妝容圖片。'}</p>
+                    <div class="detail-pill" id="suggestionPhotoPill">${renderedImage ? '妝後' : '妝前'}</div>
+                    <h3 id="suggestionPhotoTitle">${renderedImage ? `${style.name} 渲染後妝容照片` : `${style.name} 原始照片`}</h3>
+                    <p id="suggestionPhotoNote">${renderedImage ? '這張照片來自目前分析資料包的妝容結果。' : beforeImage ? '尚未取得妝容圖片，這裡先顯示目前分析資料包內的原始照片。' : '尚未取得妝容圖片。'}</p>
+                    <div class="suggestion-render-actions">
+                        <button class="btn-outline btn-sm" id="suggestionToggleBtn"${renderedImage ? '' : ' disabled'}>看妝前</button>
+                        <button class="btn-gold btn-sm" id="suggestionRenderBtn">生成妝容</button>
+                    </div>
+                    <div class="suggestion-render-quota" id="suggestionRenderQuota"></div>
+                    <div class="suggestion-render-status" id="suggestionRenderStatus" style="display:none;"></div>
                 </div>
             </div>
             <div class="style-intro-card">
@@ -2998,6 +3014,91 @@ const PageInit = {
         Router.pendingLookSaved = false;
         document.getElementById('saveSuggestionBtn').onclick = () => {
             if (saveCurrentLook()) showToast('已收藏妝容建議');
+        };
+
+        // 妝前／妝後切換。圖片來源與妝容對比圖頁同一組，但這裡是單純的按鈕點擊切換
+        // ——對比圖頁那個是「按住看另一張」，在這一頁沒有照片並排，按住看不出所以然。
+        // 沒有妝後圖時按鈕停用，切過去只會是空白。
+        const photoFrame = document.getElementById('suggestionPhotoFrame');
+        const photoPill = document.getElementById('suggestionPhotoPill');
+        const photoTitle = document.getElementById('suggestionPhotoTitle');
+        const photoNote = document.getElementById('suggestionPhotoNote');
+        const toggleBtn = document.getElementById('suggestionToggleBtn');
+        const renderBtn = document.getElementById('suggestionRenderBtn');
+        const renderStatus = document.getElementById('suggestionRenderStatus');
+        const quotaEl = document.getElementById('suggestionRenderQuota');
+
+        const photoSources = () => {
+            const p = Router.analysisPackage || {};
+            const rd = p.render || {};
+            const mo = rd.makeupOutput || {};
+            return {
+                before: p.images?.front?.compressedDataUrl || rd.beforeImageUrl || rd.beforeImageDataUrl || '',
+                after: rd.afterImageUrl || rd.afterImageDataUrl || mo.imageUrl || mo.imageDataUrl || ''
+            };
+        };
+        let photoView = photoSources().after ? 'after' : 'before';
+        const paintPhoto = () => {
+            const imgs = photoSources();
+            const isAfter = photoView === 'after';
+            const showing = isAfter ? imgs.after : imgs.before;
+            photoFrame.innerHTML = showing
+                ? `<img src="${showing}" alt="${escapeHtml(style.name)} ${isAfter ? '渲染後妝容照片' : '原始照片'}">`
+                : `<div class="rendered-photo-placeholder"><span>妝後照片</span><b>${escapeHtml(style.name)}</b></div>`;
+            photoPill.textContent = isAfter ? '妝後' : '妝前';
+            photoTitle.textContent = `${style.name} ${isAfter ? '渲染後妝容照片' : '原始照片'}`;
+            photoNote.textContent = isAfter
+                ? '這張照片來自目前分析資料包的妝容結果。'
+                : (imgs.before ? '這是你這次臉部分析使用的原始照片。' : '尚未取得照片。');
+            toggleBtn.disabled = !imgs.after;
+            toggleBtn.textContent = isAfter ? '看妝前' : '看妝後';
+        };
+        toggleBtn.onclick = () => { photoView = photoView === 'after' ? 'before' : 'after'; paintPhoto(); };
+        paintPhoto();
+
+        quotaEl.textContent = renderQuotaText();
+
+        // 生成妝容：沒有這顆按鈕，使用者拿到文字建議後就沒有下一步，流程在這裡斷掉。
+        renderBtn.onclick = async () => {
+            const originalText = renderBtn.textContent;
+            renderBtn.disabled = true;
+            renderBtn.textContent = '渲染中...';
+            renderStatus.style.display = 'block';
+            renderStatus.innerHTML = `
+                <div class="srs-line">AI 正在上妝… <span id="suggestionRenderPct">1%</span></div>
+                <div class="srs-track"><div class="srs-bar" id="suggestionRenderBar"></div></div>
+                <div class="srs-hint">生成中，約需 60–150 秒，請不要關閉頁面</div>`;
+            const barEl = document.getElementById('suggestionRenderBar');
+            const pctEl = document.getElementById('suggestionRenderPct');
+            // 後端每 2 秒才回一次進度，直接套上去會一格一格跳；每 40ms 推進 1，只准往前。
+            let shown = 1, target = 1;
+            const tick = setInterval(() => {
+                if (shown >= target) return;
+                shown = Math.min(target, shown + 1);
+                if (barEl) barEl.style.width = shown + '%';
+                if (pctEl) pctEl.textContent = shown + '%';
+            }, 40);
+            try {
+                const outcome = await runMakeupRender(p => { target = Math.max(target, p); });
+                if (!outcome.ok && handleRenderBlocked(outcome.reason)) { renderStatus.style.display = 'none'; return; }
+                if (!outcome.ok) {
+                    renderStatus.textContent = '渲染失敗：' + outcome.error.message;
+                    showAlert('妝容生成失敗：' + outcome.error.message, { type: 'error' });
+                    return;
+                }
+                target = 100;
+                await new Promise(resolve => setTimeout(resolve, 800));
+                photoView = 'after';
+                paintPhoto();
+                quotaEl.textContent = renderQuotaText();
+                renderStatus.textContent = '渲染完成！';
+                setTimeout(() => { renderStatus.style.display = 'none'; }, 3000);
+                showToast('妝容渲染完成');
+            } finally {
+                clearInterval(tick);
+                renderBtn.disabled = false;
+                renderBtn.textContent = originalText;
+            }
         };
 
     },

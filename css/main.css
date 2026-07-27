@@ -1590,6 +1590,16 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .rendered-photo-placeholder span { font-size:12px; letter-spacing:3px; color:var(--muted); margin-bottom:8px; }
 .rendered-photo-placeholder b { font-family:var(--serif); font-size:30px; letter-spacing:2px; font-weight:600; }
 .rendered-photo-copy h3 { font-size:22px; letter-spacing:2px; color:var(--ink-soft); margin:6px 0 10px; }
+/* 妝容建議頁的妝前／妝後切換與生成按鈕 */
+.suggestion-render-actions { display:flex; flex-wrap:wrap; gap:10px; margin-top:18px; }
+.suggestion-render-actions button:disabled { opacity:.45; cursor:not-allowed; transform:none; }
+.suggestion-render-quota { font-family:var(--sans); font-size:11px; letter-spacing:.1em; color:var(--gold-deep); margin-top:12px; }
+.suggestion-render-status { margin-top:14px; font-family:var(--cjk); font-size:13px; color:var(--mid); }
+.suggestion-render-status .srs-line { margin-bottom:8px; font-weight:500; color:var(--ink-soft); }
+.suggestion-render-status .srs-track { height:8px; border-radius:999px; overflow:hidden; background:var(--glass); border:1px solid var(--edge); }
+.suggestion-render-status .srs-bar { height:100%; width:1%; border-radius:999px; background:var(--btn-grad); transition:width .2s linear; }
+.suggestion-render-status .srs-hint { margin-top:8px; font-size:12px; opacity:.75; }
+@media (max-width:680px){ .suggestion-render-actions button { flex:1 1 100%; } }
 .rendered-photo-copy p { font-size:13px; line-height:1.8; color:var(--mid); }
 .compare-layout { display:grid; grid-template-columns:1.3fr 0.7fr; gap:24px; }
 .compare-preview { background:var(--paper); border:1px solid var(--line-gold); padding:18px; }
