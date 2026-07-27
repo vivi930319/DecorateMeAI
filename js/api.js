@@ -211,14 +211,16 @@ const ApiConfig = {
             posePath: '/v1/face/pose',
             jobPath: '/v1/face/jobs/basic',
             jobStatusPath: '/v1/face/jobs/{jobId}',
-            jobResultPath: '/v1/face/jobs/{jobId}/result'
+            jobResultPath: '/v1/face/jobs/{jobId}/result',
+            jobFeedbackPath: '/v1/face/jobs/{jobId}/feedback'
         },
         facePro: {
             baseUrl: gatewayService('face-pro'),
             analyzePath: '/v1/face/analyze/pro',
             jobPath: '/v1/face/jobs/pro',
             jobStatusPath: '/v1/face/jobs/{jobId}',
-            jobResultPath: '/v1/face/jobs/{jobId}/result'
+            jobResultPath: '/v1/face/jobs/{jobId}/result',
+            jobFeedbackPath: '/v1/face/jobs/{jobId}/feedback'
         },
         textSuggestion: {
             baseUrl: gatewayService('text-suggestion'),
@@ -588,6 +590,39 @@ const Api = {
         const res = await this._protectedFetch(this.config.url('facePro', 'jobPath'), { method: 'POST', body: fd, headers: this._faceHeaders() });
         if (!res.ok) throw await this._faceError(res, '建立 PRO job 失敗');
         return res.json();
+    },
+
+    // 把使用者對五官判斷的修正回報給臉部分析服務。
+    //
+    // 這些選項本來就是照 models/basic_features_roi/*_classes.json 的類別排的，所以每一筆
+    // 修正都是一筆對得上模型類別的人工標註——而 issue #24 的表顯示眼型只有 603 筆、
+    // 分數 0.387，正好是使用者最看得出來不對、也最會去改的那一項。回饋屬於模型那一端，
+    // 不是會員資料庫。
+    //
+    // 盡力而為：端點還沒上線時會 404，這裡吞掉就好。本機那份 AnalysisFeedback 仍然是
+    // 使用者當下的依據，送不出去也不影響他這一次的建議與收藏。
+    // confirmed 讓後端知道這一筆要不要留：使用者說判斷正確的那些，後端拿去核對完就可以
+    // 丟掉、不必占空間；使用者真的改過的才是要留下來重訓的資料。判斷寫在這裡而不是讓
+    // 後端自己數 corrections 是否為空，是為了讓語意留在送出的那一刻，不靠對方推論。
+    async sendAnalysisFeedback({ mode, jobId, packageId, predicted, corrections }) {
+        if (!jobId) return { ok: false, reason: 'no-job' };
+        const service = mode === 'pro' ? 'facePro' : 'faceBasic';
+        const fixes = corrections || {};
+        try {
+            const res = await this._protectedFetch(this.config.jobUrl(service, 'jobFeedbackPath', jobId), {
+                method: 'POST',
+                headers: this._gatewayHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({
+                    packageId: packageId || null,
+                    predicted: predicted || {},
+                    corrections: fixes,
+                    confirmed: Object.keys(fixes).length === 0
+                })
+            });
+            return { ok: res.ok, status: res.status };
+        } catch (_) {
+            return { ok: false };
+        }
     },
 
     async getFaceJob(mode, jobId, resultToken) {

@@ -1798,6 +1798,10 @@ body {
 .step-note { font-family:var(--cjk); font-size:13px; font-weight:300; line-height:1.9;
     color:var(--mid); max-width:70ch; margin:0 0 22px; }
 .step-actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:20px; }
+/* 分析被改過、但建議還是舊的那段時間的提示 */
+.step-stale { margin:0 0 20px; padding:12px 14px; border-radius:12px;
+    font-family:var(--cjk); font-size:12.5px; line-height:1.8; color:var(--ink-soft);
+    background:var(--glass); border:1px solid var(--gold-deep); max-width:70ch; }
 /* 步驟狀態：借用參考站那條 READY／DONE 的小字，讓使用者知道這一步跑到哪了 */
 .step-state { margin-top:14px; font-family:var(--sans); font-size:10px; letter-spacing:.3em;
     text-transform:uppercase; color:var(--gold-deep); }

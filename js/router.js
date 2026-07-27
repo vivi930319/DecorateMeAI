@@ -471,6 +471,17 @@ function applyAnalysisCorrections(corrections) {
         });
         if (typeof AnalysisDraft !== 'undefined') AnalysisDraft.save(Router.analysisPackage);
     }
+    // 已經產生過的建議是用修正前的五官跑出來的。這裡不自動重跑——那是一次 Ollama 呼叫，
+    // 而使用者可能只是順手改一項——但要標成過期，否則畫面上會是「修正後的五官」配
+    // 「修正前的建議」，正好是這次要消滅的那種不一致。
+    // update() 是頂層淺合併，下次重新生成時整個 generativeText 會被換掉，stale 自然消失。
+    const gt = Router.analysisPackage?.generativeText;
+    if (gt && gt.suggestion) {
+        Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
+            generativeText: { ...gt, stale: true }
+        });
+        if (typeof AnalysisDraft !== 'undefined') AnalysisDraft.save(Router.analysisPackage);
+    }
     // 分析紀錄是在回饋面板出現之前就寫入的，也要跟著改。
     if (typeof History !== 'undefined' && History.applyCorrections) {
         History.applyCorrections(Router.analysisPackage?.id, corrections);
@@ -502,8 +513,8 @@ function renderAnalysisFeedback(result, packageId) {
     box.innerHTML = `
       <div class="af-head">
         <b>這些判斷準嗎？</b>
-        <p>覺得哪一項不對就改掉，其餘視為正確。你的回饋會用來改善判斷準確度；
-           <strong>這一步不會上傳你的照片</strong>，只記錄判斷結果與你的修正。</p>
+        <p>覺得哪一項不對就改掉，其餘視為正確。你的修正會<strong>立刻套用</strong>到這次的妝容建議與收藏，
+           並回報給分析模型作為訓練資料；<strong>這一步不會上傳你的照片</strong>，只送出判斷結果與你的修正。</p>
       </div>
       <div class="af-rows">${fields.map(field => {
         const chosen = corrections[field];
@@ -536,6 +547,17 @@ function renderAnalysisFeedback(result, packageId) {
     if (submit) submit.onclick = () => {
       AnalysisFeedback.save(packageId, predicted, corrections);
       applyAnalysisCorrections(corrections);
+      // 回報給臉部分析服務。端點還沒上線時會 404，sendAnalysisFeedback 自己吞掉——
+      // 使用者這一次的建議與收藏已經套用了修正，送不出去不影響他。
+      if (Api.sendAnalysisFeedback) {
+          Api.sendAnalysisFeedback({
+              mode: Router.analyzeMode,
+              jobId: Router.analysisPackage?.async?.jobId,
+              packageId,
+              predicted,
+              corrections
+          }).catch(() => {});
+      }
       const changed = Object.keys(corrections).length;
       showToast(changed ? `已套用 ${changed} 項修正，之後的建議與收藏都會以你的答案為準` : '已記錄「判斷正確」，謝謝');
       const note = document.getElementById('afNote');
@@ -3046,6 +3068,9 @@ const PageInit = {
                 <span class="eyebrow">Step 1 · Personalized text</span>
                 <h3>${aiSuggestion ? `${style.name} 專屬妝容建議` : '先生成 Ollama 個人化建議'}</h3>
                 <p class="step-note">系統會把本次臉部分析與「${style.name}」一起送給文字建議服務，為你個人產生建議。這一步只產生文字，不會產生圖片。</p>
+                ${pkg.generativeText?.stale
+                    ? `<p class="step-stale">你在產生這份建議之後修改過臉部分析。下面這份是用修改前的五官跑出來的，按「重新生成建議」就會換成你的答案。</p>`
+                    : ''}
                 ${aiSuggestion ? `<div class="advice-grid">${renderMakeupAdviceGrid(aiSuggestion)}</div>` : ''}
                 <div class="step-actions">
                     <button class="btn-gold" id="genSuggestionBtn">${aiSuggestion ? '重新生成建議' : '生成 Ollama 建議'}</button>
