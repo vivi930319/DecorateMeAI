@@ -2680,7 +2680,7 @@ const MemberRewards = {
     themes: [
         { id: 'classic', name: '經典奶茶', cost: 0, swatches: ['#F7F0E6', '#C49A62', '#4A3438'], desc: '預設會員中心主題' },
         // id 維持 'rose'：資料庫用它記錄已購買，改了會員就失去已兌換的主題。
-        { id: 'rose', name: '銀霧', cost: 80, swatches: ['#EEF0F2', '#AEB4BB', '#3E444B'], desc: '鉑金銀灰會員介面' },
+        { id: 'rose', name: '銀霧', cost: 80, swatches: ['#232629', '#C6CCD3', '#EDF0F3'], desc: '深色鉑金銀灰會員介面' },
         { id: 'jade', name: '青玉光澤', cost: 120, swatches: ['#E6F0EA', '#6A9A7C', '#30483A'], desc: '清透綠色會員介面' },
         { id: 'noir', name: '黑金 PRO', cost: 180, swatches: ['#2F2629', '#D9B66F', '#F7EAD2'], desc: '深色高級會員介面' }
     ],

@@ -1012,23 +1012,25 @@ body {
 
 /* 銀霧 —— 鉑金銀灰；沿用 rose id 以保留既有兌換與會員資料 */
 body[data-member-theme="rose"] {
-    --ivory:#E3E5E7; --ivory-2:#C9CDD1; --paper:#F1F2F3; --white:#F8F8F7;
-    --gold:#8D939A; --gold-lt:#D9DCE0; --gold-deep:#5F656C; --gold-soft:#AEB3BA;
-    --gold-dim:rgba(142,148,155,0.34);
-    --gold-grad:linear-gradient(100deg,#656B72 0%,#C8CCD1 30%,#F7F8F8 50%,#C8CCD1 70%,#656B72 100%);
-    --blush:#A7ABB0; --blush-lt:#E2E4E6; --blush-deep:#737980; --blush-panel:#D8DBDE;
-    --terra:#90969D; --terra-lt:#BEC2C7; --terra-deep:#62686F;
-    --terra-grad:linear-gradient(150deg,#B8BDC2 0%,#858B92 60%,#5D636A 100%);
-    --ink:#26292D; --ink-2:#34383D; --ink-3:#44494F;
-    --ink-soft:#30343A; --mid:#6F757C; --lt:#8A9097; --muted:#7F858C;
-    --line:rgba(45,49,54,0.15); --line-gold:rgba(142,148,155,0.32);
-    --line-dk:rgba(217,220,224,0.24);
-    /* 銀霧是淺底，玻璃維持白霧，只把高光與邊線收成銀調 */
-    --glass:rgba(255,255,255,0.66); --sheen:rgba(255,255,255,0.88); --edge:rgba(142,148,155,0.34);
-    --btn-grad:linear-gradient(100deg,#8d939a 0%,#d9dce0 46%,#f7f8f8 100%); --btn-ink:#26292d;
+    --ivory:#1C1E21; --ivory-2:#25282C; --paper:#232629; --white:#2C3034;
+    --gold:#C6CCD3; --gold-lt:#E8ECEF; --gold-deep:#9AA2AB; --gold-soft:#D4DAE0;
+    --gold-dim:rgba(198,204,211,0.34);
+    --gold-grad:linear-gradient(100deg,#9AA2AB 0%,#E8ECEF 30%,#FBFCFD 50%,#E8ECEF 70%,#9AA2AB 100%);
+    --blush:#AEB6BE; --blush-lt:#343A40; --blush-deep:#D4DAE0; --blush-panel:#2A2F34;
+    --terra:#C6CCD3; --terra-lt:#DDE2E7; --terra-deep:#8B939C;
+    --terra-grad:linear-gradient(150deg,#D2D8DE 0%,#A8B0B8 60%,#8B939C 100%);
+    /* 文字與淺色元素：深底之下必須反過來用亮色（同 noir 的處理） */
+    --ink:#EDF0F3; --ink-2:#DDE1E6; --ink-3:#CBD1D8;
+    --ink-soft:#EDF0F3; --mid:#9BA3AB; --lt:#868E97; --muted:#929AA3;
+    --line:rgba(237,240,243,0.16); --line-gold:rgba(198,204,211,0.34);
+    --line-dk:rgba(198,204,211,0.24);
+    /* 深色面板取代白色霧面，高光與邊線走銀 */
+    --glass:rgba(20,23,26,0.72); --sheen:rgba(216,222,228,0.14); --edge:rgba(216,222,228,0.30);
+    --btn-grad:linear-gradient(100deg,#8b939c 0%,#d2d8de 46%,#f7f9fa 100%); --btn-ink:#14171a;
 }
-body[data-member-theme="rose"] .topbar { background:rgba(38,41,45,0.9); }
-body[data-member-theme="rose"] .member-id { background:#34383D; }
+body[data-member-theme="rose"] .topbar { background:rgba(15,17,19,0.9); }
+body[data-member-theme="rose"] .member-id { background:#1B1E21; }
+body[data-member-theme="rose"] ::selection { background:var(--gold); color:var(--ivory); }
 
 /* 青玉光澤 —— 綠色調 */
 body[data-member-theme="jade"] {
@@ -1740,9 +1742,12 @@ body {
 
 .style-intro-card { position:relative; margin:18px 0 22px; padding:34px 36px; border-radius:18px;
     background:var(--glass); backdrop-filter:blur(18px) saturate(140%); -webkit-backdrop-filter:blur(18px) saturate(140%);
-    border:1px solid var(--edge); box-shadow:inset 0 1px 0 var(--sheen), 0 14px 38px rgba(120,70,66,0.1); text-align:center; }
+    border:1px solid var(--edge); box-shadow:inset 0 1px 0 var(--sheen), 0 14px 38px rgba(120,70,66,0.1); }
 .style-intro-card h3 { font-family:var(--cjk); font-size:19px; font-weight:500; letter-spacing:.08em; color:var(--gold-deep); margin-bottom:14px; }
-.style-intro-card p { font-family:var(--cjk); font-size:14.5px; font-weight:300; line-height:2; color:var(--mid); max-width:600px; margin:0 auto; }
+.style-intro-card p { font-family:var(--cjk); font-size:14.5px; font-weight:300; line-height:2; color:var(--mid); }
+/* 這一頁的內容靠左展開。原本每一塊都置中 + max-width 夾住，在寬螢幕上會被擠成
+   中間細細一條，段落愈長愈難讀。色票也跟著靠左，才對得上左邊的標題。 */
+.style-intro-card .palette-row { justify-content:flex-start; }
 
 /* Ollama 個人化文字建議：整頁最後的全寬段落。刻意跟上面的風格摘要分開——
    上面那些是「選了這個風格的人都看得到」的固定內容，這一塊才是這一次臉部分析
@@ -1750,12 +1755,11 @@ body {
 .ollama-panel { margin:26px 0 0; padding:38px 36px 34px; border-radius:18px;
     background:var(--glass); backdrop-filter:blur(18px) saturate(140%); -webkit-backdrop-filter:blur(18px) saturate(140%);
     border:1px solid var(--edge); box-shadow:inset 0 1px 0 var(--sheen), 0 14px 38px rgba(120,70,66,0.1); }
-.ollama-panel > .eyebrow { display:block; text-align:center; }
+.ollama-panel > .eyebrow { display:block; }
 .ollama-panel h3 { font-family:var(--cjk); font-size:22px; font-weight:500; letter-spacing:.06em;
-    color:var(--ink-soft); text-align:center; margin:12px 0 10px; }
+    color:var(--ink-soft); margin:12px 0 10px; }
 .ollama-panel-note { font-family:var(--cjk); font-size:13px; font-weight:300; line-height:1.9;
-    color:var(--mid); text-align:center; max-width:560px; margin:0 auto 24px; }
-.ollama-panel #saveSuggestionBtn { display:block; margin-left:auto; margin-right:auto; }
+    color:var(--mid); max-width:70ch; margin:0 0 24px; }
 @media (max-width:680px){ .ollama-panel { padding:28px 20px 26px; } }
 .palette-row { display:flex; gap:0; justify-content:center; margin-top:24px; }
 .palette-row span { width:46px; height:46px; border:1px solid var(--edge); box-shadow:0 4px 12px rgba(120,70,66,0.16); }
