@@ -645,6 +645,12 @@ const Api = {
             if (code === 'EXTERNAL_TEXT_UPSTREAM_DISABLED') {
                 throw new Error('妝容建議服務目前停用中（尚未接上受信任的文字服務），其他功能不受影響。');
             }
+            // 401 的上游原文對使用者毫無意義（而且看起來像「你被登出了」，其實不是——
+            // 前端已經不會因為這個 401 動到 session）。只描述偵測到的狀況：服務拒絕了
+            // 這次請求。不寫「金鑰沒設定」之類的猜測，前端無從證實是哪一種授權問題。
+            if (res.status === 401) {
+                throw new Error('文字建議服務拒絕了這次請求（HTTP 401）。這是服務端的授權設定問題，與你的登入狀態無關，其他功能可以照常使用。');
+            }
             const msg = err.detail?.error?.message
                 || err.error?.message
                 || err.detail
