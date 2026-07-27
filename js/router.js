@@ -1180,7 +1180,7 @@ function openMakeupStyleModal(preselectedStyleId) {
         modal.innerHTML = `<div class="makeup-style-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Style</span><h2 id="makeupStyleModalTitle">選擇妝容風格</h2><p>選擇一款風格，接著查看妝容建議。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="makeup-style-grid">${STYLES.map(style=>`<button class="makeup-style-option ${pendingStyleModalSelection===style.id?'selected':''}" type="button" data-style-id="${escapeHtml(style.id)}"><img src="${escapeHtml(style.img)}" alt="${escapeHtml(style.name)}"><span class="makeup-style-option-copy"><b>${escapeHtml(style.name)}</b><small>${style.tags.map(escapeHtml).join(' · ')}</small></span></button>`).join('')}</div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-modal-cancel>稍後再選</button><button class="btn-gold" type="button" data-modal-confirm ${pendingStyleModalSelection?'':'disabled'}>確認風格 →</button></div></div>`;
         modal.querySelectorAll('[data-style-id]').forEach(button=>button.onclick=()=>{pendingStyleModalSelection=button.dataset.styleId;renderOptions();});
         modal.querySelector('.makeup-style-close').onclick=closeMakeupStyleModal; modal.querySelector('[data-modal-cancel]').onclick=closeMakeupStyleModal;
-        modal.querySelector('[data-modal-confirm]').onclick=()=>{if(!pendingStyleModalSelection)return;Router.selectedStyleId=pendingStyleModalSelection;closeMakeupStyleModal();Router.go('suggestion',{generate:true});};
+        modal.querySelector('[data-modal-confirm]').onclick=()=>{if(!pendingStyleModalSelection)return;Router.selectedStyleId=pendingStyleModalSelection;closeMakeupStyleModal();Router.go('suggestion');};
     };
     renderOptions(); modal.classList.add('open');
 }
@@ -2914,34 +2914,6 @@ const PageInit = {
 
     suggestion(opts) {
         if (!hasStartedJourney()) { renderAnalysisGate("妝容建議"); return; }
-        // 從風格彈窗按「確認風格 →」直接進來的：建議就在這一頁就地產生，
-        // 進度條也畫在這裡，完全不繞去「風格試妝」頁。跑完再自己重畫一次。
-        if (opts && opts.generate) {
-            const area = document.getElementById('suggestionArea');
-            if (!area) return;
-            area.innerHTML = `
-                <div class="loading-bar" style="display:block;"><div class="fill" id="suggestionFill" style="width:8%;"></div></div>
-                <div class="loading-status active" id="suggestionStatus">產生建議中...</div>`;
-            // Ollama 這一段可能跑好幾秒，使用者隨時會切走。進度與重畫都先確認那塊 DOM 還在，
-            // 否則等回應回來時節點早就被換掉了，寫進去會直接炸掉整頁。
-            const stillHere = () => !!document.getElementById('suggestionArea');
-            runMakeupSuggestion((pct, text) => {
-                const fill = document.getElementById('suggestionFill');
-                const status = document.getElementById('suggestionStatus');
-                if (!fill || !status) return;
-                fill.style.width = `${pct}%`;
-                status.textContent = text;
-            }).then(result => {
-                if (result.missingAnalysis) {
-                    showAlert('目前沒有可用的臉部分析結果，請重新完成臉部分析。', { type:'error' });
-                    Router.go('analysis');
-                    return;
-                }
-                if (!result.ok) showAlert('妝容建議失敗：' + result.error.message, { type: 'error' });
-                if (stillHere()) PageInit.suggestion();
-            });
-            return;
-        }
         const style = STYLES.find(s => s.id === Router.selectedStyleId) || STYLES[0];
         const palette = style.palette || ['#D8B69E', '#B97970', '#7C544A'];
         const r = getLatestAnalysisResult() || {};
@@ -2975,10 +2947,7 @@ const PageInit = {
                     <p id="suggestionPhotoNote">${renderedImage ? '這張照片來自目前分析資料包的妝容結果。' : beforeImage ? '尚未取得妝容圖片，這裡先顯示目前分析資料包內的原始照片。' : '尚未取得妝容圖片。'}</p>
                     <div class="suggestion-render-actions">
                         <button class="btn-outline btn-sm" id="suggestionToggleBtn"${renderedImage ? '' : ' disabled'}>看妝前</button>
-                        <button class="btn-gold btn-sm" id="suggestionRenderBtn">生成妝容</button>
                     </div>
-                    <div class="suggestion-render-quota" id="suggestionRenderQuota"></div>
-                    <div class="suggestion-render-status" id="suggestionRenderStatus" style="display:none;"></div>
                 </div>
             </div>
             <div class="style-intro-card">
@@ -2995,25 +2964,67 @@ const PageInit = {
                 <div class="analysis-item"><span class="ai-label">嘴型</span><span class="ai-value">${r['嘴型']||'—'}</span></div>
                 <div class="analysis-item"><span class="ai-label">膚色</span><span class="ai-value">${skin['膚色分級']||'—'} / ${skin['四季型']||'—'}</span></div>
             </div>
-            <div class="ollama-panel">
-                <span class="eyebrow">Personalized text · Ollama</span>
-                <h3>${style.name} 專屬妝容建議</h3>
-                <p class="ollama-panel-note">這一段是把本次臉部分析與「${style.name}」一起送給文字建議服務後，為你個人產生的內容。</p>
-                ${aiSuggestion
-                    ? `<div class="advice-grid">${renderMakeupAdviceGrid(aiSuggestion)}</div>`
-                    : `<div class="empty-state compact">尚未取得妝容建議，請從上方選單重新選擇妝容風格。</div>`
-                }
-                <button class="btn-gold" id="saveSuggestionBtn" style="margin-top:18px;">收藏妝容建議</button>
+            <div class="step-panel${aiSuggestion ? ' done' : ''}">
+                <span class="eyebrow">Step 1 · Personalized text</span>
+                <h3>${aiSuggestion ? `${style.name} 專屬妝容建議` : '先生成 Ollama 個人化建議'}</h3>
+                <p class="step-note">系統會把本次臉部分析與「${style.name}」一起送給文字建議服務，為你個人產生建議。這一步只產生文字，不會產生圖片。</p>
+                ${aiSuggestion ? `<div class="advice-grid">${renderMakeupAdviceGrid(aiSuggestion)}</div>` : ''}
+                <div class="step-actions">
+                    <button class="btn-gold" id="genSuggestionBtn">${aiSuggestion ? '重新生成建議' : '生成 Ollama 建議'}</button>
+                    ${aiSuggestion ? `<button class="btn-outline" id="saveSuggestionBtn">收藏妝容建議</button>` : ''}
+                </div>
+                <div class="step-state" id="suggestionState">${aiSuggestion ? 'DONE' : 'READY'}</div>
             </div>
-            <div style="text-align:center;margin-top:20px;">
-                <button class="btn-outline" onclick="Router.go('compare')" style="margin-right:8px;">查看前後對比</button>
+            <div class="step-panel${aiSuggestion ? '' : ' locked'}">
+                <span class="eyebrow">Step 2 · Makeup render</span>
+                <h3>生成妝容渲染圖</h3>
+                <p class="step-note">${aiSuggestion
+                    ? '把上一步的建議交給渲染服務，產生你的妝後圖。完成後可以用照片上的按鈕切換妝前／妝後。'
+                    : '請先完成 Step 1。渲染指令會用到上一步產生的建議內容，跳過它只會得到一張跟風格無關的妝。'}</p>
+                <div class="step-actions">
+                    <button class="btn-gold" id="suggestionRenderBtn"${aiSuggestion ? '' : ' disabled'}>生成妝容</button>
+                </div>
+                <div class="suggestion-render-quota" id="suggestionRenderQuota"></div>
+                <div class="suggestion-render-status" id="suggestionRenderStatus" style="display:none;"></div>
+            </div>
+            <div class="suggestion-footer-actions">
+                <button class="btn-outline" onclick="Router.go('compare')">查看前後對比</button>
                 <button class="btn-gold" onclick="openProductRecommendationModal()">查看推薦商品 →</button>
             </div>
         `;
         Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
         Router.pendingLookSaved = false;
-        document.getElementById('saveSuggestionBtn').onclick = () => {
-            if (saveCurrentLook()) showToast('已收藏妝容建議');
+        // 收藏鍵只有在建議已經產生時才存在（Step 1 還沒跑就沒有東西可收藏）。
+        const saveBtn = document.getElementById('saveSuggestionBtn');
+        if (saveBtn) saveBtn.onclick = () => { if (saveCurrentLook()) showToast('已收藏妝容建議'); };
+
+        // Step 1：就地產生 Ollama 建議，不換頁——換走的話使用者就看不到自己在哪一步了。
+        const genBtn = document.getElementById('genSuggestionBtn');
+        const stateEl = document.getElementById('suggestionState');
+        genBtn.onclick = async () => {
+            const original = genBtn.textContent;
+            genBtn.disabled = true;
+            genBtn.textContent = '產生建議中...';
+            try {
+                const result = await runMakeupSuggestion((pct, text) => {
+                    if (stateEl) stateEl.textContent = `${text} ${pct}%`;
+                });
+                if (result.missingAnalysis) {
+                    showAlert('目前沒有可用的臉部分析結果，請重新完成臉部分析。', { type:'error' });
+                    Router.go('analysis');
+                    return;
+                }
+                if (!result.ok) {
+                    if (stateEl) stateEl.textContent = 'FAILED';
+                    showAlert('妝容建議失敗：' + result.error.message, { type: 'error' });
+                    return;
+                }
+                showToast('妝容建議已產生');
+                PageInit.suggestion();   // 重畫：Step 1 轉成 DONE，Step 2 跟著解鎖
+            } finally {
+                genBtn.disabled = false;
+                genBtn.textContent = original;
+            }
         };
 
         // 妝前／妝後切換。圖片來源與妝容對比圖頁同一組，但這裡是單純的按鈕點擊切換

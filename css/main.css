@@ -1752,15 +1752,24 @@ body {
 /* Ollama 個人化文字建議：整頁最後的全寬段落。刻意跟上面的風格摘要分開——
    上面那些是「選了這個風格的人都看得到」的固定內容，這一塊才是這一次臉部分析
    跑出來、只屬於這個人的東西，混在一起使用者分不出哪段是為他產生的。 */
-.ollama-panel { margin:26px 0 0; padding:38px 36px 34px; border-radius:18px;
+.step-panel { position:relative; margin:22px 0 0; padding:34px 36px 30px; border-radius:18px;
     background:var(--glass); backdrop-filter:blur(18px) saturate(140%); -webkit-backdrop-filter:blur(18px) saturate(140%);
     border:1px solid var(--edge); box-shadow:inset 0 1px 0 var(--sheen), 0 14px 38px rgba(120,70,66,0.1); }
-.ollama-panel > .eyebrow { display:block; }
-.ollama-panel h3 { font-family:var(--cjk); font-size:22px; font-weight:500; letter-spacing:.06em;
+.step-panel > .eyebrow { display:block; }
+.step-panel h3 { font-family:var(--cjk); font-size:22px; font-weight:500; letter-spacing:.06em;
     color:var(--ink-soft); margin:12px 0 10px; }
-.ollama-panel-note { font-family:var(--cjk); font-size:13px; font-weight:300; line-height:1.9;
-    color:var(--mid); max-width:70ch; margin:0 0 24px; }
-@media (max-width:680px){ .ollama-panel { padding:28px 20px 26px; } }
+.step-note { font-family:var(--cjk); font-size:13px; font-weight:300; line-height:1.9;
+    color:var(--mid); max-width:70ch; margin:0 0 22px; }
+.step-actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:20px; }
+/* 步驟狀態：借用參考站那條 READY／DONE 的小字，讓使用者知道這一步跑到哪了 */
+.step-state { margin-top:14px; font-family:var(--sans); font-size:10px; letter-spacing:.3em;
+    text-transform:uppercase; color:var(--gold-deep); }
+/* Step 2 在 Step 1 完成前是鎖住的：渲染指令要吃上一步的產物，跳過只會得到泛用的妝。
+   壓低對比而不是整塊藏起來——使用者要看得到接下來會發生什麼事。 */
+.step-panel.locked { opacity:.55; }
+.step-panel.locked h3 { color:var(--mid); }
+@media (max-width:680px){ .step-panel { padding:26px 20px 24px; } .step-actions button { flex:1 1 100%; } }
+.suggestion-footer-actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:24px; }
 .palette-row { display:flex; gap:0; justify-content:center; margin-top:24px; }
 .palette-row span { width:46px; height:46px; border:1px solid var(--edge); box-shadow:0 4px 12px rgba(120,70,66,0.16); }
 .palette-row span:first-child { border-radius:999px 0 0 999px; }
