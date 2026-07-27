@@ -121,23 +121,32 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
 // 位置同時寫進 --wm-x / --wm-y，訊號浮水印用同一組座標，
 // 這樣光暈、流標與浮水印是同一個光源，不會各走各的。
 (function(){
+    // 只在真的有游標的裝置上跑。手機點一下會合成出 mousemove，光點就跳過去黏著不動，
+    // 而且觸控根本沒有「游標位置」這回事，這個效果在那裡沒有意義只有代價。
+    var fine = window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+    if (!fine) return;
+
     var glow = null, flow = null, root = document.documentElement;
+    var x = 0, y = 0, queued = false;
+    // --wm-x / --wm-y 掛在 :root，浮水印圖層會讀它們，所以每寫一次就是整份文件重算樣式。
+    // 用 rAF 收斂成一幀一次，不然滑快一點就是一秒鐘上百次重算。
+    function paint(){
+        queued = false;
+        root.style.setProperty('--wm-x', x + 'px');
+        root.style.setProperty('--wm-y', y + 'px');
+        if (glow) { glow.style.left = x + 'px'; glow.style.top = y + 'px'; glow.style.opacity = '1'; }
+        if (flow) flow.style.opacity = '1';
+    }
     document.addEventListener('mousemove', function(e){
         glow = glow || document.getElementById('cursorGlow');
         flow = flow || document.getElementById('goldCursorFlow');
-        root.style.setProperty('--wm-x', e.clientX + 'px');
-        root.style.setProperty('--wm-y', e.clientY + 'px');
-        if (glow) {
-            glow.style.left = e.clientX + 'px';
-            glow.style.top = e.clientY + 'px';
-            glow.style.opacity = '1';
-        }
-        if (flow) flow.style.opacity = '1';
-    });
+        x = e.clientX; y = e.clientY;
+        if (!queued) { queued = true; requestAnimationFrame(paint); }
+    }, { passive: true });
     document.addEventListener('mouseleave', function(){
         if (glow) glow.style.opacity = '0';
         if (flow) flow.style.opacity = '0';
-    });
+    }, { passive: true });
 })();
 </script>
 <script defer src="js/config.js?v=20260727-205525"></script>
