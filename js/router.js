@@ -4529,7 +4529,52 @@ const PageInit = {
 };
 
 // ═══ 初始化 ═══
+// 密碼欄位的顯示／隱藏切換。打錯密碼卻看不到自己打了什麼，是登入失敗最沒必要的一種。
+//
+// 用觀察器而不是在每個渲染點各加一次：密碼欄散在登入、註冊、修改密碼、重設密碼四處
+// 共八個，逐一加等於以後每多一個欄位就要記得回來補，而漏掉的那個不會有人發現——
+// 它只是安靜地沒有切換鈕。這裡改成看到就補，含之後動態插進來的。
+function enhancePasswordField(input) {
+    if (!input || input.dataset.pwToggle) return;
+    const group = input.closest('.input-group');
+    if (!group) return;
+    input.dataset.pwToggle = '1';
+    group.classList.add('has-pw-toggle');
+
+    const btn = document.createElement('button');
+    btn.type = 'button';          // 不寫的話它在表單裡預設是 submit，按一下就送出
+    btn.className = 'pw-toggle';
+    btn.textContent = '顯示';
+    btn.setAttribute('aria-label', '顯示密碼');
+    btn.setAttribute('aria-pressed', 'false');
+    btn.onclick = () => {
+        const reveal = input.type === 'password';
+        input.type = reveal ? 'text' : 'password';
+        btn.textContent = reveal ? '隱藏' : '顯示';
+        btn.setAttribute('aria-label', reveal ? '隱藏密碼' : '顯示密碼');
+        btn.setAttribute('aria-pressed', String(reveal));
+        // 切換後游標會被丟到開頭，使用者得再點一次才能接著打。補回尾端。
+        input.focus();
+        try { input.setSelectionRange(input.value.length, input.value.length); } catch (_) {}
+    };
+    group.appendChild(btn);
+}
+
+function watchPasswordFields() {
+    const scan = (node) => {
+        if (!node || node.nodeType !== 1) return;
+        if (node.matches && node.matches('input[type="password"]')) enhancePasswordField(node);
+        if (node.querySelectorAll) node.querySelectorAll('input[type="password"]').forEach(enhancePasswordField);
+    };
+    scan(document.body);
+    if (typeof MutationObserver !== 'function') return;
+    new MutationObserver(records => {
+        records.forEach(record => record.addedNodes.forEach(scan));
+    }).observe(document.body, { childList: true, subtree: true });
+}
+
 (function init() {
+    watchPasswordFields();
     const routeFromHash = () => {
         const page = location.hash.replace(/^#/, '');
         if (ROUTE_PAGES.has(page) && Router.currentPage !== page) Router.go(page, { fromHash: true });

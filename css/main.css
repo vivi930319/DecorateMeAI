@@ -246,6 +246,17 @@ body {
 }
 .input-group input::placeholder { color:rgba(122,74,66,0.32); }
 .input-group input:focus { border-bottom-color:var(--gold); }
+/* 密碼顯示／隱藏切換 */
+.input-group.has-pw-toggle { position:relative; }
+.input-group.has-pw-toggle input { padding-right:52px; }
+.pw-toggle {
+    position:absolute; right:0; bottom:10px; z-index:2;
+    padding:4px 2px; border:none; background:none; cursor:pointer;
+    font-family:var(--sans); font-size:10px; letter-spacing:.16em;
+    color:var(--gold-deep); transition:color .3s var(--ease);
+}
+.pw-toggle:hover { color:var(--gold); }
+.pw-toggle:focus-visible { outline:1px solid var(--gold); outline-offset:3px; }
 .auth-link { font-family:var(--sans); font-size:11px; letter-spacing:.12em; color:var(--gold-deep); cursor:pointer; display:inline-block; margin-top:6px; transition:color .3s; }
 .auth-link:hover { color:var(--gold); }
 /* Error shake · 登入驗證失敗震動 */
