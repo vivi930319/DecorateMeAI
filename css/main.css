@@ -1791,6 +1791,7 @@ body {
 .step-panel.locked h3 { color:var(--mid); }
 @media (max-width:680px){ .step-panel { padding:26px 20px 24px; } .step-actions button { flex:1 1 100%; } }
 .suggestion-footer-actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:24px; }
+.compare-viewonly-note { font-family:var(--cjk); font-size:12.5px; line-height:1.8; color:var(--mid); margin:10px 0 16px; }
 
 /* 收藏確認視窗 */
 .save-look-dialog { max-width:720px; }

@@ -452,6 +452,29 @@ function safeExternalUrl(value){
 //
 // 不收照片，只記模型答了什麼、使用者說什麼。告知文字要講明這件事：
 // 只寫「幫助我們模型升級」而不說收了什麼，使用者無從判斷要不要按。
+// 使用者改過的答案就是正確答案。
+//
+// 這些修正原本只被存進 AnalysisFeedback 當回饋資料，從來沒有回流到分析結果本身：
+// 畫面上的五官、送去產生建議與渲染的 faceAnalysis、以及收藏起來的妝容對比圖，
+// 全都還是模型原本判斷的那一版。使用者明明把眼型改對了，收藏打開卻還是錯的。
+//
+// faceAnalysis 是從同一份中文原始結果導出的，所以改完原始結果要一起重導，
+// 否則下一次產生建議或渲染拿到的仍然是舊值。
+// AnalysisFeedback 那邊自己留著 predicted，模型原本說什麼不會因此失真。
+function applyAnalysisCorrections(corrections) {
+    const fields = Object.keys(corrections || {});
+    if (!fields.length || !Router.analysisResult) return;
+    fields.forEach(field => { Router.analysisResult[field] = corrections[field]; });
+    if (Router.analysisPackage && typeof AnalysisPackage !== 'undefined') {
+        Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
+            faceAnalysis: AnalysisPackage.fromRawFaceAnalysis(Router.analysisResult, Router.analyzeMode)
+        });
+        if (typeof AnalysisDraft !== 'undefined') AnalysisDraft.save(Router.analysisPackage);
+    }
+    // 已經排隊等收藏的那筆快照是修正前建的，丟掉讓它重建。
+    Router.pendingLook = null;
+}
+
 function renderAnalysisFeedback(result, packageId) {
   const box = document.getElementById('analysisFeedback');
   if (!box || typeof AnalysisFeedback === 'undefined') return;
@@ -501,8 +524,9 @@ function renderAnalysisFeedback(result, packageId) {
     const submit = document.getElementById('afSubmit');
     if (submit) submit.onclick = () => {
       AnalysisFeedback.save(packageId, predicted, corrections);
+      applyAnalysisCorrections(corrections);
       const changed = Object.keys(corrections).length;
-      showToast(changed ? `已記下 ${changed} 項修正，謝謝` : '已記錄「判斷正確」，謝謝');
+      showToast(changed ? `已套用 ${changed} 項修正，之後的建議與收藏都會以你的答案為準` : '已記錄「判斷正確」，謝謝');
       const note = document.getElementById('afNote');
       if (note) note.textContent = '已送出，可再修改';
     };
@@ -1024,10 +1048,9 @@ compare: `
         <h3>目前風格</h3>
         <p id="compareStyleName">尚未選擇風格</p>
         <div class="analysis-tags" id="compareStyleTags"></div>
+        <p class="compare-viewonly-note">渲染在「妝容建議」頁的 Step 2 進行。這一頁只看圖。</p>
         <button class="btn-outline" id="compareGoStyleBtn">選擇風格</button>
-        <button class="btn-gold" id="compareRenderBtn" style="margin-top:12px;">生成妝容</button>
-        <div id="compareRenderStatus" style="font-size:12px;color:#888;margin-top:6px;display:none;"></div>
-        <button class="btn-outline" id="compareSaveLookBtn" style="margin-top:8px;">收藏妝容對比圖</button>
+        <button class="btn-gold" id="compareSaveLookBtn" style="margin-top:12px;">收藏妝容對比圖</button>
     </div>
 </div>`,
 suggestion: `<div class="page-header"><h1>妝容建議</h1><div class="divider"></div><p>依照臉部分析結果與選擇風格，產生妝容建議與可收藏的妝容對比圖。</p></div><div id="suggestionArea"></div>`,
@@ -2888,74 +2911,6 @@ const PageInit = {
         holdBtn.onkeyup = (e) => { if (e.key === ' ' || e.key === 'Enter') releaseHold(); };
         document.getElementById('compareGoStyleBtn').onclick = () => Router.go('style');
 
-        const renderBtn = document.getElementById('compareRenderBtn');
-        const renderStatus = document.getElementById('compareRenderStatus');
-        const renderQuotaEl = document.getElementById('compareRenderQuota');
-        const refreshRenderQuota = () => {
-            if (renderQuotaEl) renderQuotaEl.textContent = renderQuotaText();
-        };
-        refreshRenderQuota();
-        if (renderBtn) {
-            renderBtn.onclick = async () => {
-                renderBtn.disabled = true;
-                renderBtn.textContent = '渲染中...';
-                renderStatus.style.display = 'block';
-                renderStatus.innerHTML = `
-                    <div style="margin-bottom:8px;font-weight:600;">AI 正在上妝… <span id="renderProgressPct">1%</span></div>
-                    <div style="height:8px;background:rgba(0,0,0,.08);border-radius:999px;overflow:hidden;">
-                        <div id="renderProgressBar" style="height:100%;width:1%;border-radius:999px;background:linear-gradient(90deg,#f7b2c9,#c9748f);"></div>
-                    </div>
-                    <div id="renderProgressHint" style="margin-top:8px;font-size:12px;opacity:.7;">生成中，約需 60–150 秒，請不要關閉頁面</div>
-                `;
-                const barEl = document.getElementById('renderProgressBar');
-                const pctEl = document.getElementById('renderProgressPct');
-                const hintEl = document.getElementById('renderProgressHint');
-
-                // 後端每 2 秒才回一次進度，直接套上去會一格一格跳。這裡每 40ms 往目標值推進 1，
-                // 把數字補成連續的 1→100，而且只准往前、不准倒退。
-                let shownProgress = 1;
-                let targetProgress = 1;
-                const progressTick = setInterval(() => {
-                    if (shownProgress >= targetProgress) return;
-                    shownProgress = Math.min(targetProgress, shownProgress + 1);
-                    if (barEl) barEl.style.width = shownProgress + '%';
-                    if (pctEl) pctEl.textContent = shownProgress + '%';
-                }, 40);
-
-                try {
-                    const outcome = await runMakeupRender(p => { targetProgress = Math.max(targetProgress, p); });
-                    if (!outcome.ok && handleRenderBlocked(outcome.reason)) { renderStatus.style.display = 'none'; return; }
-                    if (!outcome.ok) throw outcome.error;
-                    const result = outcome.result;
-                    targetProgress = 100;
-                    // 顯示後端這次實際下給模型的指令（renderPrompt 由後端組：Ollama 個人化或 styleId 白名單）
-                    const promptPreviewEl = document.getElementById('comparePromptPreview');
-                    if (promptPreviewEl && result.renderPrompt) {
-                        promptPreviewEl.style.display = 'block';
-                        promptPreviewEl.textContent = result.renderPrompt;
-                    }
-                    if (hintEl) hintEl.textContent = '完成！正在載入妝後圖…';
-                    // 讓進度條有時間跑完最後那段，不然數字會停在 80 幾就整個消失
-                    await new Promise(resolve => setTimeout(resolve, 800));
-                    refreshRenderQuota();
-                    if (!result.renderQuota && renderQuotaEl) {
-                        renderQuotaEl.textContent = '妝容渲染完成！剩餘次數稍後更新。';
-                    }
-                    Router.compareBaseline = 'after';  // 渲染完成後，基準改成成果圖：按住看原圖、放開回成果
-                    showAfter();
-                    renderStatus.textContent = '渲染完成！';
-                    setTimeout(() => { renderStatus.style.display = 'none'; }, 3000);
-                    showToast('妝容渲染完成');
-                } catch (err) {
-                    renderStatus.textContent = '渲染失敗：' + err.message;
-                    showAlert('妝容生成失敗：' + err.message, { type: 'error' });
-                } finally {
-                    clearInterval(progressTick);
-                    renderBtn.disabled = false;
-                    renderBtn.textContent = '生成妝容';
-                }
-            };
-        }
 
         // 收藏一律走同一個確認視窗。臨時網址警告與 renderPrompt 預覽都在那裡，
         // 兩邊各寫一份，遲早會有一邊漏掉警告。
@@ -3040,7 +2995,6 @@ const PageInit = {
                 ${aiSuggestion ? `<div class="advice-grid">${renderMakeupAdviceGrid(aiSuggestion)}</div>` : ''}
                 <div class="step-actions">
                     <button class="btn-gold" id="genSuggestionBtn">${aiSuggestion ? '重新生成建議' : '生成 Ollama 建議'}</button>
-                    ${aiSuggestion ? `<button class="btn-outline" id="saveSuggestionBtn">收藏妝容建議</button>` : ''}
                 </div>
                 <div class="step-state" id="suggestionState">${aiSuggestion ? 'DONE' : 'READY'}</div>
             </div>
@@ -3051,7 +3005,8 @@ const PageInit = {
                     ? '把上一步的建議交給渲染服務，產生你的妝後圖。完成後可以用照片上的按鈕切換妝前／妝後。'
                     : '請先完成 Step 1。渲染指令會用到上一步產生的建議內容，跳過它只會得到一張跟風格無關的妝。'}</p>
                 <div class="step-actions">
-                    <button class="btn-gold" id="suggestionRenderBtn"${aiSuggestion ? '' : ' disabled'}>生成妝容</button>
+                    <button class="btn-gold" id="suggestionRenderBtn"${aiSuggestion ? '' : ' disabled'}>${renderedImage ? '重新生成妝容' : '生成妝容'}</button>
+                    ${renderedImage ? `<button class="btn-outline" id="saveSuggestionBtn">收藏妝容對比圖</button>` : ''}
                 </div>
                 <div class="suggestion-render-quota" id="suggestionRenderQuota"></div>
                 <div class="suggestion-render-status" id="suggestionRenderStatus" style="display:none;"></div>
