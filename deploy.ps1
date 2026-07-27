@@ -32,14 +32,19 @@ if ($gitChanges -and -not $AllowDirty) {
     throw "部署中止：工作目錄有尚未提交的變更。確認內容後使用 -AllowDirty 進行已授權的緊急部署。"
 }
 
-# 把所有 <script ... src="....js?v=xxx"> 的版本號換成同一個時間戳
+# 把所有 <script src="....js?v=xxx"> 與 <link href="....css?v=xxx"> 的版本號換成同一個時間戳。
+#
+# 原本這裡只認 .js，於是 main.css 的版本號一直停在某次手動寫進去的字串
+# （20260727-clear-dropdown），每次部署 JS 都換、CSS 都不換。沒有立刻出事是因為
+# firebase.json 對 js|css|html 設了 no-cache，瀏覽器每次都回源驗證；但那樣一來
+# 這個版本號就只剩誤導作用——顯示的日期跟實際內容無關。兩種都戳，才對得起它的用途。
 #
 # -Encoding UTF8 不能省。index.html 是無 BOM 的 UTF-8，PowerShell 5.1 的 Get-Content
 # 在沒有 BOM 時會退回 ANSI（CP950）解讀，中文全變亂碼，接著被下一行以 UTF-8 寫回、
 # 把亂碼固化。2026-07-20 就是這樣把進場動畫的「裝識你的美」寫壞並部署上線的。
 # 寫回時維持不加 BOM（UTF8Encoding($false)），因為 HTML 由 <meta charset> 宣告編碼。
 $content = Get-Content $indexPath -Raw -Encoding UTF8
-$updated = [regex]::Replace($content, '\.js\?v=[^"]+"', ".js?v=$stamp`"")
+$updated = [regex]::Replace($content, '\.(js|css)\?v=[^"]+"', ".`$1?v=$stamp`"")
 [System.IO.File]::WriteAllText($indexPath, $updated, (New-Object System.Text.UTF8Encoding($false)))
 
 Write-Host "版本號已戳為 $stamp" -ForegroundColor Green
