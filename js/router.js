@@ -461,10 +461,24 @@ function safeExternalUrl(value){
 // faceAnalysis 是從同一份中文原始結果導出的，所以改完原始結果要一起重導，
 // 否則下一次產生建議或渲染拿到的仍然是舊值。
 // AnalysisFeedback 那邊自己留著 predicted，模型原本說什麼不會因此失真。
-function applyAnalysisCorrections(corrections) {
-    const fields = Object.keys(corrections || {});
-    if (!fields.length || !Router.analysisResult) return;
-    fields.forEach(field => { Router.analysisResult[field] = corrections[field]; });
+// predicted 一起傳進來，是為了處理「改了又改回判斷正確」：那個欄位會從 corrections
+// 消失，但 analysisResult 上還留著剛才那個值，不拿模型原本的答案蓋回去就退不回去了。
+function applyAnalysisCorrections(corrections, predicted) {
+    if (!Router.analysisResult) return;
+    const fixes = corrections || {};
+    const base = predicted || {};
+    const fields = [...new Set([...Object.keys(fixes), ...Object.keys(base)])];
+    if (!fields.length) return;
+
+    const resolved = {};
+    let changed = false;
+    fields.forEach(field => {
+        const next = Object.prototype.hasOwnProperty.call(fixes, field) ? fixes[field] : base[field];
+        if (next == null) return;
+        resolved[field] = next;
+        if (Router.analysisResult[field] !== next) { Router.analysisResult[field] = next; changed = true; }
+    });
+    if (!changed) return;
     if (Router.analysisPackage && typeof AnalysisPackage !== 'undefined') {
         Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
             faceAnalysis: AnalysisPackage.fromRawFaceAnalysis(Router.analysisResult, Router.analyzeMode)
@@ -483,8 +497,9 @@ function applyAnalysisCorrections(corrections) {
         if (typeof AnalysisDraft !== 'undefined') AnalysisDraft.save(Router.analysisPackage);
     }
     // 分析紀錄是在回饋面板出現之前就寫入的，也要跟著改。
+    // 傳 resolved 不傳 corrections：改回「判斷正確」時要能把紀錄退回模型的答案。
     if (typeof History !== 'undefined' && History.applyCorrections) {
-        History.applyCorrections(Router.analysisPackage?.id, corrections);
+        History.applyCorrections(Router.analysisPackage?.id, resolved);
     }
     // 分析頁上那排結果格是一次性寫死的文字，重畫它們，否則使用者剛改完
     // 往上一看還是舊答案，會以為沒有生效。
@@ -540,13 +555,17 @@ function renderAnalysisFeedback(result, packageId) {
       select.onchange = () => {
         const field = select.dataset.afField;
         if (select.value) corrections[field] = select.value; else delete corrections[field];
+        // 改下拉的當下就套用到資料包。畫面上的值在這一刻已經變了——要是等按「送出回饋」
+        // 才生效，使用者看著自己的答案直接去按生成建議，送出去的仍然是模型原本那版。
+        // 網路那半（回報給模型當訓練資料）留在送出鍵，不必為了每一次下拉都打一支 API。
+        applyAnalysisCorrections(corrections, predicted);
         draw();
       };
     });
     const submit = document.getElementById('afSubmit');
     if (submit) submit.onclick = () => {
       AnalysisFeedback.save(packageId, predicted, corrections);
-      applyAnalysisCorrections(corrections);
+      applyAnalysisCorrections(corrections, predicted);
       // 回報給臉部分析服務。端點還沒上線時會 404，sendAnalysisFeedback 自己吞掉——
       // 使用者這一次的建議與收藏已經套用了修正，送不出去不影響他。
       if (Api.sendAnalysisFeedback) {
