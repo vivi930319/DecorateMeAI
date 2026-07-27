@@ -24,3 +24,7 @@ Thumbs.db
 docs/
 config.local.js
 *.bak-before-split
+
+# 進場動畫的版本比較稿，只在本機看，不進版控也不部署。
+# 先前被 f02d02c 移除過又回來——因為沒有寫進這裡，任何一次 git add -A 都會把它撿回去。
+進場動畫比較.html
