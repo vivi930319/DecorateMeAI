@@ -4521,6 +4521,8 @@ const PageInit = {
     window.addEventListener('decorate-me:session-owner-changed', (event) => {
         const reason = (event && event.detail && event.detail.reason) || '';
         if (reason === 'EXPECTED_ACTOR_REQUIRED') {
+            // 這一條是「這個分頁根本沒有登入狀態」，不是換帳號——沒有身分可以切過去，
+            // 只能請他重新登入。
             handleSessionExpired({
                 title: '登入狀態已失效',
                 message: '這個分頁目前沒有可用的登入狀態，可能是登入階段已結束或分頁資料被清除。'
@@ -4528,16 +4530,9 @@ const PageInit = {
             });
             return;
         }
-        // 實際被偵測到的條件是「目前的登入憑證屬於另一個帳號」，不是「另一個分頁」。
-        // 分頁只是其中一種成因，而且不是最常見的那種——同一個分頁先後登入兩個帳號
-        // （中間沒有乾淨登出）一樣會走到這裡。原本的文案直接斷定是別的分頁，
-        // 使用者只開一個視窗時就會去找一個不存在的分頁，真正該做的事反而被蓋掉。
-        handleSessionExpired({
-            title: '登入帳號已變更',
-            message: '目前瀏覽器持有的登入憑證屬於另一個帳號，與這個分頁顯示的身分不一致。'
-                + '常見原因是在同一個瀏覽器（同分頁或另一個分頁）登入了不同帳號。'
-                + '為避免把資料寫到錯誤的帳號，已停止動作並清除本機資料，請重新登入。'
-        });
+        // 憑證屬於另一個帳號：不再把人踢出去，改成跟著切過去。
+        // adoptSessionOwner() 自己會在認不出身分時退回登出。
+        adoptSessionOwner();
     });
 
     // 一個分頁登出或換帳號時通知其他分頁，不必等它們自己撞到 403 才發現。
@@ -4636,6 +4631,66 @@ function showApp() {
     const homeUrl = `${location.pathname}${location.search}#${landing}`;
     if (location.hash !== `#${landing}`) history.replaceState(null, '', homeUrl);
     Router.go(landing);
+}
+
+// 換帳號時「跟著切」而不是把人踢出去。
+//
+// cookie 是整個瀏覽器共用的，分頁沒辦法各自持有不同身分——偵測得到不一致，卻永遠
+// 解不掉，所以原本只能登出。這裡改成大多數網站的做法：接受 cookie 的身分，把這個
+// 分頁切過去。那份 cookie 本來就已經通過 Gateway 驗證，再逼一次登入換不到安全性，
+// 只是把使用者趕走。
+//
+// 兩件事不能省：
+//   1. 先清掉上一個帳號留在 localStorage 的 PII（收藏臉圖、分析回饋）。不清就是把
+//      A 的臉留給 B 看。而且必須在換 profile 之前做——那個函式要用舊 email 當 key。
+//   2. 認不出 cookie 到底屬於誰時，維持原本的登出。沒有可以切過去的對象就不能用猜的。
+async function adoptSessionOwner() {
+    if (Router._ownerAdoptInProgress) return;
+    Router._ownerAdoptInProgress = true;
+    try {
+        // 事件有時帶著 sub（來自 _verifySessionOwner），跨分頁廣播那條沒有。
+        // 一律自己再問一次 /auth/session，只信第一手證據。
+        const session = await Api.validateSession().catch(() => null);
+        const nextEmail = String(session?.sub || '').trim().toLowerCase();
+        if (!session || !session.ok || !nextEmail || !session.actorId || !Api._pinSession(session)) {
+            handleSessionExpired({
+                title: '登入狀態已失效',
+                message: '無法確認目前的登入身分。為避免把資料寫到錯誤的帳號，已清除本機資料，請重新登入。'
+            });
+            return;
+        }
+
+        const prevEmail = String((Auth.getProfile() || {}).email || '').trim().toLowerCase();
+        // 同一個人（例如在別的分頁重新登入自己）：重新 pin 過就好，不必驚動使用者。
+        if (prevEmail && prevEmail === nextEmail) {
+            Api._sessionExpiredNotified = false;
+            Api._resetSessionRequests();
+            return;
+        }
+
+        try { if (prevEmail && Auth.clearAccountLocalPII) Auth.clearAccountLocalPII(prevEmail); } catch (_) {}
+        resetCurrentBeautySession();
+        Api._sessionExpiredNotified = false;
+        Api._resetSessionRequests();
+
+        // 換上 cookie 真正屬於的那個人。讀不到會員資料也不要卡住——session 已經
+        // 給了 email 與角色，先用那組把畫面撐起來，其餘欄位下次載入自然補齊。
+        const fetched = await Api.fetchMember(nextEmail).catch(() => null);
+        const member = (fetched && fetched.ok && fetched.member) ? fetched.member : {};
+        Auth.setProfile({ ...member, email: nextEmail, role: session.role || member.role || 'member' });
+
+        const nameEl = document.getElementById('sidebarUsername');
+        if (nameEl) nameEl.textContent = `${getMemberDisplayName()} · ${getCurrentRoleLabel(Auth.getProfile() || {})}`;
+        updateAdminNav();
+        refreshMemberTheme();
+        updateCartBadge();
+        syncRemoteFavorites();
+        syncRemoteCart();
+        showToast(`已切換為 ${getMemberDisplayName()}`);
+        Router.go(Router.currentPage || 'dashboard', { skipLeaveGuard: true });
+    } finally {
+        Router._ownerAdoptInProgress = false;
+    }
 }
 
 function handleSessionExpired(options) {
