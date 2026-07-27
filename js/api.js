@@ -2457,11 +2457,17 @@ const Auth = {
     // 處理，但收藏對比圖（beautySuggestions_<email>）帶使用者的臉部照片網址、分析回饋
     // （beautyAnalysisFeedback）帶五官特徵，這些放在 localStorage，登出／換帳號後仍在，
     // 共用裝置的下一個人打開 devtools 就讀得到。**只清當前帳號的鍵，不動其他帳號的收藏。**
+    //
+    // beautyHistory / beautyFav / beautyCart 是**沒有帶 email 的全域鍵**，內容卻屬於
+    // 「最後登入的那個人」：分析紀錄帶臉型、眼型、膚色，收藏與購物車帶他挑了什麼。
+    // 換帳號時不清，下一個人就直接看到上一個人的紀錄——而且 syncRemoteFavorites 是
+    // 「併入」不是「取代」，殘留的收藏還會被合進新帳號再同步回伺服器。
     clearAccountLocalPII(email) {
         try {
             const em = String(email || '').trim().toLowerCase();
             if (em) localStorage.removeItem('beautySuggestions_' + em);
-            localStorage.removeItem('beautyAnalysisFeedback');
+            ['beautyAnalysisFeedback', 'beautyHistory', 'beautyFav', 'beautyCart']
+                .forEach(key => localStorage.removeItem(key));
         } catch (_) {}
     },
 
@@ -3155,5 +3161,20 @@ const History = {
         arr.unshift({ ...record, timestamp: new Date().toISOString() });
         if (arr.length > 20) arr.length = 20;
         localStorage.setItem(this._key, JSON.stringify(arr));
+    },
+    // 使用者修正五官判斷時，把已經寫進紀錄的那一筆一起改掉。
+    // 紀錄是在回饋面板出現「之前」就寫入的，不補這一步，分析紀錄會永遠停在模型
+    // 原本的答案——跟他畫面上看到的、以及收藏起來的那一份對不上。
+    applyCorrections(packageId, corrections) {
+        const fields = Object.keys(corrections || {});
+        if (!packageId || !fields.length) return;
+        const arr = this.list();
+        let touched = false;
+        arr.forEach(row => {
+            if (row.analysisPackageId !== packageId) return;
+            fields.forEach(field => { row[field] = corrections[field]; });
+            touched = true;
+        });
+        if (touched) localStorage.setItem(this._key, JSON.stringify(arr));
     }
 };

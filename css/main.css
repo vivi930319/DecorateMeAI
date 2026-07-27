@@ -30,6 +30,9 @@
     --line:rgba(70,42,42,0.13); --line-gold:rgba(192,137,122,0.30);
     --line-dk:rgba(232,196,180,0.20);
     --danger:#B0453F;
+    /* 成功色先前寫死在 .glass-alert.success .ga-mark 裡。深色主題底下那個綠壓在
+       深色玻璃上會糊掉，所以跟 --danger 一樣拉出來，讓深色主題可以各自調亮。 */
+    --success:#3F7A52;
     /* 玻璃感三件組：面板底、內側高光、邊線 */
     --glass:rgba(255,255,255,0.62); --sheen:rgba(255,255,255,0.9); --edge:rgba(255,255,255,0.55);
     /* 按鈕漸層與其上的文字色（金底要配深字，深底要配淺字） */
@@ -732,7 +735,7 @@ body {
 .insp-card:hover .insp-visual .ph img { transform:scale(1.06); }
 .insp-visual .inum { position:absolute; top:13px; left:13px; z-index:3; display:inline-flex; align-items:center; justify-content:center;
     min-width:36px; height:30px; padding:0 10px; border-radius:999px; font-family:var(--serif); font-style:italic; font-size:17px; color:var(--gold);
-    background:linear-gradient(120deg,rgba(246,219,221,0.92),rgba(233,204,164,0.92)); border:1px solid var(--edge);
+    background:var(--btn-glass); border:1px solid var(--edge);
     box-shadow:inset 0 1px 0 var(--sheen), 0 4px 12px rgba(150,88,78,0.2); }
 .insp-body { padding:17px 18px 19px; }
 .insp-body .iname { font-family:var(--cjk); font-size:20px; font-weight:500; letter-spacing:.04em; color:var(--ink-soft); }
@@ -976,7 +979,6 @@ body {
 .pd-top { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:30px; }
 .pd-close { width:42px; height:42px; flex-shrink:0; cursor:pointer; display:flex; align-items:center; justify-content:center;
     border-radius:50%; font-size:22px; line-height:1; color:var(--gold);
-    background:rgba(250,240,237,0.5); backdrop-filter:blur(14px) saturate(150%); -webkit-backdrop-filter:blur(14px) saturate(150%);
     border:1px solid var(--edge); box-shadow:inset 0 1px 0 var(--sheen), 0 6px 16px rgba(120,70,66,0.16);
     transition:background .3s var(--ease), transform .3s var(--ease); }
 .pd-close:hover { background:rgba(226,195,116,0.18); color:var(--danger); transform:rotate(90deg); }
@@ -1046,6 +1048,8 @@ body[data-member-theme="rose"] {
     --glass:rgba(20,23,26,0.72); --sheen:rgba(216,222,228,0.14); --edge:rgba(216,222,228,0.30);
     --btn-grad:linear-gradient(100deg,#8b939c 0%,#d2d8de 46%,#f7f9fa 100%); --btn-ink:#14171a;
     --btn-glass:linear-gradient(118deg, rgba(58,64,70,0.78) 0%, rgba(44,49,54,0.72) 48%, rgba(70,77,84,0.74) 100%);
+    /* 深底之下的紅與綠要拉亮，:root 那組是配淺底的，壓在深色玻璃上會糊成一團 */
+    --danger:#E8837C; --success:#7FC194;
     --btn-glass-hover:linear-gradient(118deg, rgba(74,81,88,0.86) 0%, rgba(58,64,70,0.80) 48%, rgba(88,96,104,0.82) 100%);
     --btn-glass-on:linear-gradient(118deg, rgba(198,204,211,0.90) 0%, rgba(176,184,192,0.86) 48%, rgba(210,216,222,0.88) 100%);
 }
@@ -1095,6 +1099,7 @@ body[data-member-theme="noir"] {
     --glass:rgba(23,20,16,0.72); --sheen:rgba(226,195,116,0.14); --edge:rgba(226,195,116,0.30);
     --btn-grad:linear-gradient(100deg,#b98b36 0%,#e4c777 46%,#fff3d0 100%); --btn-ink:#1a1509;
     --btn-glass:linear-gradient(118deg, rgba(46,39,30,0.80) 0%, rgba(34,29,24,0.74) 48%, rgba(58,49,36,0.76) 100%);
+    --danger:#E8837C; --success:#7FC194;
     --btn-glass-hover:linear-gradient(118deg, rgba(62,53,40,0.88) 0%, rgba(48,41,32,0.82) 48%, rgba(76,64,46,0.84) 100%);
     --btn-glass-on:linear-gradient(118deg, rgba(217,182,111,0.90) 0%, rgba(196,163,96,0.86) 48%, rgba(234,203,141,0.88) 100%);
 }
@@ -1853,12 +1858,11 @@ body {
 .glass-alert.show .ga-card { transform:none; }
 .ga-mark { width:48px; height:48px; margin:0 auto 18px; border-radius:50%; display:flex; align-items:center; justify-content:center;
     font-family:var(--serif); font-size:23px; line-height:1; color:var(--gold);
-    background:linear-gradient(120deg,rgba(246,219,221,0.92),rgba(233,204,164,0.92)); border:1px solid var(--edge);
+    background:var(--btn-glass); border:1px solid var(--edge);
     box-shadow:inset 0 1px 0 var(--sheen), 0 6px 16px rgba(150,88,78,0.2); }
 .glass-alert.error .ga-mark { color:var(--danger); font-style:normal; font-weight:500;
-    background:linear-gradient(120deg,rgba(244,210,205,0.94),rgba(232,196,180,0.94)); }
-.glass-alert.success .ga-mark { color:#3F7A52;
-    background:linear-gradient(120deg,rgba(216,238,221,0.94),rgba(233,228,196,0.94)); }
+    background:var(--btn-glass); }
+.glass-alert.success .ga-mark { color:var(--success); background:var(--btn-glass); }
 .ga-msg { font-family:var(--cjk); font-size:16px; font-weight:400; line-height:1.7; letter-spacing:.02em; color:var(--ink-soft); margin-bottom:26px; }
 .ga-ok { min-width:132px; }
 
@@ -1871,7 +1875,7 @@ body {
 .analysis-gate .ag-kicker { font-family:var(--sans); font-size:10px; letter-spacing:.36em; text-transform:uppercase; color:var(--gold-deep); }
 .analysis-gate .ag-mark { width:58px; height:58px; margin:20px auto 22px; border-radius:50%; display:flex; align-items:center; justify-content:center;
     font-family:var(--serif); font-style:italic; font-size:28px; color:var(--gold);
-    background:linear-gradient(120deg,rgba(246,219,221,0.92),rgba(233,204,164,0.92)); border:1px solid var(--edge);
+    background:var(--btn-glass); border:1px solid var(--edge);
     box-shadow:inset 0 1px 0 var(--sheen), 0 6px 16px rgba(150,88,78,0.2); }
 .analysis-gate h2 { font-family:var(--cjk); font-size:27px; font-weight:500; letter-spacing:.06em; color:var(--ink-soft); }
 .analysis-gate p { font-family:var(--cjk); font-size:14px; font-weight:300; line-height:1.9; color:var(--mid); margin:16px auto 30px; max-width:420px; }
@@ -1913,7 +1917,6 @@ body {
 .saved-look-card { position:relative; }
 .saved-look-card .look-del { position:absolute; top:11px; right:11px; z-index:6; width:32px; height:32px; cursor:pointer;
     display:flex; align-items:center; justify-content:center; border-radius:50%; font-size:18px; line-height:1; color:var(--gold);
-    background:rgba(250,240,237,0.7); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
     border:1px solid var(--edge); box-shadow:0 4px 12px rgba(120,70,66,0.18);
     opacity:0; transform:scale(.85); transition:opacity .3s var(--ease), transform .3s var(--ease), background .3s var(--ease); }
 .saved-look-card:hover .look-del, .saved-look-card:focus-within .look-del { opacity:1; transform:scale(1); }
@@ -2054,22 +2057,15 @@ body {
     background:var(--btn-glass-on);
     box-shadow:inset 0 2px 6px var(--sheen), inset 0 -9px 18px rgba(199,142,124,0.34), 0 18px 40px rgba(150,88,78,0.24);
 }
+/* 導覽列在每一個主題底下都是深色底，所以這兩顆不跟 --btn-glass 走——
+   跟著走的話，淺色主題會給它們淺色玻璃底，配上淺色文字就整個糊掉，
+   「訪客」和「登出」等於消失。這裡固定用半透明白，深底上永遠讀得到。 */
 .topbar-user,
 .topbar-logout {
     min-height:38px;
     display:inline-flex;
     align-items:center;
     justify-content:center;
-}
-.topbar-logout {
-    padding:9px 16px;
-    color:var(--gold-soft);
-}
-/* 導覽列在每一個主題底下都是深色底，所以這兩顆不跟 --btn-glass 走——
-   跟著走的話，淺色主題會給它們淺色玻璃底，配上淺色文字就整個糊掉，
-   「訪客」和「登出」等於消失。這裡固定用半透明白，深底上永遠讀得到。 */
-.topbar-user,
-.topbar-logout {
     background:rgba(255,255,255,0.10);
     border-color:rgba(255,255,255,0.20);
 }
@@ -2079,7 +2075,7 @@ body {
     border-color:rgba(255,255,255,0.30);
 }
 .topbar-user span:last-child { color:#F2E7E4; }
-.topbar-logout { color:rgba(255,255,255,0.82); }
+.topbar-logout { padding:9px 16px; color:rgba(255,255,255,0.82); }
 .topbar-logout:hover { color:#FFFFFF; }
 .topbar-user > *,
 .topbar-logout,
@@ -2526,7 +2522,7 @@ html.intro-off #brand-intro{display:none}
    「很壅擠」的來源。改回單欄由上往下讀。底色用 var(--glass)：原本寫死的白半透明
    在黑金與深色銀霧底下會浮出一塊灰白霧。 */
 #suggestionArea{display:block}#suggestionArea .analysis-section,#suggestionArea .style-intro-card{margin:0 0 18px;border:1px solid var(--line);border-radius:18px;background:var(--glass)}#suggestionArea .compare-preview{border-radius:18px}
-.loading-status.active,.ai-render-status:not(:empty),#compareRenderStatus[style*="block"]{padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:var(--paper);animation:gentlePulse 1.8s ease-in-out infinite}@keyframes gentlePulse{50%{box-shadow:0 0 0 7px var(--gold-dim);transform:translateY(-1px)}}
+.loading-status.active,.ai-render-status:not(:empty){padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:var(--paper);animation:gentlePulse 1.8s ease-in-out infinite}@keyframes gentlePulse{50%{box-shadow:0 0 0 7px var(--gold-dim);transform:translateY(-1px)}}
 @media(max-width:820px){.auth-editorial{grid-template-columns:1fr}.auth-brand-panel{min-height:32vh;padding:34px 24px}.auth-brand-panel h1{font-size:58px}.auth-brand-panel p{display:none}.auth-form-panel{padding:34px 24px;border:0}.analysis-workbench,.member-dashboard-hero,#suggestionArea{grid-template-columns:1fr}.analysis-workbench .upload-box{min-height:280px}#suggestionArea .analysis-section:last-child{grid-column:auto}.journey-dialog-shell{margin-inline:-8px;border-radius:20px;padding:56px 14px 18px}.member-dashboard-hero .member-stats{grid-template-columns:repeat(2,1fr)}}
 .render-dialog-shell{max-width:1240px}.render-dialog-shell .compare-layout{margin:0}.recommendation-modal-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.recommendation-modal-card{border:1px solid var(--line);background:var(--white);min-width:0}.recommendation-modal-card img{width:100%;aspect-ratio:1;object-fit:contain;background:#fff}.recommendation-modal-card div{padding:14px}.recommendation-modal-card small{color:var(--mid);letter-spacing:.12em}.recommendation-modal-card h3{margin-top:6px;font-size:15px}.product-recommendation-dialog{max-width:980px}@media(max-width:700px){.recommendation-modal-grid{grid-template-columns:repeat(2,1fr)}}
 

@@ -471,6 +471,17 @@ function applyAnalysisCorrections(corrections) {
         });
         if (typeof AnalysisDraft !== 'undefined') AnalysisDraft.save(Router.analysisPackage);
     }
+    // 分析紀錄是在回饋面板出現之前就寫入的，也要跟著改。
+    if (typeof History !== 'undefined' && History.applyCorrections) {
+        History.applyCorrections(Router.analysisPackage?.id, corrections);
+    }
+    // 分析頁上那排結果格是一次性寫死的文字，重畫它們，否則使用者剛改完
+    // 往上一看還是舊答案，會以為沒有生效。
+    const cells = { 'r-face': '臉型', 'r-brow': '眉型', 'r-eye': '眼型', 'r-nose': '鼻型', 'r-lip': '嘴型' };
+    Object.entries(cells).forEach(([id, field]) => {
+        const el = document.getElementById(id);
+        if (el && Router.analysisResult[field]) el.textContent = Router.analysisResult[field];
+    });
     // 已經排隊等收藏的那筆快照是修正前建的，丟掉讓它重建。
     Router.pendingLook = null;
 }
@@ -1234,7 +1245,9 @@ function openSaveLookModal() {
     modal.innerHTML = `<div class="makeup-style-dialog save-look-dialog">
         <div class="makeup-style-head">
             <div><span class="eyebrow">Save</span><h2>收藏這組妝容</h2>
-            <p>${after ? '按住下方按鈕可以看妝前，放開回到妝後。' : '尚未生成妝後圖，收藏的會是目前的原始照片。'}</p></div>
+            <p>${after
+                ? '按住下方按鈕可以看妝前，放開回到妝後。'
+                : '還沒有妝後圖，現在收藏只會存下一筆沒有圖片的紀錄。請先回「妝容建議」頁完成 Step 2。'}</p></div>
             <button class="makeup-style-close" type="button" aria-label="關閉">×</button>
         </div>
         <div class="compare-preview">
@@ -1250,7 +1263,7 @@ function openSaveLookModal() {
         </div>
         <div class="makeup-style-actions">
             <button class="btn-outline" type="button" data-cancel>取消</button>
-            <button class="btn-gold" type="button" data-confirm>確認收藏</button>
+            <button class="btn-gold" type="button" data-confirm${after ? '' : ' disabled'}>確認收藏</button>
         </div>
     </div>`;
     document.body.appendChild(modal);
@@ -1286,7 +1299,10 @@ function openSaveLookModal() {
 
     modal.querySelector('.makeup-style-close').onclick = closeSaveLookModal;
     modal.querySelector('[data-cancel]').onclick = closeSaveLookModal;
+    // 沒有妝後圖就不讓存。這道守在視窗裡而不是各個按鈕上，因為入口有兩個
+    // （妝容建議頁的 Step 2、妝容對比圖頁），守在按鈕上就得守兩次、漏一次就破功。
     modal.querySelector('[data-confirm]').onclick = () => {
+        if (!after) return;
         closeSaveLookModal();
         if (saveCurrentLook()) showToast('已收藏妝容對比圖');
     };
@@ -1372,9 +1388,12 @@ async function runMakeupSuggestion(onProgress) {
 }
 
 // 產生妝後圖的核心流程：權限與照片檢查、呼叫 Api.renderMakeupAsync、把結果寫回
-// analysisPackage 並存草稿。跟 runMakeupSuggestion 一樣完全不碰 DOM——妝容對比圖頁
-// 與妝容建議頁都用它，各自畫自己的進度與配額。
+// analysisPackage 並存草稿。完全不碰 DOM，進度用 onProgress 回報，畫在哪由呼叫端決定。
 // 擋下來的原因用 reason 回報，讓呼叫端決定要跳註冊、跳分析還是只顯示訊息。
+//
+// 目前只有妝容建議頁的 Step 2 呼叫它——當初是為了兩頁共用而抽出來的，後來妝容對比圖頁
+// 改成唯讀、渲染入口收斂成一個。留著仍然划算：它把「能不能渲染、渲染完要寫回哪裡」
+// 跟畫面完全分開，那一段是這個流程裡最容易出錯、也最不該跟 DOM 綁在一起的部分。
 async function runMakeupRender(onProgress) {
     const notify = typeof onProgress === 'function' ? onProgress : () => {};
     if (typeof isGuest === 'function' && isGuest()) return { ok: false, reason: 'guest' };
@@ -1385,9 +1404,22 @@ async function runMakeupRender(onProgress) {
     const imageDataUrl = pkg?.images?.front?.compressedDataUrl || pkg?.images?.front?.dataUrl || '';
     if (!imageDataUrl) return { ok: false, reason: 'no-photo' };
 
-    // 只挑後端會讀的兩塊，不整包送——資料包裡有 base64 圖片，整包送 payload 會爆炸。
+    // 只挑後端會讀的幾塊，不整包送——資料包裡有 base64 圖片，整包送 payload 會爆炸。
+    //
+    // generativeText 一定要在裡面。三端串接總覽與驗收.md 寫得很明白：
+    // 「Replicate 端應使用 analysisPackage.generativeText.renderPromptEn 作為妝容 prompt」。
+    // 先前這裡只送 faceAnalysis 與 styleId，Step 1 產出的 prompt 在送出前就被剝掉了——
+    // 於是畫面上鎖著 Step 2、告訴使用者「跳過它只會得到一張跟風格無關的妝」，
+    // 實際上跑不跑 Step 1 對成品圖完全沒有差別。只帶 prompt 欄位，不帶建議全文與圖片。
     const styleId = Router.selectedStyleId || pkg?.render?.styleId || 'natural';
-    const renderPackage = { faceAnalysis: pkg?.faceAnalysis || null, render: { styleId } };
+    const renderPackage = {
+        faceAnalysis: pkg?.faceAnalysis || null,
+        generativeText: {
+            renderPromptEn: pkg?.generativeText?.renderPromptEn || null,
+            ollamaRenderPromptEn: pkg?.generativeText?.ollamaRenderPromptEn || null
+        },
+        render: { styleId }
+    };
 
     try {
         const result = await Api.renderMakeupAsync({
@@ -1420,8 +1452,8 @@ async function runMakeupRender(onProgress) {
     }
 }
 
-// 渲染配額要顯示的那一句。妝容對比圖頁與妝容建議頁都要講同一件事，
-// 各寫一份遲早會講得不一樣，所以文字在這裡產生，兩邊只負責塞進自己的元素。
+// 渲染配額要顯示的那一句。訪客、無限次、剩餘次數、方案未定四種講法集中在這裡，
+// 呼叫端只負責塞進自己的元素。
 function renderQuotaText() {
     if (typeof isGuest === 'function' && isGuest()) return '訪客無法使用 AI 渲染，請先註冊會員';
     const profile = Auth.getProfile();
@@ -1433,7 +1465,32 @@ function renderQuotaText() {
     return 'AI 妝容渲染：依你的會員方案提供每日次數';
 }
 
-// 被 runMakeupRender 擋下來時要對使用者說什麼、帶他去哪。兩頁共用，免得各寫一套講法。
+// runMakeupSuggestion 失敗時的共用處置：沒有分析結果就帶他去分析頁，其餘顯示原因。
+// 跟 handleRenderBlocked 一樣回傳「我處理掉了嗎」，呼叫端只需要收拾自己畫面上的進度條。
+function handleSuggestionFailure(result) {
+    if (result.missingAnalysis) {
+        showAlert('目前沒有可用的臉部分析結果，請重新完成臉部分析。', { type:'error' });
+        Router.go('analysis');
+        return true;
+    }
+    if (!result.ok) {
+        showAlert('妝容建議失敗：' + result.error.message, { type: 'error' });
+        return true;
+    }
+    return false;
+}
+
+// 風格色票列。兩頁都要畫，而「這個風格沒給色票時用哪三色」只該有一個答案——
+// 先前那組 hex 在兩個地方各寫一次，改了一邊另一邊就會安靜地不一樣。
+function paletteRowHtml(style) {
+    const palette = (style && style.palette) || ['#D8B69E', '#B97970', '#7C544A'];
+    return `<div class="palette-row" style="margin:12px 0;">${palette
+        .map(c => `<span style="background:${c};display:inline-block;width:28px;height:28px;border-radius:50%;margin-right:6px;"></span>`)
+        .join('')}</div>`;
+}
+
+// 被 runMakeupRender 擋下來時要對使用者說什麼、帶他去哪。回傳「我處理掉了嗎」，
+// 讓呼叫端用一個 if 就能分開「被擋下」與「真的失敗」兩種結果。
 function handleRenderBlocked(reason) {
     if (reason === 'guest') { promptGuestAuth('AI 渲染妝容'); return true; }
     if (reason === 'plan') { showAlert('你目前的方案無法使用 AI 妝容渲染。', { type: 'error' }); return true; }
@@ -1477,7 +1534,10 @@ const Router = {
 
     async go(page, opts) {
         opts = opts || {};
-        if (page === 'style' && hasStartedJourney() && !opts.fromStyleModal) { openMakeupStyleModal(opts.styleId); return; }
+        // 分析完成之後，選風格一律走彈窗，不再進「風格試妝」那一頁。
+        // （原本這裡還檢查 opts.fromStyleModal，用來讓彈窗確認後回到那一頁；
+        //   彈窗改成直接進妝容建議後就沒有人再設那個旗標，條件永遠成立。）
+        if (page === 'style' && hasStartedJourney()) { openMakeupStyleModal(opts.styleId); return; }
         const adminSession = typeof AdminStore !== 'undefined' && Auth.isLoggedIn() && AdminStore.isAdmin();
         if (adminSession && page !== 'admin') page = 'admin';
         if (!opts.skipLeaveGuard && this.needsLookLeaveGuard(page)) {
@@ -2533,18 +2593,14 @@ const PageInit = {
 
             try {
                 const result = await runMakeupSuggestion(paint);
-                if (result.missingAnalysis) {
-                    showAlert('目前沒有可用的臉部分析結果，請重新完成臉部分析。', { type:'error' });
-                    Router.go('analysis');
-                    return;
-                }
-                if (!result.ok) {
-                    bar.style.display = 'none';
-                    fill.style.width = '0';
-                    status.textContent = '建議產生失敗';
-                    status.classList.remove('active');
-                    showAlert('妝容建議失敗：' + result.error.message, { type: 'error' });
-                    renderAnalysisResult(null);
+                if (handleSuggestionFailure(result)) {
+                    if (!result.missingAnalysis) {
+                        bar.style.display = 'none';
+                        fill.style.width = '0';
+                        status.textContent = '建議產生失敗';
+                        status.classList.remove('active');
+                        renderAnalysisResult(null);
+                    }
                     return;
                 }
                 setTimeout(() => { bar.style.display = 'none'; fill.style.width = '0'; status.classList.remove('active'); }, 600);
@@ -2558,7 +2614,6 @@ const PageInit = {
 
         function renderAnalysisResult(aiSuggestionResponse) {
             const style = STYLES.find(s => s.id === Router.selectedStyleId);
-            const palette = style.palette || ['#D8B69E', '#B97970', '#7C544A'];
             const r = Router.analysisResult || {};
             const skin = r['膚色'] || {};
             const savedSuggestion = Router.analysisPackage?.generativeText?.suggestion;
@@ -2569,7 +2624,7 @@ const PageInit = {
                 <div class="analysis-tags" style="justify-content:center;">
                     ${style.tags.map(t=>`<span class="analysis-tag">${t}</span>`).join('')}
                 </div>
-                <div class="palette-row" style="margin:12px 0;">${palette.map(c => `<span style="background:${c};display:inline-block;width:28px;height:28px;border-radius:50%;margin-right:6px;"></span>`).join('')}</div>
+                ${paletteRowHtml(style)}
                 <div class="analysis-section">
                     <h3>五官與膚色分析</h3>
                     <div class="analysis-item"><span class="ai-label">臉型</span><span class="ai-value">${r['臉型']||'—'}</span></div>
@@ -2942,10 +2997,9 @@ const PageInit = {
         setCompareImage('before');
     },
 
-    suggestion(opts) {
+    suggestion() {
         if (!hasStartedJourney()) { renderAnalysisGate("妝容建議"); return; }
         const style = STYLES.find(s => s.id === Router.selectedStyleId) || STYLES[0];
-        const palette = style.palette || ['#D8B69E', '#B97970', '#7C544A'];
         const r = getLatestAnalysisResult() || {};
         const skin = r['膚色'] || {};
         const pkg = Router.analysisPackage || {};
@@ -2977,7 +3031,7 @@ const PageInit = {
             <div class="style-intro-card">
                 <h3>${style.name} 專屬妝容建議</h3>
                 <div class="analysis-tags">${style.tags.map(t => `<span class="analysis-tag">${t}</span>`).join('')}</div>
-                <div class="palette-row" style="margin:12px 0;">${palette.map(c => `<span style="background:${c};display:inline-block;width:28px;height:28px;border-radius:50%;margin-right:6px;"></span>`).join('')}</div>
+                ${paletteRowHtml(style)}
             </div>
             <div class="analysis-section">
                 <h3>五官與膚色分析</h3>
@@ -3033,14 +3087,8 @@ const PageInit = {
                 const result = await runMakeupSuggestion((pct, text) => {
                     if (stateEl) stateEl.textContent = `${text} ${pct}%`;
                 });
-                if (result.missingAnalysis) {
-                    showAlert('目前沒有可用的臉部分析結果，請重新完成臉部分析。', { type:'error' });
-                    Router.go('analysis');
-                    return;
-                }
-                if (!result.ok) {
-                    if (stateEl) stateEl.textContent = 'FAILED';
-                    showAlert('妝容建議失敗：' + result.error.message, { type: 'error' });
+                if (handleSuggestionFailure(result)) {
+                    if (!result.missingAnalysis && stateEl) stateEl.textContent = 'FAILED';
                     return;
                 }
                 showToast('妝容建議已產生');
@@ -3135,12 +3183,11 @@ const PageInit = {
                 }
                 target = 100;
                 await new Promise(resolve => setTimeout(resolve, 800));
-                photoView = 'after';
-                paintPhoto();
-                quotaEl.textContent = renderQuotaText();
-                renderStatus.textContent = '渲染完成！';
-                setTimeout(() => { renderStatus.style.display = 'none'; }, 3000);
                 showToast('妝容渲染完成');
+                // 重畫整頁，不是只換照片。收藏鍵與「重新生成妝容」是建樣板當下依
+                // renderedImage 決定要不要輸出的，只換照片的話它們要等下次進頁才出現——
+                // 使用者剛渲染完，最想按的那顆卻不在。Step 1 成功時走的也是這條。
+                PageInit.suggestion();
             } finally {
                 clearInterval(tick);
                 renderBtn.disabled = false;
