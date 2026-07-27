@@ -4612,7 +4612,12 @@ function syncRemoteCart() {
     Api.getRemoteCart(profile.email).then(result => {
         if (!result || !result.ok) return;
         const merged = Cart.mergeServer(result.items, sum);
-        if (sum) Api.saveRemoteCart(merged).catch(() => {});
+        // 兩邊都是空的就沒有東西要寫回去。少了這個判斷，每次登入都會送一份
+        // {"items":[]}：伺服器上本來就沒有的東西再覆蓋一次，白費一個請求。
+        // 而且這是 last-write-wins——時序一旦不對，這份空清單是真的會把
+        // 伺服器上的購物車蓋掉的。使用者自己把車清空時走的是 _schedulePush，
+        // 那條該送的還是會送。
+        if (sum && (merged.length || result.items.length)) Api.saveRemoteCart(merged).catch(() => {});
         updateCartBadge();
     }).catch(() => {});
 }
