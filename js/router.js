@@ -1448,18 +1448,18 @@ async function runMakeupRender(onProgress) {
 
     // 只挑後端會讀的幾塊，不整包送——資料包裡有 base64 圖片，整包送 payload 會爆炸。
     //
-    // generativeText 一定要在裡面。三端串接總覽與驗收.md 寫得很明白：
-    // 「Replicate 端應使用 analysisPackage.generativeText.renderPromptEn 作為妝容 prompt」。
-    // 先前這裡只送 faceAnalysis 與 styleId，Step 1 產出的 prompt 在送出前就被剝掉了——
-    // 於是畫面上鎖著 Step 2、告訴使用者「跳過它只會得到一張跟風格無關的妝」，
-    // 實際上跑不跑 Step 1 對成品圖完全沒有差別。只帶 prompt 欄位，不帶建議全文與圖片。
+    // 不要送 generativeText。渲染端「刻意忽略」資料包裡的 renderPromptEn——
+    // 那是前端送的、可以被竄改，而照著它渲染等於讓任何人拿我們的額度生成任意圖片。
+    // 要下給模型的 prompt 由渲染端自己向文字建議服務取得
+    // （replicate_render.py build_personalized_render_prompt，只吃 styleId 與 faceAnalysis）。
+    // 送了不會有作用，只會讓下一個人以為它有用。
+    //
+    // faceJobId 是給重訓用的：臉部分析那端存標註但不存照片，渲染這端存照片。
+    // 兩邊 job id 不同，不帶這個就永遠 join 不起來，標註也就接不回它對應的那張臉。
     const styleId = Router.selectedStyleId || pkg?.render?.styleId || 'natural';
     const renderPackage = {
         faceAnalysis: pkg?.faceAnalysis || null,
-        generativeText: {
-            renderPromptEn: pkg?.generativeText?.renderPromptEn || null,
-            ollamaRenderPromptEn: pkg?.generativeText?.ollamaRenderPromptEn || null
-        },
+        faceJobId: pkg?.async?.jobId || null,
         render: { styleId }
     };
 
@@ -3101,14 +3101,14 @@ const PageInit = {
                 </div>
                 <div class="step-state" id="suggestionState">${aiSuggestion ? 'DONE' : 'READY'}</div>
             </div>
-            <div class="step-panel${aiSuggestion ? '' : ' locked'}">
+            <div class="step-panel">
                 <span class="eyebrow">Step 2 · Makeup render</span>
                 <h3>生成妝容渲染圖</h3>
-                <p class="step-note">${aiSuggestion
-                    ? '把上一步的建議交給渲染服務，產生你的妝後圖。完成後可以用照片上的按鈕切換妝前／妝後。'
-                    : '請先完成 Step 1。渲染指令會用到上一步產生的建議內容，跳過它只會得到一張跟風格無關的妝。'}</p>
+                <p class="step-note">依你的臉部分析與「${style.name}」產生妝後圖，完成後可以用照片上的按鈕切換妝前／妝後。
+                    渲染指令由後端自己向文字建議服務取得，所以<strong>不必先完成 Step 1</strong> ——
+                    先看建議只是讓你確認方向。</p>
                 <div class="step-actions">
-                    <button class="btn-gold" id="suggestionRenderBtn"${aiSuggestion ? '' : ' disabled'}>${renderedImage ? '重新生成妝容' : '生成妝容'}</button>
+                    <button class="btn-gold" id="suggestionRenderBtn">${renderedImage ? '重新生成妝容' : '生成妝容'}</button>
                     ${renderedImage ? `<button class="btn-outline" id="saveSuggestionBtn">收藏妝容對比圖</button>` : ''}
                 </div>
                 <div class="suggestion-render-quota" id="suggestionRenderQuota"></div>
