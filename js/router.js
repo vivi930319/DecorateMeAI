@@ -435,6 +435,7 @@ function lookImageSrc(value){
 // 外部連結（商品來源頁等）只接受 http(s)。escapeHtml 擋得住屬性跳脫，卻擋不住
 // javascript: / data: 這類 scheme——爬蟲抓回來的來源網址是外部可控內容，點下去
 // 就會執行。所以放進 href 之前一定要先驗 scheme，非 http(s) 一律回空字串。
+// frontend_smoke_check.js 會斷言這個函式存在：它是資安基元，不因為一時沒有呼叫端就拿掉。
 function safeExternalUrl(value){
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -4548,14 +4549,20 @@ const PageInit = {
             };
 
             // 清單縮圖優先用 640 的變體，省流量；沒有變體才退回原圖。
+            // 只接受 https。規格書 §2.4 要求全部 HTTPS，但那是「請對方遵守」；
+            // 混合內容會被瀏覽器擋掉、http 圖片也可能是被竄改的來源，所以這裡自己再擋一次。
+            const httpsOnly = (url) => (/^https:\/\//i.test(String(url || '')) ? String(url) : '');
             const thumbOf = (item) => {
                 const v = item.imageVariants || {};
-                return v['640'] || v['320'] || (Array.isArray(item.imageUrls) ? item.imageUrls[0] : '') || '';
+                return httpsOnly(v['640']) || httpsOnly(v['320'])
+                    || httpsOnly(Array.isArray(item.imageUrls) ? item.imageUrls[0] : '') || '';
             };
 
             const cardHtml = (item) => {
                 const status = String(item.status || '').toLowerCase();
                 const thumb = thumbOf(item);
+                // 來源網址是爬蟲抓回來的外部內容，直接塞 href 等於讓對方決定點下去會執行什麼。
+                const sourceLink = safeExternalUrl(item.sourceUrl);
                 return `<article class="admin-staging-card" data-staging-id="${escapeHtml(item.id)}">
                     <div class="admin-staging-thumb">${thumb
                         ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(item.name || '商品圖片')}" loading="lazy">`
@@ -4567,7 +4574,9 @@ const PageInit = {
                         </div>
                         <p class="admin-staging-meta">${escapeHtml(item.brand || '未取得品牌')} · ${escapeHtml(money(item.price, item.currency))}</p>
                         <p class="admin-staging-meta">${escapeHtml(item.sourceSite || '')} ${escapeHtml(item.sourceProductId || '')} · ${escapeHtml(item.category || '未分類')}</p>
+                        ${sourceLink ? `<p class="admin-staging-meta"><a href="${sourceLink}" target="_blank" rel="noopener noreferrer">看原始商品頁 ↗</a></p>` : ''}
                         ${item.failedReason ? `<p class="admin-staging-fail">${escapeHtml(item.failedReason)}</p>` : ''}
+                        ${status === 'rejected' && item.reviewReason ? `<p class="admin-staging-meta">退回原因：${escapeHtml(item.reviewReason)}</p>` : ''}
                         ${item.importedProductId ? `<p class="admin-staging-meta">已匯入商品 id：${escapeHtml(item.importedProductId)}</p>` : ''}
                         <div class="admin-staging-actions">
                             ${status === 'pending' ? `
@@ -4593,11 +4602,15 @@ const PageInit = {
                     result = await Api.reviewStagingProduct(id, 'approved');
                 }
                 if (!result || !result.ok) {
-                    setMessage((result && result.error) || '操作失敗，請重新載入後再試', 'error');
+                    setMessage(Api._stagingError(result), 'error');
                     card.querySelectorAll('button').forEach(b => { b.disabled = false; });
                     return;
                 }
-                setMessage('');
+                // 重畫之後這一筆會從目前的篩選消失（狀態變了），沒有訊息的話使用者
+                // 只看到它憑空不見，不確定是成功還是壞掉。
+                const done = { approved: '已核准', rejected: '已退回', import: '已匯入正式商品' };
+                setMessage(done[action] || '已更新', 'success');
+                Router._stagingLoaded = false;
                 load();
             };
 
@@ -4608,6 +4621,7 @@ const PageInit = {
                 const result = await Api.listStagingProducts({ status: filter, page, pageSize: PAGE_SIZE });
                 if (!result.ok) {
                     setState('讀取失敗', 'error');
+                    setMessage(Api._stagingError(result), 'error');
                     // 端點還沒上線時這裡會是 404。講清楚是「還沒接上」而不是「壞掉」。
                     stagingList.innerHTML = `<div class="admin-crawler-empty">${escapeHtml(result.error || '讀取失敗')}<br><small>商品後端的暫存商品 API 若尚未上線，這裡會是 404。</small></div>`;
                     if (stagingPager) stagingPager.hidden = true;
@@ -4636,7 +4650,16 @@ const PageInit = {
             drawFilters();
             const refreshBtn = document.getElementById('adminStagingRefresh');
             if (refreshBtn) refreshBtn.onclick = () => load();
-            load();
+
+            // 只有真的切到這一節才載入。掛在 PageInit.admin 頂層的話，管理員每次進
+            // 管理中台——不管是要看會員還是商品——都會對暫存商品端點打一次請求，
+            // 而那個端點還沒上線，等於每次都保證一筆 404。
+            Router._loadStagingOnce = () => {
+                if (Router._stagingLoaded) return;
+                Router._stagingLoaded = true;
+                load();
+            };
+            if (document.querySelector('[data-admin-view="crawler"]:not([hidden])')) Router._loadStagingOnce();
         }
 
         const refreshAllBtn = document.getElementById('adminRefreshAllBtn');

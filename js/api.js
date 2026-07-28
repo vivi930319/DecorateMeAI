@@ -1091,23 +1091,6 @@ const Api = {
         }
     },
 
-    // 爬蟲端已在 2026-07-28 停止提供 /api/crawler/* HTTP API，也不再與前端直連。
-    // 新流程：爬蟲寫進 crawler_staging_products → 後端 Admin 審核 → 匯入正式 products
-    // → 商品 API → 前端。
-    //
-    // 這裡不再發請求。打過去只會拿到 404，然後在畫面上顯示成一個看起來像壞掉、
-    // 實際上是「這條路已經不存在」的錯誤——那比直接說清楚更難排查。
-    //
-    // 待商品後端提供暫存商品的審核／匯入 API（路徑、認證方式、狀態欄位格式都還沒定），
-    // 這一支會改成串那組端點。
-    async previewCrawledProduct() {
-        return {
-            ok: false,
-            code: 'CRAWLER_API_RETIRED',
-            error: '爬蟲已改為寫入暫存商品表，不再提供即時預覽。改用「暫存商品審核」流程（後端 API 尚未提供）。'
-        };
-    },
-
     // ═══ 後台管理：members 讀寫都走 Gateway 的 HttpOnly cookie ═══
     _memberTokenKey: 'memberAccessToken',
     _getMemberAccessToken() {
@@ -1752,8 +1735,17 @@ const Api = {
     // 對方定案後改 Gateway 的 _STAGING_BASE 一行即可，這裡不必動。
     _stagingBase() { return `${gatewayService('admin-api')}/crawler-staging/products`; },
 
-    // 前端只認這幾個狀態；後端回別的字串會被當成未知狀態顯示原文，不會壞掉。
-    STAGING_STATUSES: Object.freeze(['pending', 'approved', 'rejected', 'imported', 'failed']),
+    // 規格書 §3 承諾這幾個代碼會被翻成看得懂的話。沒有這張表的話，畫面顯示的是上游
+    // 原文，那份文件就是在描述一件我們沒做的事。
+    _stagingError(result) {
+        const known = {
+            STAGING_NOT_FOUND: '找不到這筆暫存商品，可能已被匯入或刪除。',
+            INVALID_STATUS_TRANSITION: '這筆的狀態已經變了，請重新整理後再試。',
+            ALREADY_IMPORTED: '這筆已經匯入過了。',
+            IMPORT_FAILED: '匯入失敗：' + (result?.error || '請稍後再試')
+        };
+        return known[result?.code] || result?.error || '操作失敗，請重新載入後再試';
+    },
 
     async listStagingProducts({ status = 'pending', page = 1, pageSize = 20 } = {}) {
         try {
@@ -1773,19 +1765,6 @@ const Api = {
             };
         } catch (err) {
             return { ok: false, items: [], error: '連線失敗：' + err.message };
-        }
-    },
-
-    async getStagingProduct(id) {
-        try {
-            const res = await this._protectedFetch(`${this._stagingBase()}/${encodeURIComponent(id)}`, {
-                credentials: 'include', headers: this._adminProductHeaders(), cache: 'no-store'
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
-            return { ok: true, item: data.item || data };
-        } catch (err) {
-            return { ok: false, error: '連線失敗：' + err.message };
         }
     },
 

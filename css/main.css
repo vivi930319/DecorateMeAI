@@ -1386,35 +1386,11 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .admin-product-cell { min-width:230px; display:flex; align-items:center; gap:10px; }
 .admin-product-actions { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
 .admin-product-table { min-width:760px; }
-.admin-crawler-layout { display:grid; grid-template-columns:minmax(300px,.72fr) minmax(0,1.28fr); gap:18px; align-items:start; }
-.admin-crawler-form { display:grid; gap:17px; }
-.admin-crawler-form .admin-primary-button { width:100%; }
 .admin-crawler-message { min-height:18px; margin:0; color:var(--admin-muted); font-size:11px; line-height:1.55; }
 .admin-crawler-message.error { color:var(--admin-red); }
 .admin-crawler-message.warning { color:var(--admin-amber); }
 .admin-crawler-message.success { color:var(--admin-green); }
-.admin-crawler-preview { min-height:310px; }
 .admin-crawler-empty { min-height:230px; display:grid; place-items:center; border:1px dashed #cfd5d9; border-radius:4px; color:#7a858e; font-size:12px; }
-.admin-crawler-product { display:grid; grid-template-columns:220px minmax(0,1fr); gap:22px; }
-.admin-crawler-image { aspect-ratio:1/1; display:grid; place-items:center; overflow:hidden; border:1px solid #e0e4e6; border-radius:4px; background:#f4f6f7; color:#7a858e; font-size:11px; }
-.admin-crawler-image img { width:100%; height:100%; object-fit:contain; background:#fff; }
-.admin-crawler-product-meta { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.admin-crawler-product-meta > span { color:#77828a; font-size:11px; }
-.admin-crawler-product-meta > b { border-radius:999px; padding:5px 9px; font-size:10px; }
-.admin-crawler-product-meta > b.ok { background:#e7f4f0; color:var(--admin-green); }
-.admin-crawler-product-meta > b.warning { background:#fff0df; color:var(--admin-amber); }
-.admin-crawler-product-body h3 { margin:16px 0 0; color:var(--admin-ink); font:600 20px/1.35 "Noto Sans TC",sans-serif; }
-.admin-crawler-brand { margin:5px 0 0; color:#77828a; font-size:12px; }
-.admin-crawler-price { display:block; margin-top:14px; color:var(--admin-green); font-size:18px; }
-.admin-crawler-description { margin:14px 0 0; color:#58656e; font-size:12px; line-height:1.75; }
-.admin-crawler-specs { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 16px; margin:17px 0 0; }
-.admin-crawler-specs div { display:flex; justify-content:space-between; gap:10px; border-top:1px solid #e5e8ea; padding:9px 0; font-size:11px; }
-.admin-crawler-specs dt { color:#7a858e; }
-.admin-crawler-specs dd { margin:0; color:#344049; text-align:right; }
-.admin-crawler-missing { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:14px; }
-.admin-crawler-missing span { color:#7a858e; font-size:11px; }
-.admin-crawler-missing b { border-radius:999px; padding:5px 8px; background:#fff0df; color:var(--admin-amber); font-size:10px; }
-.admin-crawler-result-actions { display:flex; flex-wrap:wrap; gap:9px; margin-top:20px; }
 @media (max-width:1180px) {
     .admin-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
     .admin-preview-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
@@ -1449,9 +1425,6 @@ body.admin-mode .main-content * { letter-spacing:0; }
     .admin-product-form-actions,.admin-crawler-result-actions { flex-direction:column; }
     .admin-preview-grid { width:100%; min-width:0; grid-template-columns:repeat(2,minmax(0,1fr)); padding:10px; }
     .admin-product-form,.admin-crawler-form,.admin-crawler-preview,.admin-status-board,.admin-quick-actions { padding:17px; }
-    .admin-crawler-product { grid-template-columns:1fr; }
-    .admin-crawler-image { max-width:260px; }
-    .admin-crawler-specs { grid-template-columns:1fr; }
     .admin-view-heading { min-height:0; }
 }
 
@@ -1819,43 +1792,41 @@ body {
 .suggestion-footer-actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:24px; }
 .compare-viewonly-note { font-family:var(--cjk); font-size:12.5px; line-height:1.8; color:var(--mid); margin:10px 0 16px; }
 /* 管理中台：暫存商品審核。
-   這一區用管理中台自己的配色（同 .admin-primary-button 那組寫死的值），不吃會員主題
-   token——admin-mode 是獨立的淺灰介面，混進玫瑰／黑金的變數會整塊變得格格不入。 */
+   用 .admin-workspace 已經定義好的 --admin-* 那層（green/amber/red/line/soft/muted）。
+   那一層在 2458 行之後會被重映射成前台的玫瑰米白，寫死顏色等於繞過它——
+   結果就是我的綠色藥丸旁邊配一顆金色按鈕。 */
 .admin-staging-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
 .admin-staging-filters { display:flex; flex-wrap:wrap; gap:8px; }
 .admin-staging-filter { padding:7px 14px; border-radius:999px; cursor:pointer;
-    border:1px solid #cfd5d9; background:#fff; color:#344049;
+    border:1px solid var(--admin-line); background:#fff; color:var(--admin-ink);
     font-size:12px; letter-spacing:.06em; transition:all .2s ease; }
-.admin-staging-filter:hover { border-color:#929da5; background:#f7f8f9; }
-.admin-staging-filter.active { background:#176b58; border-color:#176b58; color:#fff; }
+.admin-staging-filter:hover { border-color:var(--admin-muted); background:var(--admin-soft); }
+.admin-staging-filter.active { background:var(--admin-green); border-color:var(--admin-green); color:#fff; }
 .admin-staging-list { display:grid; gap:12px; }
 .admin-staging-card { display:grid; grid-template-columns:120px 1fr; gap:16px; padding:14px;
-    border:1px solid #e6e9eb; border-radius:14px; background:#fff; }
-.admin-staging-thumb { aspect-ratio:1; border-radius:10px; overflow:hidden; background:#f3f5f7;
+    border:1px solid var(--admin-line); border-radius:14px; background:#fff; }
+.admin-staging-thumb { aspect-ratio:1; border-radius:10px; overflow:hidden; background:var(--admin-soft);
     display:flex; align-items:center; justify-content:center; }
 .admin-staging-thumb img { width:100%; height:100%; object-fit:cover; }
-.admin-staging-thumb span { font-size:11px; color:#7a858e; }
+.admin-staging-thumb span { font-size:11px; color:var(--admin-muted); }
 .admin-staging-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.admin-staging-head b { font-size:15px; color:#344049; }
-.admin-staging-meta { font-size:12.5px; color:#7a858e; margin-top:6px; }
-.admin-staging-fail { font-size:12.5px; color:#b63f46; margin-top:6px; }
+.admin-staging-head b { font-size:15px; color:var(--admin-ink); }
+.admin-staging-meta { font-size:12.5px; color:var(--admin-muted); margin-top:6px; }
+.admin-staging-fail { font-size:12.5px; color:var(--admin-red); margin-top:6px; }
 .admin-staging-badge { flex-shrink:0; padding:3px 10px; border-radius:999px;
-    font-size:10.5px; letter-spacing:.08em; border:1px solid #cfd5d9; color:#7a858e; background:#fff; }
-.admin-staging-badge.pending  { color:#a65f24; border-color:#a65f24; }
-.admin-staging-badge.approved { color:#176b58; border-color:#176b58; }
-.admin-staging-badge.imported { color:#fff; background:#176b58; border-color:#176b58; }
+    font-size:10.5px; letter-spacing:.08em; border:1px solid var(--admin-line); color:var(--admin-muted); background:#fff; }
+.admin-staging-badge.pending  { color:var(--admin-amber); border-color:var(--admin-amber); }
+.admin-staging-badge.approved { color:var(--admin-green); border-color:var(--admin-green); }
+.admin-staging-badge.imported { color:#fff; background:var(--admin-green); border-color:var(--admin-green); }
 .admin-staging-badge.failed,
-.admin-staging-badge.rejected { color:#b63f46; border-color:#b63f46; }
+.admin-staging-badge.rejected { color:var(--admin-red); border-color:var(--admin-red); }
 .admin-staging-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
 .admin-staging-pager { display:flex; align-items:center; justify-content:center; gap:16px; margin-top:18px;
-    font-size:12px; color:#7a858e; }
+    font-size:12px; color:var(--admin-muted); }
 @media (max-width:680px){ .admin-staging-card { grid-template-columns:1fr; } }
 
-/* 管理中台：爬蟲改流程後的說明區塊 */
 .admin-crawler-notice { margin:0 0 20px; padding:18px 20px; border-radius:14px;
     background:var(--glass); border:1px solid var(--gold-deep); }
-.admin-crawler-notice b { display:block; font-family:var(--cjk); font-size:14px; color:var(--ink-soft); margin-bottom:10px; }
-.admin-crawler-notice p { font-family:var(--cjk); font-size:12.5px; line-height:1.85; color:var(--mid); margin:6px 0 0; }
 .admin-crawler-notice code { font-family:var(--sans); font-size:12px; padding:1px 6px; border-radius:5px;
     background:var(--ivory-2); color:var(--ink-soft); }
 
@@ -2510,7 +2481,6 @@ body.admin-mode .main-content,
 .admin-fail,.admin-source { border-color:var(--line-gold); background:var(--white); color:var(--mid); }
 .admin-fail.ok { border-color:rgba(164,103,90,.45); background:rgba(232,196,180,.24); color:var(--gold-deep); }
 .admin-fail.warn { border-color:rgba(176,69,63,.38); background:rgba(240,205,201,.4); color:var(--danger); }
-.admin-crawler-image { border-color:var(--line-gold); background:var(--ivory); }
 
 /* ═══════════════ 後台專題展示（AI 工作階段資料流向） ═══════════════ */
 .admin-demo { margin:0; padding:0; border:0; border-radius:0; background:transparent; color:var(--ink-soft); font-family:"Noto Sans TC",Arial,sans-serif; box-shadow:none; }

@@ -172,7 +172,9 @@ if (sandbox.ApiConfig.services.crawler) throw new Error('services.crawler 應已
 if (sandbox.ApiConfig.services.aiGateway.sessionPath !== '/auth/session') throw new Error('Gateway session validation path missing');
 
 // ── Api 方法 ─────────────────────────────────────────────────
-for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'previewCrawledProduct', 'validateSession']) {
+for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'validateSession',
+  // 暫存商品審核（爬蟲改流程後取代 previewCrawledProduct）
+  'listStagingProducts', 'reviewStagingProduct', 'importStagingProduct']) {
   if (typeof sandbox.Api[method] !== 'function') throw new Error(`Missing Api.${method}`);
 }
 if (!routerSource.includes('const session = await Api.validateSession()')) throw new Error('Private pages must validate Gateway session before showApp');
