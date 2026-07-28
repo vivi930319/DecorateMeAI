@@ -295,6 +295,15 @@ class RenderRequest(BaseModel):
     analysisPackage: dict | None = None
     faceAnalysis: dict | None = None  # 舊前端相容：沒送資料包時，單獨給臉部分析也行
 
+    # 這一次渲染對應到哪一個臉部分析 job。
+    #
+    # 用途只有一個：把使用者的五官修正接回它對應的那張臉。標註存在臉部分析端
+    # （face_feedback），照片存在這一端（/media/render/{id}/before），兩邊 job id 不同，
+    # 沒有這個欄位就永遠 join 不起來，issue #24 的重訓也就拿不到「標註＋影像」的配對。
+    #
+    # 這裡只存識別碼，不改變任何權限：照片仍然走原本那條需驗證的路徑。
+    faceJobId: str | None = Field(default=None, max_length=64)
+
 
 def _validate_render_request(req: RenderRequest) -> None:
     image = req.image or ""
@@ -896,6 +905,9 @@ async def create_render_job(
         "updatedAt": now,
         "dedupKey": key,
         "ownerId": owner_id,
+        # 對應的臉部分析 job。標註在那一端、照片在這一端，靠它把兩者接起來（issue #24）。
+        # 前端可能送在頂層，也可能包在 analysisPackage 裡，兩處都看。
+        "faceJobId": req.faceJobId or (req.analysisPackage or {}).get("faceJobId"),
         "retained": False,
         "expiresAt": _job_expiry(RENDER_JOB_TIMEOUT_SECONDS + RENDER_JOB_RETENTION_SECONDS),
     }
