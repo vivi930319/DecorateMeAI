@@ -1696,14 +1696,13 @@ async def admin_product(product_id: str, request: Request):
     return await proxy_admin_request(request, f"/api/products/{safe_id}")
 
 
-@app.post("/admin-api/crawler/product-preview")
-async def admin_crawler_preview(request: Request):
-    return await proxy_admin_request(request, "/api/crawler/product-preview")
-
-
-@app.post("/admin-api/crawler/search-preview")
-async def admin_crawler_search(request: Request):
-    return await proxy_admin_request(request, "/api/crawler/search-preview")
+# 2026-07-28：爬蟲端停止提供 /api/crawler/*，改為只寫 crawler_staging_products，
+# 不再與前端直連。原本的 product-preview 與 search-preview 兩條代理一併移除——
+# 留著只會把請求轉去一個已經不存在的上游，然後回一個看起來像壞掉的錯誤。
+#
+# 新流程（爬蟲 → 暫存表 → Admin 審核 → 匯入正式 products）需要的代理路由，
+# 等商品後端定出路徑後再加。這裡是逐條列舉、不是萬用字元，所以那時候一定要回來補，
+# 否則前端呼叫得到 404。見「給商品後端_暫存商品審核與匯入_接入規格書」。
 
 
 @app.get("/admin-api/product-audit-logs")
