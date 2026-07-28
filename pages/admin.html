@@ -19,7 +19,7 @@
                 <span class="admin-nav-index">04</span><span>商品管理</span>
             </button>
             <button type="button" data-admin-section="crawler">
-                <span class="admin-nav-index">05</span><span>爬蟲匯入</span>
+                <span class="admin-nav-index">05</span><span>暫存商品審核</span>
             </button>
         </nav>
 
@@ -86,7 +86,7 @@
                             <b class="pending" id="adminProductConnection">連線中</b>
                         </div>
                         <div class="admin-service-row">
-                            <div><strong>爬蟲服務</strong><span>網址解析與商品預覽</span></div>
+                            <div><strong>暫存商品</strong><span>待審核的爬蟲資料</span></div>
                             <b class="idle" id="adminCrawlerConnection">待測試</b>
                         </div>
                     </section>
@@ -95,7 +95,7 @@
                         <div class="admin-block-heading"><span>Actions</span><h3 id="adminQuickTitle">常用操作</h3></div>
                         <button type="button" data-admin-jump="members"><span>會員權限與停權</span><b>前往</b></button>
                         <button type="button" data-admin-jump="products"><span>手動新增商品</span><b>前往</b></button>
-                        <button type="button" data-admin-jump="crawler"><span>從商品網址匯入</span><b>前往</b></button>
+                        <button type="button" data-admin-jump="crawler"><span>審核爬蟲暫存商品</span><b>前往</b></button>
                     </section>
                 </div>
             </section>
@@ -268,36 +268,24 @@
 
             <section class="admin-view" data-admin-view="crawler" hidden>
                 <div class="admin-view-heading">
-                    <div><span>Crawler Import</span><h2>商品網址匯入</h2></div>
-                    <span class="admin-crawler-state idle" id="adminCrawlerState">已改流程</span>
+                    <div><span>Crawler Staging</span><h2>暫存商品審核</h2></div>
+                    <span class="admin-crawler-state idle" id="adminStagingState">尚未載入</span>
                 </div>
 
-                <!-- 2026-07-28：爬蟲端停止提供 /api/crawler/* HTTP API，也不再與前端直連。
-                     這個面板暫時只說明新流程；等商品後端提供暫存商品的審核／匯入 API，
-                     再把下面的表單換成「待審核清單 → 核准／退回 → 匯入正式商品」。 -->
-                <div class="admin-crawler-notice">
-                    <b>爬蟲已改為寫入暫存商品表，不再即時擷取。</b>
-                    <p>新的資料流程：爬蟲 → <code>crawler_staging_products</code> → 後端 Admin 審核 →
-                       匯入正式 <code>products</code> → 商品 API → 前端。</p>
-                    <p>下方表單已停用。待商品後端提供暫存商品的查詢／審核／匯入 API
-                       （路徑、管理員認證方式、狀態欄位格式尚未確定），這裡會改成待審核清單。</p>
+                <!-- 爬蟲 2026-07-28 起只寫 crawler_staging_products，不再即時擷取。
+                     這一頁是審核那批資料：待審核 → 核准／退回 → 匯入正式商品。 -->
+                <div class="admin-staging-toolbar">
+                    <div class="admin-staging-filters" id="adminStagingFilters" role="group" aria-label="狀態篩選"></div>
+                    <button class="admin-primary-button" id="adminStagingRefresh" type="button">重新載入</button>
                 </div>
+                <p class="admin-crawler-message" id="adminStagingMessage" aria-live="polite"></p>
 
-                <div class="admin-crawler-layout">
-                    <form class="admin-crawler-form" id="adminCrawlerForm">
-                        <div class="admin-block-heading"><span>Source</span><h3>來源網址</h3></div>
-                        <label>商品頁網址
-                            <input id="adminCrawlerUrl" type="url" placeholder="爬蟲已改為暫存表寫入，此功能停用" autocomplete="off" disabled>
-                        </label>
-                        <button class="admin-primary-button" id="adminCrawlerSubmitBtn" type="submit" disabled>擷取商品資料</button>
-                        <p class="admin-crawler-message" id="adminCrawlerMessage" aria-live="polite"></p>
-                    </form>
+                <div class="admin-staging-list" id="adminStagingList"></div>
 
-                    <section class="admin-crawler-preview" aria-labelledby="adminCrawlerPreviewTitle">
-                        <div class="admin-block-heading"><span>Preview</span><h3 id="adminCrawlerPreviewTitle">擷取預覽</h3></div>
-                        <div class="admin-crawler-empty" id="adminCrawlerEmpty">尚無擷取結果</div>
-                        <div id="adminCrawlerResult" hidden></div>
-                    </section>
+                <div class="admin-staging-pager" id="adminStagingPager" hidden>
+                    <button class="admin-secondary-button" id="adminStagingPrev" type="button">上一頁</button>
+                    <span id="adminStagingPageInfo"></span>
+                    <button class="admin-secondary-button" id="adminStagingNext" type="button">下一頁</button>
                 </div>
             </section>
         </main>

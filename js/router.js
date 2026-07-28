@@ -3699,7 +3699,7 @@ const PageInit = {
             demo: { eyebrow: 'PROJECT DEMONSTRATION', title: '專題展示' },
             members: { eyebrow: 'MEMBER ACCESS', title: '會員與權限管理' },
             products: { eyebrow: 'PRODUCT CATALOG', title: '商品管理' },
-            crawler: { eyebrow: 'CRAWLER IMPORT', title: '商品網址匯入' }
+            crawler: { eyebrow: 'CRAWLER STAGING', title: '暫存商品審核' }
         };
         const sectionButtons = Array.from(document.querySelectorAll('[data-admin-section]'));
         const sectionViews = Array.from(document.querySelectorAll('[data-admin-view]'));
@@ -4501,11 +4501,143 @@ const PageInit = {
             }
         };
 
-        // 爬蟲已改為只寫 crawler_staging_products，不再提供即時擷取（2026-07-28）。
-        // 這裡原本有一整組預覽／帶入表單的程式，Api.previewCrawledProduct 改成永遠回
-        // CRAWLER_API_RETIRED 之後全部不可達——包含一張列了七個永遠不會出現的錯誤碼對照表，
-        // 那比沒有註解更誤導。等後端提供暫存商品的審核／匯入 API 再重寫，不留半死的版本。
-        // 表單本身已在 pages/admin.html 停用並改成流程說明。
+        // ═══ 暫存商品審核 ═══
+        // 爬蟲 2026-07-28 起只寫 crawler_staging_products，不再即時擷取。這一塊是審核那批資料。
+        //
+        // **商品後端尚未回覆最終路徑。** 照規格書 §1 的提案先接起來；對方定案後只要改
+        // ai_gateway.py 的 _STAGING_BASE 一行，這裡與 js/api.js 都不必動。
+        const stagingList = document.getElementById('adminStagingList');
+        if (stagingList) {
+            const stagingFilters = document.getElementById('adminStagingFilters');
+            const stagingState = document.getElementById('adminStagingState');
+            const stagingMessage = document.getElementById('adminStagingMessage');
+            const stagingPager = document.getElementById('adminStagingPager');
+            const stagingPageInfo = document.getElementById('adminStagingPageInfo');
+
+            // 後端回的是小寫英文狀態碼，中文與配色留在前端——要改字面不必動資料庫。
+            const STATUS_ZH = {
+                pending: '待審核', approved: '已核准', rejected: '已退回',
+                imported: '已匯入', failed: '匯入失敗'
+            };
+            let filter = 'pending';
+            let page = 1;
+            const PAGE_SIZE = 20;
+
+            const setState = (text, cls) => {
+                if (stagingState) { stagingState.textContent = text; stagingState.className = 'admin-crawler-state ' + cls; }
+            };
+            const setMessage = (text, cls) => {
+                if (stagingMessage) { stagingMessage.textContent = text; stagingMessage.className = 'admin-crawler-message ' + (cls || ''); }
+            };
+
+            const drawFilters = () => {
+                if (!stagingFilters) return;
+                stagingFilters.innerHTML = ['pending', 'approved', 'failed', 'imported', 'rejected', ''].map(value => {
+                    const label = value ? STATUS_ZH[value] : '全部';
+                    return `<button type="button" class="admin-staging-filter${filter === value ? ' active' : ''}" data-staging-filter="${value}">${label}</button>`;
+                }).join('');
+                stagingFilters.querySelectorAll('[data-staging-filter]').forEach(btn => {
+                    btn.onclick = () => { filter = btn.dataset.stagingFilter; page = 1; load(); };
+                });
+            };
+
+            const money = (price, currency) => {
+                if (price == null || price === '') return '未取得價格';
+                const n = Number(price);
+                return `${currency || ''} ${Number.isFinite(n) ? n.toLocaleString('zh-TW') : price}`.trim();
+            };
+
+            // 清單縮圖優先用 640 的變體，省流量；沒有變體才退回原圖。
+            const thumbOf = (item) => {
+                const v = item.imageVariants || {};
+                return v['640'] || v['320'] || (Array.isArray(item.imageUrls) ? item.imageUrls[0] : '') || '';
+            };
+
+            const cardHtml = (item) => {
+                const status = String(item.status || '').toLowerCase();
+                const thumb = thumbOf(item);
+                return `<article class="admin-staging-card" data-staging-id="${escapeHtml(item.id)}">
+                    <div class="admin-staging-thumb">${thumb
+                        ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(item.name || '商品圖片')}" loading="lazy">`
+                        : '<span>無圖片</span>'}</div>
+                    <div class="admin-staging-body">
+                        <div class="admin-staging-head">
+                            <b>${escapeHtml(item.name || '未取得名稱')}</b>
+                            <span class="admin-staging-badge ${escapeHtml(status)}">${escapeHtml(STATUS_ZH[status] || status || '未知')}</span>
+                        </div>
+                        <p class="admin-staging-meta">${escapeHtml(item.brand || '未取得品牌')} · ${escapeHtml(money(item.price, item.currency))}</p>
+                        <p class="admin-staging-meta">${escapeHtml(item.sourceSite || '')} ${escapeHtml(item.sourceProductId || '')} · ${escapeHtml(item.category || '未分類')}</p>
+                        ${item.failedReason ? `<p class="admin-staging-fail">${escapeHtml(item.failedReason)}</p>` : ''}
+                        ${item.importedProductId ? `<p class="admin-staging-meta">已匯入商品 id：${escapeHtml(item.importedProductId)}</p>` : ''}
+                        <div class="admin-staging-actions">
+                            ${status === 'pending' ? `
+                                <button class="admin-primary-button" type="button" data-staging-act="approved">核准</button>
+                                <button class="admin-secondary-button" type="button" data-staging-act="rejected">退回</button>` : ''}
+                            ${status === 'approved' ? `
+                                <button class="admin-primary-button" type="button" data-staging-act="import">匯入正式商品</button>` : ''}
+                        </div>
+                    </div>
+                </article>`;
+            };
+
+            const act = async (id, action, card) => {
+                card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+                let result;
+                if (action === 'import') {
+                    result = await Api.importStagingProduct(id);
+                } else if (action === 'rejected') {
+                    // 退回原因會顯示在清單上，讓下一個看的人知道為什麼——所以問一下，但可以不填。
+                    const reason = window.prompt('退回原因（可留空）：');
+                    result = await Api.reviewStagingProduct(id, 'rejected', String(reason || '').trim());
+                } else {
+                    result = await Api.reviewStagingProduct(id, 'approved');
+                }
+                if (!result || !result.ok) {
+                    setMessage((result && result.error) || '操作失敗，請重新載入後再試', 'error');
+                    card.querySelectorAll('button').forEach(b => { b.disabled = false; });
+                    return;
+                }
+                setMessage('');
+                load();
+            };
+
+            const load = async () => {
+                setState('載入中', 'loading');
+                setMessage('');
+                stagingList.innerHTML = '<div class="admin-crawler-empty">讀取中…</div>';
+                const result = await Api.listStagingProducts({ status: filter, page, pageSize: PAGE_SIZE });
+                if (!result.ok) {
+                    setState('讀取失敗', 'error');
+                    // 端點還沒上線時這裡會是 404。講清楚是「還沒接上」而不是「壞掉」。
+                    stagingList.innerHTML = `<div class="admin-crawler-empty">${escapeHtml(result.error || '讀取失敗')}<br><small>商品後端的暫存商品 API 若尚未上線，這裡會是 404。</small></div>`;
+                    if (stagingPager) stagingPager.hidden = true;
+                    return;
+                }
+                setState(`共 ${result.total} 筆`, result.total ? 'success' : 'idle');
+                stagingList.innerHTML = result.items.length
+                    ? result.items.map(cardHtml).join('')
+                    : '<div class="admin-crawler-empty">這個狀態底下沒有資料</div>';
+                stagingList.querySelectorAll('[data-staging-id]').forEach(card => {
+                    card.querySelectorAll('[data-staging-act]').forEach(btn => {
+                        btn.onclick = () => act(card.dataset.stagingId, btn.dataset.stagingAct, card);
+                    });
+                });
+                const pages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
+                if (stagingPager) {
+                    stagingPager.hidden = pages <= 1;
+                    if (stagingPageInfo) stagingPageInfo.textContent = `第 ${result.page} / ${pages} 頁`;
+                    const prev = document.getElementById('adminStagingPrev');
+                    const next = document.getElementById('adminStagingNext');
+                    if (prev) { prev.disabled = result.page <= 1; prev.onclick = () => { page = result.page - 1; load(); }; }
+                    if (next) { next.disabled = result.page >= pages; next.onclick = () => { page = result.page + 1; load(); }; }
+                }
+            };
+
+            drawFilters();
+            const refreshBtn = document.getElementById('adminStagingRefresh');
+            if (refreshBtn) refreshBtn.onclick = () => load();
+            load();
+        }
 
         const refreshAllBtn = document.getElementById('adminRefreshAllBtn');
         if (refreshAllBtn) refreshAllBtn.onclick = () => {

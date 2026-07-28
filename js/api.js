@@ -1742,6 +1742,91 @@ const Api = {
         });
     },
 
+    // ═══ 暫存商品審核（爬蟲 → 暫存表 → 審核 → 匯入正式商品）═══
+    //
+    // 爬蟲端 2026-07-28 起只寫 crawler_staging_products，不再與前端直連。這四支是
+    // 管理員審核那批資料用的，全部經 Gateway 的 /admin-api（自動帶 CSRF、admin 驗證、稽核）。
+    //
+    // **商品後端尚未回覆最終路徑。** 這裡照
+    // 「給商品後端_暫存商品審核與匯入_接入規格書_2026-07-29.md」§1 的提案接；
+    // 對方定案後改 Gateway 的 _STAGING_BASE 一行即可，這裡不必動。
+    _stagingBase() { return `${gatewayService('admin-api')}/crawler-staging/products`; },
+
+    // 前端只認這幾個狀態；後端回別的字串會被當成未知狀態顯示原文，不會壞掉。
+    STAGING_STATUSES: Object.freeze(['pending', 'approved', 'rejected', 'imported', 'failed']),
+
+    async listStagingProducts({ status = 'pending', page = 1, pageSize = 20 } = {}) {
+        try {
+            const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+            if (status) query.set('status', status);
+            const res = await this._protectedFetch(`${this._stagingBase()}?${query}`, {
+                credentials: 'include', headers: this._adminProductHeaders(), cache: 'no-store'
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, items: [], ...this._productApiError(data, res.status) };
+            return {
+                ok: true,
+                items: Array.isArray(data.items) ? data.items : [],
+                total: Number(data.total) || 0,
+                page: Number(data.page) || page,
+                pageSize: Number(data.pageSize) || pageSize
+            };
+        } catch (err) {
+            return { ok: false, items: [], error: '連線失敗：' + err.message };
+        }
+    },
+
+    async getStagingProduct(id) {
+        try {
+            const res = await this._protectedFetch(`${this._stagingBase()}/${encodeURIComponent(id)}`, {
+                credentials: 'include', headers: this._adminProductHeaders(), cache: 'no-store'
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
+            return { ok: true, item: data.item || data };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    // status 只接受 approved / rejected；退回時建議帶 reason，會顯示在清單上。
+    async reviewStagingProduct(id, status, reason = '') {
+        const body = { status };
+        if (reason) body.reason = reason;
+        return this._protectedWrite(null, async () => {
+            try {
+                const res = await this._protectedFetch(`${this._stagingBase()}/${encodeURIComponent(id)}`, {
+                    method: 'PATCH',
+                    credentials: 'include',
+                    headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
+                return { ok: true, item: data.item || data };
+            } catch (err) {
+                return { ok: false, error: '連線失敗：' + err.message };
+            }
+        });
+    },
+
+    async importStagingProduct(id) {
+        return this._protectedWrite(null, async () => {
+            try {
+                const res = await this._protectedFetch(`${this._stagingBase()}/${encodeURIComponent(id)}/import`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: this._adminProductHeaders({ 'Content-Type': 'application/json' })
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
+                return { ok: true, item: data.item || data };
+            } catch (err) {
+                return { ok: false, error: '連線失敗：' + err.message };
+            }
+        });
+    },
+
     async patchRemoteProduct(rawId, payload, version) {
         const baseUrl = gatewayService('admin-api');
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
