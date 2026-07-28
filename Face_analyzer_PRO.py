@@ -15,6 +15,7 @@ from api_errors import (
 )
 import job_store
 import face_feedback
+import face_corrections
 from Face_analyzer_BASIC import FaceAnalyzer, MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES
 from dev_server_utils import get_cors_origins, run_dev_server
 from image_safety import sanitize_upload
@@ -223,6 +224,9 @@ def _run_pro_job(job_id, front_bytes, angle_bytes):
     # 標成 FACE_ANALYSIS_ERROR 會誤導使用者重拍一張本來就分析得出來的照片。
     try:
         front_result = FaceAnalyzer(front_bytes).export_json()
+        # 套用這張臉先前被修正過的答案。模型的原始輸出會被留在 front_result["_modelRaw"]，
+        # 回饋一律回報那一份——否則訓練資料會變成模型在確認自己。
+        front_result = face_corrections.apply(front_result, face_corrections.image_hash(front_bytes))
         job_store.patch_if_status(_COL, job_id, {"processing"}, {"stage": "side_analysis", "progress": 65, "updatedAt": _now_iso()})
         side_bytes = angle_bytes.get("side")
         side_result = _analyze_side_supplementary(side_bytes) if side_bytes else None
@@ -337,6 +341,10 @@ async def create_pro_job(
     job_id = f"JOB-{uuid.uuid4().hex[:12]}"
     result_token = uuid.uuid4().hex
     job_data = {
+        # 正面照的穩定識別碼（SHA-256，不是影像本身）。PRO 收多角度，但五官判斷與修正
+        # 都只出自正面那張，所以快取鍵跟 BASIC 用同一個定義——同一張正面照在兩種模式
+        # 之間也因此共用同一份修正。見 face_corrections 的模組說明。
+        "imageHash": face_corrections.image_hash(front_bytes),
         "jobId": job_id, "analysisPackageId": None, "status": "queued",
         "progress": 0, "stage": "upload", "createdAt": _now_iso(),
         "startedAt": None, "completedAt": None, "updatedAt": _now_iso(), "error": None, "result": None,

@@ -21,6 +21,7 @@
 # 本機跑得動、gcloud builds submit 也上得去（它從本機磁碟打包），
 # 但檔案根本沒進版控，任何人重新 clone 下來兩支 analyzer 都會 ImportError。
 !face_feedback.py
+!face_corrections.py
 !prepare_roi_cache.py
 !train_basic_cnn_roi.py
 !predict_basic_roi.py

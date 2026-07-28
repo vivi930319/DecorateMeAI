@@ -84,6 +84,7 @@ install_api_error_handling(app, "face-analyzer-basic")
 
 import job_store
 import face_feedback
+import face_corrections
 
 _insight_app = None
 _face_mesh = None
@@ -436,6 +437,9 @@ def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.
     # vs package_build_failed，讓上層看得出到底是哪一段壞了。
     try:
         result = FaceAnalyzer(contents, brightness_mode=brightness_mode, brightness_level=brightness_level).export_json()
+        # 套用這張臉先前被修正過的答案。模型的原始輸出會被留在 result["_modelRaw"]，
+        # 回饋一律回報那一份——否則訓練資料會變成模型在確認自己。
+        result = face_corrections.apply(result, face_corrections.image_hash(contents))
     except Exception:
         logging.exception("臉部分析 job 失敗 job_id=%s", job_id)
         job_store.patch_if_status(_COL, job_id, {"processing"}, {
@@ -479,6 +483,9 @@ async def create_basic_job(
     job_id = f"JOB-{uuid.uuid4().hex[:12]}"
     result_token = uuid.uuid4().hex
     job_data = {
+        # 這張照片的穩定識別碼（SHA-256，不是影像本身）。修正快取靠它認出「同一張臉又來了」，
+        # 回饋也靠它把修正記到正確的那張臉上。見 face_corrections 的模組說明。
+        "imageHash": face_corrections.image_hash(contents),
         "jobId": job_id, "analysisPackageId": None, "status": "queued",
         "progress": 0, "stage": "upload", "createdAt": _now_iso(),
         "startedAt": None, "completedAt": None, "updatedAt": _now_iso(), "error": None, "result": None,

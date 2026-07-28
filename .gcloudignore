@@ -35,6 +35,7 @@
 # 五官判斷回饋（BASIC 與 PRO 都 import）。同上：漏放行的話 build 會停在
 # 「COPY failed: file not found in build context」。
 !face_feedback.py
+!face_corrections.py
 
 # 以下四支 Dockerfile 一直都有 COPY，但從來沒放行過——臉部映像因此建不起來
 # （2026-07-28 部署時停在 image_safety.py）。gateway 與 render 沒踩到，是因為它們

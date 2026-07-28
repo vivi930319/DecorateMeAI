@@ -53,6 +53,7 @@ COPY basic_roi_shadow.py .
 # 五官判斷回饋的驗證與儲存。BASIC 與 PRO 都 import 它，少了一樣是 import 階段就掛。
 # 它會讀 models/basic_features_roi/*_classes.json 當合法類別表——那批檔案在下面一起複製。
 COPY face_feedback.py .
+COPY face_corrections.py .
 # 眼型／臉型改由幾何決策樹提供正式答案，這兩支是它的推論路徑與特徵定義。
 COPY basic_rule_trees.py .
 COPY rule_features.py .
