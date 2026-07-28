@@ -3116,9 +3116,6 @@ const PageInit = {
             <div class="step-panel">
                 <span class="eyebrow">Step 2 · Makeup render</span>
                 <h3>生成妝容渲染圖</h3>
-                <p class="step-note">依你的臉部分析與「${style.name}」產生妝後圖，完成後可以用照片上的按鈕切換妝前／妝後。
-                    渲染指令由後端自己向文字建議服務取得，所以<strong>不必先完成 Step 1</strong> ——
-                    先看建議只是讓你確認方向。</p>
                 <div class="step-actions">
                     <button class="btn-gold" id="suggestionRenderBtn">${renderedImage ? '重新生成妝容' : '生成妝容'}</button>
                     ${renderedImage ? `<button class="btn-outline" id="saveSuggestionBtn">收藏妝容對比圖</button>` : ''}
@@ -3243,11 +3240,20 @@ const PageInit = {
                 }
                 target = 100;
                 await new Promise(resolve => setTimeout(resolve, 800));
-                showToast('妝容渲染完成');
+                // 渲染端會回這次實際用的 prompt 來源。'style_allowlist' 代表建議服務沒接上、
+                // 用的是 styleId 的固定句子——妝會比較泛用。不講的話使用者只會覺得
+                // 「怎麼跟我選的風格沒關係」，而且沒有任何線索。
+                showToast(outcome.result?.promptSource === 'style_allowlist'
+                    ? '妝容渲染完成（本次使用通用指令，未取得個人化建議）'
+                    : '妝容渲染完成');
                 // 重畫整頁，不是只換照片。收藏鍵與「重新生成妝容」是建樣板當下依
                 // renderedImage 決定要不要輸出的，只換照片的話它們要等下次進頁才出現——
                 // 使用者剛渲染完，最想按的那顆卻不在。Step 1 成功時走的也是這條。
                 PageInit.suggestion();
+                // 按鈕在頁面下方，成果圖在最上面。不捲回去的話使用者按完只看到按鈕變回
+                // 「重新生成妝容」，會以為沒反應——他要的東西在他看不到的地方。
+                document.getElementById('suggestionStage')
+                    ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             } finally {
                 clearInterval(tick);
                 renderBtn.disabled = false;
