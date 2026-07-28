@@ -294,6 +294,11 @@ function pointReasonLabel(reason) {
     return raw;
 }
 
+// 一次跟資料庫端要幾筆、最多翻幾頁。翻頁上限是保險絲不是預期值：
+// 後端若把 nextCursor 一直回同一個值，這裡不能無限打下去。
+const PRODUCT_PAGE_SIZE = 100;
+const PRODUCT_MAX_PAGES = 30;
+
 function loadGeneralProductCatalog(onDone) {
     if (Array.isArray(Router?.generalProductCatalog) && Router.generalProductCatalog.length) {
         if (typeof onDone === 'function') onDone();
@@ -301,18 +306,47 @@ function loadGeneralProductCatalog(onDone) {
     }
     if (Router?.generalProductLoading) return;
     Router.generalProductLoading = true;
-    Api.listProducts()
-        .then(rec => {
-            Router.generalProductCatalog = rec?.products?.length ? rec.products : [];
-            Router.generalProductError = !(rec && rec.ok); // 區分「載入失敗」與「真的沒商品」
-            if (typeof onDone === 'function') onDone();
-        })
+    // 商品清單是 cursor 分頁的（見〈商品搜尋管理與推薦演算法整合規格書 2026-07-17〉§6.4：
+    // 回應帶 total 與 nextCursor）。先前只抓第一頁就當成全部，所以「查看所有商品」永遠
+    // 少一大截，連上面那句「N 件商品」顯示的也是那一頁的筆數，不是實際商品數。
+    (async () => {
+        const all = [];
+        const seen = new Set();
+        const usedCursors = new Set();
+        let cursor = null;
+        let anyPageOk = false;
+        let anyPageFailed = false;
+        for (let page = 0; page < PRODUCT_MAX_PAGES; page++) {
+            const params = { limit: PRODUCT_PAGE_SIZE };
+            if (cursor) params.cursor = cursor;
+            const rec = await Api.listProducts(params);
+            if (!rec || !rec.ok) { anyPageFailed = true; break; }
+            anyPageOk = true;
+            for (const p of rec.products || []) {
+                // rawId 才是資料庫端的主鍵；id 在缺 rawId 時是隨機生成的，拿來去重會漏掉。
+                const key = p.rawId != null ? `raw:${p.rawId}` : `id:${p.id}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                all.push(p);
+            }
+            const next = rec.nextCursor || null;
+            // 沒有下一頁、這頁空的、或後端把同一個 cursor 回第二次（等於原地打轉）就停。
+            if (!next || !(rec.products || []).length || usedCursors.has(next)) break;
+            usedCursors.add(next);
+            cursor = next;
+        }
+        Router.generalProductCatalog = all;
+        // 一頁都沒成功才算失敗；中途斷掉是拿到部分清單，不該顯示成「商品服務無法載入」。
+        Router.generalProductError = !anyPageOk || (anyPageFailed && !all.length);
+    })()
         .catch(() => {
             Router.generalProductCatalog = [];
             Router.generalProductError = true;
-            if (typeof onDone === 'function') onDone();
         })
-        .finally(() => { Router.generalProductLoading = false; });
+        .finally(() => {
+            Router.generalProductLoading = false;
+            if (typeof onDone === 'function') onDone();
+        });
 }
 
 function getProductCatalog(){
@@ -522,8 +556,21 @@ function renderAnalysisFeedback(result, packageId) {
 
   const saved = AnalysisFeedback.forPackage(packageId);
   const corrections = saved ? { ...saved.corrections } : {};
+  // predicted 一律取模型的原始輸出（後端放在 _modelRaw）。後端的修正快取會把這張臉
+  // 先前被改過的答案套進 result，畫面顯示的因此是「使用者的答案」——如果連 predicted
+  // 也拿那一份送回去，訓練資料就變成模型在確認自己，face_feedback 收到的不再是
+  // 「模型錯在哪」。沒有 _modelRaw（快取關掉或舊版服務）就退回 result 本身。
+  const raw = (result && typeof result._modelRaw === 'object' && result._modelRaw) || {};
   const predicted = {};
-  fields.forEach(field => { predicted[field] = result[field]; });
+  fields.forEach(field => { predicted[field] = raw[field] || result[field]; });
+  // 本機沒有紀錄、但後端快取已經套用過修正時（換裝置、清過瀏覽器），
+  // 從「顯示值 vs 原始輸出」的差異把修正補回面板，不然那些欄位會顯示成「判斷正確」，
+  // 使用者一送出就等於親手把自己先前的修正撤回。
+  fields.forEach(field => {
+    if (!corrections[field] && predicted[field] && result[field] && result[field] !== predicted[field]) {
+      corrections[field] = result[field];
+    }
+  });
 
   const draw = () => {
     box.innerHTML = `
@@ -1354,10 +1401,63 @@ function openSaveLookModal() {
 
 function closeProductRecommendationModal(){document.getElementById('productRecommendationModal')?.remove();}
 function openProductRecommendationModal(){
-    const products=Router.analysisPackage?.recommendations?.products||[],modal=document.createElement('div'); modal.id='productRecommendationModal';modal.className='makeup-style-modal open';modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');
-    const cards=products.length?products.slice(0,6).map(p=>{const name=p.name||p.productName||'推薦商品',image=p.imageUrl||p.image_url||p.imageUrls?.[0]||'';return `<article class="recommendation-modal-card">${image?`<img src="${escapeHtml(image)}" alt="${escapeHtml(name)}">`:''}<div><small>${escapeHtml(p.brand||'')}</small><h3>${escapeHtml(name)}</h3></div></article>`;}).join(''):'<div class="empty-state">推薦商品正在整理中，也可以先查看所有商品。</div>';
-    modal.innerHTML=`<div class="makeup-style-dialog product-recommendation-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Products</span><h2>個人化商品推薦</h2><p>依照臉部分析與選擇的妝容風格，從現有商品中整理推薦。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="recommendation-modal-grid">${cards}</div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-close>稍後再看</button><button class="btn-gold" type="button" data-all>查看所有商品</button></div></div>`;
-    document.body.appendChild(modal);modal.querySelector('.makeup-style-close').onclick=closeProductRecommendationModal;modal.querySelector('[data-close]').onclick=closeProductRecommendationModal;modal.querySelector('[data-all]').onclick=()=>{closeProductRecommendationModal();Router.go('products');};modal.onclick=e=>{if(e.target===modal)closeProductRecommendationModal();};
+    const modal=document.createElement('div');
+    modal.id='productRecommendationModal';modal.className='makeup-style-modal open';modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');
+    modal.innerHTML=`<div class="makeup-style-dialog product-recommendation-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Products</span><h2>個人化商品推薦</h2><p>依照臉部分析與選擇的妝容風格，從現有商品中整理推薦。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="prod-grid recommendation-modal-grid"></div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-close>稍後再看</button><button class="btn-gold" type="button" data-all>查看所有商品</button></div></div>`;
+    document.body.appendChild(modal);
+    const grid=modal.querySelector('.recommendation-modal-grid');
+
+    // 這裡跟商品頁的「本次個人化推薦」用同一份資料與同一種卡片：getRecommendedProductCatalog()
+    // 會把推薦端點的原始欄位正規化，並用全部商品清單補上推薦回應缺的圖與價格。
+    // 先前這個彈窗自己讀 recommendations.products 的原始欄位，所以只畫得出品牌與名稱——
+    // 沒有圖、沒有分類、沒有價格，也點不進商品詳情。
+    const draw=()=>{
+        if(!document.getElementById('productRecommendationModal'))return;
+        const products=getRecommendedProductCatalog();
+        if(!products.length){
+            grid.classList.remove('prod-grid');
+            grid.innerHTML=`<div class="empty-state">${Router.generalProductLoading?'推薦商品載入中...':'推薦商品正在整理中，也可以先查看所有商品。'}</div>`;
+            return;
+        }
+        grid.classList.add('prod-grid');
+        grid.innerHTML=products.slice(0,6).map((p,i)=>`
+            <div class="prod-card reveal-in" data-pid="${escapeHtml(p.id)}" style="animation-delay:${Math.min(i*0.035,0.2)}s">
+                <div class="pc-imgwrap">
+                    ${phBox('',p.name,p.img)}
+                    <button class="heart-btn pc-heart ${Fav.has(p.id)?'fav':''}" data-fav="${escapeHtml(p.id)}" aria-label="收藏">${HEART_SVG}</button>
+                </div>
+                <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}${p.brand?` · ${escapeHtml(p.brand)}`:''}</div>
+                <div class="pc-name">${escapeHtml(p.name)}</div>
+                ${p.matchReason?`<div class="pc-reason">${escapeHtml(p.matchReason)}</div>`:''}
+                <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
+            </div>`).join('');
+        grid.querySelectorAll('.prod-card').forEach(card=>{
+            card.onclick=e=>{
+                if(e.target.closest('.heart-btn'))return;
+                closeProductRecommendationModal();
+                Router.go('products',{productId:card.dataset.pid});
+            };
+        });
+        grid.querySelectorAll('.pc-heart').forEach(btn=>{
+            btn.onclick=e=>{
+                e.stopPropagation();
+                const id=btn.dataset.fav,wasFav=Fav.has(id);
+                Fav.toggle(id,products.find(x=>String(x.id)===String(id)));
+                btn.classList.toggle('fav',!wasFav);
+                btn.classList.remove('swap');void btn.offsetWidth;btn.classList.add('swap');
+                if(!wasFav)showToast('已加入收藏');
+            };
+        });
+    };
+    draw();
+    // 推薦端點回的 imageUrl 目前是空的，要靠全部商品清單補圖補價（見 fillRecommendedImages）。
+    // 使用者可能還沒進過商品頁，這裡自己把清單load起來，載完重畫一次。
+    if(!Router.generalProductCatalog?.length)loadGeneralProductCatalog(draw);
+
+    modal.querySelector('.makeup-style-close').onclick=closeProductRecommendationModal;
+    modal.querySelector('[data-close]').onclick=closeProductRecommendationModal;
+    modal.querySelector('[data-all]').onclick=()=>{closeProductRecommendationModal();Router.go('products');};
+    modal.onclick=e=>{if(e.target===modal)closeProductRecommendationModal();};
 }
 
 // 產生妝容建議的核心流程：呼叫 Api.suggestMakeup、切掉 Ollama 偶爾漏拆黏在中文尾巴的
