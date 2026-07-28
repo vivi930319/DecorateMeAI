@@ -36,6 +36,15 @@
 # 「COPY failed: file not found in build context」。
 !face_feedback.py
 
+# 以下四支 Dockerfile 一直都有 COPY，但從來沒放行過——臉部映像因此建不起來
+# （2026-07-28 部署時停在 image_safety.py）。gateway 與 render 沒踩到，是因為它們
+# 的 Dockerfile 不需要這幾支。
+# 對照方式：把三個 Dockerfile 的 COPY 清單跟這份白名單比一次，差集就是會炸的檔案。
+!image_safety.py
+!mediapipe_ascii.py
+!basic_rule_trees.py
+!rule_features.py
+
 # ROI CNN shadow 模型：只傳推論用的 .onnx 與類別表，.pt 是訓練用的不進映像
 !models
 models/*

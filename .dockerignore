@@ -26,6 +26,9 @@
 !Dockerfile.gateway
 !face_roi.py
 !basic_roi_shadow.py
+# 五官判斷回饋（BASIC 與 PRO 都 import）。新增會被 COPY 的檔案時，
+# .dockerignore 與 .gcloudignore 兩份都要放行，少一邊就會在該邊的建置炸掉。
+!face_feedback.py
 
 # ROI CNN shadow 模型。只放推論要用的 .onnx 與類別表；
 # .pt（torch state dict，訓練用）不進映像，那是 30MB 的死重量。
