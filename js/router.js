@@ -294,9 +294,7 @@ function pointReasonLabel(reason) {
     return raw;
 }
 
-// 一次跟資料庫端要幾筆、最多翻幾頁。翻頁上限是保險絲不是預期值：
-// 後端若把 nextCursor 一直回同一個值，這裡不能無限打下去。
-const PRODUCT_PAGE_SIZE = 100;
+// 翻頁上限是保險絲不是預期值：後端若把 nextCursor 一直回同一個值，這裡不能無限打下去。
 const PRODUCT_MAX_PAGES = 30;
 
 function loadGeneralProductCatalog(onDone) {
@@ -306,9 +304,12 @@ function loadGeneralProductCatalog(onDone) {
     }
     if (Router?.generalProductLoading) return;
     Router.generalProductLoading = true;
-    // 商品清單是 cursor 分頁的（見〈商品搜尋管理與推薦演算法整合規格書 2026-07-17〉§6.4：
-    // 回應帶 total 與 nextCursor）。先前只抓第一頁就當成全部，所以「查看所有商品」永遠
-    // 少一大截，連上面那句「N 件商品」顯示的也是那一頁的筆數，不是實際商品數。
+    // 〈商品搜尋管理與推薦演算法整合規格書 2026-07-17〉§6.4 說清單回應會帶 total 與
+    // nextCursor，但資料庫端目前**不分頁**：實測 /api/products 一次回全部 1041 筆，
+    // 沒有 nextCursor，連 limit 都是忽略的。
+    //
+    // 所以第一次請求刻意不帶 limit —— 帶了才危險：萬一哪天他們實作了 limit 卻還沒實作
+    // nextCursor，我們就會安靜地只拿到前 100 筆，比現在更糟。等看到 nextCursor 再跟著翻。
     (async () => {
         const all = [];
         const seen = new Set();
@@ -317,9 +318,7 @@ function loadGeneralProductCatalog(onDone) {
         let anyPageOk = false;
         let anyPageFailed = false;
         for (let page = 0; page < PRODUCT_MAX_PAGES; page++) {
-            const params = { limit: PRODUCT_PAGE_SIZE };
-            if (cursor) params.cursor = cursor;
-            const rec = await Api.listProducts(params);
+            const rec = await Api.listProducts(cursor ? { cursor } : {});
             if (!rec || !rec.ok) { anyPageFailed = true; break; }
             anyPageOk = true;
             for (const p of rec.products || []) {
@@ -378,6 +377,27 @@ function fillRecommendedImages(list) {
             ? { ...hit, ...p, id: stableId, img: p.img || hit.img, sourceUrl: p.sourceUrl || hit.sourceUrl }
             : { ...p, id: stableId };
     });
+}
+
+// 推薦卡片最多顯示幾張。商品頁的「本次個人化推薦」與推薦彈窗共用同一個數字，
+// 不然同一份推薦在兩個地方會列出不一樣的商品，使用者只會覺得其中一邊漏了。
+const RECOMMENDED_DISPLAY_LIMIT = 8;
+
+// 推薦卡的排列：每個美妝大類先各出一件分數最高的（類別依 API 回傳順序），
+// 剩下的再依分數接在後面。
+// 2026-07-15 的需求是「每個美妝大類**至少**一件」，先前的寫法卻是每類**只**留一件——
+// 比需求更嚴，於是一份六件的推薦在商品頁只剩三張，跟彈窗列出來的對不起來。
+function orderRecommendedProducts(list) {
+    const items = Array.isArray(list) ? list : [];
+    const best = new Map();
+    for (const p of items) {
+        if (!p?.cat) continue;
+        if (!best.has(p.cat) || (p.score ?? 0) > (best.get(p.cat).score ?? 0)) best.set(p.cat, p);
+    }
+    const firsts = [...best.values()];
+    const picked = new Set(firsts.map(p => String(p.id)));
+    const rest = items.filter(p => !picked.has(String(p.id))).sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    return [...firsts, ...rest];
 }
 
 function getRecommendedProductCatalog() {
@@ -1413,14 +1433,14 @@ function openProductRecommendationModal(){
     // 沒有圖、沒有分類、沒有價格，也點不進商品詳情。
     const draw=()=>{
         if(!document.getElementById('productRecommendationModal'))return;
-        const products=getRecommendedProductCatalog();
+        const products=orderRecommendedProducts(getRecommendedProductCatalog());
         if(!products.length){
             grid.classList.remove('prod-grid');
             grid.innerHTML=`<div class="empty-state">${Router.generalProductLoading?'推薦商品載入中...':'推薦商品正在整理中，也可以先查看所有商品。'}</div>`;
             return;
         }
         grid.classList.add('prod-grid');
-        grid.innerHTML=products.slice(0,6).map((p,i)=>`
+        grid.innerHTML=products.slice(0,RECOMMENDED_DISPLAY_LIMIT).map((p,i)=>`
             <div class="prod-card reveal-in" data-pid="${escapeHtml(p.id)}" style="animation-delay:${Math.min(i*0.035,0.2)}s">
                 <div class="pc-imgwrap">
                     ${phBox('',p.name,p.img)}
@@ -2823,15 +2843,9 @@ const PageInit = {
             const chips = [`<button class="chip ${filter==='all'?'active':''}" data-filter="all">全部<span class="chip-en">All</span></button>`]
                 .concat(cats.map(id => `<button class="chip ${filter===id?'active':''}" data-filter="${id}">${id}</button>`)).join('');
             const recommended = getRecommendedProductCatalog();
-            // 個人化推薦區改成「每個美妝大類至少一件」：同類取分數最高的一件，類別依 API 回傳順序（2026-07-15 需求）
-            const recommendedByCat = (() => {
-                const best = new Map();
-                for (const p of recommended) {
-                    if (!p?.cat) continue;
-                    if (!best.has(p.cat) || (p.score ?? 0) > (best.get(p.cat).score ?? 0)) best.set(p.cat, p);
-                }
-                return [...best.values()];
-            })();
+            // 排列與張數都跟推薦彈窗共用（見 orderRecommendedProducts）：同一份推薦
+            // 在兩個地方必須列出同樣的商品。
+            const recommendedByCat = orderRecommendedProducts(recommended);
             const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
             // 就算已有個人化推薦也要載全部商品清單：下方「全部商品」要靠它，推薦卡缺圖時也要用它補圖
             const shouldLoadGeneralProducts = !apiCatalog.length && !Router.generalProductLoading;
@@ -2847,7 +2861,7 @@ const PageInit = {
                 <div class="page-header"><span class="eyebrow">Boutique · 選物</span><h1>商品推薦</h1><div class="divider"></div></div>
                 ${recommended.length ? `<section class="recommended-strip">
                     <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">AI</span><h2>本次個人化推薦</h2></div></div>
-                    <div class="prod-grid recommended-grid">${recommendedByCat.slice(0, 8).map((p, i) => `
+                    <div class="prod-grid recommended-grid">${recommendedByCat.slice(0, RECOMMENDED_DISPLAY_LIMIT).map((p, i) => `
                         <div class="prod-card reveal-in" data-rec-pid="${escapeHtml(p.id)}" style="animation-delay:${Math.min(i*0.035,0.2)}s">
                             <div class="pc-imgwrap">${phBox('', p.name, p.img)}</div>
                             <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}${p.brand ? ` · ${escapeHtml(p.brand)}` : ''}</div>
