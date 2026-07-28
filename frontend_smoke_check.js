@@ -151,7 +151,9 @@ sandbox.Cart.change(1, -2);
 if (sandbox.Cart.count() !== 0 || sandbox.Cart.list().length !== 0) throw new Error('Cart item removal failed');
 
 // ── 服務設定 ────────────────────────────────────────────────
-const requiredServices = ['faceBasic', 'facePro', 'textSuggestion', 'render', 'product', 'memberDatabase', 'crawler'];
+// crawler 已於 2026-07-28 移除：爬蟲改為只寫 crawler_staging_products，不再與前端直連，
+// 前端也不再需要 crawlerUrl。
+const requiredServices = ['faceBasic', 'facePro', 'textSuggestion', 'render', 'product', 'memberDatabase'];
 for (const service of requiredServices) {
   if (!sandbox.ApiConfig.services[service]) throw new Error(`Missing service: ${service}`);
 }
@@ -164,7 +166,9 @@ if (!proUrl.endsWith('/v1/face/analyze/pro')) throw new Error(`Bad PRO URL: ${pr
 if (suggestionUrl !== '/text-suggestion/suggest') throw new Error(`Bad suggestion URL: ${suggestionUrl}`);
 if (sandbox.ApiConfig.services.memberDatabase.baseUrl !== '/member-database') throw new Error('Member API must use same-origin Gateway');
 if (sandbox.ApiConfig.services.product.baseUrl !== '/product-api') throw new Error('Product API must use same-origin Gateway');
-if (sandbox.ApiConfig.services.crawler.baseUrl !== '/admin-api') throw new Error('Admin crawler API must use same-origin Gateway');
+// 爬蟲服務設定已移除（見上方 requiredServices 的說明）。後台其餘走 /admin-api 的功能
+// 是直接呼叫 gatewayService('admin-api')，不經過 services.crawler。
+if (sandbox.ApiConfig.services.crawler) throw new Error('services.crawler 應已移除');
 if (sandbox.ApiConfig.services.aiGateway.sessionPath !== '/auth/session') throw new Error('Gateway session validation path missing');
 
 // ── Api 方法 ─────────────────────────────────────────────────

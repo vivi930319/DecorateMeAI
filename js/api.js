@@ -235,10 +235,6 @@ const ApiConfig = {
             recommendPath: '/recommend-products',
             listPath: '/api/products'
         },
-        crawler: {
-            baseUrl: gatewayService('admin-api'),
-            previewPath: '/crawler/product-preview'
-        },
         memberDatabase: {
             baseUrl: gatewayService('member-database')
         }
@@ -498,7 +494,8 @@ const Api = {
             };
             this.config.services.memberDatabase.baseUrl = sameOriginGatewayPath(data.memberDatabaseUrl, gatewayService('member-database'));
             this.config.services.product.baseUrl = sameOriginGatewayPath(data.productUrl, gatewayService('product-api'));
-            this.config.services.crawler.baseUrl = sameOriginGatewayPath(data.crawlerUrl, gatewayService('admin-api'));
+            // crawlerUrl 不再讀取：爬蟲已改為只寫 crawler_staging_products，不與前端直連。
+            // /public-config 仍然會回這個欄位，但前端沒有任何地方需要它了。
             return true;
         } catch (err) {
             console.warn('[config] /public-config 讀取失敗，沿用同源 Gateway 路徑：', err && err.message);
@@ -1094,61 +1091,21 @@ const Api = {
         }
     },
 
-    async previewCrawledProduct(sourceUrl) {
-        const service = this.config.services.crawler;
-        if (!service?.baseUrl) return { ok: false, code: 'CRAWLER_URL_NOT_CONFIGURED', error: 'crawlerUrl 與 productUrl 都尚未設定' };
-        const url = `${service.baseUrl}${service.previewPath}`;
-        const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        const timeout = controller ? setTimeout(() => controller.abort(), 30000) : null;
-        try {
-            const res = await this._protectedFetch(url, {
-                method: 'POST',
-                credentials: 'include',
-                headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ url: sourceUrl }),
-                ...(controller ? { signal: controller.signal } : {})
-            });
-            if (timeout) clearTimeout(timeout);
-            const data = await res.json().catch(() => ({}));
-            const payload = data.data || data.product || {};
-            if (!res.ok || data.success === false) {
-                return {
-                    ok: false,
-                    status: res.status,
-                    ...this._productApiError(data, res.status),
-                    detail: data?.detail?.error?.details || data?.error?.detail || ''
-                };
-            }
-            const imageUrls = Array.isArray(payload.imageUrls)
-                ? payload.imageUrls.filter(Boolean)
-                : [payload.imageUrl || payload.image_url || payload.img].filter(Boolean);
-            return {
-                ok: true,
-                status: data.status || 'ok',
-                message: data.message || '',
-                product: {
-                    sourceUrl: payload.sourceUrl || sourceUrl,
-                    sourceSite: payload.sourceSite || '',
-                    name: payload.productName || payload.name || '',
-                    brand: payload.brand || '',
-                    price: payload.price ?? '',
-                    currency: payload.currency || '',
-                    description: payload.description || payload.desc || '',
-                    imageUrls,
-                    category: payload.category || payload.type || '',
-                    hex: payload.hex || '',
-                    specs: payload.specs || {},
-                    rawText: payload.rawText || '',
-                    missingFields: Array.isArray(payload.missingFields) ? payload.missingFields : [],
-                    warnings: Array.isArray(payload.warnings) ? payload.warnings : []
-                },
-                raw: data
-            };
-        } catch (err) {
-            if (timeout) clearTimeout(timeout);
-            if (err?.name === 'AbortError') return { ok: false, code: 'FETCH_TIMEOUT', error: '爬蟲服務逾時，請稍後重試' };
-            return { ok: false, code: 'NETWORK_ERROR', error: '爬蟲服務連線失敗：' + err.message };
-        }
+    // 爬蟲端已在 2026-07-28 停止提供 /api/crawler/* HTTP API，也不再與前端直連。
+    // 新流程：爬蟲寫進 crawler_staging_products → 後端 Admin 審核 → 匯入正式 products
+    // → 商品 API → 前端。
+    //
+    // 這裡不再發請求。打過去只會拿到 404，然後在畫面上顯示成一個看起來像壞掉、
+    // 實際上是「這條路已經不存在」的錯誤——那比直接說清楚更難排查。
+    //
+    // 待商品後端提供暫存商品的審核／匯入 API（路徑、認證方式、狀態欄位格式都還沒定），
+    // 這一支會改成串那組端點。
+    async previewCrawledProduct() {
+        return {
+            ok: false,
+            code: 'CRAWLER_API_RETIRED',
+            error: '爬蟲已改為寫入暫存商品表，不再提供即時預覽。改用「暫存商品審核」流程（後端 API 尚未提供）。'
+        };
     },
 
     // ═══ 後台管理：members 讀寫都走 Gateway 的 HttpOnly cookie ═══
@@ -1842,23 +1799,11 @@ const Api = {
         }
     },
 
+    // 同上，/crawler/search-preview 也已下線。這一支本來就有「404/405 就退回 Google 搜尋」
+    // 的路徑，所以直接走那條——功能對使用者而言沒有變差，只是不再白打一次必定失敗的請求。
     async searchProductPreview(query) {
-        const baseUrl = this.config.services.crawler.baseUrl;
-        if (!baseUrl) return { ok: false, error: 'crawlerUrl 未設定' };
-        try {
-            const res = await this._protectedFetch(`${baseUrl}/crawler/search-preview`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
-                body: JSON.stringify({ q: String(query || '').trim() })
-            });
-            const data = await res.json().catch(() => ({}));
-            if (res.status === 404 || res.status === 405) {
-                return { ok: true, fallback: true, googleUrl: `https://www.google.com/search?q=${encodeURIComponent(String(query || '').trim())}` };
-            }
-            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
-            return { ok: true, googleUrl: data.googleUrl || data.google_url || '' };
-        } catch (err) { return { ok: false, error: '連線失敗：' + err.message }; }
+        const q = String(query || '').trim();
+        return { ok: true, fallback: true, googleUrl: `https://www.google.com/search?q=${encodeURIComponent(q)}` };
     },
 
     async listProductAuditLogs(limit = 100) {

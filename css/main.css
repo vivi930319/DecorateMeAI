@@ -1818,6 +1818,13 @@ body {
 @media (max-width:680px){ .step-panel { padding:26px 20px 24px; } .step-actions button { flex:1 1 100%; } }
 .suggestion-footer-actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:24px; }
 .compare-viewonly-note { font-family:var(--cjk); font-size:12.5px; line-height:1.8; color:var(--mid); margin:10px 0 16px; }
+/* 管理中台：爬蟲改流程後的說明區塊 */
+.admin-crawler-notice { margin:0 0 20px; padding:18px 20px; border-radius:14px;
+    background:var(--glass); border:1px solid var(--gold-deep); }
+.admin-crawler-notice b { display:block; font-family:var(--cjk); font-size:14px; color:var(--ink-soft); margin-bottom:10px; }
+.admin-crawler-notice p { font-family:var(--cjk); font-size:12.5px; line-height:1.85; color:var(--mid); margin:6px 0 0; }
+.admin-crawler-notice code { font-family:var(--sans); font-size:12px; padding:1px 6px; border-radius:5px;
+    background:var(--ivory-2); color:var(--ink-soft); }
 
 /* 收藏確認視窗 */
 .save-look-dialog { max-width:720px; }
