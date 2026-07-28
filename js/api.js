@@ -660,13 +660,22 @@ const Api = {
         return this._gatewayHeaders({ 'Content-Type': 'application/json' });
     },
 
-    async suggestMakeup({ analysisPackage, faceAnalysis, style, userNote }) {
+    // 只送 faceAnalysis，**不要送整個 analysisPackage**。
+    //
+    // 資料包裡有 images.front.compressedDataUrl（使用者臉部照片的 base64）。先前整包送出去，
+    // 單次請求 171 KB，而 Ollama_suggestion.py:158 是「faceAnalysis 有值就直接用它」——
+    // analysisPackage 根本不會被讀。也就是那張臉是白送的：
+    //   · 它會經過一條公開的 Cloudflare Quick Tunnel 到別人的機器上
+    //   · 沒有任何程式讀它
+    //   · 171 KB 穿過 tunnel 打到本機 gemma3，是 502 的直接原因
+    // 渲染那條早就修過同一個坑（見 runMakeupRender 的註解），這一條漏掉了。
+    async suggestMakeup({ faceAnalysis, style, userNote }) {
         let res;
         try {
             res = await this._protectedFetch(this.config.url('textSuggestion', 'suggestPath'), {
                 method: 'POST',
                 headers: this._textSuggestionHeaders(),
-                body: JSON.stringify({ analysisPackage, faceAnalysis, style, language: 'zh-TW', userNote }),
+                body: JSON.stringify({ faceAnalysis, style, language: 'zh-TW', userNote }),
             });
         } catch (err) {
             throw new Error('無法連線到建議服務：' + err.message);

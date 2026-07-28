@@ -1373,8 +1373,8 @@ async function runMakeupSuggestion(onProgress) {
     try {
         const latestAnalysis = getLatestAnalysisResult() || {};
         notify(45, '等待完整建議中...');
+        // 不傳 analysisPackage：它含使用者臉部照片的 base64，而建議服務只讀 faceAnalysis。
         const response = await Api.suggestMakeup({
-            analysisPackage: pkg,
             faceAnalysis: pkg?.faceAnalysis || AnalysisPackage.fromRawFaceAnalysis(latestAnalysis, Router.analyzeMode),
             style: style?.name || '日常自然妝',
             userNote: style?.tags?.join('、') || ''
