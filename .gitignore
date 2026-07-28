@@ -14,6 +14,13 @@
 # ROI CNN（BASIC 五官分類）：訓練腳本、共用裁切定義、shadow 推論、訓練歷程
 !face_roi.py
 !basic_roi_shadow.py
+# 五官判斷回饋（BASIC 與 PRO 都 import）。
+#
+# 這個 repo 有三份「* 全擋 + 逐項放行」的清單：.gitignore、.dockerignore、.gcloudignore。
+# 新增一支會被 import 或 COPY 的檔案時，三份都要加。少了這一份最難發現——
+# 本機跑得動、gcloud builds submit 也上得去（它從本機磁碟打包），
+# 但檔案根本沒進版控，任何人重新 clone 下來兩支 analyzer 都會 ImportError。
+!face_feedback.py
 !prepare_roi_cache.py
 !train_basic_cnn_roi.py
 !predict_basic_roi.py
