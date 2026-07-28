@@ -10,7 +10,10 @@
     [switch]$SkipTests
 )
 
-$ErrorActionPreference = "Stop"
+# gcloud 把 InsecureRequestWarning 寫到 stderr，而 PowerShell 5.1 在 Stop 之下會把原生指令的
+# stderr 包成 NativeCommandError 並中斷——即使 gcloud 其實成功（exit code 0）。
+# 這支腳本本來就每一步都檢查 $LASTEXITCODE，所以改用 Continue，讓 exit code 說了算。
+$ErrorActionPreference = "Continue"
 
 # ── 部署門檻：測試沒過就不准上 production ──────────────────────────────
 # 「等一下再修」在部署腳本裡永遠不會發生。紅燈就停在這裡，比上線後才發現便宜太多。
