@@ -1579,9 +1579,9 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .avatar-picker span { font-size:46px; color:var(--gold-deep); }
 .avatar-picker b { position:absolute; right:4px; bottom:8px; width:38px; height:38px; border-radius:50%; background:var(--white); display:flex; align-items:center; justify-content:center; box-shadow:0 10px 24px rgba(43,32,26,0.18); }
 .mode-tabs { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px; }
-.mode-tab { border:1px solid var(--line-gold); border-radius:999px; background:var(--paper); color:var(--mid); padding:11px; font-family:var(--sans); font-size:12px; letter-spacing:2px; cursor:pointer; transition:all .25s var(--ease); }
+.mode-tab { border:1px solid var(--line-gold); border-radius:999px; background:var(--paper); color:var(--btn-glass-ink); padding:11px; font-family:var(--sans); font-size:12px; letter-spacing:2px; cursor:pointer; transition:all .25s var(--ease); }
 .mode-tab.active { color:var(--btn-ink); border-color:var(--edge); background:var(--btn-grad); box-shadow:inset 0 2px 4px var(--sheen), 0 6px 14px rgba(150,88,78,0.16); }
-.mode-tab.locked { color:var(--mid); opacity:.62; }
+.mode-tab.locked { color:var(--btn-glass-ink); opacity:.62; }
 .mode-tab .lock-badge { margin-left:6px; font-size:11px; }
 .mode-panel { display:none; }
 .mode-panel.active { display:block; }

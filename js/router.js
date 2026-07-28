@@ -480,20 +480,20 @@ function applyAnalysisCorrections(corrections, predicted) {
     });
     if (!changed) return;
     if (Router.analysisPackage && typeof AnalysisPackage !== 'undefined') {
-        Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
+        // 一次組好再寫一次草稿。這裡每改一次下拉就會跑，先前分兩段各存一次，
+        // 等於每個字元的操作都對 sessionStorage 寫兩份完整資料包（裡面有 base64 照片）。
+        const patch = {
             faceAnalysis: AnalysisPackage.fromRawFaceAnalysis(Router.analysisResult, Router.analyzeMode)
-        });
-        if (typeof AnalysisDraft !== 'undefined') AnalysisDraft.save(Router.analysisPackage);
-    }
-    // 已經產生過的建議是用修正前的五官跑出來的。這裡不自動重跑——那是一次 Ollama 呼叫，
-    // 而使用者可能只是順手改一項——但要標成過期，否則畫面上會是「修正後的五官」配
-    // 「修正前的建議」，正好是這次要消滅的那種不一致。
-    // update() 是頂層淺合併，下次重新生成時整個 generativeText 會被換掉，stale 自然消失。
-    const gt = Router.analysisPackage?.generativeText;
-    if (gt && gt.suggestion) {
-        Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
-            generativeText: { ...gt, stale: true }
-        });
+        };
+        // 已經產生過的建議是用修正前的五官跑出來的。這裡不自動重跑——那是一次 Ollama 呼叫，
+        // 而使用者可能只是順手改一項——但要標成過期，否則畫面上會是「修正後的五官」配
+        // 「修正前的建議」，正好是這次要消滅的那種不一致。
+        // update() 是頂層淺合併，下次重新生成時整個 generativeText 會被換掉，stale 自然消失。
+        // 已經標過就不再重寫，免得每次下拉都產生一份內容相同的新物件。
+        const gt = Router.analysisPackage.generativeText;
+        if (gt && gt.suggestion && !gt.stale) patch.generativeText = { ...gt, stale: true };
+
+        Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, patch);
         if (typeof AnalysisDraft !== 'undefined') AnalysisDraft.save(Router.analysisPackage);
     }
     // 分析紀錄是在回饋面板出現之前就寫入的，也要跟著改。
@@ -566,9 +566,9 @@ function renderAnalysisFeedback(result, packageId) {
     if (submit) submit.onclick = () => {
       AnalysisFeedback.save(packageId, predicted, corrections);
       applyAnalysisCorrections(corrections, predicted);
-      // 回報給臉部分析服務。端點還沒上線時會 404，sendAnalysisFeedback 自己吞掉——
-      // 使用者這一次的建議與收藏已經套用了修正，送不出去不影響他。
-      if (Api.sendAnalysisFeedback) {
+      // 回報給臉部分析服務。訪客沒有 pinned actor，_protectedFetch 會擋下寫入，
+      // 送出去也只是被靜默吞掉——乾脆不送，本機那份修正照樣立刻生效。
+      if (Api.sendAnalysisFeedback && !(typeof isGuest === 'function' && isGuest())) {
           Api.sendAnalysisFeedback({
               mode: Router.analyzeMode,
               jobId: Router.analysisPackage?.async?.jobId,
@@ -1508,18 +1508,24 @@ function renderQuotaText() {
 }
 
 // runMakeupSuggestion 失敗時的共用處置：沒有分析結果就帶他去分析頁，其餘顯示原因。
-// 跟 handleRenderBlocked 一樣回傳「我處理掉了嗎」，呼叫端只需要收拾自己畫面上的進度條。
+//
+// 回傳的是「發生了什麼」，不是「我處理掉了嗎」：
+//   'navigated' —— 已經把使用者帶去別頁，呼叫端什麼都不必做（畫面馬上就要被換掉）
+//   'failed'    —— 留在原頁，呼叫端該收拾自己的進度條與狀態字
+//   ''          —— 沒有失敗
+// 先前回布林，於是兩個呼叫端都得再自己看一次 result.missingAnalysis 才知道要不要收拾——
+// 等於這個函式宣稱處理掉了，實際上把判斷又推回去。
 function handleSuggestionFailure(result) {
     if (result.missingAnalysis) {
         showAlert('目前沒有可用的臉部分析結果，請重新完成臉部分析。', { type:'error' });
         Router.go('analysis');
-        return true;
+        return 'navigated';
     }
     if (!result.ok) {
         showAlert('妝容建議失敗：' + result.error.message, { type: 'error' });
-        return true;
+        return 'failed';
     }
-    return false;
+    return '';
 }
 
 // 風格色票列。兩頁都要畫，而「這個風格沒給色票時用哪三色」只該有一個答案——
@@ -2468,8 +2474,13 @@ const PageInit = {
                         ...Router.analysisPackage.async,
                         jobId: job.jobId,
                         // 建 job 時才拿得到，之後查 job 一律要它（X-Job-Token，沒帶會 403）。
-                        // 回饋是使用者看完結果才送的，中間可能重新整理過，所以要存下來——
-                        // 不存的話回饋那一支就沒有東西可以證明「這個 job 是我的」。
+                        // 回饋是使用者看完分析、想了一下才送的，中間會經過好幾次重繪，
+                        // 所以要放進資料包帶著走——不存的話那一支就沒有東西可以證明
+                        // 「這個 job 是我的」。
+                        //
+                        // 注意：只在同一個分頁的這一輪有效。草稿雖然寫進 sessionStorage，
+                        // 但重新整理後沒有任何地方用 AnalysisDraft.load() 還原
+                        // Router.analysisPackage，所以重整之後回饋就送不出去了。
                         resultToken: job.resultToken || null,
                         progress: job.progress || 0,
                         stage: job.stage || 'upload'
@@ -2639,16 +2650,16 @@ const PageInit = {
 
             try {
                 const result = await runMakeupSuggestion(paint);
-                if (handleSuggestionFailure(result)) {
-                    if (!result.missingAnalysis) {
-                        bar.style.display = 'none';
-                        fill.style.width = '0';
-                        status.textContent = '建議產生失敗';
-                        status.classList.remove('active');
-                        renderAnalysisResult(null);
-                    }
+                const failure = handleSuggestionFailure(result);
+                if (failure === 'failed') {
+                    bar.style.display = 'none';
+                    fill.style.width = '0';
+                    status.textContent = '建議產生失敗';
+                    status.classList.remove('active');
+                    renderAnalysisResult(null);
                     return;
                 }
+                if (failure) return;
                 setTimeout(() => { bar.style.display = 'none'; fill.style.width = '0'; status.classList.remove('active'); }, 600);
                 // 先把結果區填好再跳：使用者從合併頁返回這一頁時不會看到空白。
                 renderAnalysisResult(result.response);
@@ -3136,10 +3147,9 @@ const PageInit = {
                 const result = await runMakeupSuggestion((pct, text) => {
                     if (stateEl) stateEl.textContent = `${text} ${pct}%`;
                 });
-                if (handleSuggestionFailure(result)) {
-                    if (!result.missingAnalysis && stateEl) stateEl.textContent = 'FAILED';
-                    return;
-                }
+                const failure = handleSuggestionFailure(result);
+                if (failure === 'failed' && stateEl) stateEl.textContent = 'FAILED';
+                if (failure) return;
                 showToast('妝容建議已產生');
                 PageInit.suggestion();   // 重畫：Step 1 轉成 DONE，Step 2 跟著解鎖
             } finally {
@@ -4332,10 +4342,11 @@ const PageInit = {
         };
         if (productGoogleSearch) productGoogleSearch.onclick = async event => {
             event.preventDefault();
+            // 爬蟲的 /crawler/search-preview 已下線，這裡本來就有「拿不到就退回 Google」
+            // 的路徑，現在直接組網址。經 Api 繞一圈只是把一行字串組裝包成非同步呼叫，
+            // 而且那個失敗分支永遠不會走到。
             const terms = productSearchInput?.value.trim() || '彩妝 商品';
-            const result = await Api.searchProductPreview(terms);
-            if (result.ok && /^https:\/\//i.test(result.googleUrl || '')) window.open(result.googleUrl, '_blank', 'noopener,noreferrer');
-            else showAlert(`Google 搜尋引導失敗：${result.error || '未取得搜尋網址'}`, { type: 'error' });
+            window.open(`https://www.google.com/search?q=${encodeURIComponent(terms)}`, '_blank', 'noopener,noreferrer');
         };
 
         const loadProductAuditLogs = async () => {
@@ -4490,128 +4501,11 @@ const PageInit = {
             }
         };
 
-        const crawlerForm = document.getElementById('adminCrawlerForm');
-        const crawlerSubmitBtn = document.getElementById('adminCrawlerSubmitBtn');
-        const crawlerMessage = document.getElementById('adminCrawlerMessage');
-        const crawlerEmpty = document.getElementById('adminCrawlerEmpty');
-        const crawlerResult = document.getElementById('adminCrawlerResult');
-        let crawledProduct = null;
-        const crawlerErrorLabels = {
-            INVALID_URL: '商品網址格式不正確',
-            UNSUPPORTED_SITE: '目前尚未支援這個來源網站',
-            FETCH_TIMEOUT: '來源網站回應逾時',
-            SCRAPE_BLOCKED: '來源網站拒絕爬蟲存取',
-            PARSE_FAILED: '商品欄位解析失敗',
-            NO_PRODUCT_FOUND: '此網址找不到商品資料',
-            CRAWLER_URL_NOT_CONFIGURED: '尚未設定爬蟲服務網址',
-            NETWORK_ERROR: '無法連線到爬蟲服務'
-        };
-        const setCrawlerStatus = (label, state, message = '') => {
-            const badge = document.getElementById('adminCrawlerState');
-            if (badge) {
-                badge.textContent = label;
-                badge.className = `admin-crawler-state ${state}`;
-            }
-            if (crawlerMessage) {
-                crawlerMessage.textContent = message;
-                crawlerMessage.className = `admin-crawler-message ${state}`;
-            }
-            const connectionState = state === 'error' ? 'error' : (state === 'loading' || state === 'idle' ? 'idle' : 'ok');
-            setConnectionStatus('adminCrawlerConnection', state === 'error' ? '異常' : (connectionState === 'ok' ? '正常' : '待測試'), connectionState);
-        };
-        const normalizeCrawlerCategory = (value) => {
-            const raw = String(value || '').trim();
-            if (Object.prototype.hasOwnProperty.call(CAT_TO_TYPE, raw)) return raw;
-            return TYPE_TO_CAT[raw.toLowerCase()] || '底妝';
-        };
-        const formatCrawlerPrice = (value, currency) => {
-            if (value == null || value === '') return '';
-            if (typeof value === 'number') {
-                const formatted = value.toLocaleString('zh-TW');
-                return ['TWD', 'NTD', 'NT$'].includes(String(currency || '').toUpperCase()) ? `NT$${formatted}` : `${currency || ''}${formatted}`;
-            }
-            const text = String(value).trim();
-            if (/^(NT\$|TWD)/i.test(text)) return text.replace(/^TWD\s*/i, 'NT$');
-            return currency ? `${currency} ${text}` : text;
-        };
-        const renderCrawlerPreview = (product, responseStatus) => {
-            if (!crawlerResult || !crawlerEmpty) return;
-            const imageUrl = String(product.imageUrls?.[0] || '');
-            const safeImageUrl = /^https?:\/\//i.test(imageUrl) ? imageUrl : '';
-            const safeSourceUrl = safeExternalUrl(product.sourceUrl);
-            const specs = Object.entries(product.specs || {}).slice(0, 6);
-            const missing = product.missingFields || [];
-            crawlerEmpty.hidden = true;
-            crawlerResult.hidden = false;
-            crawlerResult.innerHTML = `
-                <article class="admin-crawler-product">
-                    <div class="admin-crawler-image">
-                        ${safeImageUrl ? `<img src="${escapeHtml(safeImageUrl)}" alt="${escapeHtml(product.name || '商品預覽')}" loading="lazy">` : '<span>無商品圖片</span>'}
-                    </div>
-                    <div class="admin-crawler-product-body">
-                        <div class="admin-crawler-product-meta">
-                            <span>${escapeHtml(product.sourceSite || '來源網站')}</span>
-                            <b class="${responseStatus === 'partial' ? 'warning' : 'ok'}">${responseStatus === 'partial' ? '部分欄位缺漏' : '擷取完成'}</b>
-                        </div>
-                        <h3>${escapeHtml(product.name || '未取得商品名稱')}</h3>
-                        <p class="admin-crawler-brand">${escapeHtml(product.brand || '未取得品牌')}</p>
-                        <strong class="admin-crawler-price">${escapeHtml(formatCrawlerPrice(product.price, product.currency) || '未取得價格')}</strong>
-                        <p class="admin-crawler-description">${escapeHtml(product.description || '未取得商品描述')}</p>
-                        ${specs.length ? `<dl class="admin-crawler-specs">${specs.map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(typeof value === 'object' ? JSON.stringify(value) : value)}</dd></div>`).join('')}</dl>` : ''}
-                        ${missing.length ? `<div class="admin-crawler-missing"><span>缺少欄位</span>${missing.map(field => `<b>${escapeHtml(field)}</b>`).join('')}</div>` : ''}
-                        <div class="admin-crawler-result-actions">
-                            <button class="admin-primary-button" id="adminUseCrawlerResult" type="button">帶入商品表單</button>
-                            ${safeSourceUrl ? `<a class="admin-secondary-button" href="${safeSourceUrl}" target="_blank" rel="noreferrer">查看來源頁</a>` : ''}
-                        </div>
-                    </div>
-                </article>`;
-            const useBtn = document.getElementById('adminUseCrawlerResult');
-            if (useBtn) useBtn.onclick = () => {
-                exitEditMode();
-                document.getElementById('adminProductName').value = product.name || '';
-                document.getElementById('adminProductBrand').value = product.brand || '';
-                document.getElementById('adminProductCategory').value = normalizeCrawlerCategory(product.category);
-                document.getElementById('adminProductPrice').value = formatCrawlerPrice(product.price, product.currency);
-                document.getElementById('adminProductImg').value = product.imageUrls?.[0] || '';
-                document.getElementById('adminProductSourceUrl').value = product.sourceUrl || '';
-                document.getElementById('adminProductDesc').value = product.description || '';
-                document.getElementById('adminProductShades').value = /^#[0-9a-fA-F]{3,8}$/.test(product.hex || '') ? product.hex : '';
-                setAdminSection('products');
-                productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                showToast('爬蟲資料已帶入，確認內容後即可新增商品');
-            };
-        };
-        if (crawlerForm) crawlerForm.onsubmit = async (event) => {
-            event.preventDefault();
-            const input = document.getElementById('adminCrawlerUrl');
-            const sourceUrl = String(input?.value || '').trim();
-            try {
-                const parsed = new URL(sourceUrl);
-                if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('invalid protocol');
-            } catch (_) {
-                setCrawlerStatus('網址錯誤', 'error', '請輸入完整的 http 或 https 商品網址');
-                input?.focus();
-                return;
-            }
-            crawlerSubmitBtn.disabled = true;
-            crawlerSubmitBtn.textContent = '正在擷取…';
-            setCrawlerStatus('擷取中', 'loading', '正在等待爬蟲服務回傳商品資料');
-            const result = await Api.previewCrawledProduct(sourceUrl);
-            crawlerSubmitBtn.disabled = false;
-            crawlerSubmitBtn.textContent = '擷取商品資料';
-            if (!result.ok) {
-                crawledProduct = null;
-                if (crawlerEmpty) crawlerEmpty.hidden = false;
-                if (crawlerResult) crawlerResult.hidden = true;
-                const label = crawlerErrorLabels[result.code] || result.error || '爬蟲執行失敗';
-                setCrawlerStatus('擷取失敗', 'error', `${label}${result.code ? `（${result.code}）` : ''}`);
-                return;
-            }
-            crawledProduct = result.product;
-            const partial = result.status === 'partial' || crawledProduct.missingFields.length > 0;
-            setCrawlerStatus(partial ? '需要補資料' : '擷取完成', partial ? 'warning' : 'success', partial ? '部分欄位缺漏，可帶入表單後補齊' : '商品資料已建立預覽');
-            renderCrawlerPreview(crawledProduct, partial ? 'partial' : 'ok');
-        };
+        // 爬蟲已改為只寫 crawler_staging_products，不再提供即時擷取（2026-07-28）。
+        // 這裡原本有一整組預覽／帶入表單的程式，Api.previewCrawledProduct 改成永遠回
+        // CRAWLER_API_RETIRED 之後全部不可達——包含一張列了七個永遠不會出現的錯誤碼對照表，
+        // 那比沒有註解更誤導。等後端提供暫存商品的審核／匯入 API 再重寫，不留半死的版本。
+        // 表單本身已在 pages/admin.html 停用並改成流程說明。
 
         const refreshAllBtn = document.getElementById('adminRefreshAllBtn');
         if (refreshAllBtn) refreshAllBtn.onclick = () => {

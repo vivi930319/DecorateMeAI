@@ -1799,12 +1799,6 @@ const Api = {
         }
     },
 
-    // 同上，/crawler/search-preview 也已下線。這一支本來就有「404/405 就退回 Google 搜尋」
-    // 的路徑，所以直接走那條——功能對使用者而言沒有變差，只是不再白打一次必定失敗的請求。
-    async searchProductPreview(query) {
-        const q = String(query || '').trim();
-        return { ok: true, fallback: true, googleUrl: `https://www.google.com/search?q=${encodeURIComponent(q)}` };
-    },
 
     async listProductAuditLogs(limit = 100) {
         const baseUrl = gatewayService('admin-api');
