@@ -87,18 +87,31 @@ flowchart TD
 * **目前狀態**：Gateway 的 `GATEWAY_ALLOW_EXTERNAL_TEXT_UPSTREAM` 未開啟，
   `/text-suggestion/*` 一律回 503。等上游端完成金鑰輪替並提供固定網址後才會啟用。
 
-### 5. 影像安全（`image_safety.py`）
+### 5. 五官判斷回饋（`face_feedback.py`）
+
+* `POST /v1/face/jobs/{job_id}/feedback`，BASIC 與 PRO 各掛一條，內容由
+  `face_feedback.register_route()` 統一提供。
+* 驗證沿用其他 job 路由那套 `X-Job-Token`——少了它，任何人都能對別人的 jobId 灌標籤，
+  而這批資料是要拿去重訓的（issue #24）。
+* 修正值一律對照 `models/basic_features_roi/*_classes.json` 驗證，不自己抄一份清單。
+* 使用者說「判斷正確」時**刪除**既有紀錄而不是略過——他可能是把先前的修正改回去，
+  只是不寫的話那筆錯誤標註會永遠留在訓練集裡。
+* 只收類別字串，永遠不碰照片。影像在渲染端，靠渲染 job 上的 `faceJobId` 對應。
+* 詳見 `五官判斷回饋_端對端流程說明_2026-07-27.md`。
+
+### 6. 影像安全（`image_safety.py`）
 
 * 上傳影像先驗證真實格式與尺寸上限，拒絕偽裝副檔名與過大的檔案。
 * 移除 EXIF 與 XMP 中的位置資訊後才進入分析管線，避免拍攝地點隨照片一起流入後端。
 
-### 6. 共用基礎設施
+### 7. 共用基礎設施
 
 | 模組 | 職責 |
 |---|---|
 | `job_store.py` | Firestore 工作資料、TTL、狀態轉換與限流視窗額度 |
 | `api_errors.py` | 統一的結構化錯誤格式、服務金鑰 fail-closed 檢查、固定時間比較 |
 | `admin_audit.py` | 管理端操作稽核紀錄 |
+| `face_feedback.py` | 五官判斷回饋：對照 `*_classes.json` 驗證、寫入 `face_feedback` 集合，並提供 BASIC／PRO 共用的路由註冊 |
 | `analysis_package.py` | 分析結果封裝，供前端與文字建議共用 |
 | `dev_server_utils.py` | 本機開發伺服器啟動、連接埠占用偵測與 CORS 來源 |
 
@@ -140,6 +153,7 @@ PythonProject12/                  # 分支 Isa
 ├── dev_server_utils.py           # 本機開發伺服器工具
 ├── face_roi.py                   # 五官 ROI 切割
 ├── basic_roi_shadow.py           # ROI 影子比對
+├── face_feedback.py              # 五官判斷回饋：驗證、儲存與 BASIC／PRO 共用路由
 ├── rule_features.py              # 規則式特徵
 ├── models/                       # 分類頭與形狀模型（納入版控）
 │   ├── basic_features_roi/
