@@ -1697,12 +1697,34 @@ async def admin_product(product_id: str, request: Request):
 
 
 # 2026-07-28：爬蟲端停止提供 /api/crawler/*，改為只寫 crawler_staging_products，
-# 不再與前端直連。原本的 product-preview 與 search-preview 兩條代理一併移除——
-# 留著只會把請求轉去一個已經不存在的上游，然後回一個看起來像壞掉的錯誤。
+# 不再與前端直連。原本的 product-preview 與 search-preview 兩條代理已移除。
 #
-# 新流程（爬蟲 → 暫存表 → Admin 審核 → 匯入正式 products）需要的代理路由，
-# 等商品後端定出路徑後再加。這裡是逐條列舉、不是萬用字元，所以那時候一定要回來補，
-# 否則前端呼叫得到 404。見「給商品後端_暫存商品審核與匯入_接入規格書」。
+# 以下是新流程（爬蟲 → 暫存表 → Admin 審核 → 匯入正式 products）的代理。
+#
+# **上游路徑集中在這一個常數。** 商品後端還沒回覆最終路徑，這裡先照
+# 「給商品後端_暫存商品審核與匯入_接入規格書_2026-07-29.md」§1 的提案接。
+# 對方定案後只要改這一行，四條路由與前端都不必動。
+_STAGING_BASE = "/api/crawler-staging/products"
+
+
+@app.get("/admin-api/crawler-staging/products")
+async def admin_staging_list(request: Request):
+    return await proxy_admin_request(request, _STAGING_BASE)
+
+
+@app.get("/admin-api/crawler-staging/products/{staging_id}")
+async def admin_staging_detail(staging_id: str, request: Request):
+    return await proxy_admin_request(request, f"{_STAGING_BASE}/{validate_product_id(staging_id)}")
+
+
+@app.patch("/admin-api/crawler-staging/products/{staging_id}")
+async def admin_staging_review(staging_id: str, request: Request):
+    return await proxy_admin_request(request, f"{_STAGING_BASE}/{validate_product_id(staging_id)}")
+
+
+@app.post("/admin-api/crawler-staging/products/{staging_id}/import")
+async def admin_staging_import(staging_id: str, request: Request):
+    return await proxy_admin_request(request, f"{_STAGING_BASE}/{validate_product_id(staging_id)}/import")
 
 
 @app.get("/admin-api/product-audit-logs")
