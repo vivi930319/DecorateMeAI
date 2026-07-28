@@ -361,14 +361,21 @@ function getProductCatalog(){
     });
 }
 
-// 推薦端點目前回的 imageUrl 是空字串（已回報資料庫組），先用全部商品清單裡的同一件商品補圖：
-// 優先比對 salePageId（推薦回應的 productUrl slug == 清單的 sale_page_id），再退而比對完整商品名稱。
+// 用全部商品清單裡的同一件商品補齊推薦缺的欄位（早期推薦端點回的 imageUrl 是空字串；
+// 2026-07-29 實測已經有值，但清單才有的 hex_primary 等欄位仍要靠這裡補）。
+//
+// **絕對不能用 rawId 比對。** 兩支端點的 id 不是同一個號碼系統：
+//   /recommend-products  id=93  → MAC 柔礦迷光金屬光炫彩餅（candidateKey "blushes:93"，是類別內編號）
+//   /api/products        id=93  → INTEGRATE 自由繪型柔色眉彩膏（全域編號，1~3131）
+// 先前 rawId 擺在第一順位，等於把兩個不同的商品當成同一件合併，而且合出來的東西
+// 看起來完全正常——這是回報給商品後端的第 1 項。
+// 目前唯一可靠的對應是 salePageId（推薦的 productUrl slug == 清單的 sale_page_id，實測對得上），
+// 再退而比對完整商品名稱。
 function fillRecommendedImages(list) {
     const catalog = Array.isArray(Router?.generalProductCatalog) ? Router.generalProductCatalog : [];
     return (Array.isArray(list) ? list : []).map((raw, index) => {
         const p = (raw && typeof raw === 'object') ? raw : {};
         const hit = catalog.find(g => (
-            (p.rawId != null && g.rawId != null && String(p.rawId) === String(g.rawId)) ||
             (p.salePageId && g.salePageId && p.salePageId === g.salePageId) ||
             (p.name && g.name && p.name === g.name)
         ));

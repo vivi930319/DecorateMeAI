@@ -912,8 +912,12 @@ const Api = {
             // 推薦端點的 productUrl 實際上是 sale_page_id slug（不是 http 網址），留下來讓前端能跟商品清單比對補圖
             salePageId: product.sale_page_id || product.salePageId
                 || ((typeof product.productUrl === 'string' && product.productUrl && !/^https?:/i.test(product.productUrl)) ? product.productUrl : null),
-            sourceUrl: product.sourceUrl || product.source_url
-                || ((typeof product.productUrl === 'string' && /^https?:/i.test(product.productUrl)) ? product.productUrl : ''),
+            // sourceUrl 只收真的是 http(s) 網址的值。推薦端點的 sourceUrl 實測回的是
+            // sale_page_id slug（例如 "mac-blush-MT1329"），不是網址；先前這裡直接照收，
+            // 後台編輯表單的「原始商品頁」欄位就會被填進一段不能點的字串。
+            // productUrl 那一路本來就有擋，sourceUrl 這一路漏了。
+            sourceUrl: [product.sourceUrl, product.source_url, product.productUrl]
+                .find(v => typeof v === 'string' && /^https?:\/\//i.test(v)) || '',
             // 商品清單 API 的欄位叫 hex_primary，不是 hex。先前只讀 product.hex，
             // 於是每一筆都拿到 undefined、色塊一律不顯示——資料一直都在，只是沒接上。
             hex: (() => {
