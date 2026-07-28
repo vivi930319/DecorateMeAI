@@ -966,10 +966,15 @@ def require_admin_access(request: Request) -> dict:
     return _require_admin_claims(require_member_access(request))
 
 
-def validate_product_id(product_id: str) -> str:
-    value = str(product_id or "").strip()
+def validate_path_segment(value: str, _code: str = "INVALID_PRODUCT_ID") -> str:
+    """消毒要塞進上游路徑的識別碼。
+
+    名字叫 segment 不叫 product_id：暫存商品的主鍵也走這裡，而它不是商品 id。
+    錯誤碼留成參數，呼叫端要的話可以講自己領域的話；預設維持 INVALID_PRODUCT_ID，
+    既有的商品路由回應不變。"""
+    value = str(value or "").strip()
     if not value or len(value) > 160 or "/" in value or "\\" in value or ".." in value or any(ord(char) < 32 for char in value):
-        raise HTTPException(status_code=400, detail={"error": {"code": "INVALID_PRODUCT_ID", "message": "Invalid product id."}})
+        raise HTTPException(status_code=400, detail={"error": {"code": _code, "message": "Invalid identifier."}})
     return value
 
 
@@ -1692,7 +1697,7 @@ async def admin_products(request: Request):
 
 @app.api_route("/admin-api/products/{product_id}", methods=["GET", "PATCH", "DELETE"])
 async def admin_product(product_id: str, request: Request):
-    safe_id = validate_product_id(product_id)
+    safe_id = validate_path_segment(product_id)
     return await proxy_admin_request(request, f"/api/products/{safe_id}")
 
 
@@ -1712,19 +1717,16 @@ async def admin_staging_list(request: Request):
     return await proxy_admin_request(request, _STAGING_BASE)
 
 
-@app.get("/admin-api/crawler-staging/products/{staging_id}")
-async def admin_staging_detail(staging_id: str, request: Request):
-    return await proxy_admin_request(request, f"{_STAGING_BASE}/{validate_product_id(staging_id)}")
-
-
-@app.patch("/admin-api/crawler-staging/products/{staging_id}")
-async def admin_staging_review(staging_id: str, request: Request):
-    return await proxy_admin_request(request, f"{_STAGING_BASE}/{validate_product_id(staging_id)}")
+# GET 與 PATCH 同一條路徑、同一個函式體，照鄰居 admin_product 的寫法合併成一條。
+# GET 目前前端沒用（列表已帶齊欄位），但放行它不增加風險——上游沒做就是 404。
+@app.api_route("/admin-api/crawler-staging/products/{staging_id}", methods=["GET", "PATCH"])
+async def admin_staging_item(staging_id: str, request: Request):
+    return await proxy_admin_request(request, f"{_STAGING_BASE}/{validate_path_segment(staging_id)}")
 
 
 @app.post("/admin-api/crawler-staging/products/{staging_id}/import")
 async def admin_staging_import(staging_id: str, request: Request):
-    return await proxy_admin_request(request, f"{_STAGING_BASE}/{validate_product_id(staging_id)}/import")
+    return await proxy_admin_request(request, f"{_STAGING_BASE}/{validate_path_segment(staging_id)}/import")
 
 
 @app.get("/admin-api/product-audit-logs")

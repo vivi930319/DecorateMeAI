@@ -37,7 +37,7 @@ from ai_gateway import (  # noqa: E402
     _authorize_member_path,
     _render_job_id_from_url,
     _sanitize_render_payload,
-    validate_product_id,
+    validate_path_segment,
 )
 
 
@@ -338,10 +338,10 @@ class AiGatewayTest(unittest.TestCase):
         self.assertEqual(suspended_error.exception.detail["error"]["code"], "ADMIN_SUSPENDED")
 
     def test_product_id_validation(self):
-        self.assertEqual(validate_product_id("lipsticks:933"), "lipsticks:933")
+        self.assertEqual(validate_path_segment("lipsticks:933"), "lipsticks:933")
         for value in ("../secret", "a/b", "a\\b", ""):
             with self.assertRaises(Exception):
-                validate_product_id(value)
+                validate_path_segment(value)
 
     def test_member_database_cookie_is_sealed_before_browser_storage(self):
         response = httpx.Response(200, headers={"set-cookie": "session=private-upstream-value; HttpOnly; Path=/"})

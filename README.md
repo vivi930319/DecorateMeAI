@@ -301,14 +301,22 @@ curl -s -o /dev/null -w "%{http_code}\n" "https://decorate-me.web.app/product-ap
 curl -s -o /dev/null -w "%{http_code}\n" "https://decorate-me.web.app/public-config"
 ```
 
-### `.gcloudignore` 的白名單陷阱
+### 三份白名單的陷阱
 
-`gcloud builds submit` 上傳來源時看的是 `.gcloudignore`，**不是** `.dockerignore`。
-這份檔案第一行是 `*`（全部排除）加上逐項放行，所以新增一支會被 `COPY` 的檔案時，
-必須同步加上 `!檔名`。漏掉的話建置會停在
-`COPY failed: file not found in build context`，而檔案其實好端端在本機。
+這個 repo 有**三份**「`*` 全擋 + 逐項放行」的清單，新增一支會被 import 或 `COPY` 的檔案時
+**三份都要加**：
 
----
+| 檔案 | 管什麼 | 漏掉的症狀 |
+|---|---|---|
+| `.gitignore` | 進不進版控 | **最難發現。** 本機跑得動、`gcloud builds submit` 也上得去（它從本機磁碟打包，不是從 git），線上一切正常——但別人 clone 下來就 `ImportError` |
+| `.dockerignore` | 本機 `docker build` 的 context | `COPY failed: file not found in build context` |
+| `.gcloudignore` | `gcloud builds submit` 上傳的 context | 同上，但只在雲端建置時出現 |
+
+2026-07-28 加 `face_feedback.py` 時只補了後兩份，於是它被部署上線、四個服務都正常，
+卻整整一天不在版控裡。CI 也照不到——它只跑 `ai_gateway_test` / `render_api_test` /
+`image_safety_test`，沒有一組會 import analyzer。
+
+**檢查方式：** 把三個 Dockerfile 的 `COPY` 清單跟三份白名單取差集，差的就是會炸的檔案。
 
 ## 資安原則
 
