@@ -476,21 +476,78 @@ def generate_ollama_suggestion(face_analysis: dict[str, Any], style_hint: str) -
     return suggestion
 
 
+# 五官分類的中文標籤 -> 英文。分析模型的輸出是中文（見 models/basic_features_roi/
+# *_classes.json），但送給影像模型的 prompt 是英文——不翻譯就等於把一串它讀不懂的字
+# 塞進 prompt，還不如不放。這裡只收模型真的會產生的那些類別，翻不出來的整項略過，
+# 寧可少一句，也不要把未知標籤原樣丟給影像模型。
+FACE_TERM_EN = {
+    # 臉型
+    "圓形臉": "a round face", "心形臉": "a heart-shaped face", "方形臉": "a square face",
+    "長形臉": "a long face", "鵝蛋臉": "an oval face",
+    # 眼型
+    "下垂眼": "downturned eyes", "丹鳳眼": "upturned almond eyes", "圓眼": "round eyes",
+    "杏仁眼": "almond eyes", "桃花眼": "soft rounded eyes", "瞇縫眼": "narrow eyes",
+    "細長眼": "long narrow eyes", "鳳眼": "upturned eyes",
+    # 眉型
+    "一字眉": "straight brows", "彎月眉": "curved brows", "落尾眉": "downward-angled brows",
+    # 鼻型
+    "寬鼻": "a wide nose", "標準鼻": "a medium-width nose",
+    # 唇型
+    "M型唇": "lips with a defined cupid's bow", "厚唇": "full lips", "微笑唇": "upturned lips",
+    "花瓣唇": "petal-shaped lips", "薄唇": "thin lips",
+    # 膚色分級與四季型
+    "白皙": "fair skin", "自然": "medium skin", "健康": "tan skin", "小麥": "deep skin",
+    "春": "warm-toned", "夏": "cool-toned", "秋": "warm deep-toned", "冬": "cool clear-toned",
+}
+
+
 def compact_face_context(face_analysis: dict[str, Any]) -> str:
-    important_keys = (
-        "faceShape", "face_shape",
-        "skinTone", "skin_tone",
-        "eyeShape", "eye_shape",
-        "lipShape", "lip_shape",
-        "skinType", "skin_type",
-        "features",
-    )
+    """把臉部分析壓成一句英文的長相描述，給影像模型當上妝的依據。
+
+    讀的是前端 AnalysisPackage.fromRawFaceAnalysis 產出的結構（faceShape / eyeShape /
+    browShape / noseFront / lipShape / skinTone{season,level}），順便相容底線寫法。
+
+    先前這裡只列了 faceShape / skinTone / eyeShape / lipShape 幾個 key，且直接把值
+    f-string 進去：skinTone 其實是個物件，會印成整串 dict；中文類別名也原樣送給影像
+    模型。加上 build_personalized_render_prompt 根本沒把 face_analysis 傳進來，
+    這一句從頭到尾都是空的——所以無論 Ollama 有沒有接上，prompt 裡都沒有這個人的長相。
+    """
+    if not isinstance(face_analysis, dict):
+        return ""
+
+    def pick(*keys):
+        for key in keys:
+            value = face_analysis.get(key)
+            if value:
+                return value
+        return None
+
     parts: list[str] = []
-    for key in important_keys:
-        value = face_analysis.get(key)
-        if value:
-            label = key.replace("_", " ")
-            parts.append(f"{label}: {value}")
+    for keys in (
+        ("faceShape", "face_shape"),
+        ("eyeShape", "eye_shape"),
+        ("browShape", "brow_shape"),
+        ("noseFront", "nose_front", "noseShape", "nose_shape"),
+        ("lipShape", "lip_shape"),
+    ):
+        english = FACE_TERM_EN.get(str(pick(*keys) or "").strip())
+        if english:
+            parts.append(english)
+
+    # skinTone 是物件：{season, level, lab}。要的是可讀的冷暖與深淺，不是整包 dict。
+    skin = pick("skinTone", "skin_tone")
+    if isinstance(skin, dict):
+        tone = " ".join(filter(None, (
+            FACE_TERM_EN.get(str(skin.get("season") or "").strip()),
+            FACE_TERM_EN.get(str(skin.get("level") or "").strip()),
+        )))
+        if tone:
+            parts.append(tone)
+    elif skin:
+        english = FACE_TERM_EN.get(str(skin).strip())
+        if english:
+            parts.append(english)
+
     return ", ".join(parts)
 
 
@@ -702,7 +759,14 @@ def build_personalized_render_prompt(style_id: str, face_analysis: dict[str, Any
 
     # Ollama 只負責「要上什麼妝」，identity lock 一律由我們自己疊上去 ——
     # 不能讓外部模型決定「可不可以改變這個人的長相」。
-    return build_render_prompt({"renderPrompt": None, "style": ollama_prompt}, {}, ""), "ollama"
+    #
+    # face_analysis 一定要傳下去。先前這裡寫死 {}，於是 prompt 裡「This person has ...」
+    # 那一句永遠是空的：拿去問 Ollama 的臉部資料，組 prompt 時又被丟掉，
+    # 個人化只剩 Ollama 那一句話，其餘 1200 多個字元跟預設完全一樣——
+    # 這就是「渲染效果跟預設沒兩樣」的來源。
+    return build_render_prompt(
+        {"renderPrompt": None, "style": ollama_prompt}, face_analysis or {}, ""
+    ), "ollama"
 
 
 def resolve_image_model() -> str:
