@@ -42,6 +42,9 @@
        這一層原本寫死成粉色，不跟主題走——深色主題底下就變成「粉底配淺字」，
        整排按鈕的字直接看不見。文字色各自用 --mid，所以這裡跟著主題深淺走就對了。 */
     --btn-glass:linear-gradient(118deg, rgba(250,228,224,0.66) 0%, rgba(243,214,210,0.58) 48%, rgba(233,205,170,0.60) 100%);
+    /* 玻璃按鈕上的文字色。原本各處直接用 --mid，但 --mid 是配「內文壓在頁面底色上」調的，
+       深色主題下它是中灰，壓在深色玻璃上就變成灰底灰字。這一層要跟著玻璃走，不是跟著內文走。 */
+    --btn-glass-ink:var(--mid);
     --btn-glass-hover:linear-gradient(118deg, rgba(253,236,232,0.78) 0%, rgba(246,223,218,0.70) 48%, rgba(238,214,180,0.72) 100%);
     /* 選中態（chip.active / mode-tab.active）。文字用 --btn-ink，所以這一層要跟 --btn-ink 反著走。 */
     --btn-glass-on:linear-gradient(118deg, rgba(248,214,212,0.84) 0%, rgba(240,210,203,0.78) 48%, rgba(232,194,149,0.80) 100%);
@@ -195,7 +198,7 @@ body {
     position:relative; display:inline-block; border:1px solid var(--edge);
     border-radius:999px; padding:13px 34px; cursor:pointer; overflow:hidden;
     font-family:var(--sans); font-size:11.5px; letter-spacing:.2em; text-transform:uppercase;
-    color:var(--mid); background:var(--glass);
+    color:var(--btn-glass-ink); background:var(--glass);
     box-shadow:inset 0 1px 3px var(--sheen), inset 0 -5px 10px rgba(199,142,124,0.2), 0 6px 16px rgba(150,88,78,0.14);
     transition:transform .35s var(--ease), box-shadow .35s var(--ease);
 }
@@ -850,7 +853,7 @@ body {
 /* 分類篩選小標籤（chips） */
 .filter-bar { display:flex; flex-wrap:wrap; gap:9px; margin-bottom:34px; padding-bottom:26px; border-bottom:1px solid var(--line); }
 .chip {
-    font-family:var(--cjk); font-size:13px; letter-spacing:.06em; color:var(--mid);
+    font-family:var(--cjk); font-size:13px; letter-spacing:.06em; color:var(--btn-glass-ink);
     padding:8px 18px; border:1px solid var(--line-gold); background:var(--paper); cursor:pointer;
     transition:color .35s var(--ease), background .35s var(--ease), border-color .35s var(--ease); white-space:nowrap;
 }
@@ -1051,6 +1054,8 @@ body[data-member-theme="rose"] {
     /* 深底之下的紅與綠要拉亮，:root 那組是配淺底的，壓在深色玻璃上會糊成一團 */
     --danger:#E8837C; --success:#7FC194;
     --btn-glass-hover:linear-gradient(118deg, rgba(74,81,88,0.86) 0%, rgba(58,64,70,0.80) 48%, rgba(88,96,104,0.82) 100%);
+    /* 深色玻璃上要接近白，中灰完全讀不出來 */
+    --btn-glass-ink:#F2F5F7;
     --btn-glass-on:linear-gradient(118deg, rgba(198,204,211,0.90) 0%, rgba(176,184,192,0.86) 48%, rgba(210,216,222,0.88) 100%);
 }
 body[data-member-theme="rose"] .topbar { background:rgba(15,17,19,0.9); }
@@ -1101,6 +1106,7 @@ body[data-member-theme="noir"] {
     --btn-glass:linear-gradient(118deg, rgba(46,39,30,0.80) 0%, rgba(34,29,24,0.74) 48%, rgba(58,49,36,0.76) 100%);
     --danger:#E8837C; --success:#7FC194;
     --btn-glass-hover:linear-gradient(118deg, rgba(62,53,40,0.88) 0%, rgba(48,41,32,0.82) 48%, rgba(76,64,46,0.84) 100%);
+    --btn-glass-ink:#F7EFDD;
     --btn-glass-on:linear-gradient(118deg, rgba(217,182,111,0.90) 0%, rgba(196,163,96,0.86) 48%, rgba(234,203,141,0.88) 100%);
 }
 body[data-member-theme="noir"] .topbar { background:rgba(18,15,17,0.9); }
@@ -1890,7 +1896,7 @@ body {
 .ga-x:hover { background:rgba(226,195,116,0.18); color:var(--danger); transform:rotate(90deg); }
 .ga-actions .btn-gold { min-width:120px; }
 .ga-cancel { min-width:120px; min-height:46px; padding:0 24px; cursor:pointer; border-radius:999px;
-    font-family:var(--sans); font-size:12px; letter-spacing:.22em; text-transform:uppercase; color:var(--mid);
+    font-family:var(--sans); font-size:12px; letter-spacing:.22em; text-transform:uppercase; color:var(--btn-glass-ink);
     background:var(--glass); border:1px solid var(--edge);
     box-shadow:inset 0 1px 0 var(--sheen); transition:background .35s var(--ease), transform .35s var(--ease); }
 .ga-cancel:hover { background:var(--glass); transform:translateY(-1px); }
@@ -1971,7 +1977,7 @@ body {
 
 /* 問候區主 CTA · 放大玻璃按鈕 */
 .greet-actions { gap:30px; margin-top:28px; }
-.greet-actions .btn-outline { padding:25px 58px; font-size:15px; letter-spacing:.26em; border-radius:999px; color:var(--mid);
+.greet-actions .btn-outline { padding:25px 58px; font-size:15px; letter-spacing:.26em; border-radius:999px; color:var(--btn-glass-ink);
     background:var(--btn-glass);
     backdrop-filter:blur(24px) saturate(155%); -webkit-backdrop-filter:blur(24px) saturate(155%);
     border:1px solid var(--edge);
@@ -2052,7 +2058,7 @@ body {
 }
 .chip {
     padding:10px 20px;
-    color:var(--mid);
+    color:var(--btn-glass-ink);
 }
 .chip.active,
 .mode-tab.active {
