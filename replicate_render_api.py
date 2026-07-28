@@ -25,6 +25,7 @@ from api_errors import (
 import job_store
 from dev_server_utils import get_cors_origins
 from replicate_render import (
+    SuggestionServiceUnavailable,
     GCS_BUCKET_NAME,
     GCS_RENDER_RETENTION_DAYS,
     IMAGE_PROVIDER,
@@ -395,6 +396,14 @@ def _server_render_prompt(req: RenderRequest) -> tuple[str, str]:
         )
     try:
         return build_personalized_render_prompt(style_id, face_analysis)
+    except SuggestionServiceUnavailable as exc:
+        # 設了建議服務卻要不到 prompt：不要靜靜退回 styleId 的罐頭 prompt。
+        # 使用者本來應該拿到個人化的妝，退回去他只會覺得「怎麼跟我選的風格沒關係」，
+        # 而且沒有任何線索。寧可讓他知道是上游掛了、稍後再試。
+        raise HTTPException(
+            status_code=503,
+            detail=error_payload("OLLAMA_UNAVAILABLE", str(exc), retryable=True),
+        )
     except ValueError:
         raise HTTPException(
             status_code=422,

@@ -643,8 +643,23 @@ STYLE_ID_TO_NAME = {
 }
 
 
+class SuggestionServiceUnavailable(RuntimeError):
+    """建議服務有設定，但這一次要不到 prompt。
+
+    刻意跟「沒設定建議服務」分開：沒設定時退回 styleId 的固定 prompt 是合理的預設行為；
+    設定了卻失敗，代表使用者**應該**拿到個人化的妝，卻因為上游壞了而拿到罐頭——
+    那件事必須講出來，不能靜靜降級。2026-07-29 就是這樣：Render 指向一條已死的 tunnel
+    超過一天，沒有任何錯誤，只是所有人的妝都變得比較泛用（見 S60）。
+    """
+
+
 def fetch_ollama_render_prompt(style_id: str, face_analysis: dict[str, Any] | None) -> str | None:
-    """跟建議服務要一段個人化的英文渲染指令。拿不到就回 None（呼叫端退回 styleId prompt）。"""
+    """跟建議服務要一段個人化的英文渲染指令。
+
+    回 None **只有一種情況**：根本沒設定建議服務。
+    設定了卻拿不到（連不上、401、逾時、回應沒有 renderPromptEn）一律丟
+    SuggestionServiceUnavailable，由呼叫端決定怎麼告訴使用者。
+    """
     if not SUGGESTION_SERVICE_URL:
         return None
 
@@ -664,20 +679,25 @@ def fetch_ollama_render_prompt(style_id: str, face_analysis: dict[str, Any] | No
         )
         response.raise_for_status()
         prompt = (response.json().get("renderPromptEn") or "").strip()
-    except Exception:
-        logging.exception("建議服務取 renderPromptEn 失敗，改用 styleId 的固定 prompt")
-        return None
+    except Exception as exc:
+        logging.exception("建議服務取 renderPromptEn 失敗")
+        raise SuggestionServiceUnavailable("建議服務目前無法連線") from exc
 
     if not prompt:
-        logging.warning("建議服務沒有回 renderPromptEn，改用 styleId 的固定 prompt")
-        return None
+        logging.warning("建議服務有回應，但沒有 renderPromptEn")
+        raise SuggestionServiceUnavailable("建議服務沒有回傳渲染指令")
     return prompt
 
 
 def build_personalized_render_prompt(style_id: str, face_analysis: dict[str, Any] | None) -> tuple[str, str]:
-    """回傳 (prompt, 來源)。來源是 'ollama' 或 'style_allowlist'，會回給前端顯示。"""
+    """回傳 (prompt, 來源)。來源是 'ollama' 或 'style_allowlist'，會回給前端顯示。
+
+    **有設定建議服務就一定要用它的輸出。** 拿不到時往上拋，不要退回 styleId 的固定 prompt——
+    那個 fallback 只保留給「沒有設定建議服務」的部署。
+    """
     ollama_prompt = fetch_ollama_render_prompt(style_id, face_analysis)
     if not ollama_prompt:
+        # 走到這裡代表 SUGGESTION_SERVICE_URL 是空的：這個部署本來就沒有建議服務。
         return build_server_render_prompt(style_id), "style_allowlist"
 
     # Ollama 只負責「要上什麼妝」，identity lock 一律由我們自己疊上去 ——
