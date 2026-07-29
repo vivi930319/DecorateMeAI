@@ -26,8 +26,15 @@
 !train_basic_cnn_roi.py
 !predict_basic_roi.py
 !eval_rule_baseline.py
-# md 文件一律不上 GitHub（僅 README.md 例外，見上方放行）——
-# 訓練歷程/紀錄書/規格書等文件留在本機與組內流通。
+# md 文件預設不上 GitHub —— 訓練歷程/紀錄書/規格書等留在本機與組內流通。
+# 例外只有兩份，都在上方／下方明確放行：
+#   README.md
+#   臉部分析模型_完整發展歷程規格書_2026-07-29.md
+#     └ 2026-07-29 使用者決定：臉部模型的歷程要有單一份可讀通的紀錄，且要進版控。
+#       它整併了 CNN訓練歷程、模型訓練記錄、DINOv2規格書、隱私說明等多份文件的內容。
+#       ⚠️ 這份文件記載了一個**尚未修補**的權限缺口（管理員可讀任何會員的妝前原圖，
+#          且該路徑沒有稽核）。目前 repo 是 private 所以沒問題，
+#          **在 未套用_渲染圖稽核與妝前圖權限_20260729.patch 套用之前，這個 repo 不可轉為 public。**
 # 模型權重（.onnx / .pt）刻意不入版控：二進位檔每次重訓都會讓 repo 永久肥一份。
 # 部署不受影響（Cloud Build 走 .gcloudignore 從本機上傳）；要重建模型就重跑
 # tools/build_identity_map.py -> prepare_roi_cache.py -> train_basic_cnn_roi.py。
@@ -90,10 +97,12 @@ firebase-hosting-full/public/README.md
 # 本機新手教學文件，不上傳 Git
 local_only_notes/
 
-# 除 README.md 外，所有 Markdown 都只留在本機，不上傳 GitHub。
-# 規則放在檔案最後，覆蓋上方曾為交接文件設定的個別例外。
+# 除下列例外，所有 Markdown 都只留在本機，不上傳 GitHub。
+# 規則放在檔案最後，覆蓋上方曾為交接文件設定的個別例外——
+# 所以新的例外也必須加在這裡，加在上面沒有用（後面的規則優先）。
 *.md
 !README.md
+!臉部分析模型_完整發展歷程規格書_2026-07-29.md
 
 # 五官分類模型：搬機時這些重訓才能重建，納入版控當備份。
 # dinov2_vits14.onnx（88MB）刻意不收 —— 那是 Meta 的公開模型，

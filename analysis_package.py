@@ -38,8 +38,7 @@ BROW_SHAPE_CODES = {
 # 一併補上。
 EYE_SHAPE_CODES = {
     "細長眼": "slender",
-    "桃花眼": "peach_blossom",
-    "杏仁眼": "almond",
+    "桃杏眼": "peach_almond",
     "圓眼": "round",
     "鳳眼": "phoenix",
     "下垂眼": "downturned",
@@ -47,6 +46,8 @@ EYE_SHAPE_CODES = {
     # ── 舊名稱別名（併入上面的類別，僅供讀取歷史資料）──
     "丹鳳眼": "phoenix",
     "瞇縫眼": "slender",
+    "桃花眼": "peach_almond",
+    "杏仁眼": "peach_almond",
 }
 
 NOSE_SHAPE_CODES = {
