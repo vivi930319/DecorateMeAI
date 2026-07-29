@@ -1,18 +1,10 @@
 {
   "classes": [
     "下垂眼",
-    "丹鳳眼",
     "圓眼",
-    "杏仁眼",
-    "桃花眼",
-    "瞇縫眼",
+    "桃杏眼",
     "細長眼",
     "鳳眼"
   ],
-  "architecture": "dinov2_vits14",
-  "classifier": "logistic_regression",
-  "embedding_size": 384,
-  "input_size": 224,
-  "train_count": 603,
-  "training_scope": "100_percent"
+  "architecture": "dinov2_vits14"
 }

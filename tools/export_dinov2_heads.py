@@ -34,6 +34,19 @@ def main() -> None:
         out = DST / f"{part}_dinov2_head.npz"
         np.savez(out, coef=coef, intercept=intercept, kind=np.array(kind))
 
+        # 類別檔要跟著 head 一起更新，否則兩者會不同步。
+        # 2026-07-30 就踩到：head 已重訓成 5 類（桃杏眼），旁邊的 *_dinov2_classes.json
+        # 還停在 8 類（含丹鳳眼、瞇縫眼）。basic_roi_shadow 的 _retired_labels 守衛會
+        # 因此拒絕載入整個 head——功能沒壞，但重訓等於白做，而且從外面看不出原因。
+        src_classes = SRC / f"{part}_classes.json"
+        if src_classes.is_file():
+            classes = json.loads(src_classes.read_text(encoding="utf-8"))["classes"]
+            (DST / f"{part}_dinov2_classes.json").write_text(
+                json.dumps({"classes": classes, "architecture": "dinov2_vits14"},
+                           ensure_ascii=False, indent=2),
+                encoding="utf-8")
+            print(f"{part:11s} 類別檔同步為 {len(classes)} 類")
+
         # 驗證：numpy 的結果必須與 sklearn 完全一致，否則抽權重的方式有誤
         scores = emb @ coef.T + intercept
         mine = scores.argmax(1) if scores.shape[1] > 1 else (scores[:, 0] > 0).astype(int)

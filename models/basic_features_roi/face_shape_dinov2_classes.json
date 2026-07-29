@@ -6,10 +6,5 @@
     "長形臉",
     "鵝蛋臉"
   ],
-  "architecture": "dinov2_vits14",
-  "classifier": "linear_svc",
-  "embedding_size": 384,
-  "input_size": 224,
-  "train_count": 386,
-  "training_scope": "100_percent"
+  "architecture": "dinov2_vits14"
 }
