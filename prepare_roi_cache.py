@@ -65,10 +65,17 @@ CANONICAL_LABELS = {
 def collect_images() -> dict[Path, dict[str, str]]:
     """收集訓練圖並套用官方分類表，同時去重與剔除標註衝突。
 
-    為什麼要按「檔案內容」去重而不是按路徑：這批資料裡有大量位元組完全相同的
-    重複檔（合併類別時用複製而非搬移留下的）。同一份像素若被切到 train 與 val
-    兩邊，模型是在驗證集上看它訓練時背過的東西，分數會虛高又測不出泛化——
-    這正是舊紀錄裡 per_image 切分分數異常漂亮的真正原因。
+    **去重的鍵是檔名，不是檔案內容**（2026-07-29 改）。原因是這批資料的組織方式：
+    同一張原始照片會被裁成不同大小分放到各部位資料夾——`face_shape/心形臉/IMG_7859.jpg`
+    是全臉 746x1110，`lip_shape/薄唇/IMG_7859.jpg` 是嘴部特寫 391x486。按內容雜湊去重
+    會把它們當成兩張不相干的圖，同一個人的臉型與唇型標註因此接不起來；實測有 164 個
+    檔名落在這種情況。標註同學的約定是「同名就是同一張照片」，這裡照那個約定走。
+
+    仍然保留「同一份照片不可同時進 train 與 val」的保護，只是判斷同一份的依據改成檔名。
+    舊紀錄裡 per_image 切分分數異常漂亮的原因（重複檔跨切分）沒有變回來。
+
+    抽 ROI 用同名檔案裡**尺寸最大**的那一份：部位特寫常常小到偵測不到完整人臉，
+    全臉那張才抽得出五個部位的 ROI。
 
     套完對照表後仍對應到多個類別的圖，是標註同學之間真正的判斷分歧
     （例如同一張臉被標成一字眉與彎月眉）。這種樣本的正確答案自己在打架，
@@ -99,8 +106,11 @@ def collect_images() -> dict[Path, dict[str, str]]:
                 if path.suffix.lower() not in EXTS or path.name.startswith("._"):
                     continue
                 raw_count += 1
-                digest = hashlib.md5(path.read_bytes()).hexdigest()
-                digest_to_path.setdefault(digest, path.resolve())
+                digest = path.name                       # 同名即同一張照片
+                # 同名檔案取尺寸最大的那份來抽 ROI：部位特寫太小會偵測不到人臉。
+                prev = digest_to_path.get(digest)
+                if prev is None or path.stat().st_size > prev.stat().st_size:
+                    digest_to_path[digest] = path.resolve()
                 existing = by_digest[digest].get(part_dir.name)
                 if existing is not None and existing != label:
                     conflicts[part_dir.name][digest] |= {existing, label}
@@ -118,7 +128,7 @@ def collect_images() -> dict[Path, dict[str, str]]:
         if kept:
             images[digest_to_path[digest]] = kept
 
-    print(f"原始檔案 {raw_count} 個 → 內容去重後 {len(by_digest)} 張唯一圖")
+    print(f"原始檔案 {raw_count} 個 → 依檔名去重後 {len(by_digest)} 張唯一照片")
     for part in PARTS:
         n = sum(1 for labels in images.values() if part in labels)
         c = len(conflicts.get(part, {}))

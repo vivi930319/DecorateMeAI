@@ -19,7 +19,7 @@ import jwt
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from admin_audit import record_admin_action
+from admin_audit import record_admin_action, recent_admin_actions
 from api_errors import install_api_error_handling, rate_limited_error, secret_equals
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -1732,6 +1732,33 @@ async def admin_staging_import(staging_id: str, request: Request):
 @app.get("/admin-api/product-audit-logs")
 async def admin_product_audit_logs(request: Request):
     return await proxy_admin_request(request, "/api/admin/product-audit-logs")
+
+
+@app.get("/admin-api/admin-actions")
+async def admin_actions(request: Request):
+    """Gateway 自己記的管理操作紀錄，給後台「最近操作」用。
+
+    跟上面那條 `/admin-api/product-audit-logs` 的差別，也是這條要單獨存在的理由：
+    那一條是**代理商品後端的稽核表**，能不能查得到、記了什麼，都由對方決定。
+    這一條讀的是 `record_admin_action()` 一直在寫的 `admin_audit_events` ——
+    **每一筆經過 Gateway 的商品／會員增改刪都在裡面**，包含失敗的那些，
+    而且商品後端就算掛了也照樣查得到。管理員誤刪之後要回答「誰、什麼時候、動了哪一筆」，
+    靠的是這一份。
+
+    只回雜湊過的 actorId，不回 email——理由見 admin_audit 的模組說明。
+    """
+    enforce_csrf(request)
+    if MULTI_SESSION_ENABLED:
+        _require_admin_claims(select_account(request, for_write=False)["claims"])
+    else:
+        claims = require_admin_access(request)
+        enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+
+    try:
+        limit = int(request.query_params.get("limit", "100"))
+    except ValueError:
+        limit = 100
+    return JSONResponse(content={"ok": True, "events": recent_admin_actions(limit)})
 
 
 async def proxy_public_product_request(request: Request, path: str):

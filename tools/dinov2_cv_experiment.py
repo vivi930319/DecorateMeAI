@@ -64,9 +64,20 @@ def crop_roi_224(frame, points, part):
 def compute_embeddings():
     """對每張圖裁它所屬部位的 224 ROI，過 DINOv2 存 embedding。有快取直接用。"""
     if EMB_PATH.is_file():
-        print(f"已有 embedding 快取 {EMB_PATH}，直接使用")
-        return np.load(EMB_PATH)
+        # 快取的列順序是綁在 index.json 的 records 上的。ROI 快取一重建，筆數就對不上，
+        # 沿用舊快取會拿 A 圖的 embedding 配 B 圖的標籤——而且只有在剛好越界時才會爆，
+        # 沒越界的話是安靜地全部算錯。所以這裡對筆數，不合就重算。
+        cached = np.load(EMB_PATH)
+        want = len(json.loads(Path("data/roi_cache/index.json").read_text(encoding="utf-8"))["records"])
+        if len(cached["embeddings"]) == want:
+            print(f"已有 embedding 快取 {EMB_PATH}（{want} 筆），直接使用")
+            return cached
+        print(f"embedding 快取筆數不符（快取 {len(cached['embeddings'])}、目前 {want}），重新計算")
 
+    # 必須早於 mediapipe：專案路徑含「淡江大學」，不套這個修復 FaceMesh 一定初始化失敗
+    # （見 mediapipe_ascii 模組說明與訓練記錄書 §三）。prepare_roi_cache 早就這樣做了，
+    # 這支當初漏掉——因為它多半吃現成的 embedding 快取，不會走到要開 FaceMesh 的這一段。
+    import mediapipe_ascii  # noqa: F401
     import mediapipe as mp
     import torch
 
@@ -120,8 +131,12 @@ def compute_embeddings():
 def compute_contour_embeddings():
     """對 MediaPipe 臉部外輪廓遮罩抽 DINOv2 embedding，列順序與 index.json 對齊。"""
     if CONTOUR_EMB_PATH.is_file():
-        print(f"已有輪廓 embedding 快取 {CONTOUR_EMB_PATH}，直接使用")
-        return np.load(CONTOUR_EMB_PATH)["embeddings"]
+        cached = np.load(CONTOUR_EMB_PATH)["embeddings"]
+        want = len(json.loads(Path("data/roi_cache/index.json").read_text(encoding="utf-8"))["records"])
+        if len(cached) == want:
+            print(f"已有輪廓 embedding 快取 {CONTOUR_EMB_PATH}（{want} 筆），直接使用")
+            return cached
+        print(f"輪廓 embedding 快取筆數不符（快取 {len(cached)}、目前 {want}），重新計算")
     import torch
 
     masks = np.load("data/roi_cache/face_contour.npy", mmap_mode="r")
