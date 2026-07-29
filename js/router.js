@@ -407,6 +407,26 @@ function orderRecommendedProducts(list) {
     return [...firsts, ...rest];
 }
 
+// 把後台價格欄位的輸入解析成數字；解析不出來回 null（由呼叫端擋下並告訴使用者）。
+//
+// 為什麼需要它：商品清單 API 給的 price 是 "NT$380" 這種顯示字串（見 _normalizeProduct），
+// 後台表單載入時就填這個值進去，而送出時做的是 Number(...)——`Number("NT$380")` 是 NaN，
+// `JSON.stringify({price: NaN})` 又會靜靜變成 `{"price": null}`。結果是管理員明明填了價格，
+// 寫進資料庫的卻是空值，畫面上沒有任何錯誤。欄位的 placeholder 當時還寫著「例如：NT$980」，
+// 等於主動教人輸入會壞掉的格式。
+//
+// 這裡接受 "NT$380"、"380 元"、"1,650"、" 380 " 這些人類會打出來的寫法，
+// 但**不接受**解析後不是有限正數的東西——那種情況要讓使用者知道，不能猜。
+function parsePriceInput(raw) {
+    if (raw == null) return null;
+    if (typeof raw === 'number') return Number.isFinite(raw) && raw >= 0 ? raw : null;
+    // 只留數字、小數點與負號；千分位逗號與 NT$／元／空白都在這一步被丟掉。
+    const cleaned = String(raw).replace(/[^\d.-]/g, '');
+    if (!cleaned || !/\d/.test(cleaned)) return null;
+    const n = Number(cleaned);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 function getRecommendedProductCatalog() {
     const fromPackage = Router?.analysisPackage?.recommendations?.products;
     if (Array.isArray(fromPackage) && fromPackage.length) return fillRecommendedImages(fromPackage);
@@ -1257,7 +1277,7 @@ admin: `
                     <option value="打亮">打亮</option>
                 </select>
             </label>
-            <label>價格<input id="adminProductPrice" type="text" placeholder="例如：NT$980"></label>
+            <label>價格<input id="adminProductPrice" type="text" inputmode="decimal" placeholder="只填數字，例如 980"></label>
             <label>圖片網址<input id="adminProductImg" type="text" placeholder="留空則使用預設示意圖"></label>
             <label>商品描述<textarea id="adminProductDesc" placeholder="顯示在前台商品詳情頁的說明文字"></textarea></label>
             <label>色號（用逗號分隔 Hex 色碼）<input id="adminProductShades" type="text" placeholder="例如：#3A241C,#C99070,#B5654A"></label>
@@ -1282,6 +1302,22 @@ admin: `
                         </tr>
                     </thead>
                     <tbody id="adminProductRows"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="admin-audit-panel">
+            <div class="dash-sec-head">
+                <div class="sh-l"><span class="sh-no">LOG</span><h2>最近操作紀錄</h2></div>
+                <button class="btn-outline btn-sm" type="button" id="adminAuditReload">重新載入</button>
+            </div>
+            <p class="admin-audit-note">誰、什麼時候、動了哪一筆商品，含失敗的操作。改錯或誤刪時從這裡找得回來。
+               操作者顯示為去識別化代號（同一位管理員的代號固定），紀錄保留 180 天。</p>
+            <div class="admin-table-wrap">
+                <table class="admin-table admin-audit-table">
+                    <thead>
+                        <tr><th>時間</th><th>動作</th><th>對象</th><th>結果</th><th>操作者</th></tr>
+                    </thead>
+                    <tbody id="adminAuditRows"></tbody>
                 </table>
             </div>
         </div>
@@ -4346,7 +4382,10 @@ const PageInit = {
             document.getElementById('adminProductSku').value = product.sku || '';
             document.getElementById('adminProductShadeName').value = product.shadeName || '';
             document.getElementById('adminProductCategory').value = product.cat || '底妝';
-            document.getElementById('adminProductPrice').value = product.price || '';
+            // 填數字，不是顯示字串。product.price 經過 _normalizeProduct 之後是 "NT$400"，
+            // 而送出時做的是 Number(...)——直接把顯示字串填回去，等於這個欄位預設就帶著
+            // 一個存檔會變成 null 的值。
+            document.getElementById('adminProductPrice').value = parsePriceInput(product.price) ?? '';
             document.getElementById('adminProductImg').value = product.img || '';
             document.getElementById('adminProductSourceUrl').value = product.sourceUrl || '';
             document.getElementById('adminProductDesc').value = product.desc || '';
@@ -4477,20 +4516,49 @@ const PageInit = {
             window.open(`https://www.google.com/search?q=${encodeURIComponent(terms)}`, '_blank', 'noopener,noreferrer');
         };
 
+        // 動作代號 -> 看得懂的中文。認不得的就原樣顯示，不要猜。
+        const AUDIT_ACTION_TEXT = {
+            'product.create': '新增商品', 'product.update': '編輯商品', 'product.delete': '刪除商品',
+            'member.create': '新增會員', 'member.update': '編輯會員', 'member.delete': '刪除會員'
+        };
+        // targetRef 是上游路徑（例如 /api/products/406），管理員要看的是那個編號。
+        const auditTarget = (ref) => {
+            const s = String(ref || '');
+            const m = s.match(/\/([^/]+)\/?$/);
+            return m && /^\d+$/.test(m[1]) ? `#${m[1]}` : (s || '—');
+        };
+        const auditTime = (iso) => {
+            const d = new Date(iso);
+            return Number.isNaN(d.getTime()) ? (iso || '—')
+                : d.toLocaleString('zh-TW', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+        };
+
         const loadProductAuditLogs = async () => {
-            const rows = document.getElementById('adminProductAuditRows');
+            const rows = document.getElementById('adminAuditRows');
             if (!rows) return;
-            rows.innerHTML = '<tr><td colspan="4">讀取中…</td></tr>';
-            const result = await Api.listProductAuditLogs(100);
+            rows.innerHTML = '<tr><td colspan="5">讀取中…</td></tr>';
+            // 讀 Gateway 自己記的那一份，不是商品後端的稽核表：後者能不能查、記了什麼
+            // 由對方決定，而且對方掛掉就查不到——誤刪之後最需要它的時候正好查不到。
+            const result = await Api.listAdminActions(100);
             if (!result.ok) {
-                rows.innerHTML = `<tr><td colspan="4">${escapeHtml(result.error || '無法讀取稽核紀錄')}</td></tr>`;
+                rows.innerHTML = `<tr><td colspan="5">${escapeHtml(result.error || '無法讀取操作紀錄')}</td></tr>`;
                 return;
             }
-            rows.innerHTML = result.logs.length ? result.logs.map(log => `<tr><td>${escapeHtml(log.createdAt || log.created_at || log.timestamp || '—')}</td><td>${escapeHtml(log.action || log.operation || '—')}</td><td>${escapeHtml(log.productId || log.product_id || '—')}</td><td>${escapeHtml(log.actorId || log.actor_id || (String(log.actor || '').startsWith('actor_') ? log.actor : '管理員'))}</td></tr>`).join('') : '<tr><td colspan="4">尚無操作紀錄</td></tr>';
+            if (!result.events.length) { rows.innerHTML = '<tr><td colspan="5">尚無操作紀錄</td></tr>'; return; }
+            rows.innerHTML = result.events.map(ev => {
+                const failed = ev.outcome !== 'success';
+                return `<tr class="${failed ? 'audit-failed' : ''}">
+                    <td>${escapeHtml(auditTime(ev.at))}</td>
+                    <td>${escapeHtml(AUDIT_ACTION_TEXT[ev.action] || ev.action || '—')}</td>
+                    <td>${escapeHtml(auditTarget(ev.targetRef))}</td>
+                    <td>${failed ? `失敗 ${escapeHtml(String(ev.statusCode || ''))}` : '成功'}</td>
+                    <td><code>${escapeHtml(String(ev.actorId || '—').slice(0, 14))}</code></td>
+                </tr>`;
+            }).join('');
         };
-        // 管理憑證改用登入 token，進到這頁就直接讀稽核紀錄，不必再等使用者「套用」什麼
+        // 管理憑證改用登入 token，進到這頁就直接讀操作紀錄，不必再等使用者「套用」什麼
         loadProductAuditLogs();
-        const auditReload = document.getElementById('adminProductAuditReload');
+        const auditReload = document.getElementById('adminAuditReload');
         if (auditReload) auditReload.onclick = loadProductAuditLogs;
         loadAdminProducts();
 
@@ -4553,7 +4621,8 @@ const PageInit = {
             const sku = document.getElementById('adminProductSku')?.value.trim();
             const shadeName = document.getElementById('adminProductShadeName')?.value.trim();
             const cat = document.getElementById('adminProductCategory')?.value;
-            const price = document.getElementById('adminProductPrice')?.value.trim();
+            const priceRaw = document.getElementById('adminProductPrice')?.value.trim();
+            const price = parsePriceInput(priceRaw);
             const img = document.getElementById('adminProductImg')?.value.trim();
             const sourceUrl = document.getElementById('adminProductSourceUrl')?.value.trim();
             const desc = document.getElementById('adminProductDesc')?.value.trim();
@@ -4562,8 +4631,15 @@ const PageInit = {
             const shades = shadesInput.filter(c => /^#[0-9a-fA-F]{3,8}$/.test(c));
             // 來源網址不再是必填：手動建立的商品本來就沒有來源頁，逼人填一個等於逼人亂編。
             // 爬蟲匯入的商品仍然帶著抓到的來源（隱藏欄位），照樣會一起送出去。
-            if (!name || !brand || !cat || !price || !img) {
+            if (!name || !brand || !cat || !priceRaw || !img) {
                 showAlert('請完整填寫商品名稱、品牌、分類、價格與圖片網址', { type:'error' });
+                return;
+            }
+            // 擋在這裡而不是讓它變成 null 送出去。先前 Number("NT$400") 是 NaN，
+            // JSON.stringify 再把 NaN 變成 null，於是「我明明填了價格」卻寫進一個空值，
+            // 而且畫面上沒有任何錯誤。
+            if (price === null) {
+                showAlert(`價格只能填數字（例如 980），目前填的是「${priceRaw}」。`, { type:'error' });
                 return;
             }
             if (shades.length !== shadesInput.length) {
@@ -4572,7 +4648,7 @@ const PageInit = {
             }
             // 全部走真商品資料庫，不再寫 localStorage demo
             const payload = {
-                name, brand, price: Number(price),
+                name, brand, price,
                 type: CAT_TO_TYPE[cat] || 'foundations',
                 imageUrl: img,
                 imageUrls: [img],

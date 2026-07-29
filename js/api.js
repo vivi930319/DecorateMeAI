@@ -1893,6 +1893,23 @@ const Api = {
         } catch (err) { return { ok: false, logs: [], error: '連線失敗：' + err.message }; }
     },
 
+    // Gateway 自己記的管理操作紀錄。跟 listProductAuditLogs 的差別：
+    // 那一支是代理商品後端的稽核表（對方記了什麼由對方決定，對方掛掉就查不到），
+    // 這一支讀的是 Gateway 每一筆增改刪都會寫的 admin_audit_events，含失敗的操作。
+    // 管理員誤刪之後要查「誰、什麼時候、動了哪一筆」，靠的是這一份。
+    async listAdminActions(limit = 100) {
+        const baseUrl = gatewayService('admin-api');
+        if (!baseUrl) return { ok: false, events: [] };
+        try {
+            const res = await this._fetchWithRelogin(`${baseUrl}/admin-actions?limit=${encodeURIComponent(limit)}`, {
+                headers: this._adminProductHeaders(), cache: 'no-store'
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, events: [], ...this._productApiError(data, res.status) };
+            return { ok: true, events: Array.isArray(data.events) ? data.events : [] };
+        } catch (err) { return { ok: false, events: [], error: '連線失敗：' + err.message }; }
+    },
+
     // LAB 物件（{L,a,b} 或 {L,A,B}）轉成推薦端新規格要的陣列 [L, a, b]
     _labToArray(lab) {
         const obj = this._labToUpperKeys(lab);
