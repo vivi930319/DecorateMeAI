@@ -25,7 +25,37 @@
 
 每一層都用**同一組 5-fold identity 切分**，跟扁平版可直接比較。
 階層式的風險是**錯誤會往下傳遞**——L1 判錯的樣本，後面幾層再準也救不回來。
-所以這支同時印出「每層自己的準確率」與「整體 macro」，兩個都要看。
+
+## 該看的指標是 precision，不是 accuracy（2026-07-30 修正）
+
+第一版每層只印 accuracy。在 1-vs-rest 且類別比約 1:4 的情況下，
+accuracy 會被多數類撐高，**看不出誤抓**——而誤抓正是階層式唯一致命的錯誤：
+被前面的層抓走的樣本會被鎖死，後面再準也救不回來。
+
+改印 precision 之後才看到真正的問題：
+
+    長形臉層  precision 0.515   誤吃 心形臉 38、鵝蛋臉 28
+    心形臉層  precision 0.257   誤吃 鵝蛋臉 42、圓形臉 34
+    鵝蛋臉層  precision 0.300
+
+**鵝蛋臉 recall 只有 0.171，不是因為第三層分不出來，
+是因為它 105 個樣本裡有 70 個在輪到它之前就被前兩層吃掉了。**
+
+病因是 `class_weight="balanced"`：它讓每一層都搶著開火。
+一般分類任務要它，**階層式正好相反——早期層要高 precision，不確定就放行**。
+拿掉之後 macro 0.398 → 0.435，鵝蛋臉 recall 0.171 → 0.438。
+
+（也試過 predict_proba 加高門檻。用巢狀切分在訓練折內選門檻，五折全部選到 0.5，
+也就是門檻沒有額外幫助——真正的問題就是 class_weight。）
+
+## 結論：修好了，但仍然不該上線
+
+    階層式（修正後）  0.437 ± 0.032
+    扁平決策樹        0.462
+    CNN 40ep/6e-4     0.522   ← 目前臉型的正式答案來源
+
+**「每層只用該層需要的特徵」這個假設是合理的，
+但省下來的好處補不回錯誤往下傳遞的代價。** 這支保留作為對照紀錄。
 """
 from __future__ import annotations
 
@@ -104,6 +134,9 @@ def main():
     fold_macros, level_acc = [], {name: [] for name, _ in LEVELS}
     level_acc["final3"] = []
     pooled_true, pooled_pred = [], []
+    # 誤抓統計：階層式唯一致命的錯誤是「抓走不屬於這一層的樣本」，
+    # 那些會被鎖死。accuracy 看不出來，要看 precision 與誤吃成分。
+    level_hits = {name: {"fired": 0, "correct": 0, "eaten": {}} for name, _ in LEVELS}
 
     for train_idx, val_idx in folds:
         pred = np.empty(len(val_idx), dtype=object)
@@ -118,12 +151,16 @@ def main():
             ytr = (y[remaining_tr] == name).astype(int)
             if len(np.unique(ytr)) < 2:
                 continue
-            clf = DecisionTreeClassifier(max_depth=args.depth, random_state=args.seed,
-                                         class_weight="balanced")
+            clf = DecisionTreeClassifier(max_depth=args.depth, random_state=args.seed)
             clf.fit(Xtr, ytr)
             Xva = pick([X[i] for i in remaining_va], feat_names)
             hit = clf.predict(Xva).astype(bool)
             level_acc[name].append(float(((y[remaining_va] == name) == hit).mean()))
+            caught = y[remaining_va[hit]]
+            level_hits[name]["fired"] += int(hit.sum())
+            level_hits[name]["correct"] += int((caught == name).sum())
+            for c in caught[caught != name]:
+                level_hits[name]["eaten"][c] = level_hits[name]["eaten"].get(c, 0) + 1
             for v in remaining_va[hit]:
                 pred[va_pos[int(v)]] = name
             remaining_va = remaining_va[~hit]
@@ -132,8 +169,7 @@ def main():
         # 最後一層：剩下的三類用下頜線曲線分
         if len(remaining_tr) and len(remaining_va):
             Xtr = pick([X[i] for i in remaining_tr], FINAL_FEATURES)
-            clf = DecisionTreeClassifier(max_depth=args.depth, random_state=args.seed,
-                                         class_weight="balanced")
+            clf = DecisionTreeClassifier(max_depth=args.depth, random_state=args.seed)
             clf.fit(Xtr, y[remaining_tr])
             out = clf.predict(pick([X[i] for i in remaining_va], FINAL_FEATURES))
             level_acc["final3"].append(float((out == y[remaining_va]).mean()))
@@ -155,13 +191,24 @@ def main():
             label = {"final3": "圓 vs 方（下頜線）"}.get(name, f"{name} vs 其餘")
             print(f"  {label:<22} {np.mean(accs):.3f}")
 
+    print("\n每一層抓到的東西裡有多少是真的（precision——階層式該看這個）:")
+    for name, s in level_hits.items():
+        if not s["fired"]:
+            continue
+        prec = s["correct"] / s["fired"]
+        eaten = sorted(s["eaten"].items(), key=lambda kv: -kv[1])
+        print(f"  {name} 層　觸發 {s['fired']}　真的是 {s['correct']}　"
+              f"precision {prec:.3f}（{1 - prec:.0%} 被鎖死）")
+        if eaten:
+            print(f"      誤吃：{'、'.join(f'{c} {n}' for c, n in eaten)}")
+
     print("\n逐類 recall:")
     pooled_true, pooled_pred = np.array(pooled_true), np.array(pooled_pred)
     for c in classes:
         m = pooled_true == c
         print(f"  {c:6s} {float((pooled_pred[m] == c).mean()):.3f}  (n={int(m.sum())})")
 
-    print("\n對照：扁平五分類（同一組 fold）見 rule_cv_results.json 的 face_shape_tree")
+    print("\n對照（同一組 5-fold）：扁平決策樹 0.462　CNN 40ep/6e-4 0.522（臉型正式答案）")
 
 
 if __name__ == "__main__":
