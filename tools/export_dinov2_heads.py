@@ -16,17 +16,28 @@ import numpy as np
 SRC = pathlib.Path("models/final_features_20260719")
 DST = pathlib.Path("models/basic_features_roi")
 
-HEADS = {
-    "face_shape": ("face_shape_dinov2_linear_svc.joblib", "linear_svc"),
-    "eye_shape": ("eye_shape_dinov2_logistic_regression.joblib", "logistic_regression"),
-    "nose_shape": ("nose_shape_dinov2_linear_svc.joblib", "linear_svc"),
-}
+def discover_heads() -> dict[str, tuple[str, str]]:
+    """從 model_selection.json 讀「哪個部位用哪個分類器」，不要在這裡再抄一份。
+
+    先前這裡是硬編清單。2026-07-31 眼型由 logistic_regression 改成 linear_svc 時，
+    train_final_selected_models 改了、這裡沒改，於是它繼續去載那個**已經不會再產生**
+    的舊 joblib——匯出「成功」，但線上拿到的是上一版的頭。
+    同一個事實抄兩份，就會有一份先過期（見發展歷程規格書 §7.8 的通則）。
+    """
+    sel = json.loads((SRC / "model_selection.json").read_text(encoding="utf-8"))["models"]
+    heads: dict[str, tuple[str, str]] = {}
+    for part, spec in sel.items():
+        if "+" not in spec:            # mobilenet 之類的不是線性頭，跳過
+            continue
+        kind = spec.split("+", 1)[1]   # dinov2_vits14+linear_svc -> linear_svc
+        heads[part] = (f"{part}_dinov2_{kind}.joblib", kind)
+    return heads
 
 
 def main() -> None:
     emb = np.load("data/roi_cache/dinov2_embeddings.npz")["embeddings"][:400]
 
-    for part, (filename, kind) in HEADS.items():
+    for part, (filename, kind) in discover_heads().items():
         clf = joblib.load(SRC / filename)
         coef = np.asarray(clf.coef_, dtype=np.float32)
         intercept = np.asarray(clf.intercept_, dtype=np.float32)

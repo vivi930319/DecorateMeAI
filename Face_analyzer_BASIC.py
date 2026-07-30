@@ -821,12 +821,14 @@ class FaceAnalyzer:
         if is_heart:
             return "心形臉"
 
+        # 2026-07-31：拿掉「梯形臉」與「菱形臉」兩個分支。官方分類表只有五類
+        # （圓形／心形／方形／長形／鵝蛋），這兩個名字從來不在裡面——吐出來之後
+        # analysis_package._code 會落成 "unknown"，前端回饋選項也沒有它們。
+        # 不自己發明對應關係，直接讓它落到下面已經調過的正規分支。
         if jaw_width >= cheekbone_width and jaw_width > forehead_width * 1.16:
-            return "方形臉" if hw < 1.25 else "梯形臉"
+            return "方形臉"
 
         if cheekbone_width >= forehead_width and cheekbone_width >= jaw_width:
-            # 菱形臉也容易被下顎取樣高度影響，改成顴骨與上下寬度差距都很明顯才判。
-            if fw_n < 0.78 and jw_n < 0.78 and cheek_to_jaw >= 1.20: return "菱形臉"
             if hw < 1.16: return "圓形臉"
             if hw >= 1.35: return "長形臉"
             if 1.16 <= hw <= 1.45 and jw_n >= 0.76: return "鵝蛋臉"
@@ -922,19 +924,20 @@ class FaceAnalyzer:
         # 導致 96% 的人被判成「桃花眼」。詳見 規則式閾值Bug_完整診斷記錄_新手版.md。
         #
         # 類別名稱依官方分類表：瞇縫眼併入細長眼、丹鳳眼併入鳳眼（2026-07-24），
-        # 杏仁眼與桃花眼合併為桃杏眼（2026-07-30）。眼型五類。
+        # 眼型現行四類（2026-07-31）：下垂眼／圓眼／桃杏眼／鳳眼。
+        # 杏仁眼＋桃花眼 → 桃杏眼（07-30）；細長眼 → 鳳眼（07-31）。
         #
-        # 這組手寫 if-else 現在只是 fallback：正式答案由 `basic_rule_trees` 的幾何決策樹
-        # 提供（同一套 5-fold 上 0.406 vs CNN 0.332，5/5 fold 全勝）。這裡維持可用，
-        # 是為了樹或模型載入失敗時仍有東西可回。
+        # 這組手寫 if-else 現在是**最後一層** fallback。幾何決策樹已於 07-30 全面退場
+        # （見 basic_rule_trees 與發展歷程規格書 §7.11），正式答案是 CNN／DINOv2；
+        # 這裡維持可用，是為了模型載入失敗時仍有東西可回。
         #
-        # 誠實的限制：三個弱特徵（ear / angle / ratio_to_face）分不乾淨六個類別，
-        # 這組規則永遠不會輸出某些類別（合併前是「桃花眼」）。
+        # 誠實的限制：三個弱特徵（ear / angle / ratio_to_face）分不乾淨，
+        # 這組規則在同一套 5-fold 上只有 0.44 左右，明顯輸給 CNN 的 0.56。
         if ear <= 0.264:
-            return "細長眼"
+            return "鳳眼"
         if ear <= 0.327:
             if ratio_to_face <= 0.207: return "下垂眼"
-            return "鳳眼" if angle <= -6.947 else "細長眼"
+            return "鳳眼"
         if ratio_to_face <= 0.229 and ear <= 0.346:
             return "桃杏眼"
         return "圓眼"

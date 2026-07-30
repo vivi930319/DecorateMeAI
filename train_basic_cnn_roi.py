@@ -201,16 +201,10 @@ def split_kfold_by_identity(labels, identities, n_folds, seed):
     return [(sorted(all_idx - set(val)), sorted(val)) for val in fold_val]
 
 
-# 眼型 7 類在每類 30~64 張的規模下分不乾淨（CNN macro 僅 0.378，
-# 「杏仁/桃花/丹鳳/細長」的視覺差異本來就細微）。先併成 3 大類把準確率做起來，
-# 之後資料補足再細分。分組依據是混淆矩陣：杏仁/桃花跟圓眼互相混、丹鳳/瞇縫跟細長眼互相混。
-EYE_MERGE_MAP = {
-    "杏仁眼": "圓眼",
-    "桃花眼": "圓眼",
-    "丹鳳眼": "細長眼",
-    "瞇縫眼": "細長眼",
-    # 圓眼、細長眼、下垂眼 維持原名
-}
+# 註：先前的 --merge-eye 實驗旗標（EYE_MERGE_MAP）已於 2026-07-31 移除。
+# 它把杏仁/桃花併進圓眼、丹鳳/瞇縫併進細長眼——而細長眼本身已在 07-31 併入鳳眼，
+# 那個對照表會產出不在官方分類表裡的類別。類別合併現在一律寫在
+# prepare_roi_cache.LABEL_ALIASES，是唯一事實來源。
 
 
 def apply_label_merge(labels, classes, merge_map):
@@ -373,8 +367,6 @@ def parse_args():
                    help="改跑 N-fold 按人分組交叉驗證（只做評估，不匯出 ONNX）。"
                         "單次 25%% 切分的 val 只有 43~105 張、分數雜訊 ±0.1，"
                         "CV 讓每張圖都輪流當過考題，數字才穩得住")
-    p.add_argument("--merge-eye", action="store_true",
-                   help="眼型 7 類合併為 3 類（杏仁/桃花->圓眼、丹鳳/瞇縫->細長眼）")
     p.add_argument("--drop-conflicts", action="store_true",
                    help="剔除標註矛盾的身分（同一人同部位被標成多個類別）的所有照片")
     p.add_argument("--architecture", choices=("mobilenet_v3_small", "simple_cnn"),
@@ -427,7 +419,6 @@ def run_cv(part, rois, labels, identities, classes, args, device):
         "pooled_macro": pooled_macro,
         "pooled_per_class_recall": per_class_recall,
         "pooled_confusion_matrix": agg_confusion.tolist(),
-        "merge_eye": bool(args.merge_eye),
         "drop_conflicts": bool(args.drop_conflicts),
         "epochs": args.epochs,
         "architecture": args.architecture,
@@ -464,9 +455,6 @@ def main():
             # 不使用 InsightFace 聚類，避免把外貌相似的不同人物錯誤綁成同一組。
             identities = np.arange(len(labels), dtype=np.int64)
 
-        if args.merge_eye and part == "eye_shape":
-            labels, classes = apply_label_merge(labels, classes, EYE_MERGE_MAP)
-
         if args.drop_conflicts:
             conflicts = find_conflict_identities(labels, identities)
             keep = [i for i, ident in enumerate(identities) if int(ident) not in conflicts]
@@ -484,7 +472,6 @@ def main():
                   ("_per_image" if args.identity_mode == "per_image" else "") + \
                   ("_contour" if args.face_input == "contour" else "") + \
                   ("_feature_contour" if args.contour_parts else "") + \
-                  ("_merged" if (args.merge_eye and part == "eye_shape") else "") + \
                   ("_noconflict" if args.drop_conflicts else "")
             summary[part] = {"cv": run_cv(part, rois, labels, identities, classes, args, device)}
             (OUT_DIR / f"{part}_cv{tag}_metrics.json").write_text(
@@ -524,7 +511,6 @@ def main():
                  ("_per_image" if args.identity_mode == "per_image" else "") + \
                  ("_contour" if args.face_input == "contour" else "") + \
                  ("_feature_contour" if args.contour_parts else "") + \
-                 ("_merged" if args.merge_eye else "") + \
                  ("_noconflict" if args.drop_conflicts else "")
         summary_name = f"cv_summary{cv_tag}.json"
     else:

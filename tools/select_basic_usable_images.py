@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import mediapipe_ascii  # noqa: F401,E402  # 必須早於 mediapipe，見該模組說明
 import mediapipe as mp  # noqa: E402
 
+from prepare_roi_cache import CANONICAL_LABELS  # noqa: E402
+
 
 def landmark_xy(landmarks, index, width, height):
     lm = landmarks[index]
@@ -135,14 +137,16 @@ def main():
             split = "val" if idx % 5 == 0 else "train"
             writer.writerow([image_id, split])
 
+    # 標註工具的選項直接取自官方分類表，不要在這裡再抄一份——
+    # 先前這裡寫死了 7 類眼型（含丹鳳眼／杏仁眼／桃花眼／瞇縫眼）與「窄鼻」，
+    # 那些在 2026-07-24～31 陸續併掉了。拿著過期的選項去標新資料，
+    # 標出來的東西會在 prepare_roi_cache 的分類表檢查被擋下，或更糟——
+    # 被別名悄悄改成別的類別。
     label_map = {
-        "face_shape": ["心形臉", "方形臉", "長形臉", "圓形臉", "鵝蛋臉"],
-        "nose_front": ["窄鼻", "寬鼻", "標準鼻"],
-        "eye_shape": ["下垂眼", "丹鳳眼", "杏仁眼", "桃花眼", "細長眼", "圓眼", "瞇縫眼"],
-        "brow_shape": ["一字眉", "落尾眉", "彎月眉"],
-        "lip_shape": ["花瓣唇", "厚唇", "微笑唇", "薄唇"],
-        "quality": ["good", "ok", "bad"],
+        ("nose_front" if part == "nose_shape" else part): sorted(labels)
+        for part, labels in CANONICAL_LABELS.items()
     }
+    label_map["quality"] = ["good", "ok", "bad"]
     label_map_json.write_text(json.dumps(label_map, ensure_ascii=False, indent=2), encoding="utf-8")
 
     with rejected_csv.open("w", newline="", encoding="utf-8") as f:
