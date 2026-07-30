@@ -120,3 +120,39 @@ def roi_to_tensor(crop_bgr: np.ndarray) -> np.ndarray:
     rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
     normed = (rgb - IMAGENET_MEAN) / IMAGENET_STD
     return np.ascontiguousarray(normed.transpose(2, 0, 1)[None], dtype=np.float32)
+
+# MediaPipe FACEMESH_FACE_OVAL 的點序（36 點，沿著臉部外框）。
+# 寫死在這裡而不是每次從 mp.solutions 取，是因為推論端不見得會初始化 FaceMesh 物件，
+# 而這串順序是固定的。
+FACE_OVAL = np.array([
+    10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+    397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
+    172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109,
+], dtype=np.int32)
+
+
+def face_contour_mask(points, h, w, size):
+    """把臉部外框畫成二值遮罩（size x size x 3，uint8）。
+
+    **訓練與推論必須共用這一份。** 遮罩的每個細節——外接框怎麼取、填充還是描邊、
+    線寬多少、用哪種內插縮放——都會影響模型看到的東西。複製第二份到推論端，
+    兩邊遲早會走樣，屆時線上表現掉了也查不出原因，因為離線重測是好的。
+    這跟 face_measurements() 註解講的是同一件事。
+
+    臉型改用輪廓輸入的理由見〈臉部分析模型_完整發展歷程規格書〉：
+    RGB 的分數各折在 0.408~0.614 之間跳（±0.074），輪廓穩定在 0.46~0.53（±0.025）——
+    平均差在雜訊內，但 RGB 依賴膚色髮型這些跟臉型無關、又會隨資料改變的線索。
+    """
+    import cv2
+
+    x1, y1, x2, y2 = roi_bbox(points, "face_shape", h, w)
+    side = max(x2 - x1, y2 - y1)
+    if side <= 0:
+        return None
+    canvas = np.zeros((side, side), dtype=np.uint8)
+    polygon = np.asarray(points, dtype=np.int32)[FACE_OVAL] - np.array([x1, y1], dtype=np.int32)
+    cv2.fillPoly(canvas, [polygon], 255, lineType=cv2.LINE_AA)
+    cv2.polylines(canvas, [polygon], True, 255,
+                  thickness=max(2, side // 100), lineType=cv2.LINE_AA)
+    mask = cv2.resize(canvas, (size, size), interpolation=cv2.INTER_AREA)
+    return cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)

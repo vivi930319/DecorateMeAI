@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -13,10 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import mediapipe_ascii  # noqa: F401,E402  # 必須早於 mediapipe，見該模組說明
 import mediapipe as mp  # noqa: E402
 
-from face_roi import ROI_SPECS, roi_bbox
+from face_roi import ROI_SPECS, face_contour_mask, roi_bbox
 
 CACHE_DIR = Path("data/roi_cache")
-OUT_PATH = CACHE_DIR / "face_contour.npy"
+# 預設輸出。實際檔名在 main() 依 --size 決定（非預設解析度會加後綴），
+# 這個常數只留給其他模組參考預設值——不要在 main 裡用它存檔。
 MAX_IMAGE_SIZE = 1024
 
 # MediaPipe FaceMesh face oval 的連續順序：額頭中央沿右側下行，再由下巴沿左側回額頭。
@@ -28,8 +30,19 @@ FACE_OVAL = np.array([
 
 
 def main():
+    # 解析度可調。預設沿用 ROI_SPECS 的 128，但圓形臉與方形臉的差別在下顎轉角，
+    # 那在 128x128 的二值遮罩上可能只有幾個像素——調高才看得出來。
+    # 寫到不同檔名，這樣不同解析度的實驗可以並存比較，不會互相覆蓋。
+    ap = argparse.ArgumentParser(description="建立臉部外輪廓二值遮罩快取")
+    ap.add_argument("--size", type=int, default=ROI_SPECS["face_shape"]["size"])
+    ap.add_argument("--out", default=None, help="輸出檔名；預設 face_contour.npy，非預設解析度會自動加後綴")
+    args = ap.parse_args()
+
     records = json.loads((CACHE_DIR / "index.json").read_text(encoding="utf-8"))["records"]
-    size = ROI_SPECS["face_shape"]["size"]
+    size = args.size
+    default_size = ROI_SPECS["face_shape"]["size"]
+    out_name = args.out or ("face_contour.npy" if size == default_size else f"face_contour_{size}.npy")
+    print(f"解析度 {size}x{size} → {out_name}")
     masks = np.zeros((len(records), size, size, 3), dtype=np.uint8)
     mesh = mp.solutions.face_mesh.FaceMesh(
         static_image_mode=True, max_num_faces=1, refine_landmarks=False,
@@ -54,18 +67,16 @@ def main():
             continue
         points = np.array([[int(l.x * w), int(l.y * h)]
                            for l in result.multi_face_landmarks[0].landmark], dtype=np.int32)
-        x1, y1, x2, y2 = roi_bbox(points, "face_shape", h, w)
-        side = max(x2 - x1, y2 - y1)
-        canvas = np.zeros((side, side), dtype=np.uint8)
-        polygon = points[FACE_OVAL] - np.array([x1, y1], dtype=np.int32)
-        cv2.fillPoly(canvas, [polygon], 255, lineType=cv2.LINE_AA)
-        cv2.polylines(canvas, [polygon], True, 255, thickness=max(2, side // 100), lineType=cv2.LINE_AA)
-        mask = cv2.resize(canvas, (size, size), interpolation=cv2.INTER_AREA)
-        masks[i] = cv2.cvtColor(mask, cv2.COLOR_GRAY2RGB)
+        # 用 face_roi 的共用函式，不要在這裡自己畫一份——推論端讀的是同一支。
+        mask = face_contour_mask(points, h, w, size)
+        if mask is None:
+            failed += 1
+            continue
+        masks[i] = mask
         done += 1
     mesh.close()
-    np.save(OUT_PATH, masks)
-    print(f"face contour cache: success={done}, failed={failed}, output={OUT_PATH}")
+    np.save(CACHE_DIR / out_name, masks)
+    print(f"face contour cache: success={done}, failed={failed}, output={CACHE_DIR / out_name}")
 
 
 if __name__ == "__main__":

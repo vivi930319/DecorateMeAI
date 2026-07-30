@@ -705,6 +705,19 @@ class FaceAnalyzer:
             pts = self._align_points_by_eyes(pts)
         return float(np.linalg.norm(pts[0] - pts[1]))
 
+    def face_outline_points(self):
+        """旋正後的臉部外框點（N×2）。量不出來回 None。
+
+        單獨開一個方法，是因為「寬度比值」描述不了下顎轉角的曲率——
+        而圓形臉與方形臉的差別正是那個轉角（實測互認率 23%、對稱 0.89，
+        代表模型完全分不開這兩類）。要算曲率就得拿到點本身，不能只拿彙總後的寬度。
+        """
+        idx = self._collect_landmark_indices(self.mp_face_mesh.FACEMESH_FACE_OVAL)
+        if len(idx) < 5:
+            return None
+        pts = np.array([self._pt(i) for i in idx], dtype=np.float32)
+        return self._align_points_by_eyes(pts)
+
     def face_measurements(self) -> dict[str, float] | None:
         """回傳臉型判斷用的原始量測值（像素單位），量不出來時回 None。
 
@@ -975,7 +988,7 @@ class FaceAnalyzer:
 
         if ratio > 0.4:                    return "厚唇"
         elif ratio < 0.25:                 return "薄唇"
-        elif m_diff_ratio > 0.06:          return "M型唇"
+        elif m_diff_ratio > 0.06:          return "花瓣唇"   # M型唇已併入花瓣唇（2026-07-30）
         elif smile_diff_ratio < -0.04:     return "微笑唇"
         else:                              return "花瓣唇"
 
@@ -1273,6 +1286,25 @@ class FaceAnalyzer:
                 result["模型分類_規則樹"] = tree_pred
         except Exception:
             logging.getLogger(__name__).exception("規則樹預測失敗，維持既有答案")
+
+        # DINOv2 逐部位覆蓋。**必須放在決策樹之後**：樹負責眼型與臉型，
+        # 而眼型的最佳來源是 DINOv2（0.542 vs 樹 0.428 vs CNN 0.495）——
+        # 放在樹之前會被樹蓋回去。臉型仍由樹決定，因為 DINOv2 在那裡最差（0.424）。
+        # 哪些部位見 basic_roi_shadow.dinov2_first_parts()，預設只有眼型。
+        #
+        # 放在角度抑制之前，理由跟 MODEL_FIRST 那段一樣：抑制必須是最後一手，
+        # 否則會被後面的覆蓋蓋掉，等於沒做。
+        try:
+            first_parts = basic_roi_shadow.dinov2_first_parts()
+            if dino and first_parts:
+                for part in first_parts:
+                    field = basic_roi_shadow.PART_TO_FIELD.get(part)
+                    entry = dino.get(field) if field else None
+                    if isinstance(entry, dict) and entry.get("label"):
+                        result[field] = entry["label"]
+                        result.setdefault("分類來源", {})[field] = entry.get("source", "dinov2")
+        except Exception:
+            logging.getLogger(__name__).exception("DINOv2 逐部位覆蓋失敗，維持既有答案")
 
         # 角度抑制必須放在最後。MODEL_FIRST 開啟時 apply_model_first() 會用 CNN 的答案
         # 覆蓋整個 result，寫在前面的抑制會被蓋掉——先前就是這樣，日誌裡看得到

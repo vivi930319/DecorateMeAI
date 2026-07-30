@@ -289,13 +289,14 @@ def main():
         cnn_s = f"{cnn[0]:.3f} ± {cnn[1]:.3f}" if cnn else "-"
         print(f"{part:12s} {lr['mean']:>8.3f} ± {lr['std']:.3f} {sv['mean']:>7.3f} ± {sv['std']:.3f} {cnn_s:>16s}")
 
-    if args.contour_parts:
-        out_path = OUT_PATH.with_name("dinov2_cv_per_image_feature_contour_results.json")
-    elif args.face_input == "contour":
-        out_path = OUT_PATH.with_name("dinov2_cv_per_image_contour_results.json")
-    else:
-        out_path = (OUT_PATH.with_name("dinov2_cv_per_image_results.json")
-                    if args.identity_mode == "per_image" else OUT_PATH)
+    # 檔名要照實反映跑的是什麼。先前這裡把 "per_image" 寫死在兩個輪廓分支裡，
+    # 於是 --identity-mode cluster 的輪廓實驗會被存成 dinov2_cv_per_image_contour_results.json
+    # ——而依規格書 §八 的規則，檔名帶 per_image 的數字是「不可採信」的那一類。
+    # 可信的結果被貼上不可信的標籤，比存錯地方更難發現。
+    tag = ("_per_image" if args.identity_mode == "per_image" else "") + \
+          ("_contour" if args.face_input == "contour" else "") + \
+          ("_feature_contour" if args.contour_parts else "")
+    out_path = OUT_PATH.with_name(f"dinov2_cv{tag}_results.json")
     out_path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n已寫入 {out_path}")
 

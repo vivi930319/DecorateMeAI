@@ -86,6 +86,30 @@ def _retired_labels(part: str, classes: list[str]) -> set[str]:
 DINOV2_ENABLED = os.getenv("ROI_DINOV2_ENABLED", "1") != "0"
 DINOV2_MODEL_FIRST = os.getenv("ROI_DINOV2_MODEL_FIRST", "0") == "1"
 
+# 逐部位指定哪些交給 DINOv2 當正式答案（逗號分隔的部位名）。
+#
+# **不要整批切換。** 同一套 5-fold（identity 切分、40 epochs、lr 6e-4）上量到的是：
+#
+#     eye_shape    CNN 0.495  DINOv2 0.542   +0.047  ← DINOv2 勝 4/5 折
+#     brow_shape   CNN 0.542  DINOv2 0.543   +0.001  （平手）
+#     lip_shape    CNN 0.565  DINOv2 0.513   -0.052
+#     nose_shape   CNN 0.868  DINOv2 0.846   -0.022
+#     face_shape   CNN 0.522  DINOv2 0.424   -0.098
+#
+# 全開會賺眼型、賠掉其餘四個，淨值是負的。DINOV2_MODEL_FIRST 那個整批開關是
+# 早期「先試試看」留下的，保留是為了相容；正式部署請用這一個。
+#
+# 誠實標記：眼型的 +0.047 落在 std（0.042）之內，不是壓倒性的差距。
+# 這組數字先前記成 +0.090，那是在 identity map 過期、桃杏眼 221 張只有 1 張
+# 進過驗證集的狀態下量的（見發展歷程規格書 §7.6）；而且對手 CNN 當時用的是
+# 還沒調好的 lr 3e-4。修好之後領先幅度縮水，方向沒變。
+#
+# 代價：DINOv2 佔整個分析約 57% 的時間。若延遲吃不消，把這個環境變數設成空字串
+# 退回全 CNN，眼型的代價是 -0.047。
+DINOV2_FIRST_PARTS = tuple(
+    x.strip() for x in os.getenv("ROI_DINOV2_FIRST_PARTS", "eye_shape").split(",") if x.strip()
+)
+
 # Shadow 階段的抽樣率。
 #
 # 實測（12 張、本機 CPU）各段耗時佔比：
@@ -111,6 +135,13 @@ DINOV2_SIZE = 224
 # 兩個分類器都是線性模型，改成只存 coef／intercept，用 numpy 算 X @ coef.T + intercept。
 # 權重由 tools/export_dinov2_heads.py 產生，並已驗證與 sklearn 預測完全一致。
 DINOV2_PARTS = ("face_shape", "eye_shape", "nose_shape")
+
+
+def dinov2_first_parts() -> tuple[str, ...]:
+    """哪些部位由 DINOv2 提供正式答案。整批開關優先於逐部位設定。"""
+    if DINOV2_MODEL_FIRST:
+        return DINOV2_PARTS
+    return tuple(p for p in DINOV2_FIRST_PARTS if p in DINOV2_PARTS)
 
 # 與 tools/dinov2_cv_experiment.py 相同的 ImageNet 正規化常數；改動會讓 embedding 對不上訓練分佈。
 _DINO_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -284,6 +315,10 @@ def should_run_dinov2() -> bool:
     """
     if not DINOV2_ENABLED:
         return False
+    # 有任何部位以 DINOv2 為正式答案時就不能抽樣——抽中才跑的話，
+    # 沒抽中的那 90% 使用者會靜靜地拿到 CNN 的答案，而且從回應看不出來。
+    if dinov2_first_parts():
+        return True
     if DINOV2_MODEL_FIRST:
         return True
     if DINOV2_SAMPLE_RATE >= 1.0:

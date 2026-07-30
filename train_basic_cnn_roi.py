@@ -384,6 +384,8 @@ def parse_args():
                    help="人物分組方式；per_image 適用於每個部位內每人只有一張照片的資料集")
     p.add_argument("--face-input", choices=("rgb", "contour"), default="rgb",
                    help="臉型輸入；contour 使用 MediaPipe 外輪廓二值遮罩")
+    p.add_argument("--contour-file", default=None,
+                   help="要讀哪一份輪廓快取（預設 face_contour.npy；高解析度是 face_contour_224.npy）")
     p.add_argument("--contour-parts", nargs="*", default=[], choices=list(PARTS),
                    help="指定使用 MediaPipe 二值形狀遮罩的部位")
     return p.parse_args()
@@ -446,7 +448,10 @@ def main():
 
     all_rois, records = load_cache()
     if args.face_input == "contour":
-        all_rois["face_shape"] = np.load(CACHE_DIR / "face_contour.npy")
+        # 解析度不同的遮罩存成不同檔名，這樣可以並存比較（見 prepare_face_contour_cache --size）
+        contour_file = args.contour_file or "face_contour.npy"
+        all_rois["face_shape"] = np.load(CACHE_DIR / contour_file)
+        print(f"臉型改用輪廓遮罩：{contour_file} {all_rois['face_shape'].shape}")
     for part in args.contour_parts:
         all_rois[part] = np.load(CACHE_DIR / f"{part}_contour.npy")
     summary = {}
