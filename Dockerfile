@@ -54,11 +54,18 @@ COPY basic_roi_shadow.py .
 # 它會讀 models/basic_features_roi/*_classes.json 當合法類別表——那批檔案在下面一起複製。
 COPY face_feedback.py .
 COPY face_corrections.py .
-# 眼型／臉型改由幾何決策樹提供正式答案，這兩支是它的推論路徑與特徵定義。
+# face_corrections 需要 canonical_label（把已淘汰的類別名換成合併後的現行名稱）。
+# 少了這支，容器會在 import 階段就 ModuleNotFoundError 起不來 —— 2026-07-31 踩過。
+# 白名單放行（.dockerignore／.gcloudignore）只決定檔案上不上得來，
+# **要進映像還是得在這裡 COPY**，兩件事都要做。
+COPY analysis_package.py .
+# 幾何決策樹的推論路徑與特徵定義。2026-07-30 起 RULE_TREE_PARTS 是空的，
+# 它不再提供任何正式答案；保留是為了讓回滾路徑可用（把部位加回去就能生效）。
 COPY basic_rule_trees.py .
 COPY rule_features.py .
-# ROI CNN shadow 模型（5 個部位各約 6MB）。BASIC 用它產生 shadow prediction，
-# 正式輸出仍是規則式。缺檔時 basic_roi_shadow 會自動停用，不影響服務啟動。
+# ROI CNN 模型（5 個部位各約 6MB）＋ DINOv2 backbone 與線性分類頭。
+# 2026-07-30 起這些就是**正式答案**：臉型／眉型／鼻型／唇型走 CNN，眼型走 DINOv2。
+# 缺檔時 basic_roi_shadow 會自動停用，不影響服務啟動。
 COPY models/basic_features_roi/ ./models/basic_features_roi/
 # replicate_render.py 尚未交付；預設 backend image 不直接複製不存在檔案
 

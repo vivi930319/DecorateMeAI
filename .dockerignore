@@ -42,3 +42,17 @@ models/basic_features_roi/*
 # DINOv2 線性分類器的權重（npz）。backbone 是 .onnx，分類頭只存 coef／intercept；
 # 沒放行的話映像裡只有 backbone，DINOv2 shadow 會整組跳過。
 !models/basic_features_roi/*.npz
+# 幾何決策樹（joblib 是樹本體、json 是類別與特徵清單，兩份都要）。
+#
+# 先前兩份 ignore 都沒放行，於是映像裡根本沒有這兩個檔——basic_rule_trees._load()
+# 找不到就記一行 warning、回空 dict，線上的臉型與眼型「一直都是 CNN 在答」，
+# 跟規格書 §11.1 畫的架構圖不一致，而且沒有人發現。
+#
+# 目前 RULE_TREE_PARTS 是空的（規則式已全面退場，見規格書 §7.11），所以這兩個檔
+# 不會被載入。放行是為了讓**回滾路徑真的可用**：把部位加回 RULE_TREE_PARTS 時
+# 線上要真的吃得到樹，而不是安靜地繼續用 CNN。
+#
+# joblib 是 pickle，會綁 sklearn 版本。目前本機與映像都是 1.7.2；requirements.txt
+# 沒有釘版本，哪天飄掉的話 _load() 會 catch 住並退回原本答案（不會拖垮分析）。
+!models/basic_features_roi/*_rule_tree.json
+!models/basic_features_roi/*_rule_tree.joblib
