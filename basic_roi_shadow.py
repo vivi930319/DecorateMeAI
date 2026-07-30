@@ -22,6 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
+import rule_features
 from face_roi import PARTS, crop_roi, roi_to_tensor
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,12 @@ def _retired_labels(part: str, classes: list[str]) -> set[str]:
 # 用既有的 onnxruntime 推論，分類器則是 scikit-learn 的 joblib，兩者都已是相依套件。
 #
 # 看完 shadow log 要升為正式答案時，設 ROI_DINOV2_MODEL_FIRST=1 即可，不需要改程式。
-DINOV2_ENABLED = os.getenv("ROI_DINOV2_ENABLED", "1") != "0"
+# 2026-07-31 起**預設關閉**（見下方 DINOV2_FIRST_PARTS 的說明）。
+#
+# 只清空 DINOV2_FIRST_PARTS 不夠：should_run_dinov2() 會落到抽樣分支，
+# 仍有 ROI_DINOV2_SAMPLE_RATE（預設 10%）的請求要付那 330ms 去跑一個
+# 已經確定比較差的模型。要留 shadow 對照就設 ROI_DINOV2_ENABLED=1。
+DINOV2_ENABLED = os.getenv("ROI_DINOV2_ENABLED", "0") != "0"
 DINOV2_MODEL_FIRST = os.getenv("ROI_DINOV2_MODEL_FIRST", "0") == "1"
 
 # 逐部位指定哪些交給 DINOv2 當正式答案（逗號分隔的部位名）。
@@ -106,8 +112,21 @@ DINOV2_MODEL_FIRST = os.getenv("ROI_DINOV2_MODEL_FIRST", "0") == "1"
 #
 # 代價：DINOv2 佔整個分析約 57% 的時間。若延遲吃不消，把這個環境變數設成空字串
 # 退回全 CNN，眼型的代價是 -0.047。
+# 2026-07-31：**預設空的**。五個部位全部改用 ConvNeXt-Tiny 之後，DINOv2 完全退場。
+#
+# 決定依據是同時量到的三件事，不是單看分數：
+#
+#     準確度   眼型 DINOv2 0.625 → ConvNeXt 0.693；四個部位提升、鼻型持平
+#     延遲     DINOv2 backbone 單次前向 110ms、每次分析跑三次 = 330ms
+#              ConvNeXt 五個部位合計只要 99ms —— 換過去同時變準又變快
+#     代價     映像由 118MB 變 556MB，記憶體需求上調
+#
+# 通常這種切換要在準確度與延遲之間取捨；這次不用，因為 DINOv2 那 330ms 買到的
+# 眼型 0.625，ConvNeXt 用 20ms 就超過了。
+#
+# 要跑回頭對照就設 ROI_DINOV2_FIRST_PARTS=eye_shape（head 檔仍在映像裡）。
 DINOV2_FIRST_PARTS = tuple(
-    x.strip() for x in os.getenv("ROI_DINOV2_FIRST_PARTS", "eye_shape").split(",") if x.strip()
+    x.strip() for x in os.getenv("ROI_DINOV2_FIRST_PARTS", "").split(",") if x.strip()
 )
 
 # Shadow 階段的抽樣率。
@@ -250,11 +269,12 @@ def _load_dinov2() -> tuple | None:
                 continue
 
             with np.load(head_path) as data:
-                heads[part] = (
-                    data["coef"].astype(np.float32),
-                    data["intercept"].astype(np.float32),
-                    classes,
-                )
+                coef = data["coef"].astype(np.float32)
+                # 融合頭：輸入是 [embedding, 幾何特徵]，coef 比 embedding 寬。
+                # 幾何欄位的**順序**存在 npz 裡，推論時照它取值——順序對不上不會報錯，
+                # 只會讓分類器拿到打亂的輸入，然後安靜地變差。
+                geom = [str(x) for x in data["geom_features"]] if "geom_features" in data else []
+                heads[part] = (coef, data["intercept"].astype(np.float32), classes, geom)
 
         if not heads:
             _dino_load_failed = True
@@ -348,12 +368,28 @@ def predict_dinov2(frame_bgr: np.ndarray, points: np.ndarray) -> dict | None:
     }
     predicted = 0
 
-    for part, (coef, intercept, classes) in heads.items():
+    for part, (coef, intercept, classes, geom_names) in heads.items():
         try:
             tensor = _dino_tensor(frame_bgr, points, part)
             emb = backbone.run(None, {"images": tensor})[0][0]
             # 訓練時對 embedding 做過 L2 正規化，推論必須一致，否則分類器輸入分佈會偏掉
             emb = emb / (np.linalg.norm(emb) + 1e-9)
+
+            # 融合頭（目前只有鼻型）：把幾何特徵接在 embedding 後面。
+            # StandardScaler 已經在匯出時摺進權重，這裡餵原始值即可。
+            # 特徵與 landmark 索引跟訓練共用 rule_features 的同一個函式，避免兩份公式走鐘。
+            if geom_names:
+                feats = rule_features.nose_features_from_points(points)
+                missing = [n for n in geom_names if n not in feats]
+                if missing:
+                    # 大聲失敗：少一維會讓後面的維度整排錯位，比直接不預測更糟。
+                    raise KeyError(f"{part} 融合頭需要的幾何特徵缺少 {missing}")
+                emb = np.concatenate([emb, np.array([feats[n] for n in geom_names],
+                                                    dtype=np.float32)])
+            if emb.shape[0] != coef.shape[1]:
+                raise ValueError(
+                    f"{part} 特徵維度 {emb.shape[0]} 與 head 的 {coef.shape[1]} 不符")
+
             best, confidence = _dino_decide(coef, intercept, emb)
             result[PART_TO_FIELD[part]] = {
                 "label": classes[best],

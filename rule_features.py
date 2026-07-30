@@ -22,7 +22,9 @@ _R_BROW = (276, 283, 282, 295, 285)
 TREE_FEATURES = {
     "brow_shape": ["tail_ratio", "arch_ratio"],
     "eye_shape": ["ear", "angle", "ratio_to_face"],
-    "nose_shape": ["ratio_width"],
+    # 2026-07-31 由 1 個擴充到 5 個，理由見 nose_features 的說明。
+    "nose_shape": ["ratio_width", "nasal_index", "length_ratio",
+                   "tip_to_alar", "alar_to_canthal"],
     # 不同高度的寬度比值。**這七個就是決策樹實際使用的契約**，順序不能動。
     #
     # 2026-07-30 試過再加六個，結論是都沒有用，所以沒有納入：
@@ -76,9 +78,59 @@ def eye_features(a) -> dict[str, float]:
 
 
 def nose_features(a) -> dict[str, float]:
-    face_width = a._dist(234, 454)
-    nose_width = a._dist(129, 358)
-    return {"ratio_width": nose_width / face_width if face_width > 1e-6 else 0.0}
+    """鼻型的幾何量。2026-07-31 由 1 個擴充到 5 個。
+
+    為什麼值得擴充：先前鼻型只有 `ratio_width` 一個特徵——臉型有 10 個、眼型有 3 個，
+    鼻型顯然是被漏掉的。而實測顯示把這**一個**數字接到 384 維 DINOv2 embedding 後面，
+    macro 就從 0.848 升到 0.892（+0.044，且三模型的錯誤重疊率只有 3%，是五個部位裡
+    互補性最高的）。一個特徵就有這個回報，代表鼻型還有沒被抽出來的幾何資訊。
+
+    新增的四個都取自人體測量學判斷鼻型的標準量，不是隨便湊的：
+
+      nasal_index      鼻寬 ÷ 鼻長。**人體測量學正式的鼻指數**，寬鼻／狹鼻的分類
+                       依據本來就是這個比值，而不是單看寬度。
+      length_ratio     鼻長 ÷ 臉高。控制「鼻子大」與「鼻子寬」的混淆——
+                       ratio_width 大有可能只是整張臉的鼻子都大。
+      tip_to_alar      鼻頭寬 ÷ 鼻翼寬。分開「鼻翼外擴」與「鼻頭圓鈍」兩種寬，
+                       它們在照片上都會讓 ratio_width 變大，但成因不同。
+      alar_to_canthal  鼻翼寬 ÷ 內眼角距。古典美學的基準是 1.0（鼻翼寬約等於
+                       兩內眼角的距離），偏離程度比絕對寬度更貼近人的主觀判斷。
+
+    全部取比值而非絕對距離：絕對像素長度會隨拍攝距離與解析度變動。
+    """
+    return nose_features_from_points(a._pts_cache)
+
+
+def nose_features_from_points(points) -> dict[str, float]:
+    """同上，但直接吃 468×2 的 landmark 陣列。
+
+    線上推論（basic_roi_shadow）拿得到的是 `FaceAnalyzer._pts_cache`，不是 analyzer 物件。
+    兩邊共用這一個函式，**公式與 landmark 索引只有一份**——鼻型的融合分類器把幾何值
+    接在 DINOv2 embedding 後面，訓練與推論只要有一點對不上，分類器就會安靜地拿到
+    偏掉的輸入分佈，而且從外面完全看不出來。
+    """
+    import numpy as _np
+
+    def dist(i, j):
+        return float(_np.linalg.norm(_np.asarray(points[i]) - _np.asarray(points[j])))
+
+    face_width = dist(234, 454)          # 顴骨左右
+    face_height = dist(10, 152)          # 髮際線到下巴
+    nose_width = dist(129, 358)          # 鼻翼左右
+    nose_length = dist(168, 2)           # 鼻根（眉心下）到鼻基底
+    tip_width = dist(98, 327)            # 鼻頭／鼻孔外緣
+    intercanthal = dist(133, 362)        # 兩內眼角
+
+    def safe(num, den):
+        return num / den if den > 1e-6 else 0.0
+
+    return {
+        "ratio_width": safe(nose_width, face_width),
+        "nasal_index": safe(nose_width, nose_length),
+        "length_ratio": safe(nose_length, face_height),
+        "tip_to_alar": safe(tip_width, nose_width),
+        "alar_to_canthal": safe(nose_width, intercanthal),
+    }
 
 
 def face_features(a) -> dict[str, float]:

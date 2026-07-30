@@ -44,6 +44,7 @@
 !image_safety.py
 !mediapipe_ascii.py
 !basic_rule_trees.py
+!pro_nose_side_model.py
 !rule_features.py
 
 # ROI CNN shadow 模型：只傳推論用的 .onnx 與類別表，.pt 是訓練用的不進映像
@@ -53,11 +54,20 @@ models/*
 models/basic_features_roi/*
 !models/basic_features_roi/*.onnx
 !models/basic_features_roi/*_classes.json
-# DINOv2 線性分類器的權重（npz）。backbone 是 .onnx，分類頭只存 coef／intercept；
-# 沒放行的話映像裡只有 backbone，DINOv2 shadow 會整組跳過。
+# DINOv2 線性分類器的權重（npz）。分類頭只存 coef／intercept，很小。
+# ⚠️ 2026-07-31 起 backbone（88MB）不再上傳：DINOv2 已退場，那是死重量。
+# 要開回 shadow 對照就把下面那行刪掉（.dockerignore 也要一起改）。
 !models/basic_features_roi/*.npz
+models/basic_features_roi/dinov2_vits14.onnx
 # 幾何決策樹（joblib 是樹本體、json 是類別與特徵清單，兩份都要）。
 # 先前兩份 ignore 都沒放行，映像裡沒有這兩個檔，線上的臉型與眼型一直都是 CNN 在答。
 # 目前 RULE_TREE_PARTS 是空的，放行是為了讓回滾路徑真的可用（見 .dockerignore 的說明）。
 !models/basic_features_roi/*_rule_tree.json
 !models/basic_features_roi/*_rule_tree.joblib
+
+# PRO 側臉鼻型（ConvNeXt-Tiny，整張圖 224）。只傳 onnx 與類別檔；
+# cv_results.json 與 label_conflicts.json 是研究紀錄，不進映像。
+!models/pro_nose_side
+models/pro_nose_side/*
+!models/pro_nose_side/nose_shape_side.onnx
+!models/pro_nose_side/nose_shape_side_classes.json

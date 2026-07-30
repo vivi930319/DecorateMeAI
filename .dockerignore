@@ -11,6 +11,7 @@
 # （正式部署走 .gcloudignore 不受影響）。
 !mediapipe_ascii.py
 !basic_rule_trees.py
+!pro_nose_side_model.py
 !rule_features.py
 !cloud_start.py
 !Dockerfile
@@ -39,9 +40,15 @@ models/*
 models/basic_features_roi/*
 !models/basic_features_roi/*.onnx
 !models/basic_features_roi/*_classes.json
-# DINOv2 線性分類器的權重（npz）。backbone 是 .onnx，分類頭只存 coef／intercept；
-# 沒放行的話映像裡只有 backbone，DINOv2 shadow 會整組跳過。
+# DINOv2 線性分類器的權重（npz）。分類頭只存 coef／intercept，很小，留著不佔空間。
+#
+# ⚠️ 2026-07-31 起 backbone（dinov2_vits14.onnx，88MB）**不再放行**：
+# 五個部位改用 ConvNeXt-Tiny 之後 DINOv2 完全退場（見 basic_roi_shadow 的說明），
+# 那 88MB 進映像只是死重量。head 檔留著是為了保留「改環境變數就能開回 shadow」的
+# 能力——但真要開回來，得先把 backbone 加回這個白名單，否則 _load_dinov2 會
+# 找不到檔案而永久停用（它會記一行 log，不會拋例外）。
 !models/basic_features_roi/*.npz
+models/basic_features_roi/dinov2_vits14.onnx
 # 幾何決策樹（joblib 是樹本體、json 是類別與特徵清單，兩份都要）。
 #
 # 先前兩份 ignore 都沒放行，於是映像裡根本沒有這兩個檔——basic_rule_trees._load()
@@ -56,3 +63,9 @@ models/basic_features_roi/*
 # 沒有釘版本，哪天飄掉的話 _load() 會 catch 住並退回原本答案（不會拖垮分析）。
 !models/basic_features_roi/*_rule_tree.json
 !models/basic_features_roi/*_rule_tree.joblib
+# PRO 側臉鼻型（ConvNeXt-Tiny，整張圖 224；不走 ROI 裁切，理由見 pro_nose_side_model）。
+# 只放行 onnx 與類別檔——cv_results.json 與 label_conflicts.json 是研究紀錄，不進映像。
+!models/pro_nose_side
+models/pro_nose_side/*
+!models/pro_nose_side/nose_shape_side.onnx
+!models/pro_nose_side/nose_shape_side_classes.json

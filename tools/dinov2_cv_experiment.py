@@ -36,9 +36,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from face_roi import PARTS, roi_bbox  # noqa: E402
 from train_basic_cnn_roi import build_part_data, load_cache, split_kfold_by_identity  # noqa: E402
 
+# 可選的 backbone 大小。維度不同，快取與輸出檔名都要跟著分開——
+# 快取的有效性檢查只比對**筆數**，維度不符不會被抓到，共用檔名會直接拿錯的 embedding。
+ENCODERS = {
+    "dinov2_vits14": 384,
+    "dinov2_vitb14": 768,
+    "dinov2_vitl14": 1024,
+}
+ENCODER = "dinov2_vits14"          # 由 --encoder 覆寫
+EMB_DIM = ENCODERS[ENCODER]
+
 EMB_PATH = Path("data/roi_cache/dinov2_embeddings.npz")
 CONTOUR_EMB_PATH = Path("data/roi_cache/dinov2_face_contour_embeddings.npz")
 OUT_PATH = Path("models/basic_features_roi/dinov2_cv_results.json")
+
+
+def _use_encoder(name: str) -> None:
+    """切換 backbone，並把快取／輸出路徑一起換掉。
+
+    vits14 沿用原本的檔名（既有結果不必重跑）；其餘各自帶後綴。
+    """
+    global ENCODER, EMB_DIM, EMB_PATH, CONTOUR_EMB_PATH, OUT_PATH
+    ENCODER, EMB_DIM = name, ENCODERS[name]
+    if name == "dinov2_vits14":
+        return
+    suffix = name.replace("dinov2_", "")
+    EMB_PATH = Path(f"data/roi_cache/dinov2_embeddings_{suffix}.npz")
+    CONTOUR_EMB_PATH = Path(f"data/roi_cache/dinov2_face_contour_embeddings_{suffix}.npz")
+    OUT_PATH = Path(f"models/basic_features_roi/dinov2_cv_results_{suffix}.json")
+
+
 DINO_SIZE = 224
 MAX_IMAGE_SIZE = 1024  # 跟 prepare_roi_cache 一致，landmark 尺度才對得上
 
@@ -69,10 +96,13 @@ def compute_embeddings():
         # 沒越界的話是安靜地全部算錯。所以這裡對筆數，不合就重算。
         cached = np.load(EMB_PATH)
         want = len(json.loads(Path("data/roi_cache/index.json").read_text(encoding="utf-8"))["records"])
-        if len(cached["embeddings"]) == want:
-            print(f"已有 embedding 快取 {EMB_PATH}（{want} 筆），直接使用")
+        got_dim = cached["embeddings"].shape[1]
+        # 維度也要對：換 backbone 時筆數不會變，只比筆數會直接拿到別的模型的 embedding。
+        if len(cached["embeddings"]) == want and got_dim == EMB_DIM:
+            print(f"已有 embedding 快取 {EMB_PATH}（{want} 筆 × {got_dim} 維），直接使用")
             return cached
-        print(f"embedding 快取筆數不符（快取 {len(cached['embeddings'])}、目前 {want}），重新計算")
+        print(f"embedding 快取不符（快取 {len(cached['embeddings'])}筆×{got_dim}維、"
+              f"目前需要 {want}筆×{EMB_DIM}維），重新計算")
 
     # 必須早於 mediapipe：專案路徑含「淡江大學」，不套這個修復 FaceMesh 一定初始化失敗
     # （見 mediapipe_ascii 模組說明與訓練記錄書 §三）。prepare_roi_cache 早就這樣做了，
@@ -81,8 +111,8 @@ def compute_embeddings():
     import mediapipe as mp
     import torch
 
-    print("載入 DINOv2 ViT-S/14（第一次會從 torch.hub 下載權重）...", flush=True)
-    dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+    print(f"載入 {ENCODER}（第一次會從 torch.hub 下載權重）...", flush=True)
+    dino = torch.hub.load("facebookresearch/dinov2", ENCODER)
     dino.eval()
 
     records = json.loads(Path("data/roi_cache/index.json").read_text(encoding="utf-8"))["records"]
@@ -93,7 +123,7 @@ def compute_embeddings():
 
     # index.json 的 records 順序就是 rois.npz 的列順序，embedding 也照同一順序存，
     # 這樣 build_part_data 選出來的 row index 可以直接拿來查 embedding。
-    embeddings = np.zeros((len(records), 384), dtype=np.float32)
+    embeddings = np.zeros((len(records), EMB_DIM), dtype=np.float32)
     failed = 0
 
     with torch.inference_mode():
@@ -141,9 +171,9 @@ def compute_contour_embeddings():
 
     masks = np.load("data/roi_cache/face_contour.npy", mmap_mode="r")
     print("載入 DINOv2 ViT-S/14，抽取臉部輪廓 embedding...", flush=True)
-    dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+    dino = torch.hub.load("facebookresearch/dinov2", ENCODER)
     dino.eval()
-    embeddings = np.zeros((len(masks), 384), dtype=np.float32)
+    embeddings = np.zeros((len(masks), EMB_DIM), dtype=np.float32)
     with torch.inference_mode():
         for i, mask in enumerate(masks):
             if not mask.any():
@@ -172,12 +202,12 @@ def compute_feature_contour_embeddings(parts):
         return results
 
     print("載入 DINOv2 ViT-S/14，抽取部位形狀 embedding...", flush=True)
-    dino = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+    dino = torch.hub.load("facebookresearch/dinov2", ENCODER)
     dino.eval()
     with torch.inference_mode():
         for part in missing:
             masks = np.load(f"data/roi_cache/{part}_contour.npy", mmap_mode="r")
-            embeddings = np.zeros((len(masks), 384), dtype=np.float32)
+            embeddings = np.zeros((len(masks), EMB_DIM), dtype=np.float32)
             for i, mask in enumerate(masks):
                 if not mask.any():
                     continue
@@ -229,11 +259,16 @@ def main():
     from sklearn.svm import LinearSVC
 
     parser = argparse.ArgumentParser(description="DINOv2 五官分類 5-fold 實驗")
+    parser.add_argument("--encoder", choices=tuple(ENCODERS), default="dinov2_vits14",
+                        help="DINOv2 backbone 大小；維度不同，快取與輸出檔名會自動分開")
     parser.add_argument("--identity-mode", choices=("cluster", "per_image"), default="cluster")
     parser.add_argument("--parts", nargs="*", default=list(PARTS))
     parser.add_argument("--face-input", choices=("rgb", "contour"), default="rgb")
     parser.add_argument("--contour-parts", nargs="*", default=[], choices=list(PARTS))
     args = parser.parse_args()
+    # 必須在任何 compute_* 之前：它會把快取與輸出路徑一起換成該 backbone 專用的。
+    _use_encoder(args.encoder)
+    print(f"backbone = {ENCODER}（{EMB_DIM} 維）　embedding 快取 = {EMB_PATH}")
 
     emb = (compute_contour_embeddings() if args.face_input == "contour"
            else compute_embeddings()["embeddings"])
@@ -293,10 +328,15 @@ def main():
     # 於是 --identity-mode cluster 的輪廓實驗會被存成 dinov2_cv_per_image_contour_results.json
     # ——而依規格書 §八 的規則，檔名帶 per_image 的數字是「不可採信」的那一類。
     # 可信的結果被貼上不可信的標籤，比存錯地方更難發現。
+    # ⚠️ encoder 後綴要一起帶上，否則不同 backbone 的結果會互相覆蓋。
+    # 2026-07-31 踩過：_use_encoder 明明把 OUT_PATH 換成 dinov2_cv_results_vitb14.json，
+    # 但這裡用 with_name 重新組檔名時只看 identity_mode/face_input/contour_parts，
+    # 把 encoder 後綴丟掉了 —— ViT-B/14 的結果直接蓋掉 ViT-S/14 的，而且不會報錯。
+    enc_tag = "" if ENCODER == "dinov2_vits14" else "_" + ENCODER.replace("dinov2_", "")
     tag = ("_per_image" if args.identity_mode == "per_image" else "") + \
           ("_contour" if args.face_input == "contour" else "") + \
           ("_feature_contour" if args.contour_parts else "")
-    out_path = OUT_PATH.with_name(f"dinov2_cv{tag}_results.json")
+    out_path = OUT_PATH.with_name(f"dinov2_cv{tag}_results{enc_tag}.json")
     out_path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n已寫入 {out_path}")
 

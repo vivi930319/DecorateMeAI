@@ -28,7 +28,11 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
-from torchvision.models import MobileNet_V3_Small_Weights, mobilenet_v3_small
+from torchvision.models import (
+    AlexNet_Weights, ConvNeXt_Tiny_Weights, EfficientNet_B0_Weights,
+    MobileNet_V3_Small_Weights, ResNet50_Weights,
+    alexnet, convnext_tiny, efficientnet_b0, mobilenet_v3_small, resnet50,
+)
 
 from face_roi import IMAGENET_MEAN, IMAGENET_STD, PARTS, ROI_SPECS
 
@@ -253,6 +257,32 @@ class SimpleRoiCNN(nn.Module):
 def build_model(architecture, n_classes, pretrained=True):
     if architecture == "simple_cnn":
         return SimpleRoiCNN(n_classes)
+    # 2026-07-31 加入的三個架構對照組。參數量差距很大（2.5M / 5.3M / 25M / 28M），
+    # 而每個部位只有 269~676 張——大容量預期會過擬合，加進來是為了把這件事**量出來**，
+    # 而不是憑「參數多會過擬合」的通則下結論。
+    #
+    # 共同的結構性疑慮：這些架構都下採樣 32 倍，輸入 96×96 到最後一層只剩 3×3 的
+    # 特徵圖。MobileNetV3-small 的設計本來就假設小輸入，其餘三個是為 224×224 設計的。
+    if architecture == "resnet50":
+        model = resnet50(weights=ResNet50_Weights.DEFAULT if pretrained else None)
+        model.fc = nn.Linear(model.fc.in_features, n_classes)
+        return model
+    if architecture == "efficientnet_b0":
+        model = efficientnet_b0(weights=EfficientNet_B0_Weights.DEFAULT if pretrained else None)
+        model.classifier[1] = nn.Linear(model.classifier[1].in_features, n_classes)
+        return model
+    if architecture == "convnext_tiny":
+        model = convnext_tiny(weights=ConvNeXt_Tiny_Weights.DEFAULT if pretrained else None)
+        model.classifier[2] = nn.Linear(model.classifier[2].in_features, n_classes)
+        return model
+    if architecture == "alexnet":
+        # 2012 年的架構，放進來當歷史基準。61M 參數裡有 58M 在最後三層全連接，
+        # 那正是小資料最容易過擬合的地方。
+        # 另一個疑慮：conv1 是 11×11 stride 4，對 96×96 的輸入等於一開始就砍掉大部分
+        # 空間資訊（224 設計的模型用在 96 上，第一層就只剩 23×23）。
+        model = alexnet(weights=AlexNet_Weights.DEFAULT if pretrained else None)
+        model.classifier[6] = nn.Linear(model.classifier[6].in_features, n_classes)
+        return model
     weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
     model = mobilenet_v3_small(weights=weights)
     model.classifier[3] = nn.Linear(model.classifier[3].in_features, n_classes)
@@ -369,9 +399,12 @@ def parse_args():
                         "CV 讓每張圖都輪流當過考題，數字才穩得住")
     p.add_argument("--drop-conflicts", action="store_true",
                    help="剔除標註矛盾的身分（同一人同部位被標成多個類別）的所有照片")
-    p.add_argument("--architecture", choices=("mobilenet_v3_small", "simple_cnn"),
+    p.add_argument("--architecture",
+                   choices=("mobilenet_v3_small", "simple_cnn", "resnet50",
+                            "efficientnet_b0", "convnext_tiny", "alexnet"),
                    default="mobilenet_v3_small",
-                   help="訓練架構；simple_cnn 是不使用預訓練權重的基礎 CNN 對照組")
+                   help="訓練架構。simple_cnn 是無預訓練的基礎對照組；"
+                        "resnet50/efficientnet_b0/convnext_tiny 是容量更大的對照組")
     p.add_argument("--identity-mode", choices=("cluster", "per_image"), default="cluster",
                    help="人物分組方式；per_image 適用於每個部位內每人只有一張照片的資料集")
     p.add_argument("--face-input", choices=("rgb", "contour"), default="rgb",
@@ -468,7 +501,9 @@ def main():
 
         if args.cv:
             # 不同實驗（合併類別/剔除矛盾）各自存檔，免得互相覆蓋、事後對不出哪個數字是哪個實驗的
-            tag = ("_simple_cnn" if args.architecture == "simple_cnn" else "") + \
+            # 非預設架構一律進檔名，否則不同架構的結果會互相覆蓋，事後對不出
+            # 哪個數字是哪個架構跑的（2026-07-31 加 resnet50 時差點踩到）。
+            tag = ("" if args.architecture == "mobilenet_v3_small" else f"_{args.architecture}") + \
                   ("_per_image" if args.identity_mode == "per_image" else "") + \
                   ("_contour" if args.face_input == "contour" else "") + \
                   ("_feature_contour" if args.contour_parts else "") + \
@@ -507,7 +542,7 @@ def main():
     # CV 是評估用，寫到獨立檔案 —— training_summary.json 是單次切分的正式結果，
     # eval_rule_baseline.py / tune_hybrid.py 都讀它，覆蓋掉會讓對照表拿不到 CNN 分數。
     if args.cv:
-        cv_tag = ("_simple_cnn" if args.architecture == "simple_cnn" else "") + \
+        cv_tag = ("" if args.architecture == "mobilenet_v3_small" else f"_{args.architecture}") + \
                  ("_per_image" if args.identity_mode == "per_image" else "") + \
                  ("_contour" if args.face_input == "contour" else "") + \
                  ("_feature_contour" if args.contour_parts else "") + \

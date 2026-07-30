@@ -1,3 +1,28 @@
+"""用**手寫規則式**批次標註照片，輸出 CSV。原用途是為 CelebA bootstrap 初始標籤。
+
+## ⚠️ 這支不能拿來驗證線上模型
+
+它呼叫的是 `analyzer.get_face_shape()` / `get_eye_shape()` 這類**手寫 if-else**，
+**完全不經過 ROI CNN／DINOv2**——也就是說它量到的是 fallback 的表現，不是線上答案。
+
+兩者差距很大（同一組 5-fold）：
+
+    眼型   規則式 0.439   vs   ConvNeXt 0.693
+    唇型   規則式 0.422   vs   ConvNeXt 0.640
+
+2026-07-31 踩過：拿這支做部署驗證，看到「桃杏眼 → 鳳眼 9/11」而以為模型或 ROI
+裁切壞掉，花了很久去查通道順序與裁切邏輯，最後發現 ROI 像素**完全相同**，
+是工具本身根本沒走模型那條路。規則式的眼型分支在 ear <= 0.327 一律回鳳眼，
+那個「系統性偏移」正是它的正常行為。
+
+**要驗證線上模型請直接跑：**
+
+    from Face_analyzer_BASIC import FaceAnalyzer
+    r = FaceAnalyzer(path).export_json()
+    r["分類來源"]["眼型"]   # 應該是 roi_cnn 或 roi_dinov2_*，不是 rule_*
+
+並檢查 `分類來源` 每個部位的 `final` 欄位，確認答案真的來自模型。
+"""
 import argparse
 import csv
 from pathlib import Path

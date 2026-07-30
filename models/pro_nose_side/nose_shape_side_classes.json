@@ -1,0 +1,15 @@
+{
+  "classes": [
+    "塌鼻",
+    "直挺鼻",
+    "翹鼻",
+    "蒜頭鼻",
+    "駝峰鼻"
+  ],
+  "size": 224,
+  "architecture": "convnext_tiny",
+  "epochs": 40,
+  "train_count": 636,
+  "training_scope": "100_percent",
+  "input": "whole_image"
+}

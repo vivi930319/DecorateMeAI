@@ -16,6 +16,7 @@ from api_errors import (
 import job_store
 import face_feedback
 import face_corrections
+import pro_nose_side_model
 from Face_analyzer_BASIC import FaceAnalyzer, MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES
 from dev_server_utils import get_cors_origins, run_dev_server
 from image_safety import sanitize_upload
@@ -80,14 +81,14 @@ async def _read_image(file: UploadFile, label: str) -> bytes:
 
 def _analyze_side_supplementary(side_bytes: bytes) -> dict | None:
     """
-    對側面照（約 10° yaw）做輔助分析：膚色、對稱性確認。
+    對側面照做輔助分析：膚色、對稱性確認，以及側臉鼻型分類。
     使用 strict_angle=False 跳過正面角度驗證。
     失敗時靜默回傳 None，不中斷主流程。
     """
     try:
         analyzer = FaceAnalyzer(side_bytes, strict_angle=False, require_insight=False)
         lip_L, lip_a, lip_b, season, shade_label, L, a, b = analyzer.get_skin_color()
-        return {
+        result = {
             "膚色": {
                 "四季型": season,
                 "膚色分級": shade_label,
@@ -98,6 +99,17 @@ def _analyze_side_supplementary(side_bytes: bytes) -> dict | None:
                 },
             },
         }
+
+        # 側臉鼻型（2026-07-31 接上）。餵整張圖，不做 landmark 裁切——
+        # 側臉 FaceMesh 只認得 73.5%，而且失敗率依類別偏斜（塌鼻 60.4%、翹鼻 93.4%），
+        # 用裁切會把類別分布扭曲（見 pro_nose_side_model 的說明）。
+        #
+        # 這是**加值資訊，不是主要答案**：除了塌鼻，各類驗證樣本只有 36~46 張。
+        # predict 自帶 caveat 欄位，回應要原樣帶出去，不要在這裡拿掉。
+        side_nose = pro_nose_side_model.predict(analyzer.frame)
+        if side_nose:
+            result["側臉鼻型"] = side_nose
+        return result
     except Exception:
         return None
 

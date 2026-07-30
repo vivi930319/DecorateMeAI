@@ -104,12 +104,29 @@ local_only_notes/
 !README.md
 !臉部分析模型_完整發展歷程規格書_2026-07-29.md
 
-# 五官分類模型：搬機時這些重訓才能重建，納入版控當備份。
-# dinov2_vits14.onnx（88MB）刻意不收 —— 那是 Meta 的公開模型，
-# 用 tools/export_dinov2_heads.py 同一套流程隨時可重新匯出。
+# 五官分類模型。
+#
+# ⚠️ 2026-07-31：**ONNX 不再入版控**。
+#
+# 上面第 38 行本來就寫了「模型權重刻意不入版控」，但這裡的白名單又放行
+# *_shape.onnx —— 兩條規則互相矛盾。MobileNetV3 只有 6MB，所以一直沒撞到牆；
+# 換成 ConvNeXt-Tiny（106MB）之後 push 直接被 GitHub 的 100MB 單檔上限擋下。
+#
+# 依原本的政策修正，理由不只是大小：
+#
+#   1. ONNX 是**建置產物**，由 .pt 權重與訓練腳本重新產生，不是原始事實
+#   2. 部署走 Cloud Build 從**本機磁碟**打包（.gcloudignore），不經 git ——
+#      git 裡有沒有它們，對線上完全沒有影響
+#   3. 真正的持久化產物是 **Artifact Registry 的映像**，它含模型且由 tag 版本化，
+#      要回滾就用 gcloud run deploy --image=<舊 tag>
+#
+# 代價（要知道）：**fresh clone 沒有模型檔，服務起不來**。
+# 重建方式見規格書 §十；或直接從 Artifact Registry 拉一個既有映像。
+#
+# *_classes.json 與 *_dinov2_head.npz 仍然入版控 —— 它們是**契約**（類別順序）
+# 與小體積權重，而且 classes.json 決定線上輸出的標籤，必須可追溯。
 !models/
 !models/basic_features_roi/
-!models/basic_features_roi/*_shape.onnx
 !models/basic_features_roi/*_classes.json
 !models/basic_features_roi/*_dinov2_head.npz
 

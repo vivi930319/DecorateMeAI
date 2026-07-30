@@ -3,5 +3,13 @@
     "寬鼻",
     "標準鼻"
   ],
-  "architecture": "dinov2_vits14"
+  "architecture": "dinov2_vits14",
+  "classifier": "linear_svc_geom_fusion",
+  "geom_features": [
+    "ratio_width",
+    "nasal_index",
+    "length_ratio",
+    "tip_to_alar",
+    "alar_to_canthal"
+  ]
 }

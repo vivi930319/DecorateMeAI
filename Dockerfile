@@ -59,6 +59,8 @@ COPY face_corrections.py .
 # 白名單放行（.dockerignore／.gcloudignore）只決定檔案上不上得來，
 # **要進映像還是得在這裡 COPY**，兩件事都要做。
 COPY analysis_package.py .
+# PRO 的側臉鼻型推論（ConvNeXt-Tiny ONNX）。BASIC 不用它，但兩支共用同一個映像。
+COPY pro_nose_side_model.py .
 # 幾何決策樹的推論路徑與特徵定義。2026-07-30 起 RULE_TREE_PARTS 是空的，
 # 它不再提供任何正式答案；保留是為了讓回滾路徑可用（把部位加回去就能生效）。
 COPY basic_rule_trees.py .

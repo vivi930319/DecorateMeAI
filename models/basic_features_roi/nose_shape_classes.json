@@ -4,5 +4,5 @@
     "標準鼻"
   ],
   "size": 96,
-  "architecture": "mobilenet_v3_small"
+  "architecture": "convnext_tiny"
 }
