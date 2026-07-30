@@ -11,14 +11,15 @@ from uuid import uuid4
 
 SCHEMA_VERSION = "2026-06-v1"
 
+# 以下每張表都**只列現行分類表的類別**。已淘汰的名稱不放進來——
+# 舊值一律在 `_code()` 入口用 LABEL_ALIASES 換成現行名稱再查表。
+# 合併掉的類別不該在任何地方以「可用類別」的身分存在。
 FACE_SHAPE_CODES = {
     "鵝蛋臉": "oval",
     "圓形臉": "round",
     "方形臉": "square",
     "長形臉": "oblong",
     "心形臉": "heart",
-    "菱形臉": "diamond",
-    "梯形臉": "trapezoid",
     "未知": "unknown",
 }
 
@@ -29,13 +30,7 @@ BROW_SHAPE_CODES = {
     "未知": "unknown",
 }
 
-# 官方分類表（2026-07-24）：眼型六類。丹鳳眼併入鳳眼、瞇縫眼併入細長眼。
-#
-# 舊名稱保留成別名而不是刪掉：資料庫與既有分析包裡還存著用舊名稱寫的紀錄，
-# 移除後那些會靜靜地變成 "unknown"。別名指向合併後的同一個代碼，讀舊資料才不會壞。
-#
-# 註：先前這張表**漏了「鳳眼」**，模型輸出鳳眼時會被 `_code` 落到 "unknown"。
-# 一併補上。
+# 官方分類表（2026-07-30）：眼型五類。
 EYE_SHAPE_CODES = {
     "細長眼": "slender",
     "桃杏眼": "peach_almond",
@@ -43,24 +38,17 @@ EYE_SHAPE_CODES = {
     "鳳眼": "phoenix",
     "下垂眼": "downturned",
     "未知": "unknown",
-    # ── 舊名稱別名（併入上面的類別，僅供讀取歷史資料）──
-    "丹鳳眼": "phoenix",
-    "瞇縫眼": "slender",
-    "桃花眼": "peach_almond",
-    "杏仁眼": "peach_almond",
 }
 
 NOSE_SHAPE_CODES = {
     "標準鼻": "standard",
     "寬鼻": "wide",
-    "窄鼻": "narrow",
     "未知": "unknown",
 }
 
 LIP_SHAPE_CODES = {
     "厚唇": "full",
     "薄唇": "thin",
-    "M型唇": "m_shape",
     "微笑唇": "smile",
     "花瓣唇": "petal",
     "未知": "unknown",
@@ -73,13 +61,47 @@ SEASON_CODES = {
     "冬季": "winter",
 }
 
+# 已淘汰的中文標籤 → 合併後的現行標籤。
+#
+# 現行分類表是唯一基準：已經合併掉的類別**不該再出現在任何顯示路徑上**。
+# 但舊資料是存在的——修正快取（face_corrections）存的是合併前的中文標籤，
+# 而它套用時不會比對分類表，會把舊標籤原樣寫回結果。
+#
+# 處理方式是「進來就正規化」，不是讓每個下游對照表各自認得舊名：
+# 下游只要認識現行類別，舊名在這裡就被換掉了。少一份要同步的清單，
+# 就少一個會悄悄過期的地方（見發展歷程規格書 §7.8）。
+#
+# 這張表要跟 prepare_roi_cache.py 的 LABEL_ALIASES 一致——那是訓練側的同一組合併決定。
+LABEL_ALIASES = {
+    # 眼型（2026-07-24 / 2026-07-30）
+    "丹鳳眼": "鳳眼",
+    "瞇縫眼": "細長眼",
+    "杏仁眼": "桃杏眼",
+    "桃花眼": "桃杏眼",
+    # 鼻型（2026-07-24）
+    "窄鼻": "標準鼻",
+    "蒜頭鼻": "寬鼻",
+    # 唇型（2026-07-30）
+    "M型唇": "花瓣唇",
+}
+
+
+def canonical_label(label: Any) -> Any:
+    """把已淘汰的標籤換成合併後的現行標籤；其餘原樣回傳。"""
+    return LABEL_ALIASES.get(label, label) if isinstance(label, str) else label
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
 def _code(mapping: dict[str, str], label: Any) -> str:
-    return mapping.get(str(label), "unknown")
+    """查代碼前先把已淘汰的標籤換成現行標籤。
+
+    上面幾張表只列現行類別，所以舊值必須在這裡就被換掉，否則會落成 "unknown"。
+    這是舊標籤進入系統的其中一個入口（另一個是 face_corrections.apply）。
+    """
+    return mapping.get(canonical_label(str(label)), "unknown")
 
 
 def normalize_face_analysis(raw_result: dict[str, Any]) -> dict[str, Any]:

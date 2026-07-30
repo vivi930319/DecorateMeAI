@@ -33,6 +33,7 @@ import os
 from datetime import datetime, timezone
 
 import job_store
+from analysis_package import canonical_label
 from basic_roi_shadow import PART_TO_FIELD
 
 CORRECTIONS_COL = "face_corrections"
@@ -74,7 +75,12 @@ def apply(result: dict, img_hash: str) -> dict:
     corrections = (doc or {}).get("corrections") or {}
     for field, value in corrections.items():
         if field in fields and value:
-            result[field] = value
+            # 正規化成現行分類表的名稱。這裡存的是使用者當初送出時的標籤，
+            # 而分類表後來合併過（M型唇→花瓣唇、杏仁眼/桃花眼→桃杏眼…）。
+            # 不換的話，一個已經不存在的類別會被寫進結果，然後一路流到
+            # 建議 prompt 與渲染 prompt——那些對照表只認得現行類別，
+            # 查不到就整句略過，不報錯（見發展歷程規格書 §7.8）。
+            result[field] = canonical_label(value)
     return result
 
 

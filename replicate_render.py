@@ -480,21 +480,24 @@ def generate_ollama_suggestion(face_analysis: dict[str, Any], style_hint: str) -
 # *_classes.json），但送給影像模型的 prompt 是英文——不翻譯就等於把一串它讀不懂的字
 # 塞進 prompt，還不如不放。這裡只收模型真的會產生的那些類別，翻不出來的整項略過，
 # 寧可少一句，也不要把未知標籤原樣丟給影像模型。
+#
+# 這裡**只列現行分類表的類別**。已淘汰的名稱（M型唇、杏仁眼…）不放進來——
+# 舊資料在 face_corrections.apply() 就已經用 analysis_package.canonical_label
+# 換成合併後的名稱了，走到這裡的一律是現行類別。合併過的東西不該在下游復活。
 FACE_TERM_EN = {
     # 臉型
     "圓形臉": "a round face", "心形臉": "a heart-shaped face", "方形臉": "a square face",
     "長形臉": "a long face", "鵝蛋臉": "an oval face",
-    # 眼型
-    "下垂眼": "downturned eyes", "丹鳳眼": "upturned almond eyes", "圓眼": "round eyes",
-    "杏仁眼": "almond eyes", "桃花眼": "soft rounded eyes", "瞇縫眼": "narrow eyes",
+    # 眼型（2026-07-30 起現行五類）
+    "下垂眼": "downturned eyes", "圓眼": "round eyes", "桃杏眼": "soft almond eyes",
     "細長眼": "long narrow eyes", "鳳眼": "upturned eyes",
     # 眉型
     "一字眉": "straight brows", "彎月眉": "curved brows", "落尾眉": "downward-angled brows",
     # 鼻型
     "寬鼻": "a wide nose", "標準鼻": "a medium-width nose",
-    # 唇型
-    "M型唇": "lips with a defined cupid's bow", "厚唇": "full lips", "微笑唇": "upturned lips",
-    "花瓣唇": "petal-shaped lips", "薄唇": "thin lips",
+    # 唇型（2026-07-30 起現行四類；M型唇已併入花瓣唇）
+    "厚唇": "full lips", "微笑唇": "upturned lips",
+    "花瓣唇": "petal-shaped lips with a defined cupid's bow", "薄唇": "thin lips",
     # 膚色分級與四季型
     "白皙": "fair skin", "自然": "medium skin", "健康": "tan skin", "小麥": "deep skin",
     "春": "warm-toned", "夏": "cool-toned", "秋": "warm deep-toned", "冬": "cool clear-toned",
