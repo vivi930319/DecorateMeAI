@@ -17,7 +17,7 @@ import uvicorn
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("ollama-suggestion")
 
-app = FastAPI(title="Ollama 妝容真實個人化修飾服務", version="2026-07-25-接入規格版")
+app = FastAPI(title="Ollama 妝容真實個人化修飾服務", version="2026-07-28-Debug-Fix")
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,9 +27,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 1. 對齊組長規格書：環境變數名稱必須為 SUGGESTION_API_KEY
 SUGGESTION_API_KEY = os.getenv("SUGGESTION_API_KEY", "").strip()
 SIGNING_SECRET = os.getenv("RENDER_PROMPT_SIGNING_SECRET", "").strip()
+
+# ENVIRONMENT=production 時，強制關閉除錯用硬編碼金鑰與詳細金鑰 log，
+# 依照「給 Ollama 端」需求文件第 3 節規定執行。
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development").strip().lower()
+IS_PRODUCTION = ENVIRONMENT == "production"
+
+if IS_PRODUCTION and not SUGGESTION_API_KEY:
+    # 正式環境缺少金鑰時，服務必須拒絕啟動，不得使用內建相容金鑰清單頂替。
+    logger.error("正式環境（ENVIRONMENT=production）未設定 SUGGESTION_API_KEY，服務拒絕啟動。")
+    sys.exit(1)
+
+if IS_PRODUCTION:
+    # 正式環境只信任 Secret Manager 提供的金鑰，不接受硬編碼備用金鑰。
+    ALLOWED_KEYS = {SUGGESTION_API_KEY}
+else:
+    # 僅開發環境保留相容金鑰清單，方便本機除錯；正式環境不會執行到這裡。
+    ALLOWED_KEYS = {
+        SUGGESTION_API_KEY,
+        "tku_im_makeup_secret_2026",
+        "my_super_secret_ollama_key_2026_tku_im"
+    }
+ALLOWED_KEYS = {k for k in ALLOWED_KEYS if k}
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 MODEL_TEXT = os.getenv("OLLAMA_MODEL", "gemma3")
@@ -37,13 +58,6 @@ MODEL_VISION = os.getenv("MODEL_VISION", "llava:latest")
 OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "120.0"))
 OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "4096"))
 OLLAMA_SUGGESTION_PORT = int(os.getenv("OLLAMA_SUGGESTION_PORT", "8010"))
-
-# 2. Fail Closed 機制：未設定 SUGGESTION_API_KEY 則拒絕啟動
-def enforce_service_api_key():
-    if not SUGGESTION_API_KEY:
-        logger.critical("致命錯誤：環境變數未設定 SUGGESTION_API_KEY。服務啟動失敗 (Fail Closed)。")
-        print("ERROR: SUGGESTION_API_KEY environment variable is required to run this service.")
-        sys.exit(1)
 
 VALID_STYLES = {"日常自然妝", "Soft baddie", "韓系亞裔妝", "日雜清透妝", "千金妝", "港風妝", "病嬌妝", "男士白開水"}
 
@@ -57,13 +71,19 @@ class SuggestRequest(BaseModel):
     model: Optional[str] = None
 
 def verify_api_key(x_api_key: Optional[str]) -> bool:
-    """ 使用固定時間比較演算法驗證 API Key，防範時脈攻擊 """
-    if not SUGGESTION_API_KEY or not x_api_key:
+    # 安全性規定：Log 不得記錄 X-API-Key 本身的值，只記錄「有沒有帶」與「比對結果」。
+    if not x_api_key:
+        logger.warning("Gateway 送來請求，但未帶 X-API-Key Header。")
         return False
-    return hmac.compare_digest(SUGGESTION_API_KEY.encode("utf-8"), x_api_key.encode("utf-8"))
+
+    for valid_key in ALLOWED_KEYS:
+        if hmac.compare_digest(valid_key.encode("utf-8"), x_api_key.encode("utf-8")):
+            return True
+
+    logger.warning("傳入的 X-API-Key 不在允許清單中，拒絕請求。")
+    return False
 
 def sign_render_prompt(render_prompt_en: str) -> Optional[str]:
-    """ 使用 HMAC-SHA256 對英文渲染指令進行底層簽章 """
     if not SIGNING_SECRET:
         return None
     return hmac.new(
@@ -73,9 +93,6 @@ def sign_render_prompt(render_prompt_en: str) -> Optional[str]:
     ).hexdigest()
 
 def build_luxury_rich_girl_prompt() -> str:
-    """
-    千金妝精純彩妝描述：不含性別詞彙、不含 identity lock 鎖定句
-    """
     prompt = (
         "Apply a luxurious elegant makeup look to the face, as a photorealistic makeup-only retouch of the original photo.\n\n"
         "Eyes: highly visible, bold and significantly thickened jet-black eyeliner that dynamically extends straight and long past the outer corner of the eyes with a subtle elegant lift, "
@@ -95,6 +112,26 @@ def make_error_response(http_code: int, code: str, message: str, retryable: bool
         content={"error": {"code": code, "message": message, "retryable": retryable}}
     )
 
+@app.middleware("http")
+async def limit_payload_size(request: Request, call_next):
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > 10 * 1024 * 1024:
+        return make_error_response(413, "PAYLOAD_TOO_LARGE", "上傳的資料過大，請縮小檔案後再試。", False)
+    return await call_next(request)
+
+# 🔍 除錯用：印出進站請求收到的 header 名稱清單（不含數值），方便排查
+# Gateway／代理層有沒有把 X-API-Key 濾掉。正式環境自動關閉，避免非必要 log。
+if not IS_PRODUCTION:
+    @app.middleware("http")
+    async def log_incoming_headers(request: Request, call_next):
+        if request.url.path == "/suggest":
+            header_names = list(request.headers.keys())
+            logger.info(f"[DEBUG 偵測] /suggest 收到的所有 Header 名稱: {header_names}")
+            for possible_name in ["x-api-key", "x_api_key", "apikey", "api-key", "authorization"]:
+                if possible_name in [h.lower() for h in header_names]:
+                    logger.info(f"[DEBUG 偵測] 發現疑似金鑰相關 Header: '{possible_name}'（但可能非標準名稱 X-API-Key）")
+        return await call_next(request)
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     logger.error(f"校驗失敗: {exc.errors()}")
@@ -110,7 +147,6 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"未捕捉的系統例外: {str(exc)}")
     return make_error_response(500, "INTERNAL_SERVER_ERROR", f"後端崩潰或例外錯誤: {str(exc)}", True)
 
-# 3. 對齊組長規格書 2.2 與 3.2 節：GET /health 不需要金鑰，並回傳精確結構
 @app.get("/health")
 async def health_check():
     ollama_reachable = False
@@ -129,7 +165,8 @@ async def health_check():
             "reachable": ollama_reachable,
             "model": MODEL_TEXT
         },
-        "api_key_required": bool(SUGGESTION_API_KEY)
+        "api_key_required": True,
+        "api_key_configured": bool(SUGGESTION_API_KEY)
     }
 
 async def extract_image_features_with_llava(base64_image_url: str) -> str:
@@ -137,7 +174,7 @@ async def extract_image_features_with_llava(base64_image_url: str) -> str:
     pure_base64 = base64_image_url.split(",")[1] if "," in base64_image_url else base64_image_url
 
     prompt = "Analyze this person's facial features, skin texture, tone, eye shape, and facial symmetry in detail for makeup application planning. Output a descriptive English paragraph under 100 words."
-    
+
     payload = {
         "model": MODEL_VISION,
         "prompt": prompt,
@@ -145,7 +182,7 @@ async def extract_image_features_with_llava(base64_image_url: str) -> str:
         "stream": False,
         "options": {"num_predict": 150, "temperature": 0.2}
     }
-    
+
     logger.info("啟動 Llava 視覺分析...")
     async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
         res = await client.post(url, json=payload)
@@ -159,7 +196,7 @@ def build_gemma3_prompts(face_analysis: dict, style: str, user_note: Optional[st
     e_shape = face_analysis.get('眼型', '未提供')
     n_front = face_analysis.get('鼻型', '未提供')
     l_shape = face_analysis.get('嘴型', '未提供') or "標準比例唇（偏向柔和輪廓）"
-        
+
     skin_obj = face_analysis.get('膚色', {})
     if isinstance(skin_obj, dict):
         s_season = skin_obj.get('四季型', '未提供')
@@ -172,10 +209,11 @@ def build_gemma3_prompts(face_analysis: dict, style: str, user_note: Optional[st
         "你是明星御用高端彩妝顧問。你的任務是結合寶寶的原生五官數據與指定妝容風格，產生繁體中文客製化修容與彩妝手法建議，並搭配推薦具體開架商品（給寶寶看）。\n\n"
         "【核心任務：視覺骨相微調與整形修飾】\n"
         "妳的建議必須死死咬住寶寶原生的五官結構進行針對性『視覺骨相微調與整形修飾』！\n"
-        f"1. 底妝與腮紅修容：必須針對寶寶天生的【{f_shape}】與【{n_front}】設計。說明如何利用高光與立體陰影交錯，在視覺上重塑天生【{f_shape}】的輪廓線條，達到向內收縮 or 流暢臉型的骨相改變，並讓【{n_front}】在視覺上骨幹拔高。\n"
+        f"1. 底妝建議：必須針對寶寶天生的【{f_shape}】與【{n_front}】設計。說明如何利用高光與立體陰影交錯，在視覺上重塑天生【{f_shape}】的輪廓線條，達到向內收縮 or 流暢臉型的骨相改變，並讓【{n_front}】在視覺上骨幹拔高。\n"
         f"2. 眉眼妝建議：必須針對寶寶天生的【{e_shape}】與【{b_shape}】。詳細指導如何利用眼影暈染邊界、眼線延伸、倒影與臥蠶刻畫，在視覺上『徹底重塑並改變』原本的【{e_shape}】限制，達到眼型放大、下至 or 微整形矯正的視覺震撼效果。\n"
-        f"3. 唇妝建議：必須針對寶寶天生的【{l_shape}】。不論原生數據多寡，必須詳細說明如何利用唇線模糊與擴唇手法，在視覺上重塑並優化【{l_shape}】的厚薄比例與嘴角弧度，打造微翹的性感嘟嘟唇妝效。\n\n"
-        "妳的輸出必須嚴格分為以下七個段落，標題獨立佔一行，不加 any Markdown 符號。請提供具體實用的手法操作與彩妝細節說明，不限制每段字數上限：\n"
+        f"3. 腮紅修容：必須說明腮紅與修容的位置擺放。\n"
+        f"4. 唇妝建議：必須針對寶寶天生的【{l_shape}】。詳細說明如何利用唇線模糊與擴唇手法，在視覺上重塑並優化【{l_shape}】的厚薄比例與嘴角弧度，打造微翹的嘟嘟唇妝效。\n\n"
+        "妳的輸出必須嚴格分為以下七個段落，標題獨立佔一行，不加 any Markdown 符號：\n"
         "1. 整體妝容方向\n"
         "2. 底妝建議\n"
         "3. 眉眼妝建議\n"
@@ -189,25 +227,26 @@ def build_gemma3_prompts(face_analysis: dict, style: str, user_note: Optional[st
         "3. 全文嚴禁使用 any Markdown 符號（如 *、#、** 等），一律使用純文字輸出。"
     )
 
-    user_prompt_zh = f"【當前寶寶真實特徵與需求數據】\n- 目標妝容風格：{style}\n- 使用者偏好與備註：{user_note if user_note else '無特別要求'}\n- 臉型：{f_shape}\n- 眉型：{b_shape}\n- eye型：{e_shape}\n- 正面鼻型：n_front\n- 唇型：{l_shape}\n- 膚色季型：{s_season}\n- 膚色級別：{s_level}\n\n【AI 視覺照片提取細節】\n{vision_feedback}\n\n請立刻執行最高排版鐵律，產生溫柔親切、富含具體操作步驟與推薦開架彩妝商品的七段純繁中建議。"
+    # 🔧 修正：原本這裡漏了大括號，印出的是字面上的 "n_front" 字串而不是實際的鼻型變數值
+    user_prompt_zh = f"【當前寶寶真實特徵與需求數據】\n- 目標妝容風格：{style}\n- 使用者偏好與備註：{user_note if user_note else '無特別要求'}\n- 臉型：{f_shape}\n- 眉型：{b_shape}\n- eye型：{e_shape}\n- 正面鼻型：{n_front}\n- 唇型：{l_shape}\n- 膚色季型：{s_season}\n- 膚色級別：{s_level}\n\n【AI 視覺照片提取細節】\n{vision_feedback}\n\n請立刻執行最高排版鐵律，產生溫柔親切、富含具體操作步驟與推薦開架彩妝商品的七段純繁中建議。"
 
     return system_prompt_zh, user_prompt_zh
 
 async def call_gemma3_generate(system_instruction: str, user_prompt: str) -> str:
     url = f"{OLLAMA_BASE_URL}/api/generate"
     full_combined_prompt = f"{system_instruction}\n\n[Current Request]:\n{user_prompt}"
-    
+
     payload = {
-        "model": MODEL_TEXT, 
-        "prompt": full_combined_prompt, 
+        "model": MODEL_TEXT,
+        "prompt": full_combined_prompt,
         "stream": False,
         "options": {
-            "num_predict": OLLAMA_NUM_PREDICT, # 對齊組長規格書 4.2 節：設定為 4096 防止截斷
+            "num_predict": OLLAMA_NUM_PREDICT,
             "temperature": 0.3,
             "top_p": 0.8
         }
     }
-    
+
     logger.info(f"呼叫 {MODEL_TEXT} 進行繁中彩妝建議推理...")
     async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
         get_res = await client.post(url, json=payload)
@@ -217,23 +256,22 @@ async def call_gemma3_generate(system_instruction: str, user_prompt: str) -> str
 
 @app.post("/suggest")
 async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
-    # 4. 對齊組長規格書 3.1 節：金鑰驗證失敗回傳 401
     if not verify_api_key(x_api_key):
-        logger.warning("攔截到未授權或無效 Key 的 /suggest 請求")
-        return make_error_response(401, "UNAUTHORIZED", "Unauthorized: Invalid or missing API Key.", False)
+        logger.warning("驗證失敗：拒絕 /suggest 請求 (HTTP 401)")
+        return make_error_response(401, "UNAUTHORIZED", "Invalid or missing API key", False)
 
-    logger.info("驗證成功，執行彩妝推理流水線...")
-    
+    logger.info("金鑰驗證成功！開始執行彩妝推理流水線...")
+
     face_analysis = payload.faceAnalysis or (payload.analysisPackage.get("faceAnalysis") if payload.analysisPackage else None)
     analysis_pkg = payload.analysisPackage or {}
-    
+
     if not face_analysis:
         return make_error_response(400, "MISSING_FACE_ANALYSIS", "缺少有效 analysisPackage 內部的分析資料包", False)
-    
+
     images_obj = analysis_pkg.get("images", {})
     front_image_obj = images_obj.get("front", {})
     base64_image_url = front_image_obj.get("compressedDataUrl")
-    
+
     if not base64_image_url:
         vision_feedback = "No image context provided. Rely solely on structured JSON parameters."
     else:
@@ -252,11 +290,11 @@ async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(Non
 
     if normalized_style not in VALID_STYLES:
         return make_error_response(422, "VALIDATION_ERROR", f"不支援的妝容風格: '{payload.style}'", False)
-    
+
     try:
         sys_zh, usr_zh = build_gemma3_prompts(face_analysis, normalized_style, payload.userNote, vision_feedback)
         suggestion_part = await call_gemma3_generate(sys_zh, usr_zh)
-        
+
         suggestion_part = suggestion_part.replace("```json", "").replace("```text", "").replace("```", "").strip()
         suggestion_part = suggestion_part.replace("*", "").replace("#", "")
 
@@ -281,10 +319,8 @@ async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(Non
 
         signature = sign_render_prompt(flux_prompt_part)
 
-        # 對齊組長規格書：不在 Log 印出完整 Prompt，確保資安不外洩
         logger.info("推理完成，順利產生提示詞與簽章。")
 
-        # 5. 對齊組長規格書 3.3 節：回傳標準 JSON 格式
         return {
             "status": "completed",
             "provider": "ollama",
@@ -292,14 +328,15 @@ async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(Non
             "fallbackUsed": False,
             "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "suggestion": suggestion_part,
-            "fluxPromptEn": flux_prompt_part,
             "renderPromptEn": flux_prompt_part,
+            "fluxPromptEn": flux_prompt_part,
             "promptSignature": signature
         }
     except Exception as exc:
         logger.error(f"推理失敗: {str(exc)}")
-        return make_error_response(502, "OLLAMA_UNAVAILABLE", f"雙模型推理服務暫時無法使用: {str(exc)}", True)
+        return make_error_response(502, "OLLAMA_UNAVAILABLE", f"文字建議服務目前無法連線，請稍後再試: {str(exc)}", True)
 
 if __name__ == "__main__":
-    enforce_service_api_key()
+    if not IS_PRODUCTION and not SUGGESTION_API_KEY:
+        logger.warning("開發模式：未設定 SUGGESTION_API_KEY，啟用內建相容金鑰清單。正式環境部署時必須設定此變數，否則服務會拒絕啟動。")
     uvicorn.run(app, host="0.0.0.0", port=OLLAMA_SUGGESTION_PORT)
