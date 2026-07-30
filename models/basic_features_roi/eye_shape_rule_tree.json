@@ -4,7 +4,6 @@
     "下垂眼",
     "圓眼",
     "桃杏眼",
-    "細長眼",
     "鳳眼"
   ],
   "features": [
@@ -12,9 +11,9 @@
     "angle",
     "ratio_to_face"
   ],
-  "max_depth": 5,
+  "max_depth": 3,
   "train_count": 676,
-  "train_macro": 0.5626,
+  "train_macro": 0.541,
   "note": "train_macro 是在訓練資料上的分數，不是泛化估計；泛化請看 rule_cv_results.json（5-fold, identity 切分）",
-  "rules": "|--- angle <= -6.456\n|   |--- ear <= 0.326\n|   |   |--- ratio_to_face <= 0.226\n|   |   |   |--- angle <= -7.715\n|   |   |   |   |--- ratio_to_face <= 0.217\n|   |   |   |   |   |--- class: 鳳眼\n|   |   |   |   |--- ratio_to_face >  0.217\n|   |   |   |   |   |--- class: 鳳眼\n|   |   |   |--- angle >  -7.715\n|   |   |   |   |--- ear <= 0.309\n|   |   |   |   |   |--- class: 鳳眼\n|   |   |   |   |--- ear >  0.309\n|   |   |   |   |   |--- class: 桃杏眼\n|   |   |--- ratio_to_face >  0.226\n|   |   |   |--- ear <= 0.315\n|   |   |   |   |--- class: 桃杏眼\n|   |   |   |--- ear >  0.315\n|   |   |   |   |--- class: 鳳眼\n|   |--- ear >  0.326\n|   |   |--- ear <= 0.353\n|   |   |   |--- angle <= -8.737\n|   |   |   |   |--- ear <= 0.343\n|   |   |   |   |   |--- class: 鳳眼\n|   |   |   |   |--- ear >  0.343\n|   |   |   |   |   |--- class: 圓眼\n|   |   |   |--- angle >  -8.737\n|   |   |   |   |--- angle <= -6.818\n|   |   |   |   |   |--- class: 桃杏眼\n|   |   |   |   |--- angle >  -6.818\n|   |   |   |   |   |--- class: 下垂眼\n|   |   |--- ear >  0.353\n|   |   |   |--- ratio_to_face <= 0.224\n|   |   |   |   |--- angle <= -8.680\n|   |   |   |   |   |--- class: 鳳眼\n|   |   |   |   |--- angle >  -8.680\n|   |   |   |   |   |--- class: 圓眼\n|   |   |   |--- ratio_to_face >  0.224\n|   |   |   |   |--- ratio_to_face <= 0.234\n|   |   |   |   |   |--- class: 圓眼\n|   |   |   |   |--- ratio_to_face >  0.234\n|   |   |   |   |   |--- class: 圓眼\n|--- angle >  -6.456\n|   |--- ratio_to_face <= 0.207\n|   |   |--- ear <= 0.259\n|   |   |   |--- angle <= -0.851\n|   |   |   |   |--- class: 細長眼\n|   |   |   |--- angle >  -0.851\n|   |   |   |   |--- class: 下垂眼\n|   |   |--- ear >  0.259\n|   |   |   |--- angle <= -5.255\n|   |   |   |   |--- class: 桃杏眼\n|   |   |   |--- angle >  -5.255\n|   |   |   |   |--- ratio_to_face <= 0.205\n|   |   |   |   |   |--- class: 下垂眼\n|   |   |   |   |--- ratio_to_face >  0.205\n|   |   |   |   |   |--- class: 下垂眼\n|   |--- ratio_to_face >  0.207\n|   |   |--- ear <= 0.297\n|   |   |   |--- ear <= 0.266\n|   |   |   |   |--- ratio_to_face <= 0.213\n|   |   |   |   |   |--- class: 細長眼\n|   |   |   |   |--- ratio_to_face >  0.213\n|   |   |   |   |   |--- class: 細長眼\n|   |   |   |--- ear >  0.266\n|   |   |   |   |--- ratio_to_face <= 0.211\n|   |   |   |   |   |--- class: 下垂眼\n|   |   |   |   |--- ratio_to_face >  0.211\n|   |   |   |   |   |--- class: 細長眼\n|   |   |--- ear >  0.297\n|   |   |   |--- ear <= 0.330\n|   |   |   |   |--- angle <= -5.505\n|   |   |   |   |   |--- class: 細長眼\n|   |   |   |   |--- angle >  -5.505\n|   |   |   |   |   |--- class: 桃杏眼\n|   |   |   |--- ear >  0.330\n|   |   |   |   |--- ratio_to_face <= 0.215\n|   |   |   |   |   |--- class: 桃杏眼\n|   |   |   |   |--- ratio_to_face >  0.215\n|   |   |   |   |   |--- class: 下垂眼\n"
+  "rules": "|--- ear <= 0.327\n|   |--- ratio_to_face <= 0.207\n|   |   |--- ear <= 0.259\n|   |   |   |--- class: 下垂眼\n|   |   |--- ear >  0.259\n|   |   |   |--- class: 下垂眼\n|   |--- ratio_to_face >  0.207\n|   |   |--- ear <= 0.307\n|   |   |   |--- class: 鳳眼\n|   |   |--- ear >  0.307\n|   |   |   |--- class: 桃杏眼\n|--- ear >  0.327\n|   |--- angle <= -7.460\n|   |   |--- ear <= 0.362\n|   |   |   |--- class: 圓眼\n|   |   |--- ear >  0.362\n|   |   |   |--- class: 圓眼\n|   |--- angle >  -7.460\n|   |   |--- ratio_to_face <= 0.222\n|   |   |   |--- class: 桃杏眼\n|   |   |--- ratio_to_face >  0.222\n|   |   |   |--- class: 下垂眼\n"
 }

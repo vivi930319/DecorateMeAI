@@ -488,9 +488,9 @@ FACE_TERM_EN = {
     # 臉型
     "圓形臉": "a round face", "心形臉": "a heart-shaped face", "方形臉": "a square face",
     "長形臉": "a long face", "鵝蛋臉": "an oval face",
-    # 眼型（2026-07-30 起現行五類）
+    # 眼型（2026-07-31 起現行四類；細長眼已併入鳳眼）
     "下垂眼": "downturned eyes", "圓眼": "round eyes", "桃杏眼": "soft almond eyes",
-    "細長眼": "long narrow eyes", "鳳眼": "upturned eyes",
+    "鳳眼": "long upturned eyes",
     # 眉型
     "一字眉": "straight brows", "彎月眉": "curved brows", "落尾眉": "downward-angled brows",
     # 鼻型
