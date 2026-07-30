@@ -62,13 +62,20 @@ async def _read_image(file: UploadFile, label: str) -> bytes:
 
     PRO 一次收最多四張照片，每一張都走同一條路——多角度採集的照片同樣是手機原圖，
     帶著拍攝地點的機率比正面照更高。
+
+    `sanitize_upload` 回傳的是 `(bytes, mime)`，**要解包**。2026-07-24 它從
+    「只回 bytes」改成回 tuple 時，BASIC 的 `_read_clean_image` 跟著改了，
+    這裡漏掉——於是 tuple 被原樣丟給 `FaceAnalyzer`，撞上型別檢查，
+    PRO 的每一次分析都回 400，一路壞到 2026-07-31 才被發現。
+    型別註記寫著 `-> bytes` 卻回傳 tuple，靜態檢查也沒攔下來。
     """
-    return await sanitize_upload(
+    contents, _mime = await sanitize_upload(
         file,
         max_bytes=MAX_UPLOAD_BYTES,
         max_pixels=MAX_IMAGE_PIXELS,
         label=f"{label}照片",
     )
+    return contents
 
 
 def _analyze_side_supplementary(side_bytes: bytes) -> dict | None:
