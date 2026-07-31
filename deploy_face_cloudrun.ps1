@@ -42,7 +42,9 @@ if ($LASTEXITCODE -ne 0) { throw "face-pro deployment failed" }
 
 foreach ($service in @("face-basic", "face-pro")) {
     $url = (& gcloud.cmd run services describe $service --project $ProjectId --region $Region --format="value(status.url)").Trim()
-    $health = Invoke-RestMethod -Uri "$url/health" -TimeoutSec 60
+    # 兩個分析服務只允許 Gateway／專案成員呼叫；直接匿名 GET 正確結果是 403。
+    $token = (& gcloud.cmd auth print-identity-token).Trim()
+    $health = Invoke-RestMethod -Uri "$url/health" -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 60
     if ($health.status -ne "ok") {
         throw "$service health is '$($health.status)'"
     }
