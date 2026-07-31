@@ -17,7 +17,7 @@ import uvicorn
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("ollama-suggestion")
 
-app = FastAPI(title="Ollama 妝容真實個人化修飾服務", version="2026-07-28-Debug-Fix")
+app = FastAPI(title="Ollama 妝容真實個人化修飾服務", version="2026-07-31-Japanese-Heavy-Eyelash-Fix")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,21 +30,16 @@ app.add_middleware(
 SUGGESTION_API_KEY = os.getenv("SUGGESTION_API_KEY", "").strip()
 SIGNING_SECRET = os.getenv("RENDER_PROMPT_SIGNING_SECRET", "").strip()
 
-# ENVIRONMENT=production 時，強制關閉除錯用硬編碼金鑰與詳細金鑰 log，
-# 依照「給 Ollama 端」需求文件第 3 節規定執行。
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development").strip().lower()
 IS_PRODUCTION = ENVIRONMENT == "production"
 
 if IS_PRODUCTION and not SUGGESTION_API_KEY:
-    # 正式環境缺少金鑰時，服務必須拒絕啟動，不得使用內建相容金鑰清單頂替。
     logger.error("正式環境（ENVIRONMENT=production）未設定 SUGGESTION_API_KEY，服務拒絕啟動。")
     sys.exit(1)
 
 if IS_PRODUCTION:
-    # 正式環境只信任 Secret Manager 提供的金鑰，不接受硬編碼備用金鑰。
     ALLOWED_KEYS = {SUGGESTION_API_KEY}
 else:
-    # 僅開發環境保留相容金鑰清單，方便本機除錯；正式環境不會執行到這裡。
     ALLOWED_KEYS = {
         SUGGESTION_API_KEY,
         "tku_im_makeup_secret_2026",
@@ -71,7 +66,6 @@ class SuggestRequest(BaseModel):
     model: Optional[str] = None
 
 def verify_api_key(x_api_key: Optional[str]) -> bool:
-    # 安全性規定：Log 不得記錄 X-API-Key 本身的值，只記錄「有沒有帶」與「比對結果」。
     if not x_api_key:
         logger.warning("Gateway 送來請求，但未帶 X-API-Key Header。")
         return False
@@ -93,16 +87,84 @@ def sign_render_prompt(render_prompt_en: str) -> Optional[str]:
     ).hexdigest()
 
 def build_luxury_rich_girl_prompt() -> str:
+    """ 千金妝精細控制鏈 """
     prompt = (
         "Apply a luxurious elegant makeup look to the face, as a photorealistic makeup-only retouch of the original photo.\n\n"
         "Eyes: highly visible, bold and significantly thickened jet-black eyeliner that dynamically extends straight and long past the outer corner of the eyes with a subtle elegant lift, "
-        "vivid and heavy shading of medium-saturation warm dusty pink-apricot and soft rose-taupe tones heavily sweeping across the entire eye sockets and lower crease, "
-        "a concentrated, rich dark brown shadow heavily packed right at the base of the lash roots for extreme depth, "
-        "highly defined, hyper-plump and three-dimensional aegyosal (charming fat) carved with a soft shadow underline, with an intense, high-contrast crystalline white-gold diamond shimmer that strongly illuminates the inner eye corners and the exact center of the three-dimensional aegyosal, "
+        "vivid and heavy shading of romantic sakura pink-apricot and soft rose-taupe tones heavily sweeping across the entire eye sockets and lower crease, "
+        "a concentrated, rich dark cherry-brown shadow heavily packed right at the base of the lash roots for extreme depth, "
+        "highly defined, hyper-plump and three-dimensional aegyosal (charming fat) carved with a soft shadow underline, with an intense, high-contrast crystalline pink-diamond champagne shimmer that strongly illuminates the inner eye corners and the exact center of the three-dimensional aegyosal, "
         "extremely long, perfectly curled, and sharply separated spiky mascaraed eyelashes creating a defined doll-like sunflower effect with long individual lash clusters extending from both upper and lower lash lines, slightly rounded inner eye corners.\n\n"
         "Brows: thin, straight, and elongated delicate brows softly filled with light brown powder and brow mascara.\n\n"
-        "Face: dewy satin skin texture with refined light brown contouring along the nose bridge and jawline, honey-melon peach blush swept horizontally below the pupils towards the cheekbones, seamlessly layered with fig-toned blush on the apples of the cheeks blended outward; clear, hyper-reflective wet-shine dewy highlighters precisely dotted on the bridge of the nose, nose tip, highest points of the cheeks, cupid's bow, and chin.\n\n"
-        "Lips: full lips defined with a lip liner to softly blur the outer boundaries, completely filled with a clear glossy peach-beige lip glaze over a concealed lip base."
+        "Face: dewy satin skin texture with refined light brown contouring along the nose bridge and jawline, prominent, highly pigmented soft pastel pink and vivid sakura-pink blush heavily swept horizontally across the cheeks below the pupils towards the cheekbones, seamlessly layered with vivid strawberry-pink blush boldly on the apples of the cheeks creating an intensely romantic rosy-pink flush; clear, hyper-reflective wet-shine dewy highlighters precisely dotted on the bridge of the nose, nose tip, highest points of the cheeks, cupid's bow, and chin.\n\n"
+        "Lips: full lips defined with a lip liner to softly blur the outer boundaries, completely filled with a clear glossy vibrant pink glass lip glaze over a concealed lip base."
+    )
+    return prompt
+
+def build_hong_kong_glam_prompt() -> str:
+    """ 港風妝精細控制鏈 """
+    prompt = (
+        "Apply a classic 1990s Hong Kong cinema glam makeup look to the face, as a photorealistic makeup-only retouch of the original photo.\n\n"
+        "Face: ultra-clean, flawless matte velvet skin texture with smooth porcelain clarity and zero unwanted shine, softly carved with sophisticated warm dark brown contouring along the nose bridge, cheekbones, and jawline, subtle warm terracotta blush seamlessly diffused into the cheek contours.\n\n"
+        "Eyes: deep smoky earth-tone brown eyeshadow heavily blended across the eye sockets and lower crease for intense structural depth, a sharp, clean jet-black retro eyeliner drawn tight along the lash line and softly winging upward at the outer corners, fluttery dense black mascaraed eyelashes defining both lash lines.\n\n"
+        "Brows: dark, dense, and naturally sculpted dark brown-black eyebrows with clear hair-like texture and defined arches.\n\n"
+        "Lips: richly pigmented, full classic vintage red lips with a smooth velvet-matte finish and soft blurred lip contours."
+    )
+    return prompt
+
+def build_korean_abg_prompt() -> str:
+    """ 韓系亞裔妝控制鏈 """
+    prompt = (
+        "Apply a trendy Korean Asian Baby Girl (ABG) instagram-style makeup look to the face, as a photorealistic makeup-only retouch of the original photo.\n\n"
+        "Brows: sharply arched and lifted dark brown eyebrows with voluminous, feathery hair-like strokes highlighting high brow bones.\n\n"
+        "Eyes: almond-shaped feline eye structure with delicate inner corner detailing, shaded with soft light brown and warm taupe eyeshadow framing the lower crease, "
+        "an ultra-sleek, razor-thin liquid jet-black eyeliner precisely drawn ultra-thin along the upper lash line and dynamically extended long, sharp, and straight past the outer eye corners with a fierce elegant upward flick, "
+        "elongated, sharply separated spiky manga-style eyelashes defining both lash lines to accentuate the dramatically lengthened eyes.\n\n"
+        "Face: sun-kissed soft matte skin with glowing highlights, precise subtle nose contouring under the brow bones, "
+        "warm nude-apricot and peach-pink blush swept diagonally upward along the cheekbones towards the temples for a lifted face structure; clear wet-shine highlighter accenting the nose bridge, nose tip, and inner eye corners.\n\n"
+        "Lips: plump, juicy, full lips softly overlined with a nude-pink liner, completely filled with a clear glossy peachy-nude water lip gloss."
+    )
+    return prompt
+
+def build_men_clean_water_prompt() -> str:
+    """ 男士白開水妝控制鏈 """
+    prompt = (
+        "Apply a ultra-clean no-makeup natural groom look for men to the face, as a photorealistic natural retouch of the original photo.\n\n"
+        "Face: ultra-clean, flawless natural matte masculine skin texture with refined smoothness, zero unwanted shine, subtle healthy skin glow, and microscopic skin detail; delicate, invisible contouring along the nose bridge and jawline for structural masculine depth.\n\n"
+        "Brows: naturally full, neat, and well-groomed dark male eyebrows with distinct, clear hair strokes and masculine straight arches.\n\n"
+        "Eyes: completely clean and natural eyes, strictly zero eyeshadow, zero eyeliner, and zero visible eye cosmetics, leaving pure realistic eyes with natural lash lines.\n\n"
+        "Lips: healthy natural nude male lips with soft hydrated texture, subtle lip moisture, strictly zero visible lipstick or lip gloss color."
+    )
+    return prompt
+
+def build_sick_cute_yandere_prompt() -> str:
+    """ 病嬌妝控制鏈 """
+    prompt = (
+        "Apply a subtle sick-cute yandere e-girl style makeup look to the face, as a photorealistic makeup-only retouch of the original photo.\n\n"
+        "Eyes: a prominent, continuous jet-black full-encircling eyeliner precisely tightlining both upper lash line and lower waterline, "
+        "with a sharply defined, downward-pointing inner corner eyeliner flick extending the eyes, "
+        "heavy shading of muted smoky dusty-rose, warm terracotta-brown, and dried-rose tones sweeping across the lower eyelids and lower crease for a melancholic flushed shadow, "
+        "defined spiky lower lash clusters framing the dark encircled eyes.\n\n"
+        "Face: pale porcelain smooth skin with a clear fair complexion, soft muted dusty-rose blush heavily diffused directly under the lower eyes blending into the cheekbones.\n\n"
+        "Brows: soft, thin, straight dark brown-black delicate eyebrows.\n\n"
+        "Lips: full lips completely filled with a watery clear glossy dusty-rose glass lip glaze, creating a high-shine reflective wet lip finish with softly blurred outer lip boundaries."
+    )
+    return prompt
+
+def build_japanese_translucent_prompt() -> str:
+    """
+    日雜清透妝（強效醒目眼妝 ＋ 重磅 Igari 潮紅腮紅 ＋ 潤澤裸粉唇）重構控制鏈：
+    1. 強制顯眼黑眼線與太陽花睫毛：清晰的黑色內外眼线、極致卷翹長的太陽花束感睫毛，強制模型把眼睛描繪清楚，擺脫素顏感。
+    2. 澎潤閃亮臥蠶：高對比香檳金珍珠光澤爆閃點亮眼頭與臥蠶。
+    3. 重磅 Igari 潮紅腮紅：鮮豔草莓蜜桃粉腮紅，橫跨眼下、蘋果肌與鼻尖大面積暈染。
+    4. 高光水光奶油肌與草莓裸粉唇：晶瑩透明的水光玻璃唇釉，全臉水光折射。
+    """
+    prompt = (
+        "Apply a Japanese magazine model beauty style makeup look to the face, as a photorealistic makeup-only retouch of the original photo.\n\n"
+        "Eyes: defined, highly visible jet-black upper eyeliner extending slightly at the outer corners, long, dramatically curled, and sharply separated spiky mascaraed eyelashes defining both lash lines, bright crystalline champagne shimmer strongly illuminating the inner corners and plump three-dimensional aegyosal (charming fat), soft peach-coral eyeshadow shading the eye sockets.\n\n"
+        "Face: dewy porcelain skin with high-shine wet glass highlights, heavy Igari-style fresh strawberry-pink and vibrant coral blush boldly swept horizontally directly across the under-eye area, cheekbones, and nose bridge creating a vivid flushed aesthetic.\n\n"
+        "Brows: neatly defined, feathery, dark brown eyebrows with distinct upward-groomed hair texture.\n\n"
+        "Lips: plump, juicy strawberry-nude lips completely coated in a thick, clear high-shine water-gloss glass lip glaze."
     )
     return prompt
 
@@ -119,8 +181,6 @@ async def limit_payload_size(request: Request, call_next):
         return make_error_response(413, "PAYLOAD_TOO_LARGE", "上傳的資料過大，請縮小檔案後再試。", False)
     return await call_next(request)
 
-# 🔍 除錯用：印出進站請求收到的 header 名稱清單（不含數值），方便排查
-# Gateway／代理層有沒有把 X-API-Key 濾掉。正式環境自動關閉，避免非必要 log。
 if not IS_PRODUCTION:
     @app.middleware("http")
     async def log_incoming_headers(request: Request, call_next):
@@ -227,7 +287,6 @@ def build_gemma3_prompts(face_analysis: dict, style: str, user_note: Optional[st
         "3. 全文嚴禁使用 any Markdown 符號（如 *、#、** 等），一律使用純文字輸出。"
     )
 
-    # 🔧 修正：原本這裡漏了大括號，印出的是字面上的 "n_front" 字串而不是實際的鼻型變數值
     user_prompt_zh = f"【當前寶寶真實特徵與需求數據】\n- 目標妝容風格：{style}\n- 使用者偏好與備註：{user_note if user_note else '無特別要求'}\n- 臉型：{f_shape}\n- 眉型：{b_shape}\n- eye型：{e_shape}\n- 正面鼻型：{n_front}\n- 唇型：{l_shape}\n- 膚色季型：{s_season}\n- 膚色級別：{s_level}\n\n【AI 視覺照片提取細節】\n{vision_feedback}\n\n請立刻執行最高排版鐵律，產生溫柔親切、富含具體操作步驟與推薦開架彩妝商品的七段純繁中建議。"
 
     return system_prompt_zh, user_prompt_zh
@@ -314,6 +373,17 @@ async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(Non
             )
         elif "千金" in normalized_style:
             flux_prompt_part = build_luxury_rich_girl_prompt()
+        elif "港風" in normalized_style:
+            flux_prompt_part = build_hong_kong_glam_prompt()
+        elif "韓系" in normalized_style or "韓式亞裔" in normalized_style:
+            flux_prompt_part = build_korean_abg_prompt()
+        elif "男士白開水" in normalized_style:
+            flux_prompt_part = build_men_clean_water_prompt()
+        elif "病嬌" in normalized_style:
+            flux_prompt_part = build_sick_cute_yandere_prompt()
+        elif "日雜清透" in normalized_style:
+            # 🚀【日雜清透妝強效修復：強拉黑眼線、太陽花睫毛與大面積潮紅腮紅】
+            flux_prompt_part = build_japanese_translucent_prompt()
         else:
             flux_prompt_part = f"high quality professional {normalized_style} makeup, flawless skin texture, natural soft diffused cosmetics rendering, seamlessly blended edges, highly realistic"
 
