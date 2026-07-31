@@ -1,0 +1,42 @@
+{
+  "version": "20260731",
+  "gcsPrefix": "gs://decorate-me-models/20260731",
+  "files": [
+    {
+      "path": "models/basic_features_roi/face_shape.onnx",
+      "object": "basic_features_roi/face_shape.onnx",
+      "size": 111380414,
+      "sha256": "ec2b8f74c9099611ecc84d76c8e0974b712d2e85b9d363602c6ca7ed18142961"
+    },
+    {
+      "path": "models/basic_features_roi/brow_shape.onnx",
+      "object": "basic_features_roi/brow_shape.onnx",
+      "size": 111374260,
+      "sha256": "005e8b9f1d44c9a0db5c841ffe1be7302f22043d2505d88f622be06aeece747b"
+    },
+    {
+      "path": "models/basic_features_roi/eye_shape.onnx",
+      "object": "basic_features_roi/eye_shape.onnx",
+      "size": 111377336,
+      "sha256": "949004207e350718a31f72bfb07e920c47280fbba4c008a0de2ff8be522154ae"
+    },
+    {
+      "path": "models/basic_features_roi/nose_shape.onnx",
+      "object": "basic_features_roi/nose_shape.onnx",
+      "size": 111371184,
+      "sha256": "b04b9792b3ca6cd03507db34e2679d124ca89d629a75331e781d91dce6d13425"
+    },
+    {
+      "path": "models/basic_features_roi/lip_shape.onnx",
+      "object": "basic_features_roi/lip_shape.onnx",
+      "size": 111377336,
+      "sha256": "56d75a4cfcae32f642981512f78402fa9135317c234cb6a6fedc53a675e4a8cf"
+    },
+    {
+      "path": "models/pro_nose_side/nose_shape_side.onnx",
+      "object": "pro_nose_side/nose_shape_side.onnx",
+      "size": 111380414,
+      "sha256": "af3e1df0389472dee874e89e59362b8a7a9c90ec6fde61fa1590a879e7461ff4"
+    }
+  ]
+}

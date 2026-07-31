@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 import math
@@ -33,6 +34,7 @@ from replicate_render import (
     REPLICATE_MODEL,
     SUGGESTION_SERVICE_URL,
     build_personalized_render_prompt,
+    build_server_render_prompt,
     call_replicate_render,
     create_signed_storage_url,
     data_url_to_bytes,
@@ -397,13 +399,11 @@ def _server_render_prompt(req: RenderRequest) -> tuple[str, str]:
     try:
         return build_personalized_render_prompt(style_id, face_analysis)
     except SuggestionServiceUnavailable as exc:
-        # 設了建議服務卻要不到 prompt：不要靜靜退回 styleId 的罐頭 prompt。
-        # 使用者本來應該拿到個人化的妝，退回去他只會覺得「怎麼跟我選的風格沒關係」，
-        # 而且沒有任何線索。寧可讓他知道是上游掛了、稍後再試。
-        raise HTTPException(
-            status_code=503,
-            detail=error_payload("OLLAMA_UNAVAILABLE", str(exc), retryable=True),
-        )
+        # Demo 的渲染不能被一台校外 Mac 或臨時 tunnel 拖垮。保留明確的 promptSource
+        # 與 warning log，維運端仍看得出降級；使用者則可用白名單中的安全固定 prompt
+        # 完成流程，不會因建議服務暫時離線而整個卡在 503。
+        logging.warning("建議服務不可用，改用固定風格 prompt：%s", exc)
+        return build_server_render_prompt(style_id), "style_allowlist_fallback"
     except ValueError:
         raise HTTPException(
             status_code=422,
@@ -654,7 +654,9 @@ async def render(
     __=Depends(enforce_render_rate_limit),
 ):
     _validate_render_request(req)
-    prompt, prompt_source = _server_render_prompt(req)
+    # 這裡可能呼叫同步 requests（建議服務 timeout 最長 90 秒）。放進 worker thread，
+    # 避免阻塞 FastAPI event loop 與其他人的健康檢查／工作輪詢。
+    prompt, prompt_source = await asyncio.to_thread(_server_render_prompt, req)
     # 同圖同後端產生的 prompt 短時間內重複 → 直接回上次結果，不重打 Replicate
     key = _dedup_key(req.image, prompt, req.strength, str(x_user_email or "").strip())
     cached = _dedup_get(key)
@@ -838,7 +840,7 @@ async def create_render_job(
     """
     _cleanup_render_jobs()
     _validate_render_request(req)
-    prompt, prompt_source = _server_render_prompt(req)
+    prompt, prompt_source = await asyncio.to_thread(_server_render_prompt, req)
     job_id = uuid.uuid4().hex
     result_token = uuid.uuid4().hex
     now = time.time()

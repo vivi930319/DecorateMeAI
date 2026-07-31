@@ -78,7 +78,12 @@ def record_admin_action(
 def recent_admin_actions(limit: int = 100) -> list[dict]:
     """最近的稽核事件，新到舊。給管理後台的稽核頁用。"""
     try:
-        events = job_store.all_jobs(AUDIT_COLLECTION, limit=max(1, min(int(limit), 500)))
+        events = job_store.all_jobs(
+            AUDIT_COLLECTION,
+            limit=max(1, min(int(limit), 500)),
+            order_by="at",
+            descending=True,
+        )
     except Exception:  # noqa: BLE001
         return []
-    return sorted(events, key=lambda item: str(item.get("at") or ""), reverse=True)
+    return events

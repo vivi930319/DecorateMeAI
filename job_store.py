@@ -104,13 +104,26 @@ def delete(col: str, job_id: str) -> None:
     collection.document(job_id).delete()
 
 
-def all_jobs(col: str, limit: int | None = None) -> list[dict]:
+def all_jobs(
+    col: str,
+    limit: int | None = None,
+    *,
+    order_by: str | None = None,
+    descending: bool = False,
+) -> list[dict]:
     max_items = DEFAULT_SCAN_LIMIT if limit is None else limit
     collection = _col(col)
     if collection is None:
         jobs = [dict(job) for job in _memory_jobs.get(col, {}).values()]
+        if order_by:
+            jobs.sort(key=lambda job: str(job.get(order_by) or ""), reverse=descending)
         return jobs[:max_items] if max_items else jobs
-    query = collection.limit(max_items) if max_items else collection
+    query = collection
+    if order_by:
+        direction = firestore.Query.DESCENDING if descending else firestore.Query.ASCENDING
+        query = query.order_by(order_by, direction=direction)
+    if max_items:
+        query = query.limit(max_items)
     return [d.to_dict() for d in query.stream() if d.exists]
 
 

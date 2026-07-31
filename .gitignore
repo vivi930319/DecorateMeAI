@@ -70,6 +70,8 @@
 !deploy_render_cloudrun.ps1
 !tools/
 !tools/*.py
+!tools/face_models_manifest.json
+!deploy_face_cloudrun.ps1
 !setup.bat
 !start_backend_local.bat
 !start_full_stack_local.bat

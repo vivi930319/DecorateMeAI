@@ -217,9 +217,11 @@ async def root_redirect():
 @app.get("/health")
 async def health():
     _cleanup_jobs()
+    model_state = basic_roi_shadow.model_status()
     return {
-        "status": "ok",
+        "status": "ok" if model_state["ready"] else "degraded",
         "service": "face-analyzer-basic",
+        "models": model_state,
         "jobs": _job_stats(),
         "limits": {
             "timeoutSeconds": FACE_JOB_TIMEOUT_SECONDS,
@@ -235,6 +237,7 @@ async def analyze(
     file: UploadFile = File(...),
     brightness_mode: str  = Form("none"),
     brightness_level: float = Form(1.0),
+    x_user_id: str | None = Header(default=None),
 ):
     # BASIC 同時支援「檔案上傳」與「拍照上傳」：
     # 前端檔案 input 直接送 File；相機拍照則把 canvas/blob 包成 File 後送到同一個欄位。
@@ -246,6 +249,11 @@ async def analyze(
     try:
         analyzer = FaceAnalyzer(contents, brightness_mode=brightness_mode, brightness_level=brightness_level)
         result = analyzer.export_json()
+        result = face_corrections.apply(
+            result,
+            face_corrections.image_hash(contents),
+            owner_id=x_user_id,
+        )
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -406,7 +414,7 @@ def _job_stats():
 
 
 def _job_view(job, include_token=False):
-    hidden = {"result"}
+    hidden = {"result", "imageHash", "ownerId"}
     if not include_token:
         hidden.add("resultToken")
     return {k: v for k, v in job.items() if k not in hidden}
@@ -421,7 +429,7 @@ def _verify_job_token(job, x_job_token=None, result_token=None):
         )
 
 
-def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.0):
+def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.0, owner_id=None):
     if not job_store.patch_if_status(
         _COL,
         job_id,
@@ -439,7 +447,11 @@ def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.
         result = FaceAnalyzer(contents, brightness_mode=brightness_mode, brightness_level=brightness_level).export_json()
         # 套用這張臉先前被修正過的答案。模型的原始輸出會被留在 result["_modelRaw"]，
         # 回饋一律回報那一份——否則訓練資料會變成模型在確認自己。
-        result = face_corrections.apply(result, face_corrections.image_hash(contents))
+        result = face_corrections.apply(
+            result,
+            face_corrections.image_hash(contents),
+            owner_id=owner_id,
+        )
     except Exception:
         logging.exception("臉部分析 job 失敗 job_id=%s", job_id)
         job_store.patch_if_status(_COL, job_id, {"processing"}, {
@@ -473,6 +485,7 @@ async def create_basic_job(
     file: UploadFile = File(...),
     brightness_mode: str   = Form("none"),
     brightness_level: float = Form(1.0),
+    x_user_id: str | None = Header(default=None),
 ):
     _cleanup_jobs()
     contents = await _read_clean_image(file, "上傳照片")
@@ -486,6 +499,7 @@ async def create_basic_job(
         # 這張照片的穩定識別碼（SHA-256，不是影像本身）。修正快取靠它認出「同一張臉又來了」，
         # 回饋也靠它把修正記到正確的那張臉上。見 face_corrections 的模組說明。
         "imageHash": face_corrections.image_hash(contents),
+        "ownerId": str(x_user_id or "").strip() or None,
         "jobId": job_id, "analysisPackageId": None, "status": "queued",
         "progress": 0, "stage": "upload", "createdAt": _now_iso(),
         "startedAt": None, "completedAt": None, "updatedAt": _now_iso(), "error": None, "result": None,
@@ -493,7 +507,14 @@ async def create_basic_job(
         "expiresAt": datetime.now(timezone.utc) + timedelta(seconds=FACE_JOB_RETENTION_SECONDS),
     }
     job_store.create(_COL, job_id, job_data)
-    background_tasks.add_task(_run_basic_job, job_id, contents, brightness_mode, brightness_level)
+    background_tasks.add_task(
+        _run_basic_job,
+        job_id,
+        contents,
+        brightness_mode,
+        brightness_level,
+        job_data["ownerId"],
+    )
     return _job_view(job_data, include_token=True)
 
 
@@ -911,7 +932,6 @@ class FaceAnalyzer:
         if eye_width < 1e-6: return "未知"
 
         ear           = (left["ear"]   + right["ear"])   / 2.0
-        angle         = (left["angle"] + right["angle"]) / 2.0
         ratio_to_face = eye_width / face_width
 
         # 門檻由本專案自己的 376 張人工標註資料校準（tools/calibrate_rule_thresholds.py）：

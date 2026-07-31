@@ -16,6 +16,7 @@ from api_errors import (
 import job_store
 import face_feedback
 import face_corrections
+import basic_roi_shadow
 import pro_nose_side_model
 from Face_analyzer_BASIC import FaceAnalyzer, MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES
 from dev_server_utils import get_cors_origins, run_dev_server
@@ -134,19 +135,29 @@ def _merge_basic_and_pro(front_result: dict, side_result: dict | None = None) ->
             }
             result["膚色"] = {**fs, "LAB": avg_lab, "LAB來源": "正面+側面平均"}
 
+        # 側臉模型的輸出屬於 PRO 結果的一部分，不能只停留在 side_result。
+        # 保留完整物件（label／confidence／classes／caveat），讓前端既能顯示答案，
+        # 也能誠實呈現目前驗證樣本較少的限制。
+        side_nose = side_result.get("側臉鼻型")
+        if isinstance(side_nose, dict) and side_nose.get("label"):
+            result["側臉鼻型"] = side_nose
+            # 舊版前端讀這個鍵；過渡期同時提供，避免後端先上線時 UI 看不到。
+            result["鼻型_側面"] = side_nose
+
     has_symmetry = bool(front_result.get("臉部對稱性"))
     result["精細分析狀態"] = {
         "多角度照片": "已接收，膚色已雙角度平均" if side_available else "未提供側面照",
         "臉部對稱性": "已計算" if has_symmetry else "無法計算",
         "鼻型精細分類": (
-            "需 70-90° 側面輪廓照才能分類翹鼻／鷹鉤鼻／塌鼻，"
-            "目前側面角度（約 10°）不足，保留為未來展望"
+            "已完成側臉鼻型分類（僅供參考）"
+            if result.get("側臉鼻型")
+            else ("已收到側面照，但側臉鼻型模型未能產生結果" if side_available else "未提供側面照")
         ),
     }
     result["精細分析備註"] = (
         "PRO 流程採正面照 + 單側側面照。"
-        "側面照目前約 10° yaw，用於膚色雙角度平均與對稱性輔助；"
-        "側面鼻型等深度特徵需 70-90° 輪廓照，保留為未來展望。"
+        "側面照用於膚色雙角度平均與側臉鼻型輔助分類；"
+        "側臉鼻型資料量仍有限，結果會附可信度與限制說明。"
     )
     return result
 
@@ -216,7 +227,7 @@ def _job_stats():
 
 
 def _job_view(job, include_token=False):
-    hidden = {"result"}
+    hidden = {"result", "imageHash", "ownerId"}
     if not include_token:
         hidden.add("resultToken")
     return {k: v for k, v in job.items() if k not in hidden}
@@ -231,7 +242,7 @@ def _verify_job_token(job, x_job_token=None, result_token=None):
         )
 
 
-def _run_pro_job(job_id, front_bytes, angle_bytes):
+def _run_pro_job(job_id, front_bytes, angle_bytes, owner_id=None):
     if not job_store.patch_if_status(
         _COL,
         job_id,
@@ -245,7 +256,11 @@ def _run_pro_job(job_id, front_bytes, angle_bytes):
         front_result = FaceAnalyzer(front_bytes).export_json()
         # 套用這張臉先前被修正過的答案。模型的原始輸出會被留在 front_result["_modelRaw"]，
         # 回饋一律回報那一份——否則訓練資料會變成模型在確認自己。
-        front_result = face_corrections.apply(front_result, face_corrections.image_hash(front_bytes))
+        front_result = face_corrections.apply(
+            front_result,
+            face_corrections.image_hash(front_bytes),
+            owner_id=owner_id,
+        )
         job_store.patch_if_status(_COL, job_id, {"processing"}, {"stage": "side_analysis", "progress": 65, "updatedAt": _now_iso()})
         side_bytes = angle_bytes.get("side")
         side_result = _analyze_side_supplementary(side_bytes) if side_bytes else None
@@ -278,9 +293,15 @@ def _run_pro_job(job_id, front_bytes, angle_bytes):
 @app.get("/health")
 async def health():
     _cleanup_jobs()
+    model_state = {
+        "basic": basic_roi_shadow.model_status(),
+        "proNoseSide": pro_nose_side_model.model_status(),
+    }
+    models_ready = model_state["basic"]["ready"] and model_state["proNoseSide"]["ready"]
     return {
-        "status": "ok",
+        "status": "ok" if models_ready else "degraded",
         "service": "face-analyzer-pro",
+        "models": model_state,
         "jobs": _job_stats(),
         "limits": {
             "timeoutSeconds": FACE_JOB_TIMEOUT_SECONDS,
@@ -297,6 +318,7 @@ async def analyze_pro(
     left45: UploadFile | None = File(default=None),
     right45: UploadFile | None = File(default=None),
     side: UploadFile | None = File(default=None),
+    x_user_id: str | None = Header(default=None),
 ):
     """
     PRO 檔案上傳版。
@@ -314,6 +336,11 @@ async def analyze_pro(
     try:
         front_bytes = await _read_image(front, "正面")
         front_result = FaceAnalyzer(front_bytes).export_json()
+        front_result = face_corrections.apply(
+            front_result,
+            face_corrections.image_hash(front_bytes),
+            owner_id=x_user_id,
+        )
 
         side_bytes = None
         for label, role, upload in (
@@ -347,6 +374,7 @@ async def create_pro_job(
     left45: UploadFile | None = File(default=None),
     right45: UploadFile | None = File(default=None),
     side: UploadFile | None = File(default=None),
+    x_user_id: str | None = Header(default=None),
 ):
     _cleanup_jobs()
     try:
@@ -364,6 +392,7 @@ async def create_pro_job(
         # 都只出自正面那張，所以快取鍵跟 BASIC 用同一個定義——同一張正面照在兩種模式
         # 之間也因此共用同一份修正。見 face_corrections 的模組說明。
         "imageHash": face_corrections.image_hash(front_bytes),
+        "ownerId": str(x_user_id or "").strip() or None,
         "jobId": job_id, "analysisPackageId": None, "status": "queued",
         "progress": 0, "stage": "upload", "createdAt": _now_iso(),
         "startedAt": None, "completedAt": None, "updatedAt": _now_iso(), "error": None, "result": None,
@@ -371,7 +400,13 @@ async def create_pro_job(
         "expiresAt": datetime.now(timezone.utc) + timedelta(seconds=FACE_JOB_RETENTION_SECONDS),
     }
     job_store.create(_COL, job_id, job_data)
-    background_tasks.add_task(_run_pro_job, job_id, front_bytes, angle_bytes)
+    background_tasks.add_task(
+        _run_pro_job,
+        job_id,
+        front_bytes,
+        angle_bytes,
+        job_data["ownerId"],
+    )
     return _job_view(job_data, include_token=True)
 
 

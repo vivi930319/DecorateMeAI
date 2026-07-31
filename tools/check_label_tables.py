@@ -94,7 +94,7 @@ def main() -> int:
         }
         bad = {k: v for k, v in miss.items() if v}
         check(not bad, f"{part} 缺: {bad}")
-        print(f"  {part:12s} {'✓' if not bad else bad}")
+        print(f"  {part:12s} {'[OK]' if not bad else bad}")
 
     print("\n=== 2. 每張表都不含已淘汰／不存在的類別 ===")
     tables = [(f"analysis_package.{part}", set(codes[part]), part) for part in CANONICAL_LABELS]
@@ -107,7 +107,7 @@ def main() -> int:
             print(f"  {name:36s} *** {stray}")
     stray_render = sorted(k for k in FACE_TERM_EN if k not in all_canon and k not in NON_PART_TERMS)
     check(not stray_render, f"replicate_render.FACE_TERM_EN 含非現行類別 {stray_render}")
-    print(f"  replicate_render.FACE_TERM_EN        {'✓' if not stray_render else stray_render}")
+    print(f"  replicate_render.FACE_TERM_EN        {'[OK]' if not stray_render else stray_render}")
     if not failures:
         print("  （其餘皆乾淨）")
 
@@ -116,7 +116,7 @@ def main() -> int:
         got = ap.canonical_label(old)
         ok = got == new and new in all_canon
         check(ok, f"別名 {old} -> {got} 不是現行類別")
-        print(f"  {old:5s} → {got:5s} {'✓' if ok else '***'}")
+        print(f"  {old:5s} -> {got:5s} {'[OK]' if ok else '***'}")
 
     print("\n=== 4. 模型輸出的類別與分類表一致 ===")
     for part, canon in CANONICAL_LABELS.items():
@@ -127,7 +127,7 @@ def main() -> int:
             got = set(json.loads(p.read_text(encoding="utf-8"))["classes"])
             ok = got == set(canon)
             check(ok, f"{p.name} 的類別 {sorted(got)} 與分類表 {sorted(canon)} 不符")
-            print(f"  {p.name:34s} {'✓' if ok else '*** ' + str(sorted(got))}")
+            print(f"  {p.name:34s} {'[OK]' if ok else '*** ' + str(sorted(got))}")
 
     print()
     if failures:

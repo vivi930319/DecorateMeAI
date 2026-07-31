@@ -13,6 +13,10 @@
 !basic_rule_trees.py
 !pro_nose_side_model.py
 !rule_features.py
+!tools
+tools/*
+!tools/download_face_models.py
+!tools/face_models_manifest.json
 !cloud_start.py
 !Dockerfile
 !requirements.txt

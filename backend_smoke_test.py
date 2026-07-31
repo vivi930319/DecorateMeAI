@@ -6,6 +6,10 @@ from pathlib import Path
 
 import requests
 
+# 這支是可直接執行的線上 smoke-test CLI，不是 pytest 測試模組。函式保留 test_* 名稱
+# 方便閱讀既有操作紀錄，但明確禁止 pytest 收集，避免把 CLI 參數誤認成 fixtures。
+__test__ = False
+
 
 def iter_smoke_image_candidates():
     auto_labels = Path("data/basic_usable/auto_labels_basic.csv")

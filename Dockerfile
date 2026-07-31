@@ -65,10 +65,15 @@ COPY pro_nose_side_model.py .
 # 它不再提供任何正式答案；保留是為了讓回滾路徑可用（把部位加回去就能生效）。
 COPY basic_rule_trees.py .
 COPY rule_features.py .
-# ROI CNN 模型（5 個部位各約 6MB）＋ DINOv2 backbone 與線性分類頭。
-# 2026-07-30 起這些就是**正式答案**：臉型／眉型／鼻型／唇型走 CNN，眼型走 DINOv2。
-# 缺檔時 basic_roi_shadow 會自動停用，不影響服務啟動。
+# 五個 BASIC ConvNeXt-Tiny ONNX（每個約 106MB）是正式答案。
 COPY models/basic_features_roi/ ./models/basic_features_roi/
+# PRO 側臉鼻型的 ConvNeXt-Tiny。程式與模型必須一起進映像，否則 PRO 會靜默降級。
+COPY models/pro_nose_side/ ./models/pro_nose_side/
+# ONNX 不進 Git；部署前由版本化 GCS bundle 補齊。Docker build 再驗一次大小與 SHA-256，
+# 讓 fresh clone 缺模型時直接建置失敗，不能做出表面健康、實際退回規則式的映像。
+COPY tools/download_face_models.py ./tools/download_face_models.py
+COPY tools/face_models_manifest.json ./tools/face_models_manifest.json
+RUN python tools/download_face_models.py --verify-only
 # replicate_render.py 尚未交付；預設 backend image 不直接複製不存在檔案
 
 # 非 root 執行。容器被打進來時，root 讓攻擊者可以裝套件、改系統檔、寫任意路徑。

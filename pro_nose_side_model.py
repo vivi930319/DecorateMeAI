@@ -57,6 +57,19 @@ _classes: list[str] = []
 _load_failed = False
 
 
+def model_status() -> dict:
+    """Return readiness metadata without allocating an ONNX session."""
+    onnx_path = MODEL_DIR / "nose_shape_side.onnx"
+    meta_path = MODEL_DIR / "nose_shape_side_classes.json"
+    missing = [str(path) for path in (onnx_path, meta_path) if not path.is_file()]
+    return {
+        "ready": not missing,
+        "required": ENABLED,
+        "architecture": "convnext_tiny",
+        "missing": missing,
+    }
+
+
 def _load():
     """Lazy load。失敗就永久停用，不重試——每次請求都重試一個載不起來的模型
     只會讓每一次分析都多付一次失敗成本。"""

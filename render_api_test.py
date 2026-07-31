@@ -228,6 +228,17 @@ class RenderApiTest(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 422)
         self.assertEqual(raised.exception.detail["error"]["code"], "INVALID_RENDER_STYLE")
 
+    def test_suggestion_outage_falls_back_to_safe_style_prompt(self):
+        request = render_api.RenderRequest(image=TINY_PNG, styleId="natural")
+        with mock.patch.object(
+            render_api,
+            "build_personalized_render_prompt",
+            side_effect=render_api.SuggestionServiceUnavailable("offline"),
+        ):
+            prompt, source = render_api._server_render_prompt(request)
+        self.assertEqual(source, "style_allowlist_fallback")
+        self.assertIn("makeup-only edit", prompt)
+
     def test_server_prompt_is_organized_into_fixed_sections(self):
         """每個風格的妝容指令拆成底妝／眉眼／腮紅修容／唇妝四段。
 

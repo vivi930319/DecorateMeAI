@@ -50,7 +50,15 @@ def image_hash(contents: bytes) -> str:
     return hashlib.sha256(contents).hexdigest()
 
 
-def apply(result: dict, img_hash: str) -> dict:
+def _cache_key(img_hash: str, owner_id: str | None) -> str | None:
+    """Scope a correction to one verified member without exposing that member id."""
+    owner = str(owner_id or "").strip()
+    if not img_hash or not owner:
+        return None
+    return hashlib.sha256(f"{owner}:{img_hash}".encode("utf-8")).hexdigest()
+
+
+def apply(result: dict, img_hash: str, *, owner_id: str | None = None) -> dict:
     """把這張臉先前的修正套進分析結果，並把模型原始輸出保留在 RAW_KEY。
 
     找不到修正就只補 RAW_KEY——這樣回饋面板永遠有一份可信的 predicted 可用，
@@ -63,11 +71,12 @@ def apply(result: dict, img_hash: str) -> dict:
     raw = {k: v for k, v in result.items() if k in fields}
     result[RAW_KEY] = raw
 
-    if not ENABLED or not img_hash:
+    key = _cache_key(img_hash, owner_id)
+    if not ENABLED or key is None:
         return result
 
     try:
-        doc = job_store.get(CORRECTIONS_COL, img_hash)
+        doc = job_store.get(CORRECTIONS_COL, key)
     except Exception:
         logging.exception("讀取修正快取失敗 hash=%s，改用模型原始輸出", img_hash[:12])
         return result
@@ -84,21 +93,22 @@ def apply(result: dict, img_hash: str) -> dict:
     return result
 
 
-def remember(img_hash: str, corrections: dict) -> None:
+def remember(img_hash: str, corrections: dict, *, owner_id: str | None = None) -> None:
     """記住這張臉的修正；修正被收回（空的）就刪掉整筆。
 
     刪除而不是留空：留著一筆空的修正，下次讀到會以為「這張臉被確認過是對的」，
     但實際上使用者只是把答案改了回去。
     """
-    if not ENABLED or not img_hash:
+    key = _cache_key(img_hash, owner_id)
+    if not ENABLED or key is None:
         return
     fields = set(PART_TO_FIELD.values())
     clean = {k: v for k, v in (corrections or {}).items() if k in fields and v}
     try:
         if not clean:
-            job_store.delete(CORRECTIONS_COL, img_hash)
+            job_store.delete(CORRECTIONS_COL, key)
             return
-        job_store.create(CORRECTIONS_COL, img_hash, {
+        job_store.create(CORRECTIONS_COL, key, {
             "imageHash": img_hash,
             "corrections": clean,
             "updatedAt": datetime.now(timezone.utc).isoformat(),

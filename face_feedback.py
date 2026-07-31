@@ -179,7 +179,11 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
             # 記到這張臉上，下次同一張照片就會顯示使用者的答案。
             # 這一份是「給人看的」，跟上面存進 face_feedback 的訓練資料是兩回事：
             # 前者可以被覆蓋、被收回，後者是模型錯在哪的紀錄。
-            face_corrections.remember(job.get("imageHash"), data.get("corrections"))
+            face_corrections.remember(
+                job.get("imageHash"),
+                data.get("corrections"),
+                owner_id=job.get("ownerId"),
+            )
         except FeedbackRejected as exc:
             raise HTTPException(
                 status_code=400,

@@ -55,8 +55,25 @@ PART_TO_FIELD = {
     "lip_shape": "嘴型",
 }
 
-ENCODER = "mobilenet_v3_small"
+ENCODER = "convnext_tiny"
 PROVIDER = "roi_cnn"
+
+
+def model_status() -> dict:
+    """Return a cheap readiness snapshot without loading the ONNX sessions."""
+    missing = []
+    for part in PART_TO_FIELD:
+        for suffix in (".onnx", "_classes.json"):
+            path = MODEL_DIR / f"{part}{suffix}"
+            if not path.is_file():
+                missing.append(str(path))
+    return {
+        "ready": not missing,
+        "required": MODEL_FIRST,
+        "architecture": ENCODER,
+        "parts": len(PART_TO_FIELD),
+        "missing": missing,
+    }
 
 
 def _retired_labels(part: str, classes: list[str]) -> set[str]:
@@ -181,9 +198,8 @@ def _load() -> dict[str, tuple]:
     try:
         import onnxruntime as ort  # insightface 本來就依賴它，等於零額外成本
 
-        # 綁成單執行緒。ROI 模型很小（MobileNetV3-small / 96x96），onnxruntime 預設開滿執行緒
-        # 只會去跟 MediaPipe、InsightFace 搶 CPU，光是排程開銷就蓋過運算本身 ——
-        # 實測五個部位推論從 60ms 降到 14ms，而 Cloud Run 上只有 1 個 CPU，爭用只會更嚴重。
+        # 綁成單執行緒。五個 ConvNeXt-Tiny 同時開滿執行緒會跟 MediaPipe、InsightFace
+        # 搶 CPU；Cloud Run 由服務層控制並行數，單一 session 不再自行擴張 thread pool。
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = 1
         opts.inter_op_num_threads = 1

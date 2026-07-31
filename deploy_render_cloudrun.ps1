@@ -51,6 +51,8 @@ gcloud run deploy $ServiceName `
   --platform=managed `
   --timeout=300s `
   --concurrency=4 `
+  --min-instances=1 `
+  --no-cpu-throttling `
   --no-allow-unauthenticated
 if ($LASTEXITCODE -ne 0) { throw "部署中止：Cloud Run 部署失敗。" }
 
