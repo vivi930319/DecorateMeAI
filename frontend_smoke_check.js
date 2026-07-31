@@ -45,7 +45,7 @@ const sandbox = {
 };
 
 vm.createContext(sandbox);
-vm.runInContext(`${apiSource}; this.ApiConfig = ApiConfig; this.Api = Api; this.ImagePipeline = ImagePipeline; this.AnalysisPackage = AnalysisPackage; this.Auth = Auth; this.AdminStore = AdminStore; this.Cart = Cart; this.localizeUserError = localizeUserError;`, sandbox);
+vm.runInContext(`${apiSource}; this.ApiConfig = ApiConfig; this.Api = Api; this.ImagePipeline = ImagePipeline; this.AnalysisPackage = AnalysisPackage; this.Auth = Auth; this.AdminStore = AdminStore; this.Cart = Cart; this.History = History; this.localizeUserError = localizeUserError;`, sandbox);
 
 // ── 使用者錯誤訊息中文化 ────────────────────────────────────
 if (sandbox.localizeUserError('Member authentication is unavailable.', 'MEMBER_SERVICE_UNAVAILABLE', 503) !== '會員服務目前無法連線，請稍後再試。') {
@@ -378,6 +378,7 @@ if (!gitignore.includes('config.local.js')) {
   sandbox.localStorage.setItem('beautySuggestions_owner@example.com', '[{"before":"face-photo-url"}]');
   sandbox.localStorage.setItem('beautySuggestions_other@example.com', '[{"before":"someone-else"}]');
   sandbox.localStorage.setItem('beautyAnalysisFeedback', '[{"faceShape":"oval"}]');
+  sandbox.localStorage.setItem('beautyHistory_owner@example.com', '[{"臉型":"鵝蛋臉","timestamp":"2026-07-31T00:00:00Z"}]');
   sandbox.Auth.clearAccountLocalPII('Owner@Example.com'); // 大小寫不同也要清到
   if (sandbox.localStorage.getItem('beautySuggestions_owner@example.com') !== null) {
     throw new Error('Logout must clear the current account saved-look PII (contains face photo URLs)');
@@ -385,8 +386,28 @@ if (!gitignore.includes('config.local.js')) {
   if (sandbox.localStorage.getItem('beautyAnalysisFeedback') !== null) {
     throw new Error('Logout must clear the analysis feedback PII');
   }
+  if (sandbox.localStorage.getItem('beautyHistory_owner@example.com') === null) {
+    throw new Error('Logout must preserve the current account text-only analysis history');
+  }
   if (sandbox.localStorage.getItem('beautySuggestions_other@example.com') === null) {
     throw new Error('Logout must NOT touch another account persisted favorites');
+  }
+}
+
+// 分析歷史只保留文字；即使上游物件帶照片或模型原始值，也不能寫入紀錄。
+{
+  const textOnly = sandbox.History._textOnly({
+    '臉型': '鵝蛋臉',
+    '側臉鼻型': { label: '翹鼻', confidence: 0.72 },
+    photo: 'data:image/jpeg;base64,SECRET',
+    _modelRaw: { '臉型': '圓形臉' },
+  });
+  const serialized = JSON.stringify(textOnly);
+  if (serialized.includes('data:image') || serialized.includes('_modelRaw')) {
+    throw new Error('Analysis history must not retain photos or raw model payloads');
+  }
+  if (textOnly['側臉鼻型'] !== '翹鼻') {
+    throw new Error('Analysis history must retain the PRO side-nose text label');
   }
 }
 
@@ -398,6 +419,13 @@ if (!pkg.faceAnalysis || !pkg.generativeText || !pkg.render || !pkg.recommendati
 }
 if (!pkg.async || !Object.prototype.hasOwnProperty.call(pkg.async, 'jobId')) {
   throw new Error('analysisPackage async job fields missing');
+}
+
+// 分析紀錄不可再直接 new Date(timestamp)；統一轉換函式必須支援 Firestore seconds。
+if (!routerSource.includes('function formatAnalysisTime(value)') ||
+    !routerSource.includes('value.seconds ?? value._seconds') ||
+    /hist-date[^\n]+new Date\(r\.timestamp\)/.test(routerSource)) {
+  throw new Error('Analysis history must use the normalized timestamp formatter');
 }
 
 // ── faceAnalysis schema 欄位完整性 ────────────────────────────
@@ -485,6 +513,13 @@ if (!mapped.lipLab || mapped.lipLab.L !== 40) throw new Error(`lipLab mapping wr
 
 // noseSide（此測試中為 null）
 if (mapped.noseSide !== null) throw new Error(`noseSide should be null, got: ${mapped.noseSide}`);
+const mappedSideNose = sandbox.AnalysisPackage.fromRawFaceAnalysis({
+  ...mockRaw,
+  '側臉鼻型': { label: '翹鼻', confidence: 0.72, caveat: '僅供參考' },
+}, 'pro');
+if (mappedSideNose.noseSide !== '翹鼻') {
+  throw new Error(`noseSide object mapping wrong: ${JSON.stringify(mappedSideNose.noseSide)}`);
+}
 
 // BASIC 模式下 sidePhotoUsed 應為 null（無 精細分析狀態）
 const mappedBasic = sandbox.AnalysisPackage.fromRawFaceAnalysis({ ...mockRaw, '精細分析狀態': null }, 'basic');

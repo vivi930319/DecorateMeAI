@@ -16,6 +16,41 @@ function escapeHtml(value) {
         .replaceAll("'", '&#039;');
 }
 
+// 後端可能回 ISO 字串、毫秒、Unix 秒數或 Firestore Timestamp。集中轉換，避免分析
+// 紀錄顯示 1970、Invalid Date，或不同頁面各自猜一套格式。
+function analysisDateValue(value) {
+    if (value == null || value === '') return null;
+    try {
+        if (typeof value?.toDate === 'function') {
+            const converted = value.toDate();
+            return Number.isNaN(converted?.getTime?.()) ? null : converted;
+        }
+        if (typeof value === 'object') {
+            const seconds = value.seconds ?? value._seconds;
+            const nanos = value.nanoseconds ?? value._nanoseconds ?? 0;
+            if (Number.isFinite(Number(seconds))) {
+                return new Date(Number(seconds) * 1000 + Number(nanos) / 1e6);
+            }
+        }
+        if (typeof value === 'number' || /^\d+(?:\.\d+)?$/.test(String(value).trim())) {
+            const number = Number(value);
+            if (!Number.isFinite(number)) return null;
+            const millis = Math.abs(number) < 1e12 ? number * 1000 : number;
+            const converted = new Date(millis);
+            return Number.isNaN(converted.getTime()) ? null : converted;
+        }
+        const converted = new Date(value);
+        return Number.isNaN(converted.getTime()) ? null : converted;
+    } catch (_) {
+        return null;
+    }
+}
+
+function formatAnalysisTime(value) {
+    const converted = analysisDateValue(value);
+    return converted ? converted.toLocaleString('zh-TW') : '時間資料無法辨識';
+}
+
 // 呼叫完外部 AI 服務（Ollama／Replicate）後，強制冷卻幾秒才能再按，避免使用者短時間內連點造成後端連線壓力
 function startButtonCooldown(btn, seconds, idleText) {
     if (!btn) return;
@@ -417,6 +452,36 @@ function orderRecommendedProducts(list) {
 //
 // 這裡接受 "NT$380"、"380 元"、"1,650"、" 380 " 這些人類會打出來的寫法，
 // 但**不接受**解析後不是有限正數的東西——那種情況要讓使用者知道，不能猜。
+// 把 Ollama 產出的英文渲染指令攤開來給人看。
+//
+// 這段本來是被藏起來的：Ollama 常把「中文建議」與「英文渲染指令」黏在同一串回覆裡，
+// splitOllamaTwoPartSuggestion 會把英文那半切掉，免得它出現在給使用者看的中文建議中間。
+// 切下來的內容一直存在 generativeText.ollamaRenderPromptEn，只是沒有任何地方顯示。
+//
+// 專題要交的紀錄需要它——組員得看得到「模型實際收到什麼指令」才寫得出報告，
+// 而不是只能描述輸出。所以這裡用 <details> 收起來：預設不展開，不干擾一般使用者，
+// 但點開就能複製。
+function renderPromptDisclosure(pkg) {
+    const gen = pkg?.generativeText || {};
+    const ollama = String(gen.ollamaRenderPromptEn || '').trim();
+    // 實際送去渲染的完整 prompt（含我方疊上的 identity lock），跟 Ollama 那段不一樣，
+    // 兩段都給：報告要說明的是「誰決定了什麼」。
+    const full = String(gen.renderPromptEn || '').trim();
+    if (!ollama && !full) return '';
+    const block = (title, note, text) => text ? `
+        <div class="prompt-block">
+            <div class="prompt-block-head"><b>${escapeHtml(title)}</b><button class="btn-outline btn-sm" type="button" data-copy-prompt>複製</button></div>
+            <p class="prompt-block-note">${escapeHtml(note)}</p>
+            <pre class="prompt-text">${escapeHtml(text)}</pre>
+        </div>` : '';
+    return `
+        <details class="prompt-disclosure">
+            <summary>查看送給圖像模型的英文指令（供紀錄用）</summary>
+            ${block('Ollama 產出的妝容指令', '文字建議服務針對這張臉與這個風格產生的部分。只描述「要上什麼妝」。', ollama)}
+            ${block('實際送出的完整 prompt', '上面那段再加上我方固定疊加的 identity lock（要求模型不得改變長相、姿勢、背景）。這才是圖像模型真正收到的內容。', full)}
+        </details>`;
+}
+
 function parsePriceInput(raw) {
     if (raw == null) return null;
     if (typeof raw === 'number') return Number.isFinite(raw) && raw >= 0 ? raw : null;
@@ -715,7 +780,7 @@ function openLookModal(item){
   var photo = (beforeSrc && afterSrc)
     ? '<div class="lm-compare-photo"><figure><img src="'+beforeSrc+'" alt="渲染前照片" onerror="markLookImageUnavailable(this)"><figcaption>Before</figcaption></figure><figure><img src="'+afterSrc+'" alt="渲染後照片" onerror="markLookImageUnavailable(this)"><figcaption>After</figcaption></figure></div>'
     : (afterSrc ? '<img src="'+afterSrc+'" alt="" onerror="markLookImageUnavailable(this)">' : '<span>'+escapeHtml(item.style||'Saved Look')+'</span>');
-  var ts = item.timestamp ? new Date(item.timestamp).toLocaleString('zh-TW') : '';
+  var ts = item.timestamp ? formatAnalysisTime(item.timestamp) : '';
   var ov=document.createElement('div'); ov.id='lookModal'; ov.className='look-modal';
   ov.innerHTML='<div class="lm-card" role="dialog" aria-modal="true">'
     +'<button class="lm-close" aria-label="關閉">×</button>'
@@ -778,15 +843,39 @@ function showCartPanel(){
     const overlay = document.createElement('div');
     overlay.id = 'cartOverlay';
     overlay.className = 'cart-overlay';
+    let catalogLoadAttempted = false;
     const render = () => {
-        const rows = Cart.list().map(item => ({ ...item, product: getProductCatalog().find(p => String(p.id) === String(item.id)) })).filter(item => item.product);
+        // 購物車只存 {id, qty}，商品內容要靠 id 回查。**三個來源都要查**：
+        // demo 假商品、真實商品 API 清單、以及本次的個人化推薦。
+        //
+        // 先前只查 getProductCatalog()（僅含 ALL_PRODUCTS 與 AdminStore 的 demo 資料），
+        // 所以使用者加入的真實商品（id 形如 api-lipsticks-2656）永遠查不到，
+        // 又被下面的 filter 整筆丟掉——**畫面上購物車是空的，但數量徽章有數字**。
+        // 收藏頁（PageInit.favorites）早就是三個來源一起查，購物車這條漏了。
+        const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
+        const catalog = [...getProductCatalog(), ...apiCatalog, ...getRecommendedProductCatalog()];
+        const rows = Cart.list()
+            .map(item => ({ ...item, product: catalog.find(p => String(p.id) === String(item.id)) }))
+            .filter(item => item.product);
+        // 車裡有東西卻一件都查不到 → 多半是商品清單還沒載入。載一次再重畫，
+        // 不要讓使用者對著空車納悶（先前就是這樣，而且沒有任何提示）。
+        if (!rows.length && Cart.count() > 0 && !apiCatalog.length
+                && !Router.generalProductLoading && !catalogLoadAttempted) {
+            catalogLoadAttempted = true;
+            loadGeneralProductCatalog(() => { if (document.getElementById('cartOverlay')) render(); });
+        }
+        const emptyMessage = Cart.count() > 0
+            ? (Router.generalProductLoading
+                ? '正在載入購物車商品資料…'
+                : '商品資料暫時無法載入，請稍後重新開啟購物車。')
+            : '購物車目前是空的';
         overlay.innerHTML = `<section class="cart-panel" role="dialog" aria-modal="true" aria-label="購物車">
             <header><div><span>Shopping Bag</span><h2>購物車</h2></div><button class="cart-close" aria-label="關閉購物車">×</button></header>
             <div class="cart-items">${rows.length ? rows.map(item => `<article class="cart-item">
                 <div class="cart-thumb">${phBox('', item.product.name, item.product.img)}</div>
                 <div class="cart-item-info"><span>${escapeHtml(CAT_EN[item.product.cat] || item.product.cat)}</span><h3>${escapeHtml(item.product.name)}</h3><p>${escapeHtml(item.product.price)}</p></div>
                 <div class="cart-qty"><button data-cart-minus="${escapeHtml(item.id)}" aria-label="減少 ${escapeHtml(item.product.name)}">−</button><b>${escapeHtml(item.qty)}</b><button data-cart-plus="${escapeHtml(item.id)}" aria-label="增加 ${escapeHtml(item.product.name)}">＋</button></div>
-            </article>`).join('') : '<div class="cart-empty">購物車目前是空的</div>'}</div>
+            </article>`).join('') : `<div class="cart-empty">${emptyMessage}</div>`}</div>
             <footer><span>共 ${Cart.count()} 件商品</span><button class="cart-checkout" ${rows.length ? '' : 'disabled'}>前往結帳</button></footer>
         </section>`;
         overlay.querySelector('.cart-close').onclick = () => overlay.remove();
@@ -1184,7 +1273,9 @@ style: `
 <div id="styleResultArea"></div>`,
 products: `<div id="productsArea"></div>`,
 favorites: `<div class="page-header"><span class="eyebrow">Wishlist</span><h1>我的收藏</h1><div class="divider"></div></div><div id="favArea"></div>`,
-history: `<div class="page-header"><span class="eyebrow">Archive</span><h1>分析紀錄</h1><div class="divider"></div></div><div id="historyArea"></div>`,
+history: `<div class="page-header"><span class="eyebrow">Archive</span><h1>分析紀錄</h1><div class="divider"></div></div>
+<p class="page-note">每一次臉部分析的判斷結果都會留在這裡，只存文字，<strong>不會保留你的照片</strong>。紀錄依帳號分開，最多保留 50 筆。</p>
+<div id="historyArea"></div>`,
 compare: `
 <div class="page-header"><h1>妝容對比圖</h1><div class="divider"></div></div>
 <div class="compare-layout">
@@ -1336,10 +1427,21 @@ profile: `
         </div>
     </div>
     <div class="member-stats">
-        <div class="stat-cell"><div class="stat-en">Wishlist</div><div class="stat-num" id="profileFavCount">0</div><div class="stat-label">收藏商品</div></div>
-        <div class="stat-cell"><div class="stat-en">Analysis</div><div class="stat-num" id="profileAnalyzeCount">0</div><div class="stat-label">分析次數</div></div>
-        <div class="stat-cell"><div class="stat-en">Looks</div><div class="stat-num" id="profileSuggestionCount">0</div><div class="stat-label">收藏妝容</div></div>
-        <div class="stat-cell"><div class="stat-en">Points</div><div class="stat-num" id="profilePointCount">0</div><div class="stat-label">會員點數</div></div>
+        <!-- 四張卡片都可點：兩張換頁、兩張捲到本頁下方的區塊。
+             用 <button> 而不是掛 onclick 的 <div>——鍵盤 Tab 到得了、Enter/空白鍵有作用、
+             螢幕閱讀器也唸得出「按鈕」。data-goto 換頁，data-scroll 捲動。 -->
+        <button class="stat-cell" type="button" data-goto="favorites" aria-label="查看收藏商品">
+            <span class="stat-en">Wishlist</span><span class="stat-num" id="profileFavCount">0</span>
+            <span class="stat-label">收藏商品</span><span class="stat-go">查看 &rarr;</span></button>
+        <button class="stat-cell" type="button" data-goto="history" aria-label="查看分析文字紀錄">
+            <span class="stat-en">Analysis</span><span class="stat-num" id="profileAnalyzeCount">0</span>
+            <span class="stat-label">分析次數</span><span class="stat-go">查看 &rarr;</span></button>
+        <button class="stat-cell" type="button" data-scroll="profileSuggestionArea" aria-label="捲動到已收藏的妝容">
+            <span class="stat-en">Looks</span><span class="stat-num" id="profileSuggestionCount">0</span>
+            <span class="stat-label">收藏妝容</span><span class="stat-go">查看 &darr;</span></button>
+        <button class="stat-cell" type="button" data-scroll="profilePointLedger" aria-label="捲動到點數紀錄">
+            <span class="stat-en">Points</span><span class="stat-num" id="profilePointCount">0</span>
+            <span class="stat-label">會員點數</span><span class="stat-go">查看 &darr;</span></button>
     </div>
 </div>
 <section class="member-tier"><div class="member-section-head"><span>Membership</span><h2>會員等級</h2></div><div id="profileTierCard"></div></section>
@@ -2728,7 +2830,7 @@ const PageInit = {
                 document.getElementById('lipSwatch').style.background = Api.labToRgb(lipLab.L||40, lipLab.a||0, lipLab.b||0);
 
                 document.getElementById('goStyleBtn').style.display = 'inline-block';
-                History.add({ ...data, analysisPackageId: Router.analysisPackage.id });
+                History.add({ ...data, analysisPackageId: Router.analysisPackage.id, mode: Router.analyzeMode });
                 renderAnalysisFeedback(data, Router.analysisPackage.id);
             } catch (err) {
                 bar.style.display = 'none'; fill.style.width = '0';
@@ -3265,6 +3367,7 @@ const PageInit = {
                     ? `<p class="step-stale">你在產生這份建議之後修改過臉部分析。下面這份是用修改前的五官跑出來的，按「重新生成建議」就會換成你的答案。</p>`
                     : ''}
                 ${aiSuggestion ? `<div class="advice-grid">${renderMakeupAdviceGrid(aiSuggestion)}</div>` : ''}
+                ${renderPromptDisclosure(pkg)}
                 <div class="step-actions">
                     <button class="btn-gold" id="genSuggestionBtn">${aiSuggestion ? '重新生成建議' : '生成 Ollama 建議'}</button>
                 </div>
@@ -3290,6 +3393,28 @@ const PageInit = {
         // 收藏鍵只有在建議已經產生時才存在（Step 1 還沒跑就沒有東西可收藏）。
         const saveBtn = document.getElementById('saveSuggestionBtn');
         if (saveBtn) saveBtn.onclick = openSaveLookModal;
+
+        // 英文指令的「複製」：抄到報告裡用。navigator.clipboard 在非 https 或
+        // 使用者拒絕權限時會失敗，所以留一條 textarea + execCommand 的退路——
+        // 這個功能存在的意義就是讓人複製得到，靜靜失敗等於沒做。
+        document.querySelectorAll('[data-copy-prompt]').forEach(btn => {
+            btn.onclick = async () => {
+                const text = btn.closest('.prompt-block')?.querySelector('.prompt-text')?.textContent || '';
+                if (!text) return;
+                try {
+                    await navigator.clipboard.writeText(text);
+                } catch (_) {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.style.cssText = 'position:fixed;opacity:0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    try { document.execCommand('copy'); } catch (_) {}
+                    ta.remove();
+                }
+                showToast('已複製英文指令');
+            };
+        });
 
         // Step 1：就地產生 Ollama 建議，不換頁——換走的話使用者就看不到自己在哪一步了。
         const genBtn = document.getElementById('genSuggestionBtn');
@@ -3429,12 +3554,15 @@ const PageInit = {
                 <div class="hist-no">${String(i+1).padStart(2,'0')}</div>
                 <div class="hist-body">
                     <div class="hist-traits">
-                        <span><em>臉型</em>${r['臉型']||'—'}</span>
-                        <span><em>眼型</em>${r['眼型']||'—'}</span>
-                        <span><em>鼻型</em>${r['鼻型']||'—'}</span>
-                        <span><em>膚色</em>${(r['膚色']&&r['膚色']['四季型'])||'—'}</span>
+                        <span><em>臉型</em>${escapeHtml(r['臉型']||'—')}</span>
+                        <span><em>眉型</em>${escapeHtml(r['眉型']||'—')}</span>
+                        <span><em>眼型</em>${escapeHtml(r['眼型']||'—')}</span>
+                        <span><em>鼻型</em>${escapeHtml(r['鼻型']||'—')}</span>
+                        ${r['側臉鼻型'] ? `<span><em>側臉鼻型</em>${escapeHtml(r['側臉鼻型'])}</span>` : ''}
+                        <span><em>嘴型</em>${escapeHtml(r['嘴型']||'—')}</span>
+                        <span><em>膚色</em>${escapeHtml([r['膚色分級'], r['四季型']].filter(Boolean).join(' / ') || '—')}</span>
                     </div>
-                    <div class="hist-date">${r.timestamp ? new Date(r.timestamp).toLocaleString('zh-TW') : ''}</div>
+                    <div class="hist-date">${r.timestamp ? escapeHtml(formatAnalysisTime(r.timestamp)) : ''}${r.mode ? ` · ${escapeHtml(String(r.mode).toUpperCase())}` : ''}</div>
                 </div>
             </div>
         `).join('') + '</div>';
@@ -3491,6 +3619,23 @@ const PageInit = {
                 </div>
             `;
         }
+        // ── 統計卡導覽：兩張換頁、兩張捲到本頁下方 ──
+        // 捲動後把目標區塊高亮一下，否則使用者只看到畫面動了，不知道該看哪裡。
+        document.querySelectorAll('.member-stats [data-goto]').forEach(btn => {
+            btn.onclick = () => Router.go(btn.dataset.goto);
+        });
+        document.querySelectorAll('.member-stats [data-scroll]').forEach(btn => {
+            btn.onclick = () => {
+                const target = document.getElementById(btn.dataset.scroll);
+                if (!target) return;
+                const section = target.closest('section') || target;
+                section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                section.classList.remove('section-flash');
+                void section.offsetWidth;          // 重新觸發動畫，連按兩次也看得到
+                section.classList.add('section-flash');
+            };
+        });
+
         const favEl = document.getElementById('profileFavCount');
         const anEl = document.getElementById('profileAnalyzeCount');
         const suggestionEl = document.getElementById('profileSuggestionCount');
@@ -3498,7 +3643,10 @@ const PageInit = {
         const suggestions = (() => {
             try { return JSON.parse(localStorage.getItem(looksKey()) || '[]'); } catch (_) { return []; }
         })();
-        if (favEl) { favEl.textContent = ALL_PRODUCTS.filter(p => Fav.has(p.id)).length; favEl.classList.add('num-pop'); }
+        // Fav 存的是 id，數量直接數 Fav 自己的清單就好。
+        // 先前寫成 ALL_PRODUCTS.filter(p => Fav.has(p.id))——只數得到 demo 假商品，
+        // 使用者收藏的真實 API 商品一律不算，所以這個數字長期偏低（常常是 0）。
+        if (favEl) { favEl.textContent = Fav.list().length; favEl.classList.add('num-pop'); }
         if (anEl) { anEl.textContent = History.list().length; anEl.classList.add('num-pop'); anEl.style.animationDelay='.1s'; }
         if (suggestionEl) { suggestionEl.textContent = suggestions.length; suggestionEl.classList.add('num-pop'); suggestionEl.style.animationDelay='.16s'; }
         if (pointEl) { pointEl.textContent = MemberRewards.getPoints(profile.email); pointEl.classList.add('num-pop'); pointEl.style.animationDelay='.2s'; }
@@ -3675,10 +3823,46 @@ const PageInit = {
                     <p>${escapeHtml(theme.desc)}</p>
                     <div class="theme-card-foot">
                         <b>${theme.cost ? `${theme.cost} 點` : '免費'}</b>
-                        <button class="${owned ? 'btn-outline' : 'btn-gold'} btn-sm" data-theme-action="${owned ? 'apply' : 'redeem'}" data-theme-id="${escapeHtml(theme.id)}" ${active ? 'disabled' : ''}>${active ? '使用中' : (owned ? '套用' : '兌換')}</button>
+                        <span class="theme-card-btns">
+                            <button class="btn-outline btn-sm theme-peek" type="button" data-theme-peek="${escapeHtml(theme.id)}"
+                                    aria-label="按住預覽${escapeHtml(theme.name)}">按住預覽</button>
+                            <button class="${owned ? 'btn-outline' : 'btn-gold'} btn-sm" data-theme-action="${owned ? 'apply' : 'redeem'}" data-theme-id="${escapeHtml(theme.id)}" ${active ? 'disabled' : ''}>${active ? '使用中' : (owned ? '套用' : '兌換')}</button>
+                        </span>
                     </div>
                 </article>`;
             }).join('')}</div>`;
+            // ── 按住預覽：只改 body 的 data-memberTheme，放開就還原 ──
+            //
+            // 主題的套用機制就是 document.body.dataset.memberTheme（見 MemberRewards.applyActiveTheme），
+            // 所以預覽不需要碰點數、不寫 localStorage、也不呼叫任何 API——
+            // 純粹是視覺上的暫時替換，放開手就回到目前真正在用的那個。
+            //
+            // 還原對象存在變數而不是每次重讀：預覽期間如果有別的程式改了 dataset，
+            // 重讀會把「預覽中的值」當成原值還原，主題就永久變成預覽的那個了。
+            const restoreTheme = () => {
+                document.body.dataset.memberTheme = activeTheme || '';
+                themeShop.querySelectorAll('.theme-peek.peeking').forEach(b => b.classList.remove('peeking'));
+            };
+            themeShop.querySelectorAll('[data-theme-peek]').forEach(btn => {
+                const start = (e) => {
+                    if (e?.preventDefault) e.preventDefault();
+                    document.body.dataset.memberTheme = btn.dataset.themePeek;
+                    btn.classList.add('peeking');
+                };
+                btn.style.touchAction = 'none';      // 手機上按住不要變成捲動
+                btn.onpointerdown = start;
+                btn.onpointerup = restoreTheme;
+                btn.onpointerleave = restoreTheme;
+                btn.onpointercancel = restoreTheme;
+                btn.onblur = restoreTheme;           // Tab 離開也要還原
+                btn.oncontextmenu = (e) => e.preventDefault();   // 長按不要跳出選單
+                // 鍵盤：Enter/空白鍵按著預覽，放開還原
+                btn.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') start(e); };
+                btn.onkeyup = (e) => { if (e.key === 'Enter' || e.key === ' ') restoreTheme(); };
+            });
+            // 離開會員頁時一定要還原，否則預覽中換頁會把預覽主題留在畫面上。
+            window.addEventListener('hashchange', restoreTheme, { once: true });
+
             themeShop.querySelectorAll('[data-theme-id]').forEach(btn => {
                 btn.onclick = async () => {
                     const id = btn.dataset.themeId;
@@ -3755,7 +3939,7 @@ const PageInit = {
                 const imageSrc = lookImageSrc(item.renderedImage);
                 const styleLabel = escapeHtml(item.style || '妝容對比圖');
                 const summary = escapeHtml(formatSavedAdvice(item));
-                const timestamp = escapeHtml(item.timestamp ? new Date(item.timestamp).toLocaleString('zh-TW') : '');
+                const timestamp = escapeHtml(item.timestamp ? formatAnalysisTime(item.timestamp) : '');
                 const expired = String(item.renderedImage || '').includes('replicate.delivery')
                     ? '<span class="saved-look-expire">此圖為舊版臨時網址，可能已失效</span>' : '';
                 return `
@@ -4208,7 +4392,7 @@ const PageInit = {
                             <div class="saved-look-kicker">Saved Look · DB</div>
                             <h3>${escapeHtml(item.style || '妝容')}</h3>
                             <p>${escapeHtml(String(summary).slice(0, 72))}</p>
-                            <time>${escapeHtml(item.timestamp ? new Date(item.timestamp).toLocaleString('zh-TW') : '')}</time>
+                            <time>${escapeHtml(item.timestamp ? formatAnalysisTime(item.timestamp) : '')}</time>
                         </div>
                     </article>`;
                 }).join('')}</div>`

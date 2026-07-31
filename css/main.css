@@ -1348,6 +1348,53 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .admin-audit-table code{font-size:11.5px;letter-spacing:.02em;opacity:.85}
 .admin-audit-table tr.audit-failed td{color:var(--danger,#c0392b)}
 .admin-audit-table tr.audit-failed td:nth-child(4){font-weight:600}
+/* Ollama 英文渲染指令：預設收起，展開給組員抄進報告 */
+.prompt-disclosure{margin:18px 0 4px;border:1px solid var(--line);background:var(--paper,transparent)}
+.prompt-disclosure>summary{padding:11px 14px;cursor:pointer;font-size:13px;letter-spacing:.04em;color:var(--mid);user-select:none}
+.prompt-disclosure>summary:hover{color:var(--ink)}
+.prompt-disclosure[open]>summary{border-bottom:1px solid var(--line)}
+.prompt-block{padding:14px}
+.prompt-block+.prompt-block{border-top:1px solid var(--line)}
+.prompt-block-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.prompt-block-head b{font-size:13.5px}
+.prompt-block-note{margin:6px 0 10px;font-size:12px;line-height:1.65;color:var(--mid)}
+.prompt-text{margin:0;padding:12px;background:rgba(0,0,0,.045);border:1px solid var(--line);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.7;
+  white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto}
+@media (prefers-color-scheme:dark){.prompt-text{background:rgba(255,255,255,.05)}}
+/* 主題「按住預覽」：按著的時候按鈕自己也要有回饋，否則使用者不確定有沒有按到 */
+.theme-card-btns{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.theme-peek{user-select:none;-webkit-user-select:none;touch-action:none}
+.theme-peek.peeking{background:var(--gold,#b9975b);color:#fff;border-color:var(--gold,#b9975b)}
+/* 預覽中在畫面角落提示，避免使用者以為主題已經被換掉了 */
+.theme-peek.peeking::after{content:'預覽中，放開還原';position:fixed;left:50%;bottom:24px;
+  transform:translateX(-50%);background:rgba(0,0,0,.82);color:#fff;font-size:12px;
+  letter-spacing:.05em;padding:8px 16px;border-radius:2px;white-space:nowrap;z-index:9999;pointer-events:none}
+@media (max-width:520px){
+  .theme-card-btns{width:100%;justify-content:flex-end}
+}
+/* 會員統計卡：現在是 button，要把瀏覽器的預設按鈕外觀清掉並補上可點的提示 */
+.member-stats .stat-cell{appearance:none;-webkit-appearance:none;background:none;border:0;
+  font:inherit;color:inherit;text-align:center;cursor:pointer;position:relative;
+  display:flex;flex-direction:column;align-items:center;gap:2px;
+  padding:14px 10px;border-radius:2px;transition:background .18s,transform .18s}
+.member-stats .stat-cell:hover,.member-stats .stat-cell:focus-visible{background:rgba(0,0,0,.04);transform:translateY(-2px)}
+.member-stats .stat-cell:focus-visible{outline:2px solid var(--gold,#b9975b);outline-offset:2px}
+.member-stats .stat-cell:active{transform:translateY(0)}
+/* 「查看 →」平常淡、hover 才明顯：不干擾數字，但一眼看得出可以點 */
+.stat-go{font-size:11px;letter-spacing:.08em;color:var(--mid);opacity:.45;transition:opacity .18s;margin-top:4px}
+.member-stats .stat-cell:hover .stat-go,.member-stats .stat-cell:focus-visible .stat-go{opacity:1}
+@media (prefers-color-scheme:dark){
+  .member-stats .stat-cell:hover,.member-stats .stat-cell:focus-visible{background:rgba(255,255,255,.06)}
+}
+/* 捲動抵達後閃一下：只有畫面捲動的話，使用者不知道該看哪一塊 */
+@keyframes sectionFlash{0%{background:rgba(185,151,91,.22)}100%{background:transparent}}
+.section-flash{animation:sectionFlash 1.4s ease-out}
+/* 尊重「減少動態效果」的系統設定：捲動改為瞬間，高亮不閃 */
+@media (prefers-reduced-motion:reduce){
+  .section-flash{animation:none;outline:2px solid var(--gold,#b9975b);outline-offset:4px}
+  .member-stats .stat-cell{transition:none}
+}
 .admin-table-wrap { max-width:100%; overflow:auto; border:1px solid var(--admin-line); border-radius:6px; background:#fff; -webkit-overflow-scrolling:touch; overscroll-behavior-x:contain; overscroll-behavior-y:auto; touch-action:pan-x pan-y; }
 .admin-table { width:100%; min-width:900px; border-collapse:collapse; }
 .admin-table th { height:46px; padding:0 16px; background:#f5f7f8; color:#647078; font:600 11px/1 "Noto Sans TC",sans-serif; text-align:left; white-space:nowrap; }

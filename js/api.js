@@ -1659,7 +1659,21 @@ const Api = {
             });
             if (!res.ok) return { ok: false, status: res.status, looks: [] };
             const data = await res.json().catch(() => ({}));
-            return { ok: true, looks: Array.isArray(data.looks) ? data.looks : [] };
+            // 收下資料庫端可能用的每一種外殼。這一支先前**只**認 `data.looks`，
+            // 而同一個檔案裡其他清單端點都同時認 `items`（商品、稽核紀錄、會員清單）——
+            // 只要對方回的是 `items` 或裸陣列，這裡就會回空陣列，後台顯示 0 筆而
+            // 資料庫其實有資料，兩邊對不起來又沒有任何錯誤訊息。
+            const list = Array.isArray(data) ? data
+                : (Array.isArray(data.looks) ? data.looks
+                : (Array.isArray(data.items) ? data.items
+                : (Array.isArray(data.savedLooks) ? data.savedLooks
+                : (Array.isArray(data.saved_looks) ? data.saved_looks : null))));
+            if (list === null) {
+                // 回了 200 但認不得的形狀：講出來，不要靜靜當成「這個人沒有收藏」。
+                console.warn('[saved-looks] 認不得的回應格式，keys =', Object.keys(data || {}));
+                return { ok: true, looks: [], unknownShape: true };
+            }
+            return { ok: true, looks: list };
         } catch (_) {
             return { ok: false, looks: [] };
         }
@@ -2340,13 +2354,14 @@ const AnalysisPackage = {
         const skin = raw?.['膚色'] || {};
         const proStatusRaw = raw?.['精細分析狀態'] || null;
         const sym = raw?.['臉部對稱性'] || null;
+        const sideNose = raw?.['側臉鼻型'] || raw?.['鼻型_側面'] || null;
         return {
             version: mode === 'pro' ? 'PRO' : 'BASIC',
             faceShape: raw?.['臉型'] || null,
             browShape: raw?.['眉型'] || null,
             eyeShape: raw?.['眼型'] || null,
             noseFront: raw?.['鼻型'] || null,
-            noseSide: raw?.['鼻型_側面'] || null,
+            noseSide: (sideNose && typeof sideNose === 'object') ? (sideNose.label || null) : sideNose,
             lipShape: raw?.['嘴型'] || null,
             skinTone: {
                 season: skin['四季型'] || null,
@@ -2538,6 +2553,8 @@ const Auth = {
             if (em) localStorage.removeItem('beautySuggestions_' + em);
             ['beautyAnalysisFeedback', 'beautyHistory', 'beautyFav', 'beautyCart']
                 .forEach(key => localStorage.removeItem(key));
+            // 純文字分析紀錄按帳號隔離，登出後保留，讓會員再次登入仍能查閱。
+            // 照片與分析原始數值不在這個鍵裡；含照片的收藏妝容仍照上方規則清除。
         } catch (_) {}
     },
 
@@ -3117,14 +3134,29 @@ const AnalysisFeedback = {
     OPTIONS: Object.freeze({
         '臉型': ['圓形臉', '心形臉', '方形臉', '長形臉', '鵝蛋臉'],
         '眉型': ['一字眉', '彎月眉', '落尾眉'],
-        // 眼型由八類併為六類（2026-07-24 官方分類表）：丹鳳眼併入鳳眼、瞇縫眼併入細長眼。
-        // 那兩個類別的圖檔在標註資料夾裡本來就與合併目標逐位元組相同——合併當初是用
-        // 複製而非搬移，舊資料夾沒刪，於是同一張臉同時掛在兩個類別底下。
-        '眼型': ['細長眼', '桃花眼', '杏仁眼', '圓眼', '鳳眼', '下垂眼'],
+        // 眼型的兩次合併：
+        //
+        // 八類 → 六類（2026-07-24）：丹鳳眼併入鳳眼、瞇縫眼併入細長眼。
+        //   那兩個類別的圖檔在標註資料夾裡本來就與合併目標逐位元組相同——合併當初是用
+        //   複製而非搬移，舊資料夾沒刪，於是同一張臉同時掛在兩個類別底下。
+        //
+        // 六類 → 五類（2026-07-30）：杏仁眼與桃花眼合併為「桃杏眼」。
+        //   不是資料不夠，是這條界線不存在：內容完全相同卻被標成不同類別的樣本裡，
+        //   「圓眼 vs 杏仁眼」17 組、「杏仁眼 vs 桃花眼」7 組，排前兩名——標註的人自己
+        //   就分不開。合併後 macro 由 0.388 升到 0.523，是所有嘗試裡幅度最大的一個。
+        //
+        // 這份清單必須與 models/basic_features_roi/eye_shape_classes.json 一致：
+        // face_feedback.validate() 會拿模型的分類表擋下不認得的值，這裡多一個選項，
+        // 使用者就會選到一個送不出去的答案。
+        '眼型': ['細長眼', '桃杏眼', '圓眼', '鳳眼', '下垂眼'],
         // 窄鼻已併入標準鼻（2026-07-22 重訓）：標註者判斷窄鼻時看的不是鼻翼寬度，
         // 舊的三類模型「標準鼻」召回率只有 0.061，整個類別塌陷進窄鼻。
         '鼻型': ['寬鼻', '標準鼻'],
-        '嘴型': ['M型唇', '厚唇', '微笑唇', '花瓣唇', '薄唇'],
+        // M型唇於 2026-07-30 併入花瓣唇（保留舊名，不另取新名）。
+        // 混淆矩陣顯示 M型唇 recall 只有 0.30——108 張裡只有 32 張判對，其餘均勻散到
+        // 另外四類。那不是「偏向某一類」，是「這個類別沒有可辨識特徵」的樣貌。
+        // 兩者的共同點是唇峰明顯，差異在照片上分不出來。
+        '嘴型': ['厚唇', '微笑唇', '花瓣唇', '薄唇'],
     }),
     list() {
         try { return JSON.parse(localStorage.getItem(this._key) || '[]'); }
@@ -3224,13 +3256,60 @@ const Cart = {
 
 // ═══ 分析紀錄模組 ═══
 const History = {
-    _key: 'beautyHistory',
-    list() { return JSON.parse(localStorage.getItem(this._key) || '[]'); },
+    // 分析文字紀錄。兩件事跟先前不同：
+    //
+    // 1. **按帳號分開存。** 舊的鍵是固定的 'beautyHistory'，內容卻屬於「最後登入的那個人」
+    //    ——換帳號不清的話，下一個人直接看到上一個人的臉型、眼型、膚色。
+    //    改成跟收藏妝容同一套做法（見 looksKey），鍵帶 email，訪客走 'guest'。
+    //
+    // 2. **只留文字，不留照片與原始數值。** 先前把整包分析結果 unshift 進去，
+    //    裡面有 LAB 原始值、_modelRaw、以及分析包的其他欄位。紀錄是給人看「那次判斷是什麼」，
+    //    不需要那些；留著只是把敏感度更高的資料多存一份在瀏覽器裡。
+    _legacyKey: 'beautyHistory',
+    _accountKey() {
+        const p = (typeof Auth !== 'undefined' && Auth.getProfile) ? Auth.getProfile() : null;
+        const em = (p && p.email) ? String(p.email).trim().toLowerCase() : 'guest';
+        return 'beautyHistory_' + em;
+    },
+    // 只挑要顯示的欄位。明確列出來，而不是排除法——日後分析結果多了新欄位，
+    // 排除法會讓它悄悄跟著寫進來，白名單不會。
+    _textOnly(record) {
+        const r = record || {};
+        const skin = r['膚色'] || {};
+        const sideNose = r['側臉鼻型'] || r['鼻型_側面'] || null;
+        return {
+            analysisPackageId: r.analysisPackageId || null,
+            mode: r.mode || r.analyzeMode || null,          // basic / pro
+            '臉型': r['臉型'] || null,
+            '眉型': r['眉型'] || null,
+            '眼型': r['眼型'] || null,
+            '鼻型': r['鼻型'] || null,
+            '側臉鼻型': (sideNose && typeof sideNose === 'object') ? (sideNose.label || null) : sideNose,
+            '嘴型': r['嘴型'] || null,
+            '膚色分級': skin['膚色分級'] || null,
+            '四季型': skin['四季型'] || null
+        };
+    },
+    list() {
+        try {
+            const own = JSON.parse(localStorage.getItem(this._accountKey()) || '[]');
+            if (own.length) return own;
+            // 舊的全域紀錄搬到目前登入的帳號，搬完就刪掉，只做一次。
+            // 不搬的話，先前累積的紀錄會在改版當下整批消失。
+            const legacy = JSON.parse(localStorage.getItem(this._legacyKey) || '[]');
+            if (legacy.length) {
+                const migrated = legacy.map(row => ({ ...this._textOnly(row), timestamp: row.timestamp }));
+                localStorage.setItem(this._accountKey(), JSON.stringify(migrated));
+                localStorage.removeItem(this._legacyKey);
+                return migrated;
+            }
+            return [];
+        } catch (_) { return []; }
+    },
     add(record) {
         const arr = this.list();
-        arr.unshift({ ...record, timestamp: new Date().toISOString() });
-        if (arr.length > 20) arr.length = 20;
-        localStorage.setItem(this._key, JSON.stringify(arr));
+        arr.unshift({ ...this._textOnly(record), timestamp: new Date().toISOString() });
+        try { localStorage.setItem(this._accountKey(), JSON.stringify(arr)); } catch (_) {}
     },
     // 使用者修正五官判斷時，把已經寫進紀錄的那一筆一起改掉。
     // 紀錄是在回饋面板出現「之前」就寫入的，不補這一步，分析紀錄會永遠停在模型
@@ -3245,6 +3324,6 @@ const History = {
             fields.forEach(field => { row[field] = corrections[field]; });
             touched = true;
         });
-        if (touched) localStorage.setItem(this._key, JSON.stringify(arr));
+        if (touched) localStorage.setItem(this._accountKey(), JSON.stringify(arr));
     }
 };

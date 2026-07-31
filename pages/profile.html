@@ -10,26 +10,26 @@
         </div>
     </div>
     <div class="member-stats">
-        <div class="stat-cell">
-            <div class="stat-en">Wishlist</div>
-            <div class="stat-num" id="profileFavCount">0</div>
-            <div class="stat-label">收藏商品</div>
-        </div>
-        <div class="stat-cell">
-            <div class="stat-en">Analysis</div>
-            <div class="stat-num" id="profileAnalyzeCount">0</div>
-            <div class="stat-label">分析次數</div>
-        </div>
-        <div class="stat-cell">
-            <div class="stat-en">Looks</div>
-            <div class="stat-num" id="profileSuggestionCount">0</div>
-            <div class="stat-label">收藏妝容</div>
-        </div>
-        <div class="stat-cell">
-            <div class="stat-en">Points</div>
-            <div class="stat-num" id="profilePointCount">0</div>
-            <div class="stat-label">會員點數</div>
-        </div>
+        <!-- 四張卡片都可點：兩張換頁、兩張捲到本頁下方的區塊。
+             用 <button> 而不是掛 onclick 的 <div>——鍵盤 Tab 到得了、Enter/空白鍵有作用、
+             螢幕閱讀器也唸得出「按鈕」。data-goto 換頁，data-scroll 捲動。
+             行為接在 js/router.js 的 .member-stats [data-goto] / [data-scroll] 處理器。
+
+             ⚠️ 這段在 js/router.js 的 `fallbacks.profile` 裡還有一份（fetch 失敗時的備援）。
+             改這裡就要一起改那裡。2026-07-31 就是備援先改成 button、這個檔案沒跟上，
+             於是功能看起來做好了、實際渲染出來的還是不能點的 <div>。 -->
+        <button class="stat-cell" type="button" data-goto="favorites" aria-label="查看收藏商品">
+            <span class="stat-en">Wishlist</span><span class="stat-num" id="profileFavCount">0</span>
+            <span class="stat-label">收藏商品</span><span class="stat-go">查看 &rarr;</span></button>
+        <button class="stat-cell" type="button" data-goto="history" aria-label="查看分析紀錄">
+            <span class="stat-en">Analysis</span><span class="stat-num" id="profileAnalyzeCount">0</span>
+            <span class="stat-label">分析次數</span><span class="stat-go">查看 &rarr;</span></button>
+        <button class="stat-cell" type="button" data-scroll="profileSuggestionArea" aria-label="捲動到已收藏的妝容">
+            <span class="stat-en">Looks</span><span class="stat-num" id="profileSuggestionCount">0</span>
+            <span class="stat-label">收藏妝容</span><span class="stat-go">查看 &darr;</span></button>
+        <button class="stat-cell" type="button" data-scroll="profilePointLedger" aria-label="捲動到點數紀錄">
+            <span class="stat-en">Points</span><span class="stat-num" id="profilePointCount">0</span>
+            <span class="stat-label">會員點數</span><span class="stat-go">查看 &darr;</span></button>
     </div>
 </div>
 
