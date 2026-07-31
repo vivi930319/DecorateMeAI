@@ -1,5 +1,6 @@
 {
   "hosting": {
+    "site": "decorate-me",
     "public": ".",
     "ignore": [
       "firebase.json",
