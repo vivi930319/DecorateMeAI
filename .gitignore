@@ -4,6 +4,8 @@
 !.gitignore
 !.dockerignore
 !.gcloudignore
+!.gcloudignore.gateway
+!.gcloudignore.render
 # CI 設定要進版控才會在 GitHub 上跑（deny-all 底下目錄要逐層放行）
 !.github/
 !.github/workflows/
@@ -72,6 +74,7 @@
 !tools/*.py
 !tools/face_models_manifest.json
 !deploy_face_cloudrun.ps1
+!deploy_gateway_cloudrun.ps1
 !setup.bat
 !start_backend_local.bat
 !start_full_stack_local.bat

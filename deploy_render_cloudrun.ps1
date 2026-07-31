@@ -36,6 +36,7 @@ Write-Host "Building image: $image"
 gcloud builds submit `
   --project=$ProjectId `
   --config=cloudbuild.render.yaml `
+  --ignore-file=.gcloudignore.render `
   --substitutions=_IMAGE=$image `
   .
 if ($LASTEXITCODE -ne 0) { throw "部署中止：映像建置失敗。" }
