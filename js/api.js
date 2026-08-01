@@ -890,16 +890,46 @@ const Api = {
             highlighter: '打亮',
             highlighters: '打亮'
         };
-        const rawCat = String(product.category || product.cat || product.type || '').trim();
+        // 中文分類名 -> 英文 type slug。/api/product/{type}/{id} 與收藏同步的 item_type
+        // 都只吃英文 slug，中文分類名只能拿來顯示與前台篩選。
+        const catToSlug = {
+            '底妝': 'foundations',
+            '眼影': 'eyeshadows',
+            '眼線/睫毛': 'eyeliner_mascara',
+            '唇彩': 'lipsticks',
+            '腮紅': 'blushes',
+            '眉毛彩妝': 'eyebrows',
+            '修容': 'contouring',
+            '打亮': 'highlighters'
+        };
+        // 商品清單 API 的 `category` 回的是**中文**（例如「唇彩」），`type` 才是英文 slug
+        // （lipsticks）。先前這裡把 category 擺在 type 前面丟進 categoryMap 查表，中文一律查不到，
+        // 於是 1041 筆商品全部掉進 '底妝' fallback——前台除了「底妝」以外每個分類都是空的，
+        // 後台的分類欄也全部顯示底妝。所以：英文 slug 走查表，中文值只要是已知分類就直接採用。
+        const typeSlug = String(product.type || product.apiType || product.item_type || '').trim();
+        const rawCategory = String(product.category || product.cat || '').trim();
         const tagCat = Array.isArray(product.tags) ? product.tags.find(tag => categoryMap[String(tag).trim()]) : '';
-        const cat = categoryMap[rawCat] || categoryMap[tagCat] || product.cat || '底妝';
+        // 伺服器給的 slug 原樣保留（不做單複數正規化）：它是拿回去打單品 API 的鍵，改了會打不到。
+        const knownSlug = categoryMap[typeSlug] ? typeSlug : (categoryMap[rawCategory] ? rawCategory : '');
+        const resolvedCat = categoryMap[knownSlug]
+            || (catToSlug[rawCategory] ? rawCategory : '')
+            || categoryMap[tagCat]
+            || (catToSlug[String(product.cat || '').trim()] ? String(product.cat).trim() : '')
+            || '';
+        const rawCat = knownSlug || rawCategory || typeSlug;
+        const cat = resolvedCat || '底妝';
+        // 分類真的認出來了才給 apiType；認不出來時維持 null，不要拿 '底妝' fallback 反推出
+        // 一個假的 'foundations' 送去收藏 API。
+        const apiType = knownSlug || (resolvedCat ? catToSlug[resolvedCat] : '') || null;
         const price = product.price == null
             ? ''
             : (String(product.price).startsWith('NT$') ? String(product.price) : `NT$${product.price}`);
         return {
-            id: product.id != null ? `api-${rawCat || cat}-${product.id}` : `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            // id 要維持 `api-{item_type}-{item_id}`：Fav.mergeRemote 就是照這個格式把伺服器上的
+            // {item_type, item_id} 對回本機收藏。用中文 category 組會對不起來。
+            id: product.id != null ? `api-${apiType || rawCat || cat}-${product.id}` : `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             rawId: product.id ?? null,
-            apiType: rawCat || null, // 原始 type slug（例如 lipsticks），呼叫 /api/product/{type}/{id} 這類單品 API 要用
+            apiType, // 原始 type slug（例如 lipsticks），呼叫 /api/product/{type}/{id} 這類單品 API 要用
             cat,
             name: product.name || '推薦商品',
             brand: product.brand || '',

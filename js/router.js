@@ -4636,16 +4636,52 @@ const PageInit = {
             setConnectionStatus('adminProductConnection', '連線中', 'pending');
             updateOverallStatus();
             renderProducts();
-            const params = {
+            // 資料庫端目前對這支清單端點有兩個實作缺口，後台要自己補：
+            //   1. limit 被壓在 100 —— 送 limit=200 實測還是只回 100 筆（total 仍回 1041），
+            //      但會回 nextCursor，所以照著 cursor 翻頁就能拿完整份。
+            //   2. type 參數完全不生效 —— type=lipsticks 與 type=blushes 回的內容一模一樣
+            //      （都是資料庫前 100 筆），所以商品類型下拉選什麼結果都相同。
+            // 兩者都已回報給資料庫端；在他們修好之前，這裡自己翻頁、自己過濾類型。
+            // type 仍照送，等他們補上伺服器端過濾後，下面這段就自動變成沒作用的複驗。
+            const typeFilter = document.getElementById('adminProductTypeFilter')?.value || '';
+            const baseParams = {
                 q: productSearchQuery.trim(),
-                type: document.getElementById('adminProductTypeFilter')?.value || '',
+                type: typeFilter,
                 status: document.getElementById('adminProductStatusFilter')?.value ?? 'active',
-                limit: 200
+                limit: 100
             };
-            return Api.listProducts(params).then(rec => {
+            const fetchAllPages = async () => {
+                const all = [];
+                const seen = new Set();
+                const usedCursors = new Set();
+                let cursor = null;
+                let firstRec = null;
+                for (let page = 0; page < PRODUCT_MAX_PAGES; page++) {
+                    const rec = await Api.listProducts(cursor ? { ...baseParams, cursor } : baseParams);
+                    if (!rec?.ok) return firstRec ? { ...firstRec, products: all } : rec;
+                    if (!firstRec) firstRec = rec;
+                    for (const p of rec.products || []) {
+                        const key = p.rawId != null ? `raw:${p.rawId}` : `id:${p.id}`;
+                        if (seen.has(key)) continue;
+                        seen.add(key);
+                        all.push(p);
+                    }
+                    const next = rec.nextCursor || null;
+                    // 沒有下一頁、這頁空的、或後端把同一個 cursor 回第二次就停，避免無限翻頁。
+                    if (!next || !(rec.products || []).length || usedCursors.has(next)) break;
+                    usedCursors.add(next);
+                    cursor = next;
+                }
+                return { ...firstRec, products: all };
+            };
+            return fetchAllPages().then(rec => {
                 if (rec?.ok) {
-                    dbProducts = rec.products || [];
-                    productResultTotal = Number(rec.total ?? dbProducts.length);
+                    const loaded = rec.products || [];
+                    dbProducts = typeFilter
+                        ? loaded.filter(p => p.apiType === typeFilter || p.cat === TYPE_TO_CAT[typeFilter])
+                        : loaded;
+                    // 伺服器的 total 是「忽略 type 之後的總數」，套了前端類型過濾就不能拿來當筆數。
+                    productResultTotal = typeFilter ? dbProducts.length : Number(rec.total ?? dbProducts.length);
                     dbProductsError = '';
                     productConnectionState = 'ok';
                     setConnectionStatus('adminProductConnection', '正常', 'ok');
