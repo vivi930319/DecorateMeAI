@@ -240,6 +240,19 @@ for (const invariant of [
   if (!routerSource.includes(invariant)) throw new Error(`Favorites refresh invariant missing: ${invariant}`);
 }
 
+// ── Firebase 根頁不可快取舊 index.html ────────────────────────
+// Firebase 把「/」與帶 query string 的網址視為不同 cache key；只替 *.html 設 no-cache
+// 不會套用到根網址，部署後瀏覽器可能繼續用上一版外框整整一小時。
+const firebaseConfig = JSON.parse(fs.readFileSync(path.join(rootDir, 'firebase.json'), 'utf8'));
+const hostingHeaders = firebaseConfig?.hosting?.headers || [];
+for (const source of ['/', '/index.html']) {
+  const rule = hostingHeaders.find(item => item.source === source);
+  const cacheValue = rule?.headers?.find(header => String(header.key).toLowerCase() === 'cache-control')?.value || '';
+  if (!cacheValue.includes('no-cache') || !cacheValue.includes('no-store')) {
+    throw new Error(`Firebase ${source} must not cache an old index.html`);
+  }
+}
+
 // ── Api 方法 ─────────────────────────────────────────────────
 for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'validateSession',
   // 暫存商品審核（爬蟲改流程後取代 previewCrawledProduct）
