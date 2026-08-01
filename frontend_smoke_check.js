@@ -171,6 +171,44 @@ if (sandbox.ApiConfig.services.product.baseUrl !== '/product-api') throw new Err
 if (sandbox.ApiConfig.services.crawler) throw new Error('services.crawler 應已移除');
 if (sandbox.ApiConfig.services.aiGateway.sessionPath !== '/auth/session') throw new Error('Gateway session validation path missing');
 
+// ── 商品分類不可全部掉回底妝 ─────────────────────────────────
+// 正式商品 API 同時回英文 type 與中文 category。管理中台的類型下拉必須依
+// 英文 slug 篩選，而表格與前台則顯示中文分類。
+{
+  const lipstick = sandbox.Api._normalizeProduct({ id: 7, type: 'lipsticks', category: '唇彩', name: '測試唇膏' });
+  if (lipstick.apiType !== 'lipsticks' || lipstick.cat !== '唇彩' || lipstick.id !== 'api-lipsticks-7') {
+    throw new Error(`Lipstick category normalization failed: ${JSON.stringify(lipstick)}`);
+  }
+  const chineseOnly = sandbox.Api._normalizeProduct({ id: 8, category: '腮紅', name: '測試腮紅' });
+  if (chineseOnly.apiType !== 'blushes' || chineseOnly.cat !== '腮紅') {
+    throw new Error(`Chinese category normalization failed: ${JSON.stringify(chineseOnly)}`);
+  }
+  const unknown = sandbox.Api._normalizeProduct({ id: 9, category: '未分類', name: '未知分類' });
+  if (unknown.apiType !== null) {
+    throw new Error('Unknown products must not receive a fake foundations apiType');
+  }
+  for (const invariant of [
+    "loaded.filter(p => p.apiType === typeFilter || p.cat === TYPE_TO_CAT[typeFilter])",
+    "el.onchange = loadAdminProducts",
+    "for (let page = 0; page < PRODUCT_MAX_PAGES; page++)"
+  ]) {
+    if (!routerSource.includes(invariant)) throw new Error(`Admin category filter invariant missing: ${invariant}`);
+  }
+}
+
+// ── 首頁品牌素材 ─────────────────────────────────────────────
+const indexSource = fs.readFileSync(path.join(rootDir, 'index.html'), 'utf8');
+const dashboardSource = fs.readFileSync(path.join(rootDir, 'pages', 'dashboard.html'), 'utf8');
+for (const assetPath of [
+  'assets/brand/decorate-me-round-source.jpg',
+  'assets/brand/decorate-me-home.jpg'
+]) {
+  if (!fs.existsSync(path.join(rootDir, assetPath))) throw new Error(`Missing brand asset: ${assetPath}`);
+}
+if (!indexSource.includes('decorate-me-round-source.jpg') || !dashboardSource.includes('decorate-me-home.jpg')) {
+  throw new Error('Homepage brand assets are not wired into the rendered templates');
+}
+
 // ── Api 方法 ─────────────────────────────────────────────────
 for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'validateSession',
   // 暫存商品審核（爬蟲改流程後取代 previewCrawledProduct）

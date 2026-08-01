@@ -1180,7 +1180,7 @@ dashboard: `
         <span class="bs-link" data-nav="analysis">開始你的美學旅程　→</span>
         <p class="bs-desc">「裝識你的美」是一套以科技與美學打造的個人美妝系統。從臉部分析解讀你的五官與膚色，到為你量身推薦的妝容風格與美妝逸品，我們相信，最美的樣子，是更認識自己的你。</p>
     </div>
-    <div class="as-photo"><img class="as-photo-img" alt="" onload="this.classList.add('loaded')"><div class="as-photo-ph"><div class="demo-mark">❧</div><div class="demo-cap">商品形象照 · Demo</div></div></div>
+    <div class="as-photo"><img class="as-photo-img" src="assets/brand/decorate-me-home.jpg" alt="Decorate Me 品牌識別" onload="this.classList.add('loaded')"><div class="as-photo-ph"><div class="demo-mark">❧</div><div class="demo-cap">商品形象照 · Demo</div></div></div>
 </section>`,
 analysis: `
 <div class="page-header"><h1>臉部分析</h1><div class="divider"></div><p>上傳正面照片，分析五官特徵</p></div>
