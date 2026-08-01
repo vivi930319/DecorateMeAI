@@ -97,7 +97,12 @@ body {
     max-width:1320px; margin:0 auto; padding:0 48px; height:74px;
     display:flex; align-items:center; gap:40px;
 }
-.topbar-brand { cursor:pointer; flex-shrink:0; }
+.topbar-brand { cursor:pointer; flex-shrink:0; display:flex; align-items:center; gap:11px; }
+.brand-round-mark { position:relative; width:44px; height:44px; flex:0 0 44px; overflow:hidden; border-radius:50%;
+    background:#fff; border:1px solid rgba(232,196,180,.46); box-shadow:0 6px 18px rgba(20,12,14,.2); }
+.brand-round-mark img { position:absolute; width:289%; max-width:none; height:auto; left:50%; top:50%;
+    transform:translate(-50%,-45%); }
+.topbar-brand-copy { display:flex; flex-direction:column; min-width:0; }
 .sb-name { font-family:var(--cjk); font-size:20px; font-weight:500; letter-spacing:.14em; line-height:1.1;
     color:var(--gold-lt);
     background:var(--gold-grad); background-size:240% 100%; -webkit-background-clip:text; background-clip:text;
@@ -487,8 +492,9 @@ body {
     background:linear-gradient(0deg, rgba(206,140,132,0.45), transparent);
     clip-path:polygon(0 38%, 100% 8%, 100% 100%, 0 100%); }
 .as-photo-img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:2;
-    opacity:0; transition:opacity .7s var(--ease); }
+    object-position:center; opacity:0; transition:opacity .7s var(--ease), transform .7s var(--ease); }
 .as-photo-img.loaded { opacity:1; }
+.as-photo:hover .as-photo-img.loaded { transform:scale(1.025); }
 .as-photo-ph { position:relative; z-index:1; text-align:center; }
 .as-photo-ph .demo-mark { font-family:var(--serif); font-style:italic; font-size:46px; color:rgba(255,250,246,0.78); line-height:1; }
 .as-photo-ph .demo-cap { font-family:var(--sans); font-size:10px; letter-spacing:.26em; text-transform:uppercase;
@@ -2397,6 +2403,7 @@ a:focus-visible, button:focus-visible, [data-nav]:focus-visible,
 @media (max-width:768px){
     .topbar-inner { padding:12px 16px 14px; gap:10px 12px; align-items:center; overflow:hidden; }
     .topbar-brand { margin-right:auto; min-width:0; }
+    .brand-round-mark { width:38px; height:38px; flex-basis:38px; }
     .topbar-brand .sb-name { font-size:19px; }
     .topbar-brand .sb-sub { font-size:7.5px; letter-spacing:.44em; margin-top:4px; }
 
@@ -2461,6 +2468,12 @@ a:focus-visible, button:focus-visible, [data-nav]:focus-visible,
     /* 橫滑卡片列：滿版出血讓手指從螢幕邊緣就能滑，並隱藏捲軸避免佔空間 */
     .insp-row, .trend-row { margin-left:-18px; margin-right:-18px; padding-left:18px; padding-right:18px; scrollbar-width:none; }
     .insp-row::-webkit-scrollbar, .trend-row::-webkit-scrollbar { display:none; }
+}
+
+@media (max-width:620px){
+    .topbar-brand { gap:8px; }
+    .topbar-brand .sb-name { display:none; }
+    .topbar-brand .sb-sub { margin-top:0; font-size:7px; letter-spacing:.28em; white-space:nowrap; }
 }
 
 /* —— 小手機（≤480） —— */
@@ -2754,3 +2767,25 @@ select option, .af-select option {
     background-color:var(--white); color:var(--ink-soft);
 }
 select:focus, .af-select:focus { outline:none; border-color:var(--gold); }
+
+/* 手機上點不到「註冊」按鈕。
+   .auth-overlay 是 position:fixed;inset:0;overflow:hidden —— 遮罩層自己不能捲；
+   .auth-card-wide 的 max-height 用 92vh，而手機瀏覽器的 vh 算的是「網址列收起來」
+   的大視窗，所以卡片會比實際看得到的區域還高。再加上 align-items:center 讓超出的
+   部分上下均分溢出，兩端就都捲不到了 —— 註冊表單有 7 個欄位加頭像選擇器，最底下
+   的送出按鈕正好落在切掉的那一段。
+   實測（可見高度 640px、卡片 845px）：卡片 top -103、bottom 743，上下各被切 103px。
+
+   改成讓遮罩層自己捲，並用 margin:auto 取代 align-items:center：有空間時一樣置中，
+   空間不夠時不會把內容推到捲不到的位置（align-items:center 會，這是它的已知行為）。 */
+.auth-overlay { overflow-y:auto; overflow-x:hidden; -webkit-overflow-scrolling:touch; align-items:flex-start; }
+.auth-overlay > .auth-editorial, .auth-overlay > .auth-card { margin:auto; }
+/* dvh 會跟著網址列伸縮，是這個情境正確的單位。不支援的瀏覽器吃前一行的 vh。 */
+.auth-editorial { min-height:100vh; min-height:100dvh; }
+.auth-card-wide { max-height:92vh; max-height:92dvh; }
+@media (max-width:820px){
+    /* 手機上不要巢狀捲動：卡片不再自己限高，一律由遮罩層捲。否則會出現
+       「卡片內部已經捲到底，但卡片本身還有一截在畫面外」這種怎麼都摸不到底的狀態。 */
+    .auth-card-wide { max-height:none; overflow:visible; }
+    .auth-overlay > .auth-card { margin:16px auto; width:calc(100% - 28px); padding:34px 22px 28px; }
+}
