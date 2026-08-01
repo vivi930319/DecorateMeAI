@@ -817,12 +817,17 @@ function getCurrentRoleLabel(profile){
     return '一般會員';
 }
 
-function updateAdminNav(){
+function updateAdminNav(page){
     const admin = typeof AdminStore !== 'undefined' && AdminStore.isAdmin();
     document.querySelectorAll('[data-admin-link]').forEach(el => {
         el.style.display = admin ? '' : 'none';
     });
-    document.body.classList.toggle('admin-mode', admin);
+    // 管理員「身分」與管理中台「頁面」是兩件事。只有管理員真的進入 admin 頁時
+    // 才切換成獨立的後台外框；否則會員導覽、購物車與後台內容會同時出現在畫面上。
+    const activePage = page || (typeof Router !== 'undefined' ? Router.currentPage : null);
+    const adminMode = admin && activePage === 'admin';
+    document.body.classList.toggle('admin-mode', adminMode);
+    if (adminMode && typeof closeTopbarMenu === 'function') closeTopbarMenu();
 }
 
 function updateCartBadge(){
@@ -1866,6 +1871,8 @@ const Router = {
             showAlert('此帳號目前沒有使用此功能的權限，請聯繫管理員', { type: 'error' });
             return;
         }
+        // fetch 頁面前就先切換外框，避免管理頁載入期間短暫露出會員購物車與會員列。
+        updateAdminNav(page);
         // 一進分析頁就先把 face 服務叫醒（不等它回來）。使用者接下來還要選照片、對鏡頭，
         // 這幾十秒剛好夠 Cloud Run 冷啟動跑完，等他按下分析時容器已經是熱的。
         if (page === 'analysis' && typeof Api !== 'undefined' && Api.warmFaceServices) {
@@ -5305,12 +5312,12 @@ function showApp() {
     document.getElementById('app').style.display = 'block';
     const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
     document.getElementById('sidebarUsername').textContent = `${getMemberDisplayName()} · ${getCurrentRoleLabel(profile)}`;
-    updateAdminNav();
     updateCartBadge();
     refreshMemberTheme();
     syncRemoteFavorites();
     syncRemoteCart();
     const landing = (typeof AdminStore !== 'undefined' && AdminStore.isAdmin()) ? 'admin' : 'dashboard';
+    updateAdminNav(landing);
     const homeUrl = `${location.pathname}${location.search}#${landing}`;
     if (location.hash !== `#${landing}`) history.replaceState(null, '', homeUrl);
     Router.go(landing);

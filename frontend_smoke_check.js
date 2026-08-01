@@ -209,6 +209,25 @@ if (!indexSource.includes('decorate-me-round-source.jpg') || !dashboardSource.in
   throw new Error('Homepage brand assets are not wired into the rendered templates');
 }
 
+// ── 管理中台與會員端外框必須完全分離 ─────────────────────────
+// 管理員角色本身不能讓所有頁面都變成後台；只有已驗證的管理員正在 admin 頁時，
+// 才隱藏會員購物車、會員身分列與前台浮水印。
+const cssSource = fs.readFileSync(path.join(rootDir, 'css', 'main.css'), 'utf8');
+for (const invariant of [
+  "const adminMode = admin && activePage === 'admin'",
+  'updateAdminNav(page);',
+  'updateAdminNav(landing);'
+]) {
+  if (!routerSource.includes(invariant)) throw new Error(`Admin/member shell separation missing: ${invariant}`);
+}
+for (const selector of [
+  'body.admin-mode .topbar',
+  'body.admin-mode .brand-watermark',
+  'body.admin-mode .watermark-stamp'
+]) {
+  if (!cssSource.includes(selector)) throw new Error(`Admin mode must hide member UI: ${selector}`);
+}
+
 // ── Api 方法 ─────────────────────────────────────────────────
 for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'validateSession',
   // 暫存商品審核（爬蟲改流程後取代 previewCrawledProduct）

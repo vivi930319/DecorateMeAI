@@ -1261,7 +1261,12 @@ body[data-member-theme="noir"] ::selection { background:var(--gold); color:var(-
 /* ═══════════════ Admin console ═══════════════ */
 body.admin-mode { margin:0; overflow-y:auto; overscroll-behavior-y:auto; background:#f3f5f7; color:#20272d; font-family:"Noto Sans TC", Arial, sans-serif; }
 body.admin-mode .topbar,
-body.admin-mode .cursor-glow { display:none !important; }
+body.admin-mode .topbar-menu-backdrop,
+body.admin-mode .brand-watermark,
+body.admin-mode .signal-watermark,
+body.admin-mode .cursor-glow,
+body.admin-mode .gold-cursor-flow,
+body.admin-mode .watermark-stamp { display:none !important; }
 body.admin-mode .app-shell { background:#f3f5f7; }
 body.admin-mode .main-content { max-width:none; min-height:100vh; margin:0; padding:0; background:#f3f5f7; }
 body.admin-mode .main-content.page-enter,
