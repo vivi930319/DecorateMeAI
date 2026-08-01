@@ -228,6 +228,18 @@ for (const selector of [
   if (!cssSource.includes(selector)) throw new Error(`Admin mode must hide member UI: ${selector}`);
 }
 
+// ── 收藏頁每次打開都要重新向會員資料庫同步 ──────────────────
+// pages/favorites.html 只是版型；只有 200 並不代表收藏資料有讀到。
+// 同步失敗時也不能再把錯誤偽裝成「尚無收藏」。
+for (const invariant of [
+  "if (page === 'favorites') refreshFavoritesPage();",
+  "Router.favoriteSyncState = 'loading'",
+  "Router.favoriteSyncState = result && result.ok ? 'ready' : 'error'",
+  '雲端收藏暫時無法同步'
+]) {
+  if (!routerSource.includes(invariant)) throw new Error(`Favorites refresh invariant missing: ${invariant}`);
+}
+
 // ── Api 方法 ─────────────────────────────────────────────────
 for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'validateSession',
   // 暫存商品審核（爬蟲改流程後取代 previewCrawledProduct）

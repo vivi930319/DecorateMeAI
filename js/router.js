@@ -1839,6 +1839,7 @@ const Router = {
     productRecommendationLoading: false,
     generalProductCatalog: null,
     generalProductLoading: false,
+    favoriteSyncState: 'idle',
 
     stopAnalysisCameras() {
         if (this.proScanTimer) clearInterval(this.proScanTimer);
@@ -1915,6 +1916,9 @@ const Router = {
             }
             // 頁面初始化
             if (typeof PageInit[page] === 'function') PageInit[page](opts);
+            // 收藏頁不是只有一個 HTML 版型；每次進入都要重新向會員資料庫取回收藏。
+            // 先前只在登入時同步一次，登入當下若短暫失敗，之後打開收藏頁永遠只會看到空白。
+            if (page === 'favorites') refreshFavoritesPage();
         } catch (e) {
             const fallback = getPageFallback(page);
             if (fallback) {
@@ -1930,6 +1934,7 @@ const Router = {
                 updateAdminNav();
                 refreshMemberTheme();
                 if (typeof PageInit[page] === 'function') PageInit[page](opts);
+                if (page === 'favorites') refreshFavoritesPage();
                 return;
             }
             document.getElementById('mainContent').innerHTML = `<div class="empty-state">頁面載入失敗</div>`;
@@ -3204,11 +3209,27 @@ const PageInit = {
         });
         const items = catalog.filter(p => Fav.has(p.id));
         const area = document.getElementById('favArea');
+        if (!area) return;
+        const syncState = Router.favoriteSyncState || 'idle';
+        const syncNote = syncState === 'loading'
+            ? '<div class="fav-sync-note">正在同步會員收藏…</div>'
+            : (syncState === 'error'
+                ? '<div class="fav-sync-note is-error">雲端收藏暫時無法同步，目前顯示這台裝置上的資料。<button type="button" data-fav-retry>重新同步</button></div>'
+                : '');
+        const bindRetry = () => {
+            const retry = area.querySelector('[data-fav-retry]');
+            if (retry) retry.onclick = refreshFavoritesPage;
+        };
         if (!apiCatalog.length && !Router.generalProductLoading) {
             loadGeneralProductCatalog(() => { if (Router.currentPage === 'favorites') PageInit.favorites(); });
         }
-        if (!items.length) { area.innerHTML = '<div class="empty-state">目前尚無收藏商品</div>'; return; }
-        area.innerHTML = `<div class="prod-count">${items.length} 件收藏</div><div class="prod-grid">` + items.map((p, i) => `
+        if (!items.length) {
+            const emptyText = syncState === 'loading' ? '正在讀取收藏商品' : '目前尚無收藏商品';
+            area.innerHTML = syncNote + `<div class="empty-state">${emptyText}</div>`;
+            bindRetry();
+            return;
+        }
+        area.innerHTML = syncNote + `<div class="prod-count">${items.length} 件收藏</div><div class="prod-grid">` + items.map((p, i) => `
             <div class="prod-card reveal-in" data-pid="${p.id}" style="animation-delay:${Math.min(i*0.035,0.4)}s">
                 <div class="pc-imgwrap">
                     ${phBox('', p.name, p.img)}
@@ -3232,6 +3253,7 @@ const PageInit = {
                 setTimeout(()=>{ Fav.toggle(btn.dataset.unfav, product); PageInit.favorites(); }, 320);
             };
         });
+        bindRetry();
     },
 
     compare() {
@@ -5269,19 +5291,33 @@ function watchPasswordFields() {
     });
 })();
 
-// 把伺服器上的收藏拉回本機。登入與啟動各跑一次就夠——收藏的變動都會即時寫回伺服器，
-// 需要補齊的只有「這台裝置還不知道的那些」。
-// 失敗不做任何提示：本機收藏照樣能用，這只是補齊，不是必要條件。
+// 把伺服器上的收藏拉回本機。除了登入啟動，每次進收藏頁也會重新同步；
+// 這樣登入當下若網路短暫失敗，使用者不必整個登出重來。
+let remoteFavoritesSyncPromise = null;
 function syncRemoteFavorites() {
     const profile = (typeof Auth !== 'undefined' && Auth.getProfile) ? (Auth.getProfile() || {}) : {};
-    if (!profile.email || (typeof isGuest === 'function' && isGuest())) return;
-    if (typeof Api === 'undefined' || !Api.listRemoteFavorites || typeof Fav === 'undefined') return;
-    Api.listRemoteFavorites(profile.email).then(result => {
-        if (!result || !result.ok) return;
+    if (!profile.email || (typeof isGuest === 'function' && isGuest())) return Promise.resolve({ ok: false, skipped: true });
+    if (typeof Api === 'undefined' || !Api.listRemoteFavorites || typeof Fav === 'undefined') return Promise.resolve({ ok: false, skipped: true });
+    if (remoteFavoritesSyncPromise) return remoteFavoritesSyncPromise;
+    remoteFavoritesSyncPromise = Api.listRemoteFavorites(profile.email).then(result => {
+        if (!result || !result.ok) return result || { ok: false };
         const added = Fav.mergeRemote(result.favorites);
-        // 只有真的補進東西才重畫，避免每次載入都無謂地重繪收藏頁
-        if (added && Router.currentPage === 'favorites') PageInit.favorites();
-    }).catch(() => {});
+        return { ...result, added };
+    }).catch(() => ({ ok: false })).finally(() => {
+        remoteFavoritesSyncPromise = null;
+    });
+    return remoteFavoritesSyncPromise;
+}
+
+function refreshFavoritesPage() {
+    if (Router.currentPage !== 'favorites') return;
+    Router.favoriteSyncState = 'loading';
+    PageInit.favorites();
+    syncRemoteFavorites().then(result => {
+        if (Router.currentPage !== 'favorites') return;
+        Router.favoriteSyncState = result && result.ok ? 'ready' : 'error';
+        PageInit.favorites();
+    });
 }
 
 // 把伺服器上的購物車同步回本機。與 syncRemoteFavorites 同一套：登入與啟動各跑一次。

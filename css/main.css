@@ -1504,6 +1504,9 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .back-link:hover { color:var(--ink-soft); }
 .empty-state { text-align:center; padding:90px 0; color:var(--lt); font-family:var(--cjk); font-size:15px; letter-spacing:.06em; }
 .empty-state::before { content:'✦'; display:block; font-size:18px; color:var(--gold-dim); margin-bottom:16px; }
+.fav-sync-note { display:flex; align-items:center; justify-content:center; gap:12px; margin:0 0 22px; padding:11px 16px; border:1px solid var(--line-gold); background:var(--glass); color:var(--mid); font-size:13px; }
+.fav-sync-note.is-error { border-color:rgba(179,83,87,.35); color:var(--danger); }
+.fav-sync-note button { border:0; border-bottom:1px solid currentColor; padding:2px 0; background:transparent; color:inherit; font:inherit; cursor:pointer; }
 
 @media (max-width:1100px) {
     .prod-grid { grid-template-columns:repeat(3,1fr); }
