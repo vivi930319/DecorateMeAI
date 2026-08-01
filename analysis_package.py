@@ -124,6 +124,10 @@ def normalize_face_analysis(raw_result: dict[str, Any]) -> dict[str, Any]:
             "level": skin.get("膚色分級"),
             "lab": deepcopy(skin.get("LAB")),
             "labSource": skin.get("LAB來源", "正面照"),
+            # 頭髮或陰影蓋住臉頰時膚色會算錯，而且不會報錯。推薦端拿 lab 去比色號之前
+            # 要看這個旗標——缺欄位時視為可信，維持既有行為。
+            "labReliable": bool((skin.get("可信度") or {}).get("reliable", True)),
+            "labReliability": deepcopy(skin.get("可信度")),
         },
         "lipLab": deepcopy(raw.get("嘴唇_LAB")),
         "symmetry": deepcopy(raw.get("臉部對稱性")),

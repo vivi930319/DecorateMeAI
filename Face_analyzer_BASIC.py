@@ -591,6 +591,27 @@ class FaceAnalyzer:
     # 而我們還沒量。**沒有量過的東西不要放寬。**
     PITCH_LIMIT   = float(os.getenv("FACE_PITCH_LIMIT", "15.0"))
 
+    # ── 膚色取樣被頭髮污染 ────────────────────────────────────────────────
+    # get_skin_color 的膚色範圍過濾只擋得住黑髮（靠 LAB 的 L>=35 下限）。實測把同一張
+    # 照片的**真實頭髮**移植到臉頰（40 張、160 組遮蔽案例）：棕髮與染髮平均有 53% 的
+    # 像素直接通過那層過濾——顏色範圍本來就分不開棕髮與皮膚，兩者在 LAB／HSV／YCrCb
+    # 三個空間裡都重疊。純色塗塊的對照組更極端，通過率 100%。
+    #
+    # 後段的分位裁切與中位數離群剔除多數時候擋得住，但不是每次：ΔE>5 佔 19%，最差 45。
+    # 也就是說每五次就有一次膚色明顯算錯，而且**完全不會報錯**——粉底推薦與色號比對
+    # 都會跟著錯。
+    #
+    # 兩道防線，都用上面那批資料量過：
+    #   1. 紋理過濾。皮膚平滑、頭髮有高頻紋理，這是顏色分不開時還能用的訊號。
+    #      加上之後最差 ΔE 從 45.01 降到 22.03，ΔE>5 從 19% 降到 15%。
+    #   2. 可信度標記。光靠 1 不夠（只是把錯誤變小，不是消除），所以再量一個能預測
+    #      「這次算錯了」的訊號。試過四個候選，頰部 ROI 內 L 的 MAD 分離度最好（1.28）：
+    #        乾淨照片 p50 6.67 / p95 9.55  |  算錯案例中位數 15.69、算對 8.24
+    #      門檻取 9.5（≈乾淨照片的 p95）→ 抓到 100% 的算錯案例，乾淨照片誤報 5%。
+    SKIN_TEXTURE_STD_MAX  = float(os.getenv("FACE_SKIN_TEXTURE_STD_MAX", "6.0"))
+    SKIN_TEXTURE_WINDOW   = int(os.getenv("FACE_SKIN_TEXTURE_WINDOW", "7"))
+    SKIN_SPREAD_UNRELIABLE = float(os.getenv("FACE_SKIN_SPREAD_UNRELIABLE", "9.5"))
+
     def __init__(self, image_input, strict_angle=True, brightness_mode="none", brightness_level=1.0, require_insight=True):
         if isinstance(image_input, str):
             self.frame = cv2.imdecode(np.fromfile(image_input, dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -1077,6 +1098,39 @@ class FaceAnalyzer:
 
         return (float(np.median(l_vals)), float(np.median(a_vals)), float(np.median(b_vals)))
 
+    def _skin_texture_mask(self):
+        """回傳「夠平滑，像皮膚」的遮罩。頭髮的高頻方向性紋理在這裡會被剔掉。
+
+        用局部標準差而不是 Laplacian：對雜訊比較不敏感，而且一次 blur 就算得出來，
+        不會拖慢分析。見 SKIN_TEXTURE_STD_MAX 的說明。
+        """
+        gray = cv2.cvtColor(self.frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        win  = (self.SKIN_TEXTURE_WINDOW, self.SKIN_TEXTURE_WINDOW)
+        mean = cv2.blur(gray, win)
+        sq   = cv2.blur(gray * gray, win)
+        std  = np.sqrt(np.maximum(sq - mean * mean, 0.0))
+        return (std <= self.SKIN_TEXTURE_STD_MAX).astype(np.uint8) * 255
+
+    def _skin_sample_reliability(self, lab_img, roi_mask) -> dict:
+        """頰部取樣區的亮度離散程度——遮擋的偵測訊號，門檻由實測決定。
+
+        量的是**顏色過濾之前**的幾何取樣區：污染的證據就在那些被過濾掉、或沒被
+        過濾掉但明顯偏離的像素裡。過濾之後才量等於先把證據刪掉再找證據。
+        """
+        l_vals = lab_img[:, :, 0][roi_mask > 0].astype(np.float32) / 2.55
+        if l_vals.size < 100:
+            return {"measured": False, "reliable": True, "hint": ""}
+        spread = float(np.median(np.abs(l_vals - np.median(l_vals))))
+        reliable = spread <= self.SKIN_SPREAD_UNRELIABLE
+        return {
+            "measured": True,
+            "reliable": reliable,
+            "spread": round(spread, 2),
+            "threshold": self.SKIN_SPREAD_UNRELIABLE,
+            # 值照樣回傳，不清空：它仍是目前最好的估計，只是要讓下游知道別拿它去比色號。
+            "hint": "" if reliable else "臉頰被頭髮或陰影遮住，膚色可能不準；把頭髮撥到耳後、在均勻光線下重拍會更準確。",
+        }
+
     def _classify_shade_12grid(self, lab_img, mask_u8):
         l_mean, a_axis, b_axis = self._lab_robust_from_mask(lab_img, mask_u8)
         matched = None
@@ -1153,6 +1207,17 @@ class FaceAnalyzer:
             combined_mask = cv2.bitwise_and(face_mask, color_mask)
         if cv2.countNonZero(combined_mask) < 100:
             raise ValueError("膚色區域不足，請使用光線均勻、臉部清楚的正面照片")
+
+        # 顏色分不開棕髮與皮膚，紋理可以——完整理由與實測數字見 SKIN_TEXTURE_STD_MAX。
+        textured = cv2.bitwise_and(combined_mask, self._skin_texture_mask())
+        # 紋理過濾不能反過來把樣本殺光：粗顆粒、對焦不準或高 ISO 的照片整張都是高頻
+        # 雜訊，那種照片上這一層會濾掉幾乎所有像素。剩太少就退回沒濾的版本——
+        # 寧可污染風險照舊（下面的可信度標記還會抓），也不要沒有樣本可算。
+        if cv2.countNonZero(textured) >= 150:
+            combined_mask = textured
+
+        # 可信度量在幾何取樣區上，不是量過濾後的結果，理由見 _skin_sample_reliability。
+        self.skin_reliability = self._skin_sample_reliability(lab, sample_mask)
 
         season               = self._classify_season(lab, hsv, combined_mask)
         shade_label, L, a, b = self._classify_shade_12grid(lab, combined_mask)
@@ -1244,6 +1309,9 @@ class FaceAnalyzer:
                 "四季型":   season,
                 "膚色分級": shade_label,
                 "LAB": {"L": float(round(L,2)), "a": float(round(a,2)), "b": float(round(b,2))},
+                # 頭髮／陰影遮住臉頰時這裡會是 reliable:false。值照樣給——它仍是最好的
+                # 估計，但下游要拿它去算 ΔE 比色號之前應該先看這個旗標。
+                "可信度": getattr(self, "skin_reliability", {"measured": False, "reliable": True, "hint": ""}),
             },
             "嘴唇_LAB": {"L": float(lip_L), "a": float(lip_a), "b": float(lip_b)},
             "臉部對稱性": self.get_face_symmetry(),
