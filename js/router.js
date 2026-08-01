@@ -3650,9 +3650,13 @@ const PageInit = {
         if (anEl) { anEl.textContent = History.list().length; anEl.classList.add('num-pop'); anEl.style.animationDelay='.1s'; }
         if (suggestionEl) { suggestionEl.textContent = suggestions.length; suggestionEl.classList.add('num-pop'); suggestionEl.style.animationDelay='.16s'; }
         if (pointEl) { pointEl.textContent = MemberRewards.getPoints(profile.email); pointEl.classList.add('num-pop'); pointEl.style.animationDelay='.2s'; }
+        // 這個數字先畫本機的、拿到資料庫餘額才蓋掉。讀不到資料庫時不能讓它繼續假裝是
+        // 已同步的餘額——把標籤改成「會員點數（本機）」，看的人才知道這是還沒對上帳的數字。
+        const pointLabelEl = pointEl ? pointEl.parentElement?.querySelector('.stat-label') : null;
+        const markPointsUnsynced = () => { if (pointLabelEl) pointLabelEl.textContent = '會員點數（本機）'; };
         if (pointEl && !isGuest() && profile.email && Api.getMemberPoints) {
             Api.getMemberPoints(profile.email).then(r => {
-                if (!r || !r.ok || r.balance == null) return;
+                if (!r || !r.ok || r.balance == null) { markPointsUnsynced(); return; }
                 pointEl.textContent = r.balance;
                 if (r.lifetime != null && typeof MemberRewards !== 'undefined') {
                     // 讓會員等級進度也能吃到資料庫的 lifetime；保留 localStorage 只是為了既有 MemberTier 介面。
@@ -3660,12 +3664,21 @@ const PageInit = {
                     all[String(profile.email).trim().toLowerCase()] = Number(r.lifetime) || 0;
                     MemberRewards._save(MemberRewards._lifetimeKey, all);
                 }
-            }).catch(() => {});
+            }).catch(() => { markPointsUnsynced(); });
         }
 
         const checkinCard = document.getElementById('profileCheckinCard');
         if (checkinCard) {
-            const paintCheckin = (status, remote) => {
+            // 打卡失敗要講清楚是哪一種失敗，使用者才知道該重新登入還是回報給我們。
+            const checkinFailureMessage = (result) => {
+                if (!result) return '打卡失敗：連不上會員資料庫，請稍後再試。';
+                if (result.status === 401) return '打卡失敗：登入狀態已失效，請重新登入後再打卡。';
+                if (result.status === 404) return '打卡失敗：會員資料庫尚未提供打卡功能，這一次沒有記錄到。已回報給資料庫端。';
+                return `打卡失敗：${result.error || '會員資料庫沒有接受這次打卡'}，這一次沒有記錄到。`;
+            };
+            // source: 'remote' = 讀到資料庫紀錄；'unknown' = 還沒讀到（載入中或讀取失敗）。
+            // 不再有 'local' 這個狀態——本機 localStorage 不是點數的真相來源。
+            const paintCheckin = (status, source) => {
                 const nextMilestone = MemberRewards.nextStreakMilestone(Number(status.streak) || 0);
                 const streakLine = (Number(status.streak) || 0) > 0
                     ? `目前連續簽到 <b>${Number(status.streak) || 0}</b> 天${nextMilestone ? `，再簽 ${nextMilestone - (Number(status.streak) || 0)} 天可拿額外 ${MemberRewards._streakBonusTable[nextMilestone]} 點` : '，已達最高獎勵天數'}`
@@ -3674,38 +3687,43 @@ const PageInit = {
                     <div>
                         <b>${status.checkedToday ? '今天已完成打卡' : '今天還沒打卡'}</b>
                         <p>每日打卡可獲得 10 點；連續簽到 3 / 7 / 14 / 30 天另有加碼獎勵。</p>
-                        <p class="checkin-streak">${streakLine}${remote ? '（資料庫同步）' : ''}</p>
+                        <p class="checkin-streak">${streakLine}${source === 'remote' ? '（資料庫同步）' : '（尚未取得資料庫紀錄）'}</p>
                     </div>
                     <button class="btn-gold btn-sm" id="dailyCheckinBtn" ${status.checkedToday || isGuest() ? 'disabled' : ''}>${status.checkedToday ? '已打卡' : '打卡 +10'}</button>
                 </div>`;
                 const btn = document.getElementById('dailyCheckinBtn');
                 if (btn) btn.onclick = async () => {
                     btn.disabled = true;
-                    if (!isGuest() && Api.checkInMember) {
-                        const remoteResult = await Api.checkInMember(profile.email).catch(() => null);
-                        if (remoteResult?.ok) {
-                            const gained = remoteResult.awarded ?? remoteResult.points ?? 0;
-                            showToast(`打卡成功，獲得 ${gained} 點`);
-                            PageInit.profile();
-                            return;
-                        }
+                    // 打卡一定要寫進會員資料庫才算數。
+                    //
+                    // 先前這裡在遠端失敗時會**靜默**改用 MemberRewards（localStorage 的 demo 模組）
+                    // 發點數，然後跳出跟成功一模一樣的「打卡成功，獲得 10 點」。使用者看到點數增加、
+                    // 資料庫卻什麼都沒收到，而且雙方都看不出寫入失敗了——點數就這樣只累積在瀏覽器裡。
+                    // 現在遠端失敗就明講失敗，不再自己在瀏覽器裡發點數。
+                    const remoteResult = (!isGuest() && Api.checkInMember)
+                        ? await Api.checkInMember(profile.email).catch(() => null)
+                        : null;
+                    if (remoteResult?.ok) {
+                        const gained = remoteResult.awarded ?? remoteResult.points ?? 0;
+                        showToast(`打卡成功，獲得 ${gained} 點`);
+                        PageInit.profile();
+                        return;
                     }
-                    const result = MemberRewards.checkin(profile.email);
-                    if (!result.ok) { showAlert(result.message, { type:'error' }); btn.disabled = false; return; }
-                    showToast(result.bonus
-                        ? `打卡成功！連續 ${result.streak} 天，獲得 ${result.points} 點（含連續簽到獎勵 ${result.bonus} 點）`
-                        : `打卡成功，獲得 ${result.points} 點`);
-                    PageInit.profile();
+                    // 按鈕不停用：資料庫端修好之後，不必重新整理就能直接再試一次。
+                    btn.disabled = false;
+                    showAlert(checkinFailureMessage(remoteResult), { type: 'error' });
                 };
             };
-            paintCheckin(MemberRewards.checkinStatus(profile.email), false);
+            // 初始狀態不讀 localStorage：那份紀錄是舊版本機打卡留下的，拿它當「今天已打卡」
+            // 會把按鈕停用，使用者連重試的機會都沒有。先畫成未打卡，等資料庫回覆再更新。
+            paintCheckin({ checkedToday: false, streak: 0 }, 'unknown');
             if (!isGuest() && profile.email && Api.getCheckinStatus) {
                 Api.getCheckinStatus(profile.email).then(r => {
                     if (!r || !r.ok) return;
                     paintCheckin({
                         checkedToday: !!r.checkedToday,
                         streak: Number(r.streak) || 0
-                    }, true);
+                    }, 'remote');
                 }).catch(() => {});
             }
         }
