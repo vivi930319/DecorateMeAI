@@ -4597,7 +4597,11 @@ const PageInit = {
                 let firstRec = null;
                 for (let page = 0; page < PRODUCT_MAX_PAGES; page++) {
                     const rec = await Api.listProducts(cursor ? { ...baseParams, cursor } : baseParams);
-                    if (!rec?.ok) return firstRec ? { ...firstRec, products: all } : rec;
+                    // 中途某一頁失敗：前面撈到的仍然有用，但**不能假裝撈完了**。
+                    // 標成 partial，下面才不會把伺服器回的總數（例如 1041）掛在一份
+                    // 只有 300 筆的清單上——那正是「後台看不到所有商品」的原樣重現，
+                    // 而且這次連個提示都沒有。
+                    if (!rec?.ok) return firstRec ? { ...firstRec, products: all, partial: true } : rec;
                     if (!firstRec) firstRec = rec;
                     for (const p of rec.products || []) {
                         const key = p.rawId != null ? `raw:${p.rawId}` : `id:${p.id}`;
@@ -4620,10 +4624,16 @@ const PageInit = {
                         ? loaded.filter(p => p.apiType === typeFilter || p.cat === TYPE_TO_CAT[typeFilter])
                         : loaded;
                     // 伺服器的 total 是「忽略 type 之後的總數」，套了前端類型過濾就不能拿來當筆數。
-                    productResultTotal = typeFilter ? dbProducts.length : Number(rec.total ?? dbProducts.length);
-                    dbProductsError = '';
-                    productConnectionState = 'ok';
-                    setConnectionStatus('adminProductConnection', '正常', 'ok');
+                    // 翻頁中途失敗（partial）時同理：那個總數描述的是完整清單，掛在一份不完整的
+                    // 清單上會讓管理員以為全部都在這裡了。這種時候只報實際載到的筆數並標明。
+                    productResultTotal = (typeFilter || rec.partial)
+                        ? dbProducts.length
+                        : Number(rec.total ?? dbProducts.length);
+                    dbProductsError = rec.partial
+                        ? `商品清單只載入了部分資料（${dbProducts.length} 筆），請按重新載入再試一次。`
+                        : '';
+                    productConnectionState = rec.partial ? 'error' : 'ok';
+                    setConnectionStatus('adminProductConnection', rec.partial ? '部分載入' : '正常', rec.partial ? 'error' : 'ok');
                     const total = document.getElementById('adminProductTotal');
                     if (total) total.textContent = String(productResultTotal);
                 } else {
@@ -4803,10 +4813,27 @@ const PageInit = {
                 showAlert('色號格式不正確，只接受 Hex 色碼（例如 #3A241C），不合格式的色號已被忽略。', { type:'error' });
                 return;
             }
+            // 編輯既有商品時，分類欄若沒被動過就沿用它原本的 type，不要從 cat 反推。
+            //
+            // _normalizeProduct 認不出分類時 cat 會落到 '底妝' 而 apiType 維持 null；
+            // 編輯表單照著 cat 預選「底妝」，存檔再用 CAT_TO_TYPE[cat] || 'foundations'
+            // 換回英文——一個原本是眼影的商品，只因為管理員改了價格，type 就被靜默改寫成
+            // foundations。管理員沒有碰分類，我們就不該替他決定分類。
+            const editing = editingProductId
+                ? (dbProducts || []).find(p => String(p.id) === String(editingProductId))
+                : null;
+            const categoryUntouched = editing && cat === (editing.cat || '底妝');
+            const resolvedType = (categoryUntouched && editing.apiType)
+                ? editing.apiType
+                : CAT_TO_TYPE[cat];
+            if (!resolvedType) {
+                showAlert('這件商品的分類無法判定，請先從分類下拉選單選一個正確的分類再儲存。', { type:'error' });
+                return;
+            }
             // 全部走真商品資料庫，不再寫 localStorage demo
             const payload = {
                 name, brand, price,
-                type: CAT_TO_TYPE[cat] || 'foundations',
+                type: resolvedType,
                 imageUrl: img,
                 imageUrls: [img],
                 image_url: img,

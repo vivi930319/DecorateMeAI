@@ -34,8 +34,9 @@
     /* 玻璃面板（妝容對比、分析結果、收藏卡…）的底。預設值就是先前寫死的那三個顏色，
        所以預設主題完全不變；深色主題在下面各自覆寫。 */
     --glass-surface:rgba(249,237,233,0.34);
-    --glass-surface-hover:rgba(252,246,244,0.60);
+    --glass-surface-hover:rgba(252,246,244,0.60); --glass-surface-hover-soft:rgba(252,246,244,0.50);
     --glass-surface-solid:rgba(250,240,237,0.92);
+    --surface-rgb:250,240,237;
     /* 按鈕漸層與其上的文字色（金底要配深字，深底要配淺字） */
     --btn-grad:linear-gradient(100deg,#F1C7D0 0%,#EFD0C8 46%,#E6C295 100%);
     --btn-ink:#5B3A38;
@@ -1050,7 +1051,7 @@ body[data-member-theme="rose"] {
     --line-dk:rgba(198,204,211,0.24);
     /* 深色面板取代白色霧面，高光與邊線走銀 */
     --glass:rgba(20,23,26,0.72); --sheen:rgba(216,222,228,0.14);
-    --glass-surface:rgba(20,23,26,0.55); --glass-surface-hover:rgba(34,38,43,0.68); --glass-surface-solid:rgba(28,31,34,0.94); --edge:rgba(216,222,228,0.30);
+    --glass-surface:rgba(20,23,26,0.55); --glass-surface-hover:rgba(34,38,43,0.68); --glass-surface-hover-soft:rgba(30,34,38,0.60); --glass-surface-solid:rgba(28,31,34,0.94); --surface-rgb:28,31,34; --edge:rgba(216,222,228,0.30);
     --btn-grad:linear-gradient(100deg,#8b939c 0%,#d2d8de 46%,#f7f9fa 100%); --btn-ink:#14171a;
     --btn-glass:linear-gradient(118deg, rgba(58,64,70,0.78) 0%, rgba(44,49,54,0.72) 48%, rgba(70,77,84,0.74) 100%);
     /* 深底之下的紅與綠要拉亮，:root 那組是配淺底的，壓在深色玻璃上會糊成一團 */
@@ -1079,7 +1080,7 @@ body[data-member-theme="jade"] {
     --line-dk:rgba(168,212,188,0.22);
     /* 青玉也是淺底，玻璃維持白霧，邊線與按鈕收成綠調 */
     --glass:rgba(255,255,255,0.64); --sheen:rgba(255,255,255,0.88);
-    --glass-surface:rgba(235,246,240,0.40); --glass-surface-hover:rgba(244,250,246,0.62); --glass-surface-solid:rgba(240,248,244,0.94); --edge:rgba(79,146,112,0.34);
+    --glass-surface:rgba(235,246,240,0.40); --glass-surface-hover:rgba(244,250,246,0.62); --glass-surface-hover-soft:rgba(242,249,245,0.52); --glass-surface-solid:rgba(240,248,244,0.94); --surface-rgb:240,248,244; --edge:rgba(79,146,112,0.34);
     --btn-grad:linear-gradient(100deg,#4F9270 0%,#A8D4BC 46%,#E6F0EA 100%); --btn-ink:#1E3A2B;
     --btn-glass:linear-gradient(118deg, rgba(224,240,231,0.66) 0%, rgba(206,230,216,0.58) 48%, rgba(190,222,204,0.60) 100%);
     --btn-glass-hover:linear-gradient(118deg, rgba(234,247,240,0.78) 0%, rgba(216,238,226,0.70) 48%, rgba(200,232,214,0.72) 100%);
@@ -1105,7 +1106,7 @@ body[data-member-theme="noir"] {
     --line-dk:rgba(217,182,111,0.24);
     /* 深色面板取代白色霧面，高光與邊線走金 */
     --glass:rgba(23,20,16,0.72); --sheen:rgba(226,195,116,0.14);
-    --glass-surface:rgba(23,20,16,0.55); --glass-surface-hover:rgba(40,34,27,0.68); --glass-surface-solid:rgba(34,29,24,0.94); --edge:rgba(226,195,116,0.30);
+    --glass-surface:rgba(23,20,16,0.55); --glass-surface-hover:rgba(40,34,27,0.68); --glass-surface-hover-soft:rgba(35,30,24,0.60); --glass-surface-solid:rgba(34,29,24,0.94); --surface-rgb:34,29,24; --edge:rgba(226,195,116,0.30);
     --btn-grad:linear-gradient(100deg,#b98b36 0%,#e4c777 46%,#fff3d0 100%); --btn-ink:#1a1509;
     --btn-glass:linear-gradient(118deg, rgba(46,39,30,0.80) 0%, rgba(34,29,24,0.74) 48%, rgba(58,49,36,0.76) 100%);
     --danger:#E8837C; --success:#7FC194;
@@ -1587,7 +1588,7 @@ body.admin-mode .main-content * { letter-spacing:0; }
 /* ── Success check · 模糊+旋轉打勾的完成回饋 ── */
 .toast-check { position:fixed; left:50%; bottom:38px; transform:translate(-50%,26px); opacity:0; z-index:320;
     display:flex; align-items:center; gap:13px; color:#4A2F30;
-    background:rgba(250,240,237,0.62); backdrop-filter:blur(20px) saturate(150%); -webkit-backdrop-filter:blur(20px) saturate(150%);
+    background:rgba(var(--surface-rgb),0.62); backdrop-filter:blur(20px) saturate(150%); -webkit-backdrop-filter:blur(20px) saturate(150%);
     border:1px solid var(--edge); border-radius:999px; padding:14px 28px 14px 18px;
     box-shadow:inset 0 1px 0 var(--sheen), 0 22px 54px rgba(120,70,66,0.22);
     font-family:var(--sans); font-size:12px; letter-spacing:.18em; }
@@ -1710,7 +1711,8 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .compare-stage.has-render::before,
 .compare-stage.has-render::after { display:none; }
 .compare-stage.has-render .compare-photo-label {
-    background:rgba(252,248,240,0.72);
+    /* 妝前／妝後標籤壓在渲染結果上，深色主題底下奶油色會整塊浮出來 */
+    background:rgba(var(--surface-rgb),0.78);
     padding:8px 18px;
 }
 .compare-photo-label {
@@ -1790,7 +1792,9 @@ body {
 .dash-card:hover,
 .upload-box:hover,
 .stat-cell:hover { background:var(--glass-surface-hover); }
-.hist-item:hover { background:var(--glass-surface-hover); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
+/* 這一條的透明度本來就比 .stat-cell:hover 低一階（0.50 對 0.60），共用同一個變數會把它
+   悄悄改亮。差異很小，但「換主題」不該順便改掉預設主題的外觀。 */
+.hist-item:hover { background:var(--glass-surface-hover-soft); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
 
 /* —— 深色玻璃表面 —— */
 .dash-card.dark,
@@ -1939,7 +1943,7 @@ body {
     background:rgba(44,32,36,0.42); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); opacity:0; transition:opacity .3s var(--ease); }
 .glass-alert.show { opacity:1; }
 .ga-card { position:relative; width:100%; max-width:382px; padding:38px 34px 30px; text-align:center; border-radius:24px;
-    background:rgba(250,240,237,0.72); backdrop-filter:blur(24px) saturate(150%); -webkit-backdrop-filter:blur(24px) saturate(150%);
+    background:rgba(var(--surface-rgb),0.72); backdrop-filter:blur(24px) saturate(150%); -webkit-backdrop-filter:blur(24px) saturate(150%);
     border:1px solid var(--edge); box-shadow:inset 0 1px 0 var(--sheen), 0 36px 84px rgba(60,30,30,0.34);
     transform:translateY(16px) scale(.96); transition:transform .35s var(--ease); }
 .glass-alert.show .ga-card { transform:none; }
@@ -1957,7 +1961,7 @@ body {
 .ga-actions { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
 /* 分析引導閘門（對比圖 / 妝容建議無分析紀錄時） */
 .analysis-gate { max-width:560px; margin:40px auto; padding:60px 46px 54px; text-align:center; border-radius:24px;
-    background:rgba(250,240,237,0.42); backdrop-filter:blur(24px) saturate(150%); -webkit-backdrop-filter:blur(24px) saturate(150%);
+    background:rgba(var(--surface-rgb),0.42); backdrop-filter:blur(24px) saturate(150%); -webkit-backdrop-filter:blur(24px) saturate(150%);
     border:1px solid var(--edge); box-shadow:inset 0 1px 0 var(--sheen), 0 26px 60px rgba(120,70,66,0.16); }
 .analysis-gate .ag-kicker { font-family:var(--sans); font-size:10px; letter-spacing:.36em; text-transform:uppercase; color:var(--gold-deep); }
 .analysis-gate .ag-mark { width:58px; height:58px; margin:20px auto 22px; border-radius:50%; display:flex; align-items:center; justify-content:center;

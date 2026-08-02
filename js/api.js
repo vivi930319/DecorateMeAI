@@ -2247,7 +2247,13 @@ const AnalysisPackage = {
                 season: skin['四季型'] || null,
                 level: skin['膚色分級'] || null,
                 lab: skin['LAB'] || null,
-                labSource: skin['LAB來源'] || null
+                labSource: skin['LAB來源'] || null,
+                // 頭髮或陰影蓋住臉頰時膚色會算錯。臉部分析端會標記，但**送去商品推薦的
+                // 是這個 JS 建的資料包**，不是後端 analysis_package.py 那份——先前只補了
+                // 後端那條路，這裡沒帶，於是旗標從來沒到過推薦端，整個「不可信就別比色號」
+                // 的設計在前端這條路上是空的。欄位缺漏時視為可信，維持既有行為。
+                labReliable: (skin['可信度'] || {}).reliable !== false,
+                labReliability: skin['可信度'] || null
             },
             lipLab: raw?.['嘴唇_LAB'] || null,
             symmetry: sym ? {
