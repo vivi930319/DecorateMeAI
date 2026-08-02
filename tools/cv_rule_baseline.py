@@ -8,7 +8,7 @@
 
 2026-07-24 的校準顯示眼型規則式 0.374 對上 CNN 0.332，看起來規則式贏，
 但那個差距（0.042）很可能小於單次切分本身的雜訊。這支腳本把規則式接上
-**完全相同的 fold**（`split_kfold_by_identity(labels, identities, 5, 42)`，
+完全相同的 fold（`split_kfold_by_identity(labels, identities, 5, 42)`，
 對同一組 labels/identities 是確定性的），才能斷定誰真的比較好。
 
 ## 不能偷看的地方

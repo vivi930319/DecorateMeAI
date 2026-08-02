@@ -452,6 +452,26 @@ def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.
             face_corrections.image_hash(contents),
             owner_id=owner_id,
         )
+    except ValueError as exc:
+        # FaceAnalyzer 對「這張照片本身有問題」一律 raise ValueError，而且訊息本身就是
+        # 要給使用者看的可行動指引：pose_guidance 產生的「你現在露出的是右臉，請把頭轉向
+        # 你的右邊」、「沒偵測到人臉」、「膚色區域不足，請使用光線均勻、臉部清楚的正面照片」。
+        #
+        # 先前這一段跟內部錯誤共用同一個 except Exception，於是每一句都被覆蓋成
+        # 「臉部分析失敗，請稍後再試」。那句話對使用者毫無用處——他不知道要改什麼，
+        # 只會原樣重拍同一張、再失敗一次。同步的 /analyze 端點（見上面的 except ValueError）
+        # 一直都有把訊息傳出去，但前端走的是 job 路徑，所以 pose_guidance 那段指引
+        # 實際上從來沒有被任何使用者看到過。
+        #
+        # 錯誤碼刻意用一個前端 USER_ERROR_ZH 沒有收錄的新碼：那張表命中就會用固定字串
+        # 取代訊息，收錄了反而又把這裡的具體指引蓋掉一次。沒收錄時前端會原樣顯示中文訊息。
+        logging.info("臉部分析 job 因照片問題中止 job_id=%s: %s", job_id, exc)
+        job_store.patch_if_status(_COL, job_id, {"processing"}, {
+            "status": "failed", "stage": "unusable_image",
+            "completedAt": _now_iso(), "updatedAt": _now_iso(),
+            "error": {"code": "FACE_IMAGE_UNUSABLE", "message": str(exc), "retryable": True},
+        })
+        return
     except Exception:
         logging.exception("臉部分析 job 失敗 job_id=%s", job_id)
         job_store.patch_if_status(_COL, job_id, {"processing"}, {
@@ -567,12 +587,12 @@ class FaceAnalyzer:
     #     0-5°   0.538      5-8°   0.389      8-12°  0.339
     #    12-18°  0.162     18-25°  0.031
     #
-    # 那條曲線描述的是**規則式**分類器。線上開著 ROI_MODEL_FIRST=1，使用者看到的是
+    # 那條曲線描述的是規則式分類器。線上開著 ROI_MODEL_FIRST=1，使用者看到的是
     # CNN 覆蓋後的答案，而 CNN 在同一批圖上幾乎不受角度影響：
     #
     #     0-5°  0.831   5-8°  0.741   8-12° 0.769   12-18° 0.812   18-25° 0.781
     #
-    # 所以角度抑制**預設關閉**（門檻設成不可能達到的值）。按規則式的數字去抑制，
+    # 所以角度抑制預設關閉（門檻設成不可能達到的值）。按規則式的數字去抑制，
     # 等於把 CNN 81% 準確的答案丟掉——那是拿錯的量測結果去傷害對的分類器。
     #
     # 機制留著，因為它在兩種情況下會需要：
@@ -580,7 +600,7 @@ class FaceAnalyzer:
     #   2. 之後量到某個五官／某個軸真的敏感時（例如眼型對 pitch，還沒量）
     # 要啟用就設環境變數，例如 FACE_YAW_UNRELIABLE=12 FACE_YAW_UNCERTAIN=8。
     #
-    # ⚠️ 上面 CNN 那組數字**尚未排除訓練集**。tools/measure_angle_sensitivity.py 目前
+    # 注意：上面 CNN 那組數字尚未排除訓練集。tools/measure_angle_sensitivity.py 目前
     # 對整個資料夾評估，裡面可能含 CNN 訓練過的圖，準確率與平坦度都可能被記憶效應灌水。
     # 要當結論用，必須先限制在 val split（做法見 eval_rule_baseline.py）。
     YAW_LIMIT      = float(os.getenv("FACE_YAW_LIMIT", "18.0"))
@@ -588,17 +608,17 @@ class FaceAnalyzer:
     YAW_UNCERTAIN  = float(os.getenv("FACE_YAW_UNCERTAIN", "9999"))
     # pitch 維持 15：同一批資料顯示它對臉型幾乎沒有影響（0-5° 0.307、12-18° 0.250），
     # 但那只量了臉型。抬頭低頭會直接改變眼睛的開合，眼型很可能是 pitch 敏感的，
-    # 而我們還沒量。**沒有量過的東西不要放寬。**
+    # 而我們還沒量。沒有量過的東西不要放寬。
     PITCH_LIMIT   = float(os.getenv("FACE_PITCH_LIMIT", "15.0"))
 
     # ── 膚色取樣被頭髮污染 ────────────────────────────────────────────────
     # get_skin_color 的膚色範圍過濾只擋得住黑髮（靠 LAB 的 L>=35 下限）。實測把同一張
-    # 照片的**真實頭髮**移植到臉頰（40 張、160 組遮蔽案例）：棕髮與染髮平均有 53% 的
+    # 照片的真實頭髮移植到臉頰（40 張、160 組遮蔽案例）：棕髮與染髮平均有 53% 的
     # 像素直接通過那層過濾——顏色範圍本來就分不開棕髮與皮膚，兩者在 LAB／HSV／YCrCb
     # 三個空間裡都重疊。純色塗塊的對照組更極端，通過率 100%。
     #
     # 後段的分位裁切與中位數離群剔除多數時候擋得住，但不是每次：ΔE>5 佔 19%，最差 45。
-    # 也就是說每五次就有一次膚色明顯算錯，而且**完全不會報錯**——粉底推薦與色號比對
+    # 也就是說每五次就有一次膚色明顯算錯，而且完全不會報錯——粉底推薦與色號比對
     # 都會跟著錯。
     #
     # 兩道防線，都用上面那批資料量過：
@@ -968,7 +988,7 @@ class FaceAnalyzer:
         # 眼型現行四類（2026-07-31）：下垂眼／圓眼／桃杏眼／鳳眼。
         # 杏仁眼＋桃花眼 → 桃杏眼（07-30）；細長眼 → 鳳眼（07-31）。
         #
-        # 這組手寫 if-else 現在是**最後一層** fallback。幾何決策樹已於 07-30 全面退場
+        # 這組手寫 if-else 現在是最後一層 fallback。幾何決策樹已於 07-30 全面退場
         # （見 basic_rule_trees 與發展歷程規格書 §7.11），正式答案是 CNN／DINOv2；
         # 這裡維持可用，是為了模型載入失敗時仍有東西可回。
         #
@@ -1001,7 +1021,7 @@ class FaceAnalyzer:
         # 「窄鼻」已經併入「標準鼻」，不再是一個輸出類別。
         #
         # 併掉的理由，從當初的校準數字就看得出來：人工標註的三類，ratio_width 中位數是
-        # 寬鼻 0.310 > 窄鼻 0.291 > 標準鼻 0.283 —— **「窄鼻」的鼻翼比「標準鼻」還寬**。
+        # 寬鼻 0.310 > 窄鼻 0.291 > 標準鼻 0.283 —— 「窄鼻」的鼻翼比「標準鼻」還寬。
         # 標註者判斷窄鼻時看的顯然不是鼻翼寬度（可能是鼻頭大小或鼻樑），
         # 也就是這個特徵跟那個標籤本來就對不上。
         #
@@ -1378,7 +1398,7 @@ class FaceAnalyzer:
         except Exception:
             logging.getLogger(__name__).exception("規則樹預測失敗，維持既有答案")
 
-        # DINOv2 逐部位覆蓋。**必須放在決策樹之後**：樹負責眼型與臉型，
+        # DINOv2 逐部位覆蓋。必須放在決策樹之後：樹負責眼型與臉型，
         # 而眼型的最佳來源是 DINOv2（0.542 vs 樹 0.428 vs CNN 0.495）——
         # 放在樹之前會被樹蓋回去。臉型仍由樹決定，因為 DINOv2 在那裡最差（0.424）。
         # 哪些部位見 basic_roi_shadow.dinov2_first_parts()，預設只有眼型。
@@ -1401,7 +1421,7 @@ class FaceAnalyzer:
         # 覆蓋整個 result，寫在前面的抑制會被蓋掉——先前就是這樣，日誌裡看得到
         # 「規則=無法判斷（拍攝角度偏斜） 模型=圓形臉」，抑制等於沒做。
         #
-        # 注意這裡抑制的是**模型的**答案，而角度衰減曲線目前只量過規則式。CNN 從
+        # 注意這裡抑制的是模型的答案，而角度衰減曲線目前只量過規則式。CNN 從
         # landmark 裁 ROI，斜臉的裁切同樣會失真，但失真多少沒有量過，所以這道抑制
         # 現在是「合理的預防」而不是「有數據支撐的門檻」。量完再回來調 YAW_UNRELIABLE。
         if "臉型" in pose_report.get("suppressedFields", []):

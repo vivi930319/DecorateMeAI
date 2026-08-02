@@ -288,7 +288,7 @@ class RenderRequest(BaseModel):
     # 全站串接統一走 analysisPackage，渲染也不例外。
     #
     # 但這裡只從資料包讀「結構化資料」（faceAnalysis、styleId），
-    # **資料包裡的 generativeText.renderPromptEn 一律忽略** ——
+    # 資料包裡的 generativeText.renderPromptEn 一律忽略 ——
     # 那是前端送來的，可以被竄改，而 renderApiKey 是明文寫在網頁裡的：
     # 一旦照著它渲染，任何人都能拿這把 key 送任意 prompt、用我們的 Replicate 額度生成任意圖片。
     # 要下給模型的 prompt，後端自己去跟建議服務要（build_personalized_render_prompt）。
@@ -362,7 +362,7 @@ def _render_inputs(req: RenderRequest) -> tuple[str, dict | None]:
     """從請求裡取出組 prompt 需要的兩樣東西：styleId 與 faceAnalysis。
 
     優先讀 analysisPackage（全站串接統一走資料包），沒有的話才看單獨的欄位。
-    **刻意不讀資料包裡的 generativeText.renderPromptEn** —— 見 RenderRequest 的說明。
+    刻意不讀資料包裡的 generativeText.renderPromptEn —— 見 RenderRequest 的說明。
     """
     package = req.analysisPackage or {}
     face = req.faceAnalysis or package.get("faceAnalysis")
@@ -1256,7 +1256,7 @@ async def delete_member_render_artifacts(
             if not job_id:
                 continue
             attempted.add(str(job_id))
-            # 妝後圖與**妝前圖**都要刪。妝前圖是使用者上傳的原始照片，
+            # 妝後圖與妝前圖都要刪。妝前圖是使用者上傳的原始照片，
             # 帳號都刪了還把他的臉留在儲存空間裡，是這個系統最嚴重的一種失敗。
             # 妝後圖有 isPermanent 旗標（可能是外部暫存網址），妝前圖一律由本服務
             # 上傳到自己的 bucket，所以不需要那個判斷。

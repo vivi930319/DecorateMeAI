@@ -37,7 +37,7 @@ from face_roi import PARTS, roi_bbox  # noqa: E402
 from train_basic_cnn_roi import build_part_data, load_cache, split_kfold_by_identity  # noqa: E402
 
 # 可選的 backbone 大小。維度不同，快取與輸出檔名都要跟著分開——
-# 快取的有效性檢查只比對**筆數**，維度不符不會被抓到，共用檔名會直接拿錯的 embedding。
+# 快取的有效性檢查只比對筆數，維度不符不會被抓到，共用檔名會直接拿錯的 embedding。
 ENCODERS = {
     "dinov2_vits14": 384,
     "dinov2_vitb14": 768,
@@ -328,7 +328,7 @@ def main():
     # 於是 --identity-mode cluster 的輪廓實驗會被存成 dinov2_cv_per_image_contour_results.json
     # ——而依規格書 §八 的規則，檔名帶 per_image 的數字是「不可採信」的那一類。
     # 可信的結果被貼上不可信的標籤，比存錯地方更難發現。
-    # ⚠️ encoder 後綴要一起帶上，否則不同 backbone 的結果會互相覆蓋。
+    # 注意：encoder 後綴要一起帶上，否則不同 backbone 的結果會互相覆蓋。
     # 2026-07-31 踩過：_use_encoder 明明把 OUT_PATH 換成 dinov2_cv_results_vitb14.json，
     # 但這裡用 with_name 重新組檔名時只看 identity_mode/face_input/contour_parts，
     # 把 encoder 後綴丟掉了 —— ViT-B/14 的結果直接蓋掉 ViT-S/14 的，而且不會報錯。
