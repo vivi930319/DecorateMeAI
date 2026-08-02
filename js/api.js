@@ -7,24 +7,15 @@
     }
 })();
 
-// ═══ API 設定：所有外部服務都走這裡，不直接連 PostgreSQL 或 Ollama 11434 ═══
+// API 設定：瀏覽器只呼叫 Gateway，不直接連資料庫或模型服務。
 function getRuntimeApiConfig() {
     return typeof window !== 'undefined' ? (window.DECORATE_ME_CONFIG || {}) : {};
 }
 
 const RuntimeApiConfig = getRuntimeApiConfig();
 
-// 所有服務的 baseUrl 與金鑰一律由 config.local.js（window.DECORATE_ME_CONFIG）在執行時注入，
-// 這裡不寫死任何網址或金鑰，避免機密進版控外洩；未注入時為空字串，url() 會回空、不對外呼叫。
-// AI Gateway 代理臉部分析與渲染：瀏覽器不再持有上游長期金鑰（規格書「Admin 商品管理安全 Proxy」§3 禁止），
-// 改帶 /auth/login 發的短期 session。Gateway 路由是 /{service}/{path}，所以要帶上服務名當前綴。
-//
-// 正式站用相對路徑：firebase.json 的 rewrites 已把 /face-basic 等路徑導到 ai-gateway，
-// 走同源就不必處理 CORS，Gateway 種的 dm_session（SameSite=Lax）也才送得出去。
-// 本機開發沒有 rewrites，可在 config.local.js 設 aiGatewayUrl 指向 Gateway 絕對網址。
-// 未設定、又是從 localhost/127.0.0.1 的開發伺服器打開時，預設指向本機 Gateway（8015，
-// 見 ai_gateway 的 run_dev_server），讓一鍵啟動腳本零設定就能登入。
-// 正式站是從 decorate-me.web.app 開的，命中不了這個判斷，維持同源空字串。
+// 正式站使用同源路徑與短期 session，本機開發則預設連到 8015 埠。
+// 服務網址可由公開設定注入，但長期金鑰只能留在伺服器端。
 function _defaultGatewayUrl() {
     const explicit = String(RuntimeApiConfig.aiGatewayUrl || '').trim();
     if (explicit) return explicit;
@@ -66,7 +57,7 @@ const USER_ERROR_ZH = Object.freeze({
     ADMIN_REQUIRED: '只有管理員可以執行這項操作。',
     ADMIN_SUSPENDED: '管理員帳號目前已停權。',
     ADMIN_PROXY_NOT_CONFIGURED: '管理端服務尚未完成設定。',
-    // 點數與兌換：資料庫端只回這三個碼，先前沒收錄，訊息會掉到下面的通用分支去猜。
+    // 點數與兌換的錯誤碼。
     INSUFFICIENT_POINTS: '點數不足，無法完成這次兌換。',
     ALREADY_OWNED: '你已經擁有這個項目了。',
     INVALID_THEME: '找不到這個主題，請重新整理後再試。',
@@ -90,8 +81,7 @@ const USER_ERROR_ZH = Object.freeze({
     MEDIA_UNAVAILABLE: '圖片目前無法讀取，請稍後再試。',
     FACE_ANALYSIS_TIMEOUT: '臉部分析逾時，請稍後再試。',
     FACE_ANALYSIS_ERROR: '臉部分析失敗，請稍後再試。',
-    // 分析成功、只是結果封裝失敗：明確告訴使用者「不需重拍」，否則他會一直換照片，
-    // 而問題根本不在照片。
+    // 分析已完成時，提示使用者不必重新拍照。
     PACKAGE_BUILD_FAILED: '臉部分析已完成，但結果整理失敗，請稍後再試（不需重拍照片）。',
     RENDER_TIMEOUT: '妝容生成逾時，請稍後再試。',
     RENDER_PROVIDER_ERROR: '妝容生成服務處理失敗，請稍後再試。',
@@ -100,19 +90,17 @@ const USER_ERROR_ZH = Object.freeze({
     FETCH_TIMEOUT: '服務回應逾時，請稍後再試。'
 });
 
-// 寫入防線擋下請求時顯示的說明。這些不是後端回的錯誤——請求根本沒送出去——
-// 所以另外收在這裡，不混進 USER_ERROR_ZH（那份是後端 error code 對照表）。
+// 寫入請求在前端被擋下時使用這組提示。
 const WRITE_BLOCKED_ZH = Object.freeze({
     NO_LOCAL_IDENTITY: '請先登入後再執行這項操作。',
-    // 只擋這一次寫入，不清資料也不強制登出——說明要讓人知道「重新登入就好」，
-    // 而不是以為系統壞了。
+    // 只停止本次寫入，保留本機資料並提示重新登入。
     NO_SESSION_PIN: '這個分頁的登入狀態已失效，請重新登入後再執行這項操作。',
     SESSION_UNAVAILABLE: '目前無法確認登入狀態，為避免寫錯帳號已中止這次操作，請稍後再試。',
     OWNER_MISMATCH: '登入身分已切換成其他帳號，為避免寫錯帳號已中止這次操作，請重新整理後再試。',
     DEFAULT: '無法確認目前的登入身分，這次操作已中止。'
 });
 
-// 把秒數講成人看得懂的等待時間。「請在 900 秒後再試」沒有人會去換算。
+// 將秒數轉成容易閱讀的等待時間。
 function formatRetryWait(seconds) {
     const total = Math.max(1, Math.round(Number(seconds) || 0));
     if (total < 60) return `${total} 秒`;
@@ -122,8 +110,7 @@ function formatRetryWait(seconds) {
 }
 if (typeof window !== 'undefined') window.formatRetryWait = formatRetryWait;
 
-// 被限流時，後端一律回 retryAfterSeconds（見 api_errors.rate_limited_error）。
-// 沒有秒數就退回「請稍後再試」——寧可講得模糊，也不要編一個數字出來。
+// 優先顯示後端提供的 retryAfterSeconds，缺少時使用一般提示。
 function retryWaitSuffix(details) {
     const seconds = Number(details && (details.retryAfterSeconds ?? details.retryAfter)) || 0;
     return seconds > 0 ? `請在 ${formatRetryWait(seconds)}後再試。` : '請稍後再試。';
@@ -131,8 +118,7 @@ function retryWaitSuffix(details) {
 
 function localizeUserError(message, code = '', status = 0, details = null) {
     const raw = String(message || '').trim();
-    // 429 先處理：它的訊息要帶「還要等多久」，所以不能走下面那張固定字串對照表。
-    // 使用者拿不到時間就只能一直重試，而每一次重試都讓視窗往後延。
+    // 429 需要顯示等待時間，因此先單獨處理。
     if (status === 429 || /RATE_LIMITED|QUOTA_EXCEEDED/.test(String(code || '').toUpperCase())) {
         const wait = retryWaitSuffix(details);
         const upper = String(code || '').trim().toUpperCase();
@@ -141,9 +127,7 @@ function localizeUserError(message, code = '', status = 0, details = null) {
         return `操作次數過多，${wait}`;
     }
     const explicitCode = String(code || '').trim().toUpperCase();
-    // 只有「整句訊息本身就是一個錯誤碼」時才拿它當碼查表。先前是掃句子裡第一個全大寫的字，
-    // 任何夾帶大寫單字的訊息都會被誤判成錯誤碼，查到什麼就顯示什麼 —— 使用者會看到
-    // 跟實際錯誤無關的句子（例如兌換點數不足卻顯示「你沒有執行這項操作的權限」）。
+    // 只有整句都是錯誤碼時才查表，避免誤判一般英文訊息。
     const bareCode = /^[A-Z][A-Z0-9_]{2,}$/.test(raw) ? raw : '';
     const resolvedCode = explicitCode || bareCode;
     if (USER_ERROR_ZH[resolvedCode]) return USER_ERROR_ZH[resolvedCode];
@@ -185,8 +169,7 @@ function localizeUserError(message, code = '', status = 0, details = null) {
     }
     // 未收錄的純英文後端訊息不直接顯示，避免把內部實作細節暴露給使用者。
     if (/[A-Za-z]{3}/.test(raw)) return '系統目前無法完成這項操作，請稍後再試。';
-    // 400 家族（欄位驗證、業務規則擋下）的收尾。刻意放在中文訊息分支「之後」——
-    // 放前面會蓋掉後端已經寫好的中文說明，例如把「點數不足」變成一句空話。
+    // 先保留後端中文說明，再處理其他 400 類錯誤。
     if (status === 400) return '這項操作無法完成，請確認輸入內容後再試一次。';
     return raw || '系統目前無法完成這項操作，請稍後再試。';
 }
@@ -253,16 +236,13 @@ const ApiConfig = {
     }
 };
 
-// ═══ API 串接層 ═══
+// API 串接層。
 const Api = {
     config: ApiConfig,
     _sessionAbortController: typeof AbortController === 'function' ? new AbortController() : null,
     _expectedActorKey: 'gatewayExpectedActor',
     _expectedSubjectKey: 'gatewayExpectedSubject',
-    // 後端 /auth/session 回的角色。這是**唯一可信**的 role 來源——它來自登入時
-    // 由資料庫驗過的會員所簽發的 JWT。本機 profile 的 role/level 是可被竄改的
-    // sessionStorage 值，絕不能拿來決定要不要顯示管理後台。與 actor 綁在一起，
-    // 換帳號時一起失效。
+    // 管理員角色只能採信後端驗證過的 session，不能使用可修改的本機資料。
     _verifiedRoleKey: 'gatewayVerifiedRole',
 
     _pinnedActor() {
@@ -283,9 +263,7 @@ const Api = {
         } catch (_) { return ''; }
     },
 
-    // 後端驗證過「這個分頁的目前帳號是不是管理員」。管理後台的顯示與進入一律靠這個，
-    // 不靠本機 profile。後端本來就會擋掉非管理員的寫入；這道是把「連看都看不到」補上，
-    // 不讓一個把本機 role 改成 admin 的帳號晃進管理畫面。
+    // 只有後端確認為管理員的分頁可以顯示與進入後台。
     isVerifiedAdmin() {
         return this.verifiedRole() === 'admin';
     },
@@ -350,10 +328,7 @@ const Api = {
         }
     },
 
-    // 只有這兩條路徑是以「會員 session」的身分在講話。text-suggestion、render、face
-    // 都是 AI 上游：它們的 401 說的是「上游拒絕了我們」（例如 Gateway 金鑰沒串上，
-    // 見 issue #34），跟這個人有沒有登入完全無關，卻會在他按下「生成建議」的那一刻
-    // 把他踢回登入頁。真正失效的 session 仍然會在下一次 /auth/session 被攔下。
+    // 只有會員與管理路徑的 401 代表登入可能失效；模型服務的 401 屬於上游錯誤。
     _speaksForMemberSession(input) {
         try {
             const url = new URL(String(input), window.location.origin);
@@ -391,9 +366,7 @@ const Api = {
         window.dispatchEvent(new CustomEvent(type, { detail }));
     },
 
-    // 讀 Gateway 發的 CSRF token。它刻意不是 HttpOnly——double-submit 的前提就是
-    // 「自己的 JS 讀得到、別的網域讀不到」。讀不到就回空字串，讓後端去拒絕，
-    // 不要在前端猜一個值出來。
+    // 讀取同源 CSRF cookie；缺少時交由後端拒絕請求。
     _csrfToken() {
         try {
             const jar = String((typeof document !== 'undefined' && document.cookie) || '');
@@ -404,8 +377,7 @@ const Api = {
         }
     },
 
-    // 所有受保護的寫入都從這裡送出。X-Expected-Actor 只會送到本站 Gateway，
-    // 絕不附在第三方網址；缺少分頁綁定身分時直接拒絕，不讓 shared cookie 決定寫入者。
+    // 所有受保護寫入都經過這裡，並只向同源 Gateway 傳送身分標頭。
     async _protectedFetch(input, init = {}) {
         if (!this._sessionAbortController) this._resetSessionRequests();
         const method = String(init.method || 'GET').toUpperCase();
@@ -420,38 +392,19 @@ const Api = {
         if (isWrite && isProtected) {
             const actorId = this._pinnedActor();
             if (!actorId) {
-                // 這個分頁沒有 pin 到身分。擋下這次寫入就夠了——沒有 actor 就不可能
-                // 帶著別人的身分寫進去，而「寫錯帳號」正是這道防線唯一要擋的事。
-                //
-                // 以前這裡還會送 session-owner-changed，於是整個分頁被登出、本機資料
-                // 被清空、畫面跳回登入頁。但「沒有 pin」不等於「別人登入了」：重新整理、
-                // sessionStorage 被清、伺服器端登入階段結束都會走到這裡，而這些情況
-                // 一個證據都沒有。沒有證據就做最重的處置，結果是使用者三不五時被踢出去
-                // 並且被告知一個不存在的分頁換了帳號。真正有證據的兩條路（Gateway 回
-                // 409、或 validateSession 讀回來的 sub/actorId 與本機對不上）仍然照舊
-                // 登出，那兩條才是真的有人換了帳號。
+                // 分頁缺少綁定身分時只擋下寫入，不直接清除資料或登出。
                 const error = new Error(WRITE_BLOCKED_ZH.NO_SESSION_PIN);
                 error.code = 'EXPECTED_ACTOR_REQUIRED';
                 throw error;
             }
             nextInit.headers['X-Expected-Actor'] = actorId;
-            // CSRF double-submit：Gateway 登入時發一個非 HttpOnly 的 dm_csrf cookie，
-            // 這裡把它讀出來放回標頭。別的網站送得出請求，但讀不到我們網域的 cookie，
-            // 補不出這個標頭。只加在同源的 Gateway 寫入上——附到第三方網址等於把
-            // token 送給對方，而且會多觸發一次 preflight。
+            // 將同源 CSRF cookie 放入標頭，讓後端驗證 double-submit token。
             const csrfToken = this._csrfToken();
             if (csrfToken) nextInit.headers['X-CSRF-Token'] = csrfToken;
         }
         const res = await fetch(input, nextInit);
         if (isProtected && res.status === 401 && this._speaksForMemberSession(input)) {
-            // 401 同樣不一定是我們的 session 死了。Gateway 會把上游的 401 原樣轉回來——
-            // 例如文字建議服務因為缺金鑰而拒絕，那跟會員的登入狀態毫無關係，
-            // 卻會害使用者在按下「生成建議」時被登出。只認 Gateway 自己的驗證錯誤碼；
-            // 認不出來就不動作，真正失效的 session 會在下一次 /auth/session 被攔下。
-            //
-            // 這裡刻意不收裸的 UNAUTHORIZED。其餘每一個都是 MEMBER_ 開頭、明確在講
-            // 會員身分；UNAUTHORIZED 泛到任何一個上游拒絕都會命中，收了它等於把
-            // 上面那句「只認 Gateway 自己的錯誤碼」整個作廢。
+            // 只用會員驗證專用錯誤碼判定登出，避免把上游 401 誤認成 session 失效。
             const sessionCodes = [
                 'MEMBER_AUTH_REQUIRED', 'MEMBER_SESSION_REQUIRED', 'MEMBER_AUTH_INVALID',
                 'MEMBER_SESSION_INVALID', 'MEMBER_SESSION_MISSING'
@@ -460,10 +413,7 @@ const Api = {
                 this._notifySessionInvalid('decorate-me:session-expired');
             }
         } else if (isProtected && res.status === 409) {
-            // 409 不一定是換帳號。Gateway 在「這個分頁選的帳號已經不在了」時回 409，
-            // 但上游的業務衝突（獎勵已經領過、信箱已註冊）也是 409，而且會被原樣透傳。
-            // 先前不分青紅皂白就登出，於是「領取一個已經領過的獎勵」＝被踢出去，
-            // 而那個狀態其實完全正常。只認 Gateway 自己的錯誤碼。
+            // 409 也可能是一般業務衝突，只有指定錯誤碼才代表帳號已切換。
             const ownerChangeCodes = ['ACCOUNT_NOT_AVAILABLE', 'SESSION_OWNER_CHANGED', 'EXPECTED_ACTOR_REQUIRED'];
             if (ownerChangeCodes.includes(await this._peekErrorCode(res))) {
                 this._notifySessionInvalid('decorate-me:session-owner-changed', { reason: 'SESSION_OWNER_CHANGED' });
@@ -472,13 +422,10 @@ const Api = {
         return res;
     },
 
-    // 向 Gateway 取得穩定的同源路徑。上游資料庫的真實網址只留在 Cloud Run，
-    // 瀏覽器不再直接連 Quick Tunnel，也不會因 tunnel 換址或第三方 cookie 被封鎖而整站失效。
+    // 從 Gateway 取得同源路徑，不讓瀏覽器直接連上游服務。
     async bootstrapConfig() {
         const gateway = this.config.services.aiGateway;
-        // router.js 用 .finally() 擋住開站流程，所以這裡一定要有逾時。
-        // Gateway 若是連得上卻不回應（不是 5xx，是 hang），沒有逾時就永遠不 settle，
-        // .finally() 不觸發，整個前端卡在白畫面——比用到舊網址嚴重得多。
+        // 設定逾時，避免 Gateway 無回應時讓開站流程一直等待。
         const controller = typeof AbortController === 'function' ? new AbortController() : null;
         const timer = controller ? setTimeout(() => controller.abort(), 4000) : null;
         try {
@@ -518,9 +465,7 @@ const Api = {
         }
     },
 
-    // face-basic / face-pro 的 min-instances 是 0，閒置後容器會縮到零，下一個人按分析就得等冷啟動
-    // （mediapipe 載模型特別久）。趁使用者還在選照片、還沒按下按鈕的空檔先打一發 /health 把容器叫醒，
-    // 等他真的送出時通常已經是熱的。故意不 await，純背景預熱，失敗也無所謂。
+    // 在背景預熱臉部分析服務，縮短第一次分析的等待時間。
     warmFaceServices() {
         [
             this.config.services.faceBasic.baseUrl,
@@ -589,18 +534,8 @@ const Api = {
         return res.json();
     },
 
-    // 把使用者對五官判斷的修正回報給臉部分析服務。
-    //
-    // 這些選項本來就是照 models/basic_features_roi/*_classes.json 的類別排的，所以每一筆
-    // 修正都是一筆對得上模型類別的人工標註——而 issue #24 的表顯示眼型只有 603 筆、
-    // 分數 0.387，正好是使用者最看得出來不對、也最會去改的那一項。回饋屬於模型那一端，
-    // 不是會員資料庫。
-    //
-    // 盡力而為：端點還沒上線時會 404，這裡吞掉就好。本機那份 AnalysisFeedback 仍然是
-    // 使用者當下的依據，送不出去也不影響他這一次的建議與收藏。
-    // confirmed 讓後端知道這一筆要不要留：使用者說判斷正確的那些，後端拿去核對完就可以
-    // 丟掉、不必占空間；使用者真的改過的才是要留下來重訓的資料。判斷寫在這裡而不是讓
-    // 後端自己數 corrections 是否為空，是為了讓語意留在送出的那一刻，不靠對方推論。
+    // 將五官修正回傳給分析服務，作為後續模型改善資料。
+    // 回傳失敗不影響本次建議與收藏；confirmed 表示使用者是否接受原判斷。
     async sendAnalysisFeedback({ mode, jobId, resultToken, packageId, predicted, corrections }) {
         if (!jobId) return { ok: false, reason: 'no-job' };
         const service = mode === 'pro' ? 'facePro' : 'faceBasic';
@@ -608,8 +543,7 @@ const Api = {
         try {
             const res = await this._protectedFetch(this.config.jobUrl(service, 'jobFeedbackPath', jobId), {
                 method: 'POST',
-                // 跟查 job 同一套憑證：token 證明這個 job 是這個瀏覽器建的，
-                // 否則任何人都能對別人的 jobId 灌回饋，訓練資料就髒了。
+                // 使用 job token 確認回饋來自建立該工作的瀏覽器。
                 headers: this._faceJobHeaders(service, resultToken, { 'Content-Type': 'application/json' }),
                 body: JSON.stringify({
                     packageId: packageId || null,
@@ -653,22 +587,12 @@ const Api = {
         throw new Error('臉部分析 job 逾時');
     },
 
-    // 2026-07-20 改走 Gateway：原本前端直連公開 tunnel 並自帶 X-API-Key，
-    // 那正是《Gateway 安全代理與 Ollama 專題展示說明》明文禁止的「前端直連」。
-    // 現在跟臉部分析、渲染一致，只送登入後的短期 session，瀏覽器不再持有任何上游金鑰。
+    // 文字建議經由 Gateway 傳送，瀏覽器只使用短期 session。
     _textSuggestionHeaders() {
         return this._gatewayHeaders({ 'Content-Type': 'application/json' });
     },
 
-    // 只送 faceAnalysis，**不要送整個 analysisPackage**。
-    //
-    // 資料包裡有 images.front.compressedDataUrl（使用者臉部照片的 base64）。先前整包送出去，
-    // 單次請求 171 KB，而 Ollama_suggestion.py:158 是「faceAnalysis 有值就直接用它」——
-    // analysisPackage 根本不會被讀。也就是那張臉是白送的：
-    //   · 它會經過一條公開的 Cloudflare Quick Tunnel 到別人的機器上
-    //   · 沒有任何程式讀它
-    //   · 171 KB 穿過 tunnel 打到本機 gemma3，是 502 的直接原因
-    // 渲染那條早就修過同一個坑（見 runMakeupRender 的註解），這一條漏掉了。
+    // 文字建議只需要 faceAnalysis；不要傳送含有臉部照片的完整資料包。
     async suggestMakeup({ faceAnalysis, style, userNote }) {
         let res;
         try {
@@ -688,9 +612,7 @@ const Api = {
             if (code === 'EXTERNAL_TEXT_UPSTREAM_DISABLED') {
                 throw new Error('妝容建議服務目前停用中（尚未接上受信任的文字服務），其他功能不受影響。');
             }
-            // 401 的上游原文對使用者毫無意義（而且看起來像「你被登出了」，其實不是——
-            // 前端已經不會因為這個 401 動到 session）。只描述偵測到的狀況：服務拒絕了
-            // 這次請求。不寫「金鑰沒設定」之類的猜測，前端無從證實是哪一種授權問題。
+            // 上游 401 不代表會員登出，只顯示服務拒絕請求的通用說明。
             if (res.status === 401) {
                 throw new Error('文字建議服務拒絕了這次請求（HTTP 401）。這是服務端的授權設定問題，與你的登入狀態無關，其他功能可以照常使用。');
             }
@@ -746,11 +668,8 @@ const Api = {
         return data;
     },
 
-    // 非同步渲染：gpt-image-2 要跑 50~150 秒，同步等會撞 Cloud Run 逾時（實測一堆 504）。
-    // 改成送出後拿 jobId、每 2 秒輪詢一次，onProgress 會被餵 1~100 的進度給進度條用。
-    // 2026-07-15 對齊後端新接口：前端只送結構化資料（styleId + analysisPackage），prompt 由後端組
-    // （前端送的 prompt 會被後端忽略——信任前端 prompt 等於任何人能用我們額度生任意圖）；
-    // 輪詢必須帶建立 job 時回的 resultToken（X-Job-Token），不帶會被 403 擋到逾時。
+    // 渲染時間較長，因此建立工作後以 jobId 輪詢進度。
+    // 前端只送結構化資料，prompt 由後端產生；查詢結果時必須附上 job token。
     async renderMakeupAsync({ imageDataUrl, styleId = 'natural', analysisPackage = null, strength = 0.35, onProgress = null }) {
         const baseUrl = this.config.services.render.baseUrl;
         // 同上：身分由 Gateway 依 session 認定，不再送瀏覽器可偽造的 X-User-Email／X-User-Role。
@@ -799,9 +718,7 @@ const Api = {
         if (submitted.resultToken) headers['X-Job-Token'] = submitted.resultToken;
         const pollUrl = `${baseUrl}/render/jobs/${jobId}`;
         const deadline = Date.now() + 5 * 60 * 1000;  // 5 分鐘保險絲，正常 150 秒內一定結束
-        // 指數退避：前幾輪維持 2 秒（多數渲染在這段時間內就有進度可回報），之後每輪
-        // 乘以 1.5 直到 10 秒封頂。固定 2 秒等於一次渲染要打 75 次，其中大半都是
-        // 「還在跑」——那些請求對使用者沒有任何價值，卻是實打實的後端負載與費用。
+        // 輪詢間隔逐步增加到 10 秒，減少長時間渲染造成的無效請求。
         const POLL_MIN_MS = 2000;
         const POLL_MAX_MS = 10000;
         let pollDelay = POLL_MIN_MS;
@@ -815,8 +732,7 @@ const Api = {
                 if (!pollRes.ok) {
                     // 輪詢途中的暫時性錯誤不該直接判死，繼續等下一輪
                     if (pollRes.status === 404) throw new Error('渲染工作不存在或已過期');
-                    // 被限流時就照後端說的時間等，不要繼續照原節奏敲——那只會讓視窗
-                    // 一直重新開始。Retry-After 讀不到（跨來源）就退回自己的退避節奏。
+                    // 被限流時依 Retry-After 等待；讀不到時沿用目前退避間隔。
                     if (pollRes.status === 429) {
                         const wait = Number(job?.error?.retryAfterSeconds
                             || pollRes.headers.get('Retry-After')) || 0;
@@ -902,10 +818,8 @@ const Api = {
             '修容': 'contouring',
             '打亮': 'highlighters'
         };
-        // 商品清單 API 的 `category` 回的是**中文**（例如「唇彩」），`type` 才是英文 slug
-        // （lipsticks）。先前這裡把 category 擺在 type 前面丟進 categoryMap 查表，中文一律查不到，
-        // 於是 1041 筆商品全部掉進 '底妝' fallback——前台除了「底妝」以外每個分類都是空的，
-        // 後台的分類欄也全部顯示底妝。所以：英文 slug 走查表，中文值只要是已知分類就直接採用。
+        // type 是 API 使用的英文分類；category 是畫面顯示的中文分類。
+        // 兩者分開處理，避免未知分類被誤設為底妝。
         const typeSlug = String(product.type || product.apiType || product.item_type || '').trim();
         const rawCategory = String(product.category || product.cat || '').trim();
         const tagCat = Array.isArray(product.tags) ? product.tags.find(tag => categoryMap[String(tag).trim()]) : '';
@@ -925,8 +839,7 @@ const Api = {
             ? ''
             : (String(product.price).startsWith('NT$') ? String(product.price) : `NT$${product.price}`);
         return {
-            // id 要維持 `api-{item_type}-{item_id}`：Fav.mergeRemote 就是照這個格式把伺服器上的
-            // {item_type, item_id} 對回本機收藏。用中文 category 組會對不起來。
+            // 本機商品 id 固定使用 api-{item_type}-{item_id}，才能和遠端收藏互相對應。
             id: product.id != null ? `api-${apiType || rawCat || cat}-${product.id}` : `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             rawId: product.id ?? null,
             apiType, // 原始 type slug（例如 lipsticks），呼叫 /api/product/{type}/{id} 這類單品 API 要用
@@ -942,14 +855,10 @@ const Api = {
             // 推薦端點的 productUrl 實際上是 sale_page_id slug（不是 http 網址），留下來讓前端能跟商品清單比對補圖
             salePageId: product.sale_page_id || product.salePageId
                 || ((typeof product.productUrl === 'string' && product.productUrl && !/^https?:/i.test(product.productUrl)) ? product.productUrl : null),
-            // sourceUrl 只收真的是 http(s) 網址的值。推薦端點的 sourceUrl 實測回的是
-            // sale_page_id slug（例如 "mac-blush-MT1329"），不是網址；先前這裡直接照收，
-            // 後台編輯表單的「原始商品頁」欄位就會被填進一段不能點的字串。
-            // productUrl 那一路本來就有擋，sourceUrl 這一路漏了。
+            // sourceUrl 只接受 http(s) 網址，商品識別字串不能當成連結。
             sourceUrl: [product.sourceUrl, product.source_url, product.productUrl]
                 .find(v => typeof v === 'string' && /^https?:\/\//i.test(v)) || '',
-            // 商品清單 API 的欄位叫 hex_primary，不是 hex。先前只讀 product.hex，
-            // 於是每一筆都拿到 undefined、色塊一律不顯示——資料一直都在，只是沒接上。
+            // 商品主色欄位可能是 hex_primary 或舊版 hex。
             hex: (() => {
                 const raw = product.hex || product.hex_primary || '';
                 return /^#[0-9a-fA-F]{3,8}$/.test(raw) ? raw : null;
@@ -988,23 +897,11 @@ const Api = {
         };
     },
 
-    // ═══ 以色找色 ═══
-    //
-    // 在瀏覽器端算。上游沒有 /api/recommend/{type}/{id}（實測 404，那支從來沒回過資料），
-    // 但商品清單 API 每一筆都帶 lab，1041 筆算色差是微秒級，不需要後端也不需要多打請求。
-    //
-    // 只開放唇彩。其他類別的 hex / lab 是從商品圖抽出來的，眼影與眉筆抓到的多半是
-    // 包裝色而不是產品色；全開的話會推出「這支眉筆和那支睫毛膏顏色很像」——比的是包裝盒。
-    // 等 盤點清單.csv 的人工色系盤點完成（目前色系欄位 0/1040）再逐類放行。
+    // 以色找色：直接使用商品清單的 Lab 值在瀏覽器排序。
+    // 目前只開放唇彩，避免其他類別的包裝色造成錯誤推薦。
     SHADE_MATCH_CATEGORIES: Object.freeze(['lipsticks']),
 
-    // CIE94（graphics 係數）。CIE76 只是 Lab 上的歐氏距離，對高彩度的紅色會嚴重高估
-    // 色差——而唇彩正好整片集中在高彩度紅粉區，用 CIE76 排出來的順序會偏。
-    // CIEDE2000 更準，但它的 hue 角度分段容易寫錯、又難在這裡驗證；CIE94 修掉了彩度
-    // 權重、沒有角度不連續的問題，對「同類商品之內排序」已經足夠。
-    //
-    // 這個公式是不對稱的（sC / sH 取自參考色的彩度），這裡刻意讓 labRef 是使用者
-    // 正在看的那支商品，符合「跟這支比起來像不像」的語意。
+    // 使用 CIE94 計算高彩度唇彩的色差；labRef 是目前正在比較的商品。
     _deltaE94(labRef, labOther) {
         const [L1, a1, b1] = labRef;
         const [L2, a2, b2] = labOther;
@@ -1061,12 +958,7 @@ const Api = {
         }
     },
 
-    // 伺服器端收藏同步：跨裝置同步用，依賴組員資料庫的登入 session（同上，失敗時不影響本機 Fav）
-    //
-    // 走 member-database 而不是 product-api。收藏是會員資料，Gateway 也只在
-    // member-database 的白名單裡放行 api/favorites/toggle；先前送到 product-api，
-    // 被商品白名單（只有 api/products 與 recommend-products）擋掉，一律 404。
-    // 上游那條端點其實是好的——不帶 session 直接打會回 401，不是 404。
+    // 收藏屬於會員資料，因此經 member-database 同步；失敗時保留本機收藏。
     async toggleRemoteFavorite(itemId, itemType) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl) return null;
@@ -1088,14 +980,7 @@ const Api = {
         return result?.blocked ? null : result;
     },
 
-    // 商品管理端點用管理員登入後的 token 驗證，由後端判斷 role=admin。
-    //
-    // 這裡原本還支援讓管理員手動貼一把 ADMIN_API_KEY，但那把金鑰實際上並不存在：
-    // 〈商品搜尋管理與推薦演算法整合規格書 2026-07-17〉§3 約定的是
-    // `Authorization: Bearer <admin-token>`，資料庫端也是照這個實作；
-    // 手貼金鑰是〈Admin 商品管理安全 Proxy 規格書 2026-07-18〉§1 描述的過渡驗收做法，
-    // 該文件同時要求上線後移除，而資料庫端從未提供過這樣一把金鑰。
-    // 留著只會讓管理員以為少填了什麼，實際上填什麼都會被回 INVALID_TOKEN。
+    // 商品管理端點使用登入憑證，由後端確認 role=admin。
     _adminProductHeaders(headers = {}) {
         return this._memberHeaders(headers);
     },
@@ -1341,7 +1226,7 @@ const Api = {
     // 寫入前確認 cookie 裡的身分就是這個分頁以為的那個人。
     //
     // 被動偵測（收到 403 才查）永遠慢一步：第一個寫入請求已經帶著別人的憑證送出去了。
-    // 收藏、刪除、扣點這類會改變資料的動作，必須在送出**之前**先問清楚，
+    // 收藏、刪除、扣點這類會改變資料的動作，必須在送出之前先問清楚，
     // 否則一次誤寫就寫進別人的帳號，事後無法分辨也無法回復。
     //
     // 讀取不套這個檢查——多一次往返換不到等值的保護，讀錯了頂多顯示錯誤，
@@ -1367,15 +1252,8 @@ const Api = {
         return { ok: true };
     },
 
-    // ═══ 統一的 protected write actor 防線 ═══
-    //
-    // 每一條會改變資料的請求，送出前都要先確認 cookie 裡的身分就是這個分頁以為的那個人。
-    // 這道檢查原本是各寫各的：六個方法各自抄一次 assertSessionOwner + 早退，回傳形狀還有
-    // 三種（null／{ok:false}／{ok:false,reason}），而 patchMember 與 deleteMember 整個漏掉——
-    // 後台的停權與刪除會員，在 session 被另一個帳號蓋掉時照樣送得出去。
-    // 收斂成單一入口之後，「新增一個寫入端點」跟「補上防線」是同一個動作，漏不掉。
-    //
-    // actor 是「執行這次寫入的人」，不是「被寫入的對象」，兩者不一定相同：
+    // 所有寫入都先確認 cookie 與目前分頁身分一致，再由統一入口送出。
+    // actor 是執行寫入的人，不一定是被操作的會員：
     //   · 會員動自己的資料（簽到、兌換、收藏）—— actor 就是那個 email；
     //   · 後台動別人的資料（停權、刪除）—— actor 是目前登入的管理員，傳 null
     //     由這裡取本機 profile；拿被操作的會員 email 去比對只會把正常的後台操作全擋掉。
@@ -1617,9 +1495,7 @@ const Api = {
                     headers: { 'Content-Type': 'application/json' }
                 });
                 const data = await res.json().catch(() => ({}));
-                // 領取失敗最常見的是「已經領過了」（409）。原本直接顯示上游的 message，
-                // 而那句話對使用者沒有意義，看起來像系統壞掉——實際上狀態是正常的，
-                // 只是這個獎勵今天已經拿過。逐一對應成看得懂的說法。
+                // 將「已領取」等常見狀態轉成清楚的中文提示。
                 if (!res.ok) {
                     const byStatus = {
                         400: '這個任務還沒完成，現在不能領取。',
@@ -1653,9 +1529,7 @@ const Api = {
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) {
                     const code = data?.error?.code || data?.code || '';
-                    // 已經擁有不算失敗：點數先前就扣過了，使用者確實有這個主題。
-                    // 回成功，呼叫端才會把解鎖同步到本機並套用 —— 否則會卡在
-                    // 「伺服器說你有、本機說你沒有」，怎麼按都套用不上。
+                    // 已擁有主題時視為成功，讓本機補回解鎖狀態。
                     if (/ALREADY_OWNED|already.?owned/i.test(code)) return { ok: true, alreadyOwned: true };
                     return { ok: false, status: res.status, code, error: data?.error?.message || data?.message || `HTTP ${res.status}` };
                 }
@@ -1689,10 +1563,7 @@ const Api = {
             });
             if (!res.ok) return { ok: false, status: res.status, looks: [] };
             const data = await res.json().catch(() => ({}));
-            // 收下資料庫端可能用的每一種外殼。這一支先前**只**認 `data.looks`，
-            // 而同一個檔案裡其他清單端點都同時認 `items`（商品、稽核紀錄、會員清單）——
-            // 只要對方回的是 `items` 或裸陣列，這裡就會回空陣列，後台顯示 0 筆而
-            // 資料庫其實有資料，兩邊對不起來又沒有任何錯誤訊息。
+            // 相容 looks、items 與裸陣列三種清單回應格式。
             const list = Array.isArray(data) ? data
                 : (Array.isArray(data.looks) ? data.looks
                 : (Array.isArray(data.items) ? data.items
@@ -1715,28 +1586,14 @@ const Api = {
         // saved_looks 的 before/after 欄位是 String(500) URL；禁止把 File、Blob
         // 或 data/base64 寫入資料庫。圖片必須先由前端或上傳服務取得 http(s) URL。
         //
-        // 只有妝後圖是必要條件。它由渲染服務產生，一定有網址（/media/render/<hash>）。
-        // 妝前圖是使用者自己上傳的照片，系統裡沒有任何管道能讓它變成網址——Gateway 只有
-        // GET /media/render 與 /media/legacy，沒有上傳端點——所以它永遠是 data:base64。
-        // 先前連妝前圖一起檢查，等於每一筆收藏都在送出前就被擋掉，而且 skipped 分支是空的，
-        // 畫面完全正常卻一筆都沒進資料庫（見 S57）。這裡改成妝前圖沒網址就留空：
-        // 既不把 90 萬字元的 base64 塞進 String(500) 欄位，也不因為它丟掉整筆收藏。
-        // 原始臉部照片不進伺服器，同時也符合既有的隱私方向。
+        // 妝後圖必須有網址；妝前圖若仍是 base64 就留空，不寫入會員資料庫。
         const afterImageUrl = String(payload?.afterImageUrl || '').trim();
         const rawBeforeImageUrl = String(payload?.beforeImageUrl || '').trim();
         const beforeImageUrl = this._isStorableImageUrl(rawBeforeImageUrl) ? rawBeforeImageUrl : '';
         if (!payload?.style || !this._isStorableImageUrl(afterImageUrl)) {
             return { ok: false, skipped: true, reason: 'AFTER_IMAGE_URL_REQUIRED' };
         }
-        // 資料庫驗證 afterImageUrl 必須是 http(s) URL（INVALID_AFTER_IMAGE_URL），
-        // 但 Gateway 刻意回相對路徑——同一條路徑在本機開發與正式站都成立，也塞得進
-        // String(500)。存進資料庫前補上目前的 origin：Gateway 的 STABLE_RENDER_URL_RE
-        // 是 `(?:https://[^/]+)?/media/render/(...)`，主機前綴本來就是選用的，
-        // 所以收藏後的 retain 與日後刪除都照樣解析得到 job id。
-        // 注意：本機以 http:// 開發時存進去的網址不符合那個 https 前綴，retain 會失效；
-        // 正式站一律 https，不受影響。
-        // 兩個欄位用同一套規則。資料庫目前只驗 afterImageUrl，但兩邊存成不同形式
-        // 沒有好處，而且哪天它也開始驗 before，這裡就不必再改一次。
+        // 資料庫需要完整 http(s) 網址，因此替 Gateway 相對路徑補上目前網域。
         const qualify = (value) => value && value.startsWith('/')
             ? new URL(value, window.location.origin).href
             : value;
@@ -1782,18 +1639,11 @@ const Api = {
         });
     },
 
-    // ═══ 暫存商品審核（爬蟲 → 暫存表 → 審核 → 匯入正式商品）═══
-    //
-    // 爬蟲端 2026-07-28 起只寫 crawler_staging_products，不再與前端直連。這四支是
-    // 管理員審核那批資料用的，全部經 Gateway 的 /admin-api（自動帶 CSRF、admin 驗證、稽核）。
-    //
-    // **商品後端尚未回覆最終路徑。** 這裡照
-    // 「給商品後端_暫存商品審核與匯入_接入規格書_2026-07-29.md」§1 的提案接；
-    // 對方定案後改 Gateway 的 _STAGING_BASE 一行即可，這裡不必動。
+    // 暫存商品審核：管理員透過 Gateway 審核爬蟲寫入的候選商品。
+    // 上游路徑集中在 Gateway 的 _STAGING_BASE，前端不需知道真實網址。
     _stagingBase() { return `${gatewayService('admin-api')}/crawler-staging/products`; },
 
-    // 規格書 §3 承諾這幾個代碼會被翻成看得懂的話。沒有這張表的話，畫面顯示的是上游
-    // 原文，那份文件就是在描述一件我們沒做的事。
+    // 將暫存商品錯誤碼轉成使用者看得懂的訊息。
     _stagingError(result) {
         const known = {
             STAGING_NOT_FOUND: '找不到這筆暫存商品，可能已被匯入或刪除。',
@@ -2077,7 +1927,7 @@ const Api = {
         } catch (err) {
             throw new Error('無法連線到會員資料庫，請稍後再試。');
         }
-        // 原本不管什麼錯都丟「註冊 API 連線失敗」，把後端明確的 EMAIL_EXISTS 也蓋掉了
+        // 保留後端的註冊錯誤，例如信箱已存在。
         if (!res.ok) throw await this._memberApiError(res, '註冊失敗');
         return res.json();
     },
@@ -2502,12 +2352,7 @@ const Auth = {
         localStorage.setItem(this._membersKey, JSON.stringify(members));
     },
     getUser()  { return sessionStorage.getItem('beautyUser') || ''; },
-    // 一張 base64 頭像動輒幾十 KB，先前它跟著整個 profile 被寫進 sessionStorage。
-    // sessionStorage 不會因重新整理而清空，等於把使用者的臉留在分頁裡給下一個人；
-    // 而且它一路被塞進每一次 setProfile 的 JSON，很容易撐爆配額讓寫入靜靜失敗。
-    // 正確的長期做法是上傳到私有物件、只存 object name（待儲存端提供上傳端點）。
-    // 在那之前，data: 頭像只留在這個記憶體欄位裡：本次 session 的 SPA 導覽照樣顯示，
-    // 但不落地、整頁重新整理後就回到後端提供的頭像網址或預設圖示。
+    // base64 頭像只保存在記憶體，避免將臉部圖片寫入 sessionStorage。
     _volatileAvatar: '',
     _isPersistableAvatar(value) {
         const v = String(value || '');
@@ -2522,8 +2367,7 @@ const Auth = {
             profile = safeProfile;
             try { sessionStorage.setItem('beautyProfile', JSON.stringify(profile)); } catch (_) {}
         }
-        // 記憶體裡有本次 session 暫存的 data: 頭像時補回去，讓 SPA 導覽看得到，
-        // 但它從來沒有、也不會進 sessionStorage。
+        // SPA 導覽時補回暫存頭像，但不寫入瀏覽器儲存空間。
         if (!this._isPersistableAvatar(profile.avatar) && this._volatileAvatar) {
             profile = { ...profile, avatar: this._volatileAvatar };
         }
@@ -2545,13 +2389,7 @@ const Auth = {
     },
     isLoggedIn() { return !!this.getUser(); },
     clearSession() {
-        // 列舉清除，不要逐一列名——逐一列名正是先前漏掉 beautyAnalysisDraft 的原因。
-        // 那個 key 放的是完整分析資料包，**裡面有使用者上傳的照片**（base64）。
-        // sessionStorage 不會因為重新整理而清空，所以同一個分頁的下一個登入者
-        // 讀得到前一個人的臉。
-        //
-        // 之後任何人新增 sessionStorage 的 key，都會自動被這裡帶走，
-        // 不必記得回來改這個函式。
+        // 登出時列舉並清除全部 sessionStorage，避免遺漏新增的敏感資料。
         try {
             const keys = [];
             for (let i = 0; i < sessionStorage.length; i++) {
@@ -2568,15 +2406,7 @@ const Auth = {
         }
     },
 
-    // 清掉「這一個帳號」殘留在 localStorage 的 PII——sessionStorage 由 clearSession
-    // 處理，但收藏對比圖（beautySuggestions_<email>）帶使用者的臉部照片網址、分析回饋
-    // （beautyAnalysisFeedback）帶五官特徵，這些放在 localStorage，登出／換帳號後仍在，
-    // 共用裝置的下一個人打開 devtools 就讀得到。**只清當前帳號的鍵，不動其他帳號的收藏。**
-    //
-    // beautyHistory / beautyFav / beautyCart 是**沒有帶 email 的全域鍵**，內容卻屬於
-    // 「最後登入的那個人」：分析紀錄帶臉型、眼型、膚色，收藏與購物車帶他挑了什麼。
-    // 換帳號時不清，下一個人就直接看到上一個人的紀錄——而且 syncRemoteFavorites 是
-    // 「併入」不是「取代」，殘留的收藏還會被合進新帳號再同步回伺服器。
+    // 登出時清除目前帳號的臉部資料，以及未分帳號的舊版資料。
     clearAccountLocalPII(email) {
         try {
             const em = String(email || '').trim().toLowerCase();
@@ -2686,14 +2516,7 @@ const AdminStore = {
         this._syncCurrentProfile(email, { level });
     },
     isAdmin() {
-        // 管理後台的顯示與進入，**只**信後端 /auth/session 驗過的角色。
-        //
-        // 本機 profile 的 role/level 是可被竄改的 sessionStorage 值。實測到一個未通過
-        // OTP 的亂碼帳號因為本機 role 被當成 admin 而晃進管理畫面（後端仍擋掉了所有
-        // 寫入，但「連看都不該看到」）。這裡不再有「退回本機 profile」的分支——那個
-        // 分支本身就是洞：沒有有效 session 的帳號只要把本機 role 改成 admin 就能繞過。
-        // 沒有後端驗過的 admin session，就不是 admin。
-        // 注意：session pin 與驗證角色的方法在 Api 物件上（不是 Auth）。
+        // 只採信後端 session 驗證的角色；本機 profile 不能授予管理員權限。
         return typeof Api.isVerifiedAdmin === 'function' && Api.isVerifiedAdmin();
     },
     defaultPermissions(role) {
@@ -3028,7 +2851,7 @@ const ProSubscription = {
     }
 };
 
-// ═══ 會員等級擴充：一般／銀卡／金卡由累計點數自動判定；VIP／管理員仍走原本手動核發那套 ═══
+// 會員等級：一般、銀卡與金卡依累計點數判定；VIP 與管理員由後台設定。
 const MemberTier = {
     _ladder: [
         { id: 'general', name: '一般會員', min: 0 },
@@ -3144,19 +2967,8 @@ const Fav = {
     }
 };
 
-// ═══ 臉部分析回饋 ═══
-//
-// 使用者對五官判斷說「準」或「不準」，不準時可以直接選正確答案。
-// **這一步不收照片。** 只記模型答了什麼、使用者說什麼，兩者都是短字串。
-//
-// 為什麼不順便收照片：訓練需要 (影像, 標籤) 成對，只有標籤是訓練不了模型的。
-// 收照片就是把「原始臉部照片不進伺服器」這個立場整個翻過來，需要明確告知與同意。
-// 所以這裡收的是**弱點訊號**——告訴我們模型在哪些五官、哪些類別上系統性出錯，
-// 再由標註者對那些案例好好標。這也避開了自陳資料的老問題：臉型帶審美價值，
-// 讓使用者自己選，收到的分布會偏向討喜的類別。
-//
-// 目前先排在本機。資料庫端的端點還沒有（見給資料庫端清單 TASK 12），
-// 端點到位前不寫對接程式——對著不存在的端點講話的程式，這個專案已經有過兩批了。
+// 臉部分析回饋只記錄文字標籤，不保存照片。
+// 回饋可指出模型常出錯的類別，但不能直接當成影像訓練資料。
 const AnalysisFeedback = {
     _key: 'beautyAnalysisFeedback',
     // 與 models/basic_features_roi/*_classes.json 一致。順序照模型的類別順序，
@@ -3164,28 +2976,11 @@ const AnalysisFeedback = {
     OPTIONS: Object.freeze({
         '臉型': ['圓形臉', '心形臉', '方形臉', '長形臉', '鵝蛋臉'],
         '眉型': ['一字眉', '彎月眉', '落尾眉'],
-        // 眼型的兩次合併：
-        //
-        // 八類 → 六類（2026-07-24）：丹鳳眼併入鳳眼、瞇縫眼併入細長眼。
-        //   那兩個類別的圖檔在標註資料夾裡本來就與合併目標逐位元組相同——合併當初是用
-        //   複製而非搬移，舊資料夾沒刪，於是同一張臉同時掛在兩個類別底下。
-        //
-        // 六類 → 五類（2026-07-30）：杏仁眼與桃花眼合併為「桃杏眼」。
-        //   不是資料不夠，是這條界線不存在：內容完全相同卻被標成不同類別的樣本裡，
-        //   「圓眼 vs 杏仁眼」17 組、「杏仁眼 vs 桃花眼」7 組，排前兩名——標註的人自己
-        //   就分不開。合併後 macro 由 0.388 升到 0.523，是所有嘗試裡幅度最大的一個。
-        //
-        // 這份清單必須與 models/basic_features_roi/eye_shape_classes.json 一致：
-        // face_feedback.validate() 會拿模型的分類表擋下不認得的值，這裡多一個選項，
-        // 使用者就會選到一個送不出去的答案。
+        // 選項必須與模型分類表一致，避免送出後端不認得的標籤。
         '眼型': ['細長眼', '桃杏眼', '圓眼', '鳳眼', '下垂眼'],
-        // 窄鼻已併入標準鼻（2026-07-22 重訓）：標註者判斷窄鼻時看的不是鼻翼寬度，
-        // 舊的三類模型「標準鼻」召回率只有 0.061，整個類別塌陷進窄鼻。
+        // 窄鼻已合併到標準鼻。
         '鼻型': ['寬鼻', '標準鼻'],
-        // M型唇於 2026-07-30 併入花瓣唇（保留舊名，不另取新名）。
-        // 混淆矩陣顯示 M型唇 recall 只有 0.30——108 張裡只有 32 張判對，其餘均勻散到
-        // 另外四類。那不是「偏向某一類」，是「這個類別沒有可辨識特徵」的樣貌。
-        // 兩者的共同點是唇峰明顯，差異在照片上分不出來。
+        // M 型唇已合併到花瓣唇。
         '嘴型': ['厚唇', '微笑唇', '花瓣唇', '薄唇'],
     }),
     list() {
@@ -3211,17 +3006,11 @@ const AnalysisFeedback = {
     }
 };
 
-// ═══ 購物車模組 ═══
-//
-// 本機 localStorage 是工作副本；登入後每次變更會背景同步整台車回會員資料庫
-// （POST /api/members/{email}/cart，last-write-wins），換裝置／換瀏覽器登入時
-// 由 syncRemoteCart() 讀回。訪客（沒有 email）維持純本機，不同步。
-// 同步全程盡力而為：伺服器連不上時本機購物車照樣能用，不報錯、不擋操作。
+// 購物車先存本機；會員登入後再背景同步，訪客則維持本機模式。
 const Cart = {
     _key: 'beautyCart',
     _pushTimer: null,
-    // 剛登入時設 true：讓 syncRemoteCart 把「登入前的訪客車」與「伺服器車」數量相加合併一次；
-    // 其餘情境（重載、換裝置還原）為 false，以伺服器為準直接取代，避免每次載入都相加造成灌水。
+    // 登入時只合併一次訪客購物車，其餘同步以伺服器資料為準。
     _mergeGuestOnce: false,
     list() {
         try { return JSON.parse(localStorage.getItem(this._key) || '[]'); }
@@ -3284,25 +3073,16 @@ const Cart = {
     }
 };
 
-// ═══ 分析紀錄模組 ═══
+// 分析紀錄模組。
 const History = {
-    // 分析文字紀錄。兩件事跟先前不同：
-    //
-    // 1. **按帳號分開存。** 舊的鍵是固定的 'beautyHistory'，內容卻屬於「最後登入的那個人」
-    //    ——換帳號不清的話，下一個人直接看到上一個人的臉型、眼型、膚色。
-    //    改成跟收藏妝容同一套做法（見 looksKey），鍵帶 email，訪客走 'guest'。
-    //
-    // 2. **只留文字，不留照片與原始數值。** 先前把整包分析結果 unshift 進去，
-    //    裡面有 LAB 原始值、_modelRaw、以及分析包的其他欄位。紀錄是給人看「那次判斷是什麼」，
-    //    不需要那些；留著只是把敏感度更高的資料多存一份在瀏覽器裡。
+    // 每個帳號分開保存文字摘要，不儲存照片或模型原始數值。
     _legacyKey: 'beautyHistory',
     _accountKey() {
         const p = (typeof Auth !== 'undefined' && Auth.getProfile) ? Auth.getProfile() : null;
         const em = (p && p.email) ? String(p.email).trim().toLowerCase() : 'guest';
         return 'beautyHistory_' + em;
     },
-    // 只挑要顯示的欄位。明確列出來，而不是排除法——日後分析結果多了新欄位，
-    // 排除法會讓它悄悄跟著寫進來，白名單不會。
+    // 使用白名單挑選可保存欄位，避免新欄位意外被寫入。
     _textOnly(record) {
         const r = record || {};
         const skin = r['膚色'] || {};
@@ -3324,8 +3104,7 @@ const History = {
         try {
             const own = JSON.parse(localStorage.getItem(this._accountKey()) || '[]');
             if (own.length) return own;
-            // 舊的全域紀錄搬到目前登入的帳號，搬完就刪掉，只做一次。
-            // 不搬的話，先前累積的紀錄會在改版當下整批消失。
+            // 第一次讀取時將舊版全域紀錄搬到目前帳號。
             const legacy = JSON.parse(localStorage.getItem(this._legacyKey) || '[]');
             if (legacy.length) {
                 const migrated = legacy.map(row => ({ ...this._textOnly(row), timestamp: row.timestamp }));
@@ -3341,9 +3120,7 @@ const History = {
         arr.unshift({ ...this._textOnly(record), timestamp: new Date().toISOString() });
         try { localStorage.setItem(this._accountKey(), JSON.stringify(arr)); } catch (_) {}
     },
-    // 使用者修正五官判斷時，把已經寫進紀錄的那一筆一起改掉。
-    // 紀錄是在回饋面板出現「之前」就寫入的，不補這一步，分析紀錄會永遠停在模型
-    // 原本的答案——跟他畫面上看到的、以及收藏起來的那一份對不上。
+    // 五官修正後同步更新對應的分析紀錄。
     applyCorrections(packageId, corrections) {
         const fields = Object.keys(corrections || {});
         if (!packageId || !fields.length) return;

@@ -117,9 +117,7 @@ if (sandbox.AdminStore.isAdminProfile({ email: 'admin@decorateme.local' })) {
   throw new Error('Admin profile should not trust email naming fallback');
 }
 
-// ── 管理後台只認後端驗過的角色，不認本機 profile ──────────────
-// 實測：未通過 OTP 的亂碼帳號因本機 role 被當成 admin 而晃進管理畫面。
-// isAdmin() 決定「看不看得到管理後台」，必須只信 /auth/session 驗過的角色。
+// 管理後台只採信後端驗證過的角色。
 {
   // 本機 profile 自稱 admin，但沒有任何後端驗過的 session → 一律不是 admin。
   sandbox.Api._clearPinnedSession();
@@ -151,8 +149,7 @@ sandbox.Cart.change(1, -2);
 if (sandbox.Cart.count() !== 0 || sandbox.Cart.list().length !== 0) throw new Error('Cart item removal failed');
 
 // ── 服務設定 ────────────────────────────────────────────────
-// crawler 已於 2026-07-28 移除：爬蟲改為只寫 crawler_staging_products，不再與前端直連，
-// 前端也不再需要 crawlerUrl。
+// 爬蟲只寫入暫存表，前端不再需要 crawlerUrl。
 const requiredServices = ['faceBasic', 'facePro', 'textSuggestion', 'render', 'product', 'memberDatabase'];
 for (const service of requiredServices) {
   if (!sandbox.ApiConfig.services[service]) throw new Error(`Missing service: ${service}`);
@@ -166,8 +163,7 @@ if (!proUrl.endsWith('/v1/face/analyze/pro')) throw new Error(`Bad PRO URL: ${pr
 if (suggestionUrl !== '/text-suggestion/suggest') throw new Error(`Bad suggestion URL: ${suggestionUrl}`);
 if (sandbox.ApiConfig.services.memberDatabase.baseUrl !== '/member-database') throw new Error('Member API must use same-origin Gateway');
 if (sandbox.ApiConfig.services.product.baseUrl !== '/product-api') throw new Error('Product API must use same-origin Gateway');
-// 爬蟲服務設定已移除（見上方 requiredServices 的說明）。後台其餘走 /admin-api 的功能
-// 是直接呼叫 gatewayService('admin-api')，不經過 services.crawler。
+// 後台爬蟲審核功能直接使用 /admin-api。
 if (sandbox.ApiConfig.services.crawler) throw new Error('services.crawler 應已移除');
 if (sandbox.ApiConfig.services.aiGateway.sessionPath !== '/auth/session') throw new Error('Gateway session validation path missing');
 
@@ -210,8 +206,7 @@ if (!indexSource.includes('decorate-me-round-source.jpg') || !dashboardSource.in
 }
 
 // ── 管理中台與會員端外框必須完全分離 ─────────────────────────
-// 管理員角色本身不能讓所有頁面都變成後台；只有已驗證的管理員正在 admin 頁時，
-// 才隱藏會員購物車、會員身分列與前台浮水印。
+// 只有管理員進入 admin 頁面時才隱藏會員介面。
 const cssSource = fs.readFileSync(path.join(rootDir, 'css', 'main.css'), 'utf8');
 for (const invariant of [
   "const adminMode = admin && activePage === 'admin'",
@@ -229,8 +224,7 @@ for (const selector of [
 }
 
 // ── 收藏頁每次打開都要重新向會員資料庫同步 ──────────────────
-// pages/favorites.html 只是版型；只有 200 並不代表收藏資料有讀到。
-// 同步失敗時也不能再把錯誤偽裝成「尚無收藏」。
+// 收藏頁必須重新同步資料，並區分空清單與同步失敗。
 for (const invariant of [
   "if (page === 'favorites') refreshFavoritesPage();",
   "Router.favoriteSyncState = 'loading'",
@@ -241,8 +235,7 @@ for (const invariant of [
 }
 
 // ── Firebase 根頁不可快取舊 index.html ────────────────────────
-// Firebase 把「/」與帶 query string 的網址視為不同 cache key；只替 *.html 設 no-cache
-// 不會套用到根網址，部署後瀏覽器可能繼續用上一版外框整整一小時。
+// 根網址與 index.html 都要停用快取，避免部署後仍顯示舊版外框。
 const firebaseConfig = JSON.parse(fs.readFileSync(path.join(rootDir, 'firebase.json'), 'utf8'));
 const hostingHeaders = firebaseConfig?.hosting?.headers || [];
 for (const source of ['/', '/index.html']) {
@@ -263,8 +256,7 @@ if (!routerSource.includes('const session = await Api.validateSession()')) throw
 if (!apiSource.includes('this._cancelSessionRequests();')) throw new Error('Expired sessions must cancel protected request batch');
 
 // ── XSS 與外部 URL scheme 防線（item 7）──────────────────────────
-// 這些欄位都可能帶入會員自訂內容或爬蟲抓回的外部資料，一旦直接進 innerHTML／href
-// 就是注入面。用字串檢查把關鍵修補鎖住，避免日後有人改回未轉義的版本。
+// 會員與爬蟲資料進入 HTML 前必須轉義，外部網址也要驗證協定。
 if (!routerSource.includes('escapeHtml(msg)')) throw new Error('showToast must escape its message (XSS)');
 if (!routerSource.includes('<span class="accent">${escapeHtml(user)}</span>')) throw new Error('Dashboard greeting must escape the member name (XSS)');
 if (!routerSource.includes('function safeExternalUrl(')) throw new Error('External links must be scheme-validated via safeExternalUrl');
@@ -272,14 +264,10 @@ if (/href="\$\{escapeHtml\(product\.sourceUrl\)\}"/.test(routerSource)) throw ne
 if (routerSource.includes("__av.innerHTML = '<img src=\"' + __p.avatar")) throw new Error('Avatar image URL must be validated via lookImageSrc, not inserted raw');
 
 // ── protected write actor 防線 ────────────────────────────────
-// 每一條會改變資料的請求都必須先確認「cookie 裡的身分」就是這個分頁以為的那個人，
-// 而且只能從 _protectedWrite 這個單一入口進去——否則新增端點時很容易漏掉防線
-// （patchMember 與 deleteMember 就漏過，後台停權／刪除會員在 session 換人後照樣送得出去）。
-// 這一段是非同步的，收在函式裡由檔案最後 await，確保失敗會反映在結束碼上。
+// 所有寫入都由 _protectedWrite 驗證目前分頁身分。
 let checkProtectedWriteActor;
 {
-  // assertSessionOwner 只該有「定義」與「_protectedWrite 內部呼叫」兩處。
-  // 多出來的呼叫代表某個寫入端點又自己抄了一份檢查，繞過了統一入口。
+  // assertSessionOwner 只能由統一寫入入口呼叫。
   const ownerCalls = apiSource.match(/this\.assertSessionOwner\(/g) || [];
   if (ownerCalls.length !== 1) {
     throw new Error(`Write guard must funnel through _protectedWrite; found ${ownerCalls.length} direct assertSessionOwner call sites`);
@@ -307,7 +295,7 @@ let checkProtectedWriteActor;
   sandbox.Api._pinSession({ sub: 'owner@example.com', actorId: 'actor_owner_tab' });
 
   const run = async () => {
-    // 1) session 屬於別人：寫入必須在送出前就被擋下，一個 request 都不能出去
+    // 1) session 屬於其他帳號時，必須在送出前阻擋。
     stubSession({ ok: true, sub: 'someone-else@example.com', actorId: 'actor_other_tab', role: 'member' });
     fetchCalls = [];
     const blocked = await sandbox.Api.checkInMember('owner@example.com');
@@ -325,8 +313,7 @@ let checkProtectedWriteActor;
       throw new Error('Owner mismatch must notify the Router');
     }
 
-    // 2) 後台寫入的 actor 是「目前登入的管理員」，不是被操作的那個會員。
-    //    這兩支先前完全沒有防線，是這道統一入口補上的缺口。
+    // 2) 後台寫入者是目前登入的管理員，不是被操作的會員。
     fetchCalls = [];
     const blockedPatch = await sandbox.Api.patchMember('victim@example.com', { status: 'suspended' });
     if (blockedPatch.ok !== false || blockedPatch.blocked !== true) {
@@ -433,9 +420,7 @@ if (sandbox.ImagePipeline.workerPath !== 'js/image-worker.js') {
 // ── 本機設定安全預設 ─────────────────────────────────────────
 const configExample = fs.readFileSync(path.join(rootDir, 'config.local.example.js'), 'utf8');
 
-// OTP 不得有任何前端繞過路徑。原本這裡只檢查旗標預設為 false，但那道檢查守錯了
-// 東西：旗標存在本身就是問題，因為它是瀏覽器端的值，devtools 一行就能翻開。
-// 現在改成守「程式碼裡根本沒有繞過」這個更強的不變式。
+// OTP 不得有任何前端繞過路徑或長度判斷捷徑。
 if (/DECORATE_ME_CONFIG\?\.allowInsecureOtpBypass|allowOtpBypass/.test(routerSource)) {
   throw new Error('router.js must not read an OTP bypass flag');
 }
@@ -476,7 +461,7 @@ if (!gitignore.includes('config.local.js')) {
   }
 }
 
-// 分析歷史只保留文字；即使上游物件帶照片或模型原始值，也不能寫入紀錄。
+// 分析紀錄只保存文字，不寫入照片或模型原始值。
 {
   const textOnly = sandbox.History._textOnly({
     '臉型': '鵝蛋臉',
@@ -503,7 +488,7 @@ if (!pkg.async || !Object.prototype.hasOwnProperty.call(pkg.async, 'jobId')) {
   throw new Error('analysisPackage async job fields missing');
 }
 
-// 分析紀錄不可再直接 new Date(timestamp)；統一轉換函式必須支援 Firestore seconds。
+// 分析時間統一轉換，並支援 Firestore seconds。
 if (!routerSource.includes('function formatAnalysisTime(value)') ||
     !routerSource.includes('value.seconds ?? value._seconds') ||
     /hist-date[^\n]+new Date\(r\.timestamp\)/.test(routerSource)) {

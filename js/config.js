@@ -1,8 +1,8 @@
-// Override these values in the deployed frontend without changing application code.
+// 部署時可覆蓋這些公開設定，不必修改主要程式。
 window.DECORATE_ME_CONFIG = window.DECORATE_ME_CONFIG || {};
 
-// Public runtime switches only. Never place API keys, tokens, or passwords here.
-// 專題展示面板：專題結束後把 adminDemoEnabled 改成 false，或讓 adminDemoExpiresAt 到期即可自動關閉。
+// 這裡只能放公開開關，禁止放 API 金鑰、權杖或密碼。
+// 管理展示功能可手動關閉，也會在設定時間後自動失效。
 window.DECORATE_ME_FEATURES = Object.assign({
     adminDemoEnabled: true,
     adminDemoExpiresAt: '2026-12-31T23:59:59+08:00'
