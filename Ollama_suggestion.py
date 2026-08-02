@@ -176,12 +176,24 @@ def _extract_face_analysis(payload: SuggestRequest) -> dict[str, Any]:
 
 
 def _pick(face_analysis: dict[str, Any], english_key: str, chinese_key: str, default: str = "未提供") -> Any:
-    if english_key in face_analysis:
-        return face_analysis.get(english_key) or default
-    if chinese_key in face_analysis:
-        return face_analysis.get(chinese_key) or default
-    raw = face_analysis.get("raw") or {}
-    return raw.get(chinese_key) or default
+    """依序找英文鍵、中文鍵、raw 裡的中文鍵，全都沒有才回 default。
+
+    先前是「鍵存在就用它的值，否則往下找」，而不是「找到有值的才用」。差別在前端送來的
+    faceAnalysis 是**無條件**建出這五個鍵的（`faceShape: raw?.['臉型'] || null`）——
+    中文原值一旦缺了就寫成 null，不是不寫。於是 `english_key in face_analysis` 成立、
+    值卻是 null，直接回「未提供」，底下那行 raw 的退路永遠走不到；raw 裡明明還留著答案。
+
+    使用者看到的就是五官全部「未提供」，而建議內容照樣生得出來——沒有任何地方報錯。
+    """
+    for source, key in (
+        (face_analysis, english_key),
+        (face_analysis, chinese_key),
+        (face_analysis.get("raw") or {}, chinese_key),
+    ):
+        value = source.get(key) if isinstance(source, dict) else None
+        if value:
+            return value
+    return default
 
 
 def _map_or_raw(value: str, mapping: dict) -> str:
