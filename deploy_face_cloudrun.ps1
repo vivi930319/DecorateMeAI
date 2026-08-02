@@ -73,8 +73,24 @@ foreach ($service in @("face-basic", "face-pro")) {
     # 帶了 --audiences 也不一定簽得出來：使用者帳號憑證產不出指定 audience 的 ID token，
     # 那需要服務帳號。所以這一項改成「拿得到就驗，拿不到就明講跳過」，不再讓它決定成敗——
     # 部署成不成功由上面的 Ready 判定，這裡只是加碼資訊。
-    $token = (& gcloud.cmd auth print-identity-token --audiences=$url 2>$null)
-    if ($LASTEXITCODE -ne 0 -or -not $token) {
+    # 取 token 這一步**必須**擋住 $ErrorActionPreference = "Stop"。
+    # PowerShell 5.1 對原生命令做 stderr 重導（`2>$null`）時，會把每一行 stderr 包成
+    # NativeCommandError；在 Stop 模式下那是終止性錯誤，腳本會死在這一行，**根本跑不到
+    # 下面那個 $LASTEXITCODE 判斷**——防呆寫了等於沒寫，實測就是這樣掛的。
+    # 所以改成 try/finally 暫時放寬，並且不要重導 stderr。
+    $token = $null
+    $previousEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $token = & gcloud.cmd auth print-identity-token --audiences=$url
+    } catch {
+        $token = $null
+    } finally {
+        $ErrorActionPreference = $previousEap
+    }
+    if (-not $token) {
+        # 使用者帳號憑證產不出指定 audience 的 ID token（gcloud 直接回 "Requires valid
+        # service account."）。這是憑證類型的限制，不是部署有問題，所以只提示不失敗。
         Write-Host "$service Ready（修訂版 $revision）；/health 略過：目前憑證簽不出對應 audience 的 ID token" -ForegroundColor Yellow
         continue
     }
