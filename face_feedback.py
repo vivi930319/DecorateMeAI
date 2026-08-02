@@ -122,7 +122,7 @@ def save(mode: str, job_id: str, payload: dict) -> str | None:
     predicted = payload.get("predicted") or {}
     fields = allowed_classes()
     doc = {
-        # 與文件 id 相同，以 job_id 衍生，確保同一份紀錄覆寫同一個物件。
+        # 跟文件 id 一樣用 job_id 衍生。先前每次覆寫都給新的 uuid，等於同一份紀錄在
         # 穩定的 key 底下有一個會變的身分，對得上才怪。
         "feedbackId": f"FB-{job_id}",
         "jobId": job_id,

@@ -46,10 +46,22 @@ foreach ($service in @("face-basic", "face-pro")) {
     # 先確認 Cloud Run 自己認為這個修訂版可服務。這一項不需要任何額外權限，
     # 而且它是硬性的：容器沒起來、或啟動探測沒過，Ready 就不會是 True，流量也不會切過去。
     $describe = @("run", "services", "describe", $service, "--project", $ProjectId, "--region", $Region)
-    $ready = (& gcloud.cmd @describe --format="value(status.conditions[0].status)").Trim()
-    $revision = (& gcloud.cmd @describe --format="value(status.latestReadyRevisionName)").Trim()
+    # 用 filter 挑 Ready 這個條件，不要用 conditions[0]：那是位置索引，Cloud Run 沒有保證
+    # Ready 一定排第一個，順序一變就會拿到別的條件（例如 ConfigurationsReady）當成結論。
+    #
+    # 比對子要用 `=` 不能用 `:`：`:` 是「包含」，`type:Ready` 會同時命中 Ready、
+    # ConfigurationsReady 與 RoutesReady，實測回傳 "True;True;True"，跟 "True" 比一定不等，
+    # 於是每次部署都被判成失敗——又繞回這段程式要修的那個毛病。
+    $ready = & gcloud.cmd @describe --format="value(status.conditions.filter(`"type=Ready`").firstof(status))"
+    if ($LASTEXITCODE -ne 0) { throw "$service 狀態查詢失敗（gcloud 結束碼 $LASTEXITCODE）" }
+    $revision = & gcloud.cmd @describe --format="value(status.latestReadyRevisionName)"
+    if ($LASTEXITCODE -ne 0) { throw "$service 修訂版查詢失敗（gcloud 結束碼 $LASTEXITCODE）" }
+    $ready = "$ready".Trim(); $revision = "$revision".Trim()
+    # 查詢本身失敗時要說「查不到」，不要說「沒 Ready」——否則一次暫時性的 API 失誤
+    # 就會把一次成功的部署報成失敗，正是這段程式當初要修掉的毛病。
+    if (-not $ready) { throw "$service 讀不到 Ready 狀態，無法確認部署結果" }
     if ($ready -ne "True") {
-        throw "$service 的修訂版 $revision 未進入 Ready 狀態（status=$ready）"
+        throw "$service 的修訂版 $revision 未進入 Ready 狀態（Ready=$ready）"
     }
 
     # 再打一次 /health 拿模型清單。這兩個服務只允許 Gateway／專案成員呼叫，所以要帶 ID token，

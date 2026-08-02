@@ -133,7 +133,27 @@ def _merge_basic_and_pro(front_result: dict, side_result: dict | None = None) ->
                 "a": round((fl["a"] + sl["a"]) / 2, 2),
                 "b": round((fl["b"] + sl["b"]) / 2, 2),
             }
-            result["膚色"] = {**fs, "LAB": avg_lab, "LAB來源": "正面+側面平均"}
+            # 可信度要合併，不能直接沿用正面那張的。
+            #
+            # `{**fs, ...}` 會把正面照算出來的 可信度 原樣帶到一個「一半來自側面照」的
+            # LAB 上，而側面照從來沒做過遮擋檢查——正面乾淨、側面被頭髮蓋住時，平均值
+            # 已經被污染，旗標卻還說可信。兩張都判定可信才算可信；側面沒量過（measured
+            # 為 False）就不能替它背書，一律降為不可信並說明原因。
+            front_rel = fs.get("可信度") or {}
+            side_rel = ss.get("可信度") or {}
+            side_ok = bool(side_rel.get("measured")) and side_rel.get("reliable") is not False
+            if front_rel.get("reliable") is not False and not side_ok:
+                merged_rel = {
+                    **front_rel,
+                    "reliable": False,
+                    "hint": "側面照的膚色取樣未經遮擋檢查，這個平均值請當作參考；"
+                            "想要準確的膚色請確認兩張照片都沒有頭髮或陰影蓋住臉頰。",
+                }
+            elif front_rel.get("reliable") is False:
+                merged_rel = front_rel
+            else:
+                merged_rel = {**front_rel, "reliable": True}
+            result["膚色"] = {**fs, "LAB": avg_lab, "LAB來源": "正面+側面平均", "可信度": merged_rel}
 
         # 側臉模型的輸出屬於 PRO 結果的一部分，不能只停留在 side_result。
         # 保留完整物件（label／confidence／classes／caveat），讓前端既能顯示答案，
@@ -264,6 +284,19 @@ def _run_pro_job(job_id, front_bytes, angle_bytes, owner_id=None):
         job_store.patch_if_status(_COL, job_id, {"processing"}, {"stage": "side_analysis", "progress": 65, "updatedAt": _now_iso()})
         side_bytes = angle_bytes.get("side")
         side_result = _analyze_side_supplementary(side_bytes) if side_bytes else None
+    except ValueError as exc:
+        # 與 BASIC 的 _run_basic_job 同一個理由：FaceAnalyzer 對「這張照片本身有問題」一律
+        # raise ValueError，訊息就是要給使用者看的可行動指引（pose_guidance 的「請把頭轉向
+        # 你的右邊」、「沒偵測到人臉」、「膚色區域不足」）。PRO 用的是同一個 FaceAnalyzer、
+        # 同樣 strict_angle=True，先前卻只有 BASIC 把訊息傳出去，PRO 這邊照舊吞掉——
+        # 同一張斜臉走 BASIC 會被告知怎麼喬，走 PRO 只會拿到「請稍後再試」。
+        logging.info("PRO 臉部分析 job 因照片問題中止 job_id=%s: %s", job_id, exc)
+        job_store.patch_if_status(_COL, job_id, {"processing"}, {
+            "status": "failed", "stage": "unusable_image",
+            "completedAt": _now_iso(), "updatedAt": _now_iso(),
+            "error": {"code": "FACE_IMAGE_UNUSABLE", "message": str(exc), "retryable": True},
+        })
+        return
     except Exception:
         logging.exception("PRO 臉部分析 job 失敗 job_id=%s", job_id)
         job_store.patch_if_status(_COL, job_id, {"processing"}, {

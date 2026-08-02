@@ -190,7 +190,7 @@ def _pick(face_analysis: dict[str, Any], english_key: str, chinese_key: str, def
         (face_analysis, chinese_key),
         (face_analysis.get("raw") or {}, chinese_key),
     ):
-        value = source.get(key) if isinstance(source, dict) else None
+        value = source.get(key)
         if value:
             return value
     return default

@@ -610,7 +610,8 @@ class FaceAnalyzer:
     #
     # 兩道防線，都用上面那批資料量過：
     #   1. 紋理過濾。皮膚平滑、頭髮有高頻紋理，這是顏色分不開時還能用的訊號。
-    #      加上之後最差 ΔE 從 45.01 降到 22.03，ΔE>5 從 19% 降到 15%。
+    #      走完整程式碼路徑複驗（tools/measure_hair_contamination.py）：最差 ΔE 從 45.01
+    #      降到 22.41，ΔE>5 從 19% 降到 15%。
     #   2. 可信度標記。光靠 1 不夠（只是把錯誤變小，不是消除），所以再量一個能預測
     #      「這次算錯了」的訊號。試過四個候選，頰部 ROI 內 L 的 MAD 分離度最好（1.28）：
     #        乾淨照片 p50 6.67 / p95 9.55  |  算錯案例中位數 15.69、算對 8.24
@@ -1217,14 +1218,23 @@ class FaceAnalyzer:
         # 紋理過濾不能反過來把樣本殺光：粗顆粒、對焦不準或高 ISO 的照片整張都是高頻
         # 雜訊，那種照片上這一層會濾掉幾乎所有像素。剩太少就退回沒濾的版本——
         # 寧可污染風險照舊（下面的可信度標記還會抓），也不要沒有樣本可算。
-        if cv2.countNonZero(textured) >= 150:
-            combined_mask = textured
+        shade_mask = textured if cv2.countNonZero(textured) >= 150 else combined_mask
 
-        # 可信度量在幾何取樣區上，不是量過濾後的結果，理由見 _skin_sample_reliability。
-        self.skin_reliability = self._skin_sample_reliability(lab, sample_mask)
+        # 可信度只量頰部這塊幾何取樣區。門檻 9.5 是在頰部上校準的（乾淨照片 p95 = 9.55），
+        # 而 sample_mask 在頰部太小時會退回整臉凸包——那塊含額頭反光與下顎陰影，
+        # 實測 MAD 中位數 8.43、p95 13.06，拿同一個門檻去套，乾淨照片的誤報率會從
+        # 5% 跳到 37.5%。所以這裡固定用頰部；頰部本來就不夠大時不宣稱可信度。
+        self.skin_reliability = self._skin_sample_reliability(lab, cheek_mask)
 
+        # 季型算在**紋理過濾前**的遮罩上，膚色分級才用過濾後的。
+        #
+        # 兩者要的東西不同：紋理過濾是為了「別把頭髮的顏色算進膚色」，而 _classify_season
+        # 的 clear 判定吃的是 v_std >= 18.0 —— 明暗分佈的離散程度，那需要完整取樣。
+        # 先前兩者共用過濾後的遮罩，等於把「專門剔除高變異像素」的結果餵進一個為未過濾
+        # 資料校準的門檻：實測 40 張乾淨照片，v_std 平均 28.42 掉到 24.57，**12%（5/40）
+        # 的四季型被改掉**（夏季→秋季、冬季→夏季），而使用者與我們都看不出來。
         season               = self._classify_season(lab, hsv, combined_mask)
-        shade_label, L, a, b = self._classify_shade_12grid(lab, combined_mask)
+        shade_label, L, a, b = self._classify_shade_12grid(lab, shade_mask)
         return lip_L, lip_a, lip_b, season, shade_label, L, a, b
 
     def get_face_symmetry(self):

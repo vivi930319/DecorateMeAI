@@ -9,7 +9,10 @@ from typing import Any
 from uuid import uuid4
 
 
-SCHEMA_VERSION = "2026-06-v1"
+# 2026-08-03：skinTone 新增 labReliable / labReliability（膚色取樣是否被頭髮遮擋）。
+# 版本要跟著動——消費端靠它判斷自己拿到的是哪一版，欄位加了卻不動版本，
+# 推薦端就無從得知「沒有這個欄位」是舊資料包還是新資料包漏送。
+SCHEMA_VERSION = "2026-08-v2"
 
 # 以下每張表都只列現行分類表的類別。已淘汰的名稱不放進來——
 # 舊值一律在 `_code()` 入口用 LABEL_ALIASES 換成現行名稱再查表。
