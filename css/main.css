@@ -31,6 +31,11 @@
     --success:#3F7A52;
     /* 玻璃感三件組：面板底、內側高光、邊線 */
     --glass:rgba(255,255,255,0.62); --sheen:rgba(255,255,255,0.9); --edge:rgba(255,255,255,0.55);
+    /* 玻璃面板（妝容對比、分析結果、收藏卡…）的底。預設值就是先前寫死的那三個顏色，
+       所以預設主題完全不變；深色主題在下面各自覆寫。 */
+    --glass-surface:rgba(249,237,233,0.34);
+    --glass-surface-hover:rgba(252,246,244,0.60);
+    --glass-surface-solid:rgba(250,240,237,0.92);
     /* 按鈕漸層與其上的文字色（金底要配深字，深底要配淺字） */
     --btn-grad:linear-gradient(100deg,#F1C7D0 0%,#EFD0C8 46%,#E6C295 100%);
     --btn-ink:#5B3A38;
@@ -1044,7 +1049,8 @@ body[data-member-theme="rose"] {
     --line:rgba(237,240,243,0.16); --line-gold:rgba(198,204,211,0.34);
     --line-dk:rgba(198,204,211,0.24);
     /* 深色面板取代白色霧面，高光與邊線走銀 */
-    --glass:rgba(20,23,26,0.72); --sheen:rgba(216,222,228,0.14); --edge:rgba(216,222,228,0.30);
+    --glass:rgba(20,23,26,0.72); --sheen:rgba(216,222,228,0.14);
+    --glass-surface:rgba(20,23,26,0.55); --glass-surface-hover:rgba(34,38,43,0.68); --glass-surface-solid:rgba(28,31,34,0.94); --edge:rgba(216,222,228,0.30);
     --btn-grad:linear-gradient(100deg,#8b939c 0%,#d2d8de 46%,#f7f9fa 100%); --btn-ink:#14171a;
     --btn-glass:linear-gradient(118deg, rgba(58,64,70,0.78) 0%, rgba(44,49,54,0.72) 48%, rgba(70,77,84,0.74) 100%);
     /* 深底之下的紅與綠要拉亮，:root 那組是配淺底的，壓在深色玻璃上會糊成一團 */
@@ -1072,7 +1078,8 @@ body[data-member-theme="jade"] {
     --line:rgba(30,70,50,0.14); --line-gold:rgba(79,146,112,0.30);
     --line-dk:rgba(168,212,188,0.22);
     /* 青玉也是淺底，玻璃維持白霧，邊線與按鈕收成綠調 */
-    --glass:rgba(255,255,255,0.64); --sheen:rgba(255,255,255,0.88); --edge:rgba(79,146,112,0.34);
+    --glass:rgba(255,255,255,0.64); --sheen:rgba(255,255,255,0.88);
+    --glass-surface:rgba(235,246,240,0.40); --glass-surface-hover:rgba(244,250,246,0.62); --glass-surface-solid:rgba(240,248,244,0.94); --edge:rgba(79,146,112,0.34);
     --btn-grad:linear-gradient(100deg,#4F9270 0%,#A8D4BC 46%,#E6F0EA 100%); --btn-ink:#1E3A2B;
     --btn-glass:linear-gradient(118deg, rgba(224,240,231,0.66) 0%, rgba(206,230,216,0.58) 48%, rgba(190,222,204,0.60) 100%);
     --btn-glass-hover:linear-gradient(118deg, rgba(234,247,240,0.78) 0%, rgba(216,238,226,0.70) 48%, rgba(200,232,214,0.72) 100%);
@@ -1097,7 +1104,8 @@ body[data-member-theme="noir"] {
     --line:rgba(247,234,210,0.16); --line-gold:rgba(217,182,111,0.34);
     --line-dk:rgba(217,182,111,0.24);
     /* 深色面板取代白色霧面，高光與邊線走金 */
-    --glass:rgba(23,20,16,0.72); --sheen:rgba(226,195,116,0.14); --edge:rgba(226,195,116,0.30);
+    --glass:rgba(23,20,16,0.72); --sheen:rgba(226,195,116,0.14);
+    --glass-surface:rgba(23,20,16,0.55); --glass-surface-hover:rgba(40,34,27,0.68); --glass-surface-solid:rgba(34,29,24,0.94); --edge:rgba(226,195,116,0.30);
     --btn-grad:linear-gradient(100deg,#b98b36 0%,#e4c777 46%,#fff3d0 100%); --btn-ink:#1a1509;
     --btn-glass:linear-gradient(118deg, rgba(46,39,30,0.80) 0%, rgba(34,29,24,0.74) 48%, rgba(58,49,36,0.76) 100%);
     --danger:#E8837C; --success:#7FC194;
@@ -1762,7 +1770,11 @@ body {
 .stat-cell,
 .lm-card,
 .suggestion-card {
-    background:rgba(249,237,233,0.34);
+    /* 這條規則的邊框吃 var(--edge)、陰影吃 var(--sheen)，唯獨背景先前寫死成奶油色。
+       同一個面板三個屬性、兩個跟著會員主題走一個不跟，於是銀霧與黑金這種深色主題底下，
+       妝容對比、分析結果、收藏卡全都還是一塊奶茶色浮在深色頁面上。
+       改吃 --glass-surface：預設值就是原本那個顏色，淺色主題外觀完全不變。 */
+    background:var(--glass-surface);
     backdrop-filter:blur(24px) saturate(150%);
     -webkit-backdrop-filter:blur(24px) saturate(150%);
     border-color:var(--edge);
@@ -1777,8 +1789,8 @@ body {
 /* hover 時略提亮、更清透 */
 .dash-card:hover,
 .upload-box:hover,
-.stat-cell:hover { background:rgba(252,246,244,0.60); }
-.hist-item:hover { background:rgba(252,246,244,0.50); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
+.stat-cell:hover { background:var(--glass-surface-hover); }
+.hist-item:hover { background:var(--glass-surface-hover); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
 
 /* —— 深色玻璃表面 —— */
 .dash-card.dark,
@@ -1803,7 +1815,7 @@ body {
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) {
     .dash-card, .style-card, .cat-card, .product-row, .product-card, .info-card,
     .skin-box, .result-cell, .analysis-section, .saved-look-card, .upload-box,
-    .compare-preview, .stat-cell, .lm-card, .suggestion-card { background:rgba(250,240,237,0.92); }
+    .compare-preview, .stat-cell, .lm-card, .suggestion-card { background:var(--glass-surface-solid); }
     .dash-card.dark, .member-id { background:rgba(50,36,40,0.92); }
 }
 
