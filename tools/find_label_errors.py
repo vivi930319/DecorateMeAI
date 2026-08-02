@@ -1,6 +1,6 @@
 """找出很可能標錯的個別照片，產生人工複核清單。
 
-## 為什麼要這支
+用途
 
 這個資料集的每一次大幅提升都來自修標籤，不是修模型：
 
@@ -8,21 +8,21 @@
     眼型 6 類 → 5 類（桃杏眼）              → macro +0.069
     唇型 5 類 → 4 類                        → macro +0.068
 
-那些是**整批類別**的界線不存在。這支處理下一層：**個別照片標錯**。
+那些是整批類別的界線不存在。本程式處理下一層：個別照片標錯。
 
-## 判斷方式：兩個模型都很有把握地說「這張不是這一類」
+判斷方式：兩個模型都很有把握地說「這張不是這一類」
 
-對每張圖取 out-of-fold 預測——也就是那張圖**沒有參與訓練**的那一折所給的答案，
+對每張圖取 out-of-fold 預測——也就是那張圖沒有參與訓練的那一折所給的答案，
 否則模型只是在背它自己看過的東西。
 
-同時跑 CNN 與 DINOv2，只挑**兩者都答錯、且都很有把握**的樣本。
+同時跑 CNN 與 DINOv2，只挑兩者都答錯、且都很有把握的樣本。
 單一模型答錯可能只是它自己的弱點；兩個架構完全不同的模型同時、有把握地
 指向同一個別的答案，那比較可能是標籤本身有問題。
 
-**這不是自動改標籤。** 產出是給人看的清單——模型沒有比標註同學更權威，
+這不是自動改標籤。 產出是給人看的清單——模型沒有比標註同學更權威，
 它只是很擅長指出「這一張跟同類的其他張長得不一樣」。最後仍由人決定。
 
-## 產出
+產出
 
     models/basic_features_roi/label_review.csv    可排序的清單
     review_sheets/<part>_NN.jpg                   看圖複核用的拼圖
@@ -120,7 +120,7 @@ def main():
     ap.add_argument("--learning-rate", type=float, default=3e-4)
     ap.add_argument("--architecture", default="mobilenet_v3_small")
     # train_one 會讀 args.seed（DataLoader 的 generator）與 args.val_ratio，
-    # 這支不走那條路徑也要給，否則 AttributeError。
+    # 本工具未經完整初始化流程，因此要補上這個欄位以避免 AttributeError。
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--val-ratio", type=float, default=0.25)
     ap.add_argument("--conf", type=float, default=CONF_MIN)

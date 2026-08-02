@@ -6,7 +6,7 @@ from pathlib import Path
 
 import requests
 
-# 這支是可直接執行的線上 smoke-test CLI，不是 pytest 測試模組。函式保留 test_* 名稱
+# 本檔是可直接執行的線上 smoke-test CLI，不是 pytest 測試模組。函式保留 test_* 名稱
 # 方便閱讀既有操作紀錄，但明確禁止 pytest 收集，避免把 CLI 參數誤認成 fixtures。
 __test__ = False
 
@@ -201,8 +201,8 @@ def test_image_safety_rejections(base_url):
         raise RuntimeError(f"[SAFETY] 空上傳未被正確擋下：status={status} code={code}")
     print(f"[SAFETY] empty -> {status} {code}")
 
-    # 6) 正向對照：一張正常的合成 PNG 應**通過**安全層。它沒有臉，所以會在臉部偵測
-    #    那一步被拒（400），但錯誤碼**不能**是任何一個圖片安全拒絕碼——那代表安全層
+    # 6) 正向對照：一張正常的合成 PNG 應通過安全層。它沒有臉，所以會在臉部偵測
+    #    那一步被拒（400），但錯誤碼不能是任何一個圖片安全拒絕碼——那代表安全層
     #    誤擋了正常圖。
     status, payload = _post_raw(url, "ok.png", "image/png", png_bytes(64, 64))
     code = _error_code(payload)

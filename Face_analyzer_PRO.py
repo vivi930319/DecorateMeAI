@@ -65,7 +65,7 @@ async def _read_image(file: UploadFile, label: str) -> bytes:
     PRO 一次收最多四張照片，每一張都走同一條路——多角度採集的照片同樣是手機原圖，
     帶著拍攝地點的機率比正面照更高。
 
-    `sanitize_upload` 回傳的是 `(bytes, mime)`，**要解包**。2026-07-24 它從
+    `sanitize_upload` 回傳的是 `(bytes, mime)`，要解包。2026-07-24 它從
     「只回 bytes」改成回 tuple 時，BASIC 的 `_read_clean_image` 跟著改了，
     這裡漏掉——於是 tuple 被原樣丟給 `FaceAnalyzer`，撞上型別檢查，
     PRO 的每一次分析都回 400，一路壞到 2026-07-31 才被發現。
@@ -105,7 +105,7 @@ def _analyze_side_supplementary(side_bytes: bytes) -> dict | None:
         # 側臉 FaceMesh 只認得 73.5%，而且失敗率依類別偏斜（塌鼻 60.4%、翹鼻 93.4%），
         # 用裁切會把類別分布扭曲（見 pro_nose_side_model 的說明）。
         #
-        # 這是**加值資訊，不是主要答案**：除了塌鼻，各類驗證樣本只有 36~46 張。
+        # 這是加值資訊，不是主要答案：除了塌鼻，各類驗證樣本只有 36~46 張。
         # predict 自帶 caveat 欄位，回應要原樣帶出去，不要在這裡拿掉。
         side_nose = pro_nose_side_model.predict(analyzer.frame)
         if side_nose:
@@ -254,7 +254,7 @@ def _run_pro_job(job_id, front_bytes, angle_bytes, owner_id=None):
     # 標成 FACE_ANALYSIS_ERROR 會誤導使用者重拍一張本來就分析得出來的照片。
     try:
         front_result = FaceAnalyzer(front_bytes).export_json()
-        # 套用這張臉先前被修正過的答案。模型的原始輸出會被留在 front_result["_modelRaw"]，
+        # 套用這張臉已儲存的修正；模型原始輸出保留在 front_result["_modelRaw"]，
         # 回饋一律回報那一份——否則訓練資料會變成模型在確認自己。
         front_result = face_corrections.apply(
             front_result,

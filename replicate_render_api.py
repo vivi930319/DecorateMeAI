@@ -78,10 +78,8 @@ _dedup_lock = Lock()
 _dedup_cache: dict[str, tuple[float, dict]] = {}
 _dedup_inflight: set[str] = set()
 
-# 非同步 job：/render 同步版會被 Cloud Run 的請求逾時砍掉（gpt-image-2 實測 50~150 秒），
-# 所以另開一組 job 端點——送出後立刻回 jobId，前端輪詢進度，不再有 504。
-# job 狀態走 Firestore（不是 process 記憶體），因為這個服務 maxScale=20、concurrency=4，
-# 輪詢的請求很可能被導到另一個 instance，記憶體裡的 job 在那邊根本不存在。
+# 渲染改用非同步工作，避免 50～150 秒的處理時間造成 Cloud Run 逾時。
+# 工作狀態存入 Firestore，讓不同服務實例都能讀取。
 RENDER_JOBS_COLLECTION = os.getenv("RENDER_JOBS_COLLECTION", "render_jobs")
 # 進度條的預估總秒數。Replicate 轉手 OpenAI 的排隊時間浮動極大（實測 50~150 秒），拿不到真實進度，
 # 這個值只是用來把「已經等了多久」映射成 1~95% 的估算百分比，跑完才跳 100。
@@ -304,7 +302,7 @@ class RenderRequest(BaseModel):
     # （face_feedback），照片存在這一端（/media/render/{id}/before），兩邊 job id 不同，
     # 沒有這個欄位就永遠 join 不起來，issue #24 的重訓也就拿不到「標註＋影像」的配對。
     #
-    # 這裡只存識別碼，不改變任何權限：照片仍然走原本那條需驗證的路徑。
+    # 這裡只保存識別碼；照片仍由原有的驗證路徑保護。
     faceJobId: str | None = Field(default=None, max_length=64)
 
 
@@ -441,8 +439,8 @@ def _response_from_completed_job(job: dict, image: str | None = None) -> dict:
     妝前圖的 job，使用者收藏之後永遠只有一半的對比圖——而且因為妝後圖正常出現，
     看起來像是「妝前圖偶爾會壞」，很難查。
 
-    舊 job 可能本來就沒有妝前圖（那個功能 2026-07-22 才上線）。這種情況用**這次請求
-    的原圖補建**，而不是放棄快取重新渲染：去重存在的目的是省下昂貴又緩慢的模型呼叫，
+    舊 job 可能本來就沒有妝前圖（那個功能 2026-07-22 才上線）。這種情況用這次請求
+    的原圖補建，而不是放棄快取重新渲染：去重存在的目的是省下昂貴又緩慢的模型呼叫，
     不是省一次圖片上傳。補建出來的是這個 job 自己的物件，不與舊 job 共用，
     所以刪除時各自獨立，不需要額外的引用計數。
     """
@@ -497,7 +495,7 @@ def _artifact_is_shared(job: dict, field: str, url: str) -> bool:
 
 
 def _delete_job_artifact(job: dict, force: bool = False) -> bool:
-    """刪掉這個 job 的圖片。**妝前圖與妝後圖都要刪。**
+    """刪掉這個 job 的圖片。妝前圖與妝後圖都要刪。
 
     妝前圖是使用者自己的臉。他刪掉收藏之後那張圖若留在 GCS 上，那不是浪費空間，
     是隱私事故——所以這裡兩個欄位都處理，任何新增的圖片欄位也必須加進來。
@@ -685,9 +683,7 @@ async def render(
             "replicateTempUrl": result.get("replicateTempUrl"),
             "isPermanent": result.get("isPermanent", False),
             "model": result["model"],
-            # 回傳實際送給模型的 prompt，讓前端可以顯示「這次到底下了什麼指令」。
-            # prompt 一律由後端組（Ollama 個人化，或退回 styleId 白名單），不含使用者自由輸入。
-            # 看不到它的話，渲染結果不如預期時根本無從判斷是 prompt 的問題還是模型的問題。
+            # 回傳後端產生的實際 prompt，方便判斷渲染問題來自指令或模型。
             "renderPrompt": prompt,
             "promptSource": prompt_source,  # 'ollama' 或 'style_allowlist'（建議服務掛掉時）
             "error": None,
@@ -758,9 +754,7 @@ def _run_render_job(
         return
     try:
         result = call_replicate_render(image, prompt)
-        # 妝前圖：使用者送進來的原圖，先前渲染完就丟掉，所以收藏永遠只有妝後圖。
-        # 存起來才有前後對比。它跟妝後圖共用同一個 job 的擁有者檢查與生命週期，
-        # 不需要另開上傳端點，瀏覽器也不必重傳一次。
+        # 妝前圖與妝後圖共用同一個工作、擁有者檢查與生命週期，供收藏頁對比。
         #
         # 失敗不影響渲染：拿不到妝前圖只是少一半對比，讓整次渲染失敗才是本末倒置。
         before_url = None
@@ -946,7 +940,7 @@ async def get_render_job(
     x_user_id: str | None = Header(default=None),
     x_admin_request: str | None = Header(default=None),
 ):
-    # 這支會被前端每兩秒打一次，所以不掛 rate limit，否則輪詢自己就會把配額燒光
+    # 進度端點會被頻繁輪詢，因此不套用一般請求配額。
     job = job_store.get(RENDER_JOBS_COLLECTION, job_id)
     if job is None:
         raise HTTPException(
@@ -1239,8 +1233,7 @@ async def delete_member_render_artifacts(
     # 已經不見，那張圖就永遠沒有東西指向它——沒有人知道它存在、也沒有人會再嘗試刪。
     # 留著紀錄至少能重試。
     #
-    # 一次只抓一批，刪完再抓下一批，直到沒有為止。先前是單次 limit=500，
-    # 超過的部分完全不會被處理，而且會員資料那邊已經刪掉了，等於留下無主的臉部照片。
+    # 分批刪除直到清空，避免超過單次查詢上限的照片成為孤立資料。
     deleted = 0
     batches = 0
     attempted: set[str] = set()

@@ -19,8 +19,8 @@ DST = pathlib.Path("models/basic_features_roi")
 def discover_heads() -> dict[str, tuple[str, str]]:
     """從 model_selection.json 讀「哪個部位用哪個分類器」，不要在這裡再抄一份。
 
-    先前這裡是硬編清單。2026-07-31 眼型由 logistic_regression 改成 linear_svc 時，
-    train_final_selected_models 改了、這裡沒改，於是它繼續去載那個**已經不會再產生**
+    舊版這裡是硬編清單。2026-07-31 眼型由 logistic_regression 改成 linear_svc 時，
+    train_final_selected_models 改了、這裡沒改，於是它繼續去載那個已經不會再產生
     的舊 joblib——匯出「成功」，但線上拿到的是上一版的頭。
     同一個事實抄兩份，就會有一份先過期（見發展歷程規格書 §7.8 的通則）。
     """
@@ -45,10 +45,7 @@ def main() -> None:
         out = DST / f"{part}_dinov2_head.npz"
         np.savez(out, coef=coef, intercept=intercept, kind=np.array(kind))
 
-        # 類別檔要跟著 head 一起更新，否則兩者會不同步。
-        # 2026-07-30 就踩到：head 已重訓成 5 類（桃杏眼），旁邊的 *_dinov2_classes.json
-        # 還停在 8 類（含丹鳳眼、瞇縫眼）。basic_roi_shadow 的 _retired_labels 守衛會
-        # 因此拒絕載入整個 head——功能沒壞，但重訓等於白做，而且從外面看不出原因。
+        # 匯出 head 時同步更新分類檔，避免模型輸出維度與標籤數量不一致。
         src_classes = SRC / f"{part}_classes.json"
         if src_classes.is_file():
             classes = json.loads(src_classes.read_text(encoding="utf-8"))["classes"]

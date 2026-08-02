@@ -1,24 +1,24 @@
 """規則式／幾何做法的 5-fold 評估——與 CNN 用同一套 fold，讓兩者真的可比。
 
-## 為什麼需要這支
+用途
 
-`calibrate_rule_thresholds.py` 用的是**單次切分**（`split_by_identity`,
-`val_ratio=0.25`），而 CNN 的分數來自 **5-fold**（`split_kfold_by_identity`）。
+`calibrate_rule_thresholds.py` 用的是單次切分（`split_by_identity`,
+`val_ratio=0.25`），而 CNN 的分數來自 5-fold（`split_kfold_by_identity`）。
 兩者評估協定不同，分數不能直接並列比較——單次切分只看一個 val set，雜訊大得多。
 
 2026-07-24 的校準顯示眼型規則式 0.374 對上 CNN 0.332，看起來規則式贏，
-但那個差距（0.042）很可能小於單次切分本身的雜訊。這支腳本把規則式接上
+但那個差距（0.042）很可能小於單次切分本身的雜訊。本腳本把規則式接上
 完全相同的 fold（`split_kfold_by_identity(labels, identities, 5, 42)`，
 對同一組 labels/identities 是確定性的），才能斷定誰真的比較好。
 
-## 不能偷看的地方
+不能偷看的地方
 
-- **門檻只能在每個 fold 的 train 上搜**，再到該 fold 的 val 評分。
+- 門檻只能在每個 fold 的 train 上搜，再到該 fold 的 val 評分。
   一次搜完全部資料再報分數等於用考題調參，分數必然虛高。
-- **眼型決策樹的深度也要在 train 內部選**（train 再切一次 CV），
+- 眼型決策樹的深度也要在 train 內部選（train 再切一次 CV），
   不能拿 val 挑深度。
 
-## 輸出
+輸出
 
     models/basic_features_roi/rule_cv_results.json
 """
@@ -145,7 +145,7 @@ def cv_threshold(part, feat_name, classes_spec, grid, cache):
 def cv_tree(part, cache):
     """對任一部位跑「淺決策樹」規則式，與 CNN 同一組 fold。
 
-    用決策樹而不是別的分類器，是因為它學出來的東西**本身就是規則**——可以直接
+    用決策樹而不是別的分類器，是因為它學出來的東西本身就是規則——可以直接
     印成 if-else 抄回 `Face_analyzer_BASIC`，維持規則式路徑「看得懂、改得動」的
     性質。深度限制加上 `min_samples_leaf=8` 是為了不讓它在幾百張圖上長成
     一棵背答案的樹。

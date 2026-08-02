@@ -225,7 +225,7 @@ def retain_permanent_storage_url(url: str | None, owner_id: str, job_id: str, va
 
     `variant` 必須把同一個 job 的不同圖片分開。妝前圖與妝後圖共用 job_id，
     目的地名稱若只用 job_id 就會撞在一起——而且下面有 `destination.exists()` 檢查，
-    撞到不會報錯，只會**靜默略過複製並回傳既有物件的網址**，
+    撞到不會報錯，只會靜默略過複製並回傳既有物件的網址，
     結果妝前圖指向妝後圖那張。傳 "-before" 之類的後綴把它們分開。
     """
     object_name = storage_object_name_from_url(url)
@@ -365,7 +365,7 @@ def data_url_to_bytes(data_url: str) -> tuple[bytes, str]:
     `image_safety`，跟 Face BASIC／PRO 用同一份實作。這裡只負責 data URL 的外層拆解，
     並把 `ImageRejected` 翻成呼叫端既有的 `ValueError` 契約。
 
-    回傳的是**清洗後**的位元組：這條路徑的下一站就是第三方渲染供應商，臉部照片的
+    回傳的是清洗後的位元組：這條路徑的下一站就是第三方渲染供應商，臉部照片的
     拍攝地點與機身序號不該跟著出去。
     """
     from image_safety import ImageRejected, sanitize_image_bytes
@@ -397,7 +397,7 @@ def data_url_to_bytes(data_url: str) -> tuple[bytes, str]:
 def sanitize_data_url(data_url: str) -> str:
     """回傳同一張圖、但已去除中繼資料的 data URL。
 
-    走 Replicate 的路徑是把 data URL **原封不動**送出去的（`input_images`），所以清洗
+    走 Replicate 的路徑是把 data URL 原封不動送出去的（`input_images`），所以清洗
     必須發生在字串本身，只清 `data_url_to_bytes` 的回傳值救不到那條路。
     """
     cleaned, content_type = data_url_to_bytes(data_url)
@@ -481,7 +481,7 @@ def generate_ollama_suggestion(face_analysis: dict[str, Any], style_hint: str) -
 # 塞進 prompt，還不如不放。這裡只收模型真的會產生的那些類別，翻不出來的整項略過，
 # 寧可少一句，也不要把未知標籤原樣丟給影像模型。
 #
-# 這裡**只列現行分類表的類別**。已淘汰的名稱（M型唇、杏仁眼…）不放進來——
+# 這裡只列現行分類表的類別。已淘汰的名稱（M型唇、杏仁眼…）不放進來——
 # 舊資料在 face_corrections.apply() 就已經用 analysis_package.canonical_label
 # 換成合併後的名稱了，走到這裡的一律是現行類別。合併過的東西不該在下游復活。
 FACE_TERM_EN = {
@@ -510,9 +510,9 @@ def compact_face_context(face_analysis: dict[str, Any]) -> str:
     讀的是前端 AnalysisPackage.fromRawFaceAnalysis 產出的結構（faceShape / eyeShape /
     browShape / noseFront / lipShape / skinTone{season,level}），順便相容底線寫法。
 
-    先前這裡只列了 faceShape / skinTone / eyeShape / lipShape 幾個 key，且直接把值
+    舊版這裡只列了 faceShape / skinTone / eyeShape / lipShape 幾個 key，且直接把值
     f-string 進去：skinTone 其實是個物件，會印成整串 dict；中文類別名也原樣送給影像
-    模型。加上 build_personalized_render_prompt 根本沒把 face_analysis 傳進來，
+    模型。加上 build_personalized_render_prompt 未把 face_analysis 傳進來，
     這一句從頭到尾都是空的——所以無論 Ollama 有沒有接上，prompt 裡都沒有這個人的長相。
     """
     if not isinstance(face_analysis, dict):
@@ -678,7 +678,7 @@ def build_server_render_prompt(style_id: str) -> str:
 # 跟他的臉型、膚色都無關。Ollama 的建議服務其實會針對個人產出一段 renderPromptEn
 # （細到眼影暈染方向、眼線形狀），但一直沒有人用它。
 #
-# 這裡由 render 服務**自己**去跟建議服務要那段 prompt，而不是讓前端傳進來 ——
+# 這裡由 render 服務自己去跟建議服務要那段 prompt，而不是讓前端傳進來 ——
 # renderApiKey 是明文寫在前端網頁裡的，一旦開放前端送任意 prompt，任何人都能拿它
 # 生成任意圖片、燒我們的 Replicate 額度。styleId 白名單是目前唯一的濫用防線，不能拆。
 #
@@ -707,7 +707,7 @@ class SuggestionServiceUnavailable(RuntimeError):
     """建議服務有設定，但這一次要不到 prompt。
 
     刻意跟「沒設定建議服務」分開：沒設定時退回 styleId 的固定 prompt 是合理的預設行為；
-    設定了卻失敗，代表使用者**應該**拿到個人化的妝，卻因為上游壞了而拿到罐頭——
+    設定了卻失敗，代表使用者應該拿到個人化的妝，卻因為上游壞了而拿到罐頭——
     那件事必須講出來，不能靜靜降級。2026-07-29 就是這樣：Render 指向一條已死的 tunnel
     超過一天，沒有任何錯誤，只是所有人的妝都變得比較泛用（見 S60）。
     """
@@ -716,7 +716,7 @@ class SuggestionServiceUnavailable(RuntimeError):
 def fetch_ollama_render_prompt(style_id: str, face_analysis: dict[str, Any] | None) -> str | None:
     """跟建議服務要一段個人化的英文渲染指令。
 
-    回 None **只有一種情況**：根本沒設定建議服務。
+    回 None 只有一種情況：未設定建議服務。
     設定了卻拿不到（連不上、401、逾時、回應沒有 renderPromptEn）一律丟
     SuggestionServiceUnavailable，由呼叫端決定怎麼告訴使用者。
     """
@@ -752,7 +752,7 @@ def fetch_ollama_render_prompt(style_id: str, face_analysis: dict[str, Any] | No
 def build_personalized_render_prompt(style_id: str, face_analysis: dict[str, Any] | None) -> tuple[str, str]:
     """回傳 (prompt, 來源)。來源是 'ollama' 或 'style_allowlist'，會回給前端顯示。
 
-    **有設定建議服務就一定要用它的輸出。** 拿不到時往上拋，不要退回 styleId 的固定 prompt——
+    有設定建議服務就一定要用它的輸出。 拿不到時往上拋，不要退回 styleId 的固定 prompt——
     那個 fallback 只保留給「沒有設定建議服務」的部署。
     """
     ollama_prompt = fetch_ollama_render_prompt(style_id, face_analysis)
@@ -763,10 +763,7 @@ def build_personalized_render_prompt(style_id: str, face_analysis: dict[str, Any
     # Ollama 只負責「要上什麼妝」，identity lock 一律由我們自己疊上去 ——
     # 不能讓外部模型決定「可不可以改變這個人的長相」。
     #
-    # face_analysis 一定要傳下去。先前這裡寫死 {}，於是 prompt 裡「This person has ...」
-    # 那一句永遠是空的：拿去問 Ollama 的臉部資料，組 prompt 時又被丟掉，
-    # 個人化只剩 Ollama 那一句話，其餘 1200 多個字元跟預設完全一樣——
-    # 這就是「渲染效果跟預設沒兩樣」的來源。
+    # 將 face_analysis 傳入 prompt 組裝流程，確保渲染使用完整的個人化特徵。
     return build_render_prompt(
         {"renderPrompt": None, "style": ollama_prompt}, face_analysis or {}, ""
     ), "ollama"

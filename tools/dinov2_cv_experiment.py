@@ -5,7 +5,7 @@
 理論上比從頭 fine-tune 一個 CNN 更不容易過擬合。
 
 第一輪沒做它的理由是「量尺不可信（單次切分雜訊 ±0.1），換架構只會得到另一組
-不可信的數字」。現在 5-fold CV 就位，而且這裡用**完全相同的 fold**
+不可信的數字」。現在 5-fold CV 就位，而且這裡用完全相同的 fold
 （split_kfold_by_identity, seed=42 —— 對同一批 labels/identities 是確定性的），
 所以 DINOv2 的分數跟 CNN 基準可以直接逐 fold 相比。
 
@@ -54,7 +54,7 @@ OUT_PATH = Path("models/basic_features_roi/dinov2_cv_results.json")
 def _use_encoder(name: str) -> None:
     """切換 backbone，並把快取／輸出路徑一起換掉。
 
-    vits14 沿用原本的檔名（既有結果不必重跑）；其餘各自帶後綴。
+    vits14 沿用既有的檔名（既有結果不必重跑）；其餘各自帶後綴。
     """
     global ENCODER, EMB_DIM, EMB_PATH, CONTOUR_EMB_PATH, OUT_PATH
     ENCODER, EMB_DIM = name, ENCODERS[name]
@@ -104,9 +104,7 @@ def compute_embeddings():
         print(f"embedding 快取不符（快取 {len(cached['embeddings'])}筆×{got_dim}維、"
               f"目前需要 {want}筆×{EMB_DIM}維），重新計算")
 
-    # 必須早於 mediapipe：專案路徑含「淡江大學」，不套這個修復 FaceMesh 一定初始化失敗
-    # （見 mediapipe_ascii 模組說明與訓練記錄書 §三）。prepare_roi_cache 早就這樣做了，
-    # 這支當初漏掉——因為它多半吃現成的 embedding 快取，不會走到要開 FaceMesh 的這一段。
+    # 在載入 mediapipe 前處理非 ASCII 路徑，避免 FaceMesh 初始化失敗。
     import mediapipe_ascii  # noqa: F401
     import mediapipe as mp
     import torch
@@ -324,10 +322,7 @@ def main():
         cnn_s = f"{cnn[0]:.3f} ± {cnn[1]:.3f}" if cnn else "-"
         print(f"{part:12s} {lr['mean']:>8.3f} ± {lr['std']:.3f} {sv['mean']:>7.3f} ± {sv['std']:.3f} {cnn_s:>16s}")
 
-    # 檔名要照實反映跑的是什麼。先前這裡把 "per_image" 寫死在兩個輪廓分支裡，
-    # 於是 --identity-mode cluster 的輪廓實驗會被存成 dinov2_cv_per_image_contour_results.json
-    # ——而依規格書 §八 的規則，檔名帶 per_image 的數字是「不可採信」的那一類。
-    # 可信的結果被貼上不可信的標籤，比存錯地方更難發現。
+    # 輸出檔名要包含實際的 identity mode，避免混淆不同驗證方式的結果。
     # 注意：encoder 後綴要一起帶上，否則不同 backbone 的結果會互相覆蓋。
     # 2026-07-31 踩過：_use_encoder 明明把 OUT_PATH 換成 dinov2_cv_results_vitb14.json，
     # 但這裡用 with_name 重新組檔名時只看 identity_mode/face_input/contour_parts，

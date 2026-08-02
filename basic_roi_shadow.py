@@ -1,12 +1,12 @@
 """ROI CNN 的 shadow prediction：跑模型、記錄結果，但不影響 BASIC 的正式輸出。
 
-為什麼是 shadow 而不是直接用：這批模型按人切分的 macro accuracy 只有 0.38~0.67，
+原因是 shadow 而不是直接用：這批模型按人切分的 macro accuracy 只有 0.38~0.67，
 全數低於規格書門檻 0.70（見 CNN訓練歷程_BASIC五官分類.md）。直接接上去會讓線上結果變差，
 所以照規格書 13.1 的做法先跑 shadow —— API 照樣回規則式答案，預設只把
 「規則式 vs 模型」的差異寫進 log，累積真實流量上的比較資料。若內部驗收需要看
 模型欄位，可用 ROI_SHADOW_EXPOSE_RESPONSE=1 暫時回傳。
 
-這支模組的每個對外進入點都不能拋例外。模型檔不存在、onnxruntime 載入失敗、ROI 裁切失敗，
+本模組的每個對外進入點都不能拋例外。模型檔不存在、onnxruntime 載入失敗、ROI 裁切失敗，
 一律回 None 讓 BASIC 當作沒這回事 —— shadow 功能壞掉絕不能拖垮正式分析。
 
 用 ROI_SHADOW_ENABLED=0 可以整個關掉。
@@ -36,14 +36,12 @@ EXPOSE_IN_RESPONSE = os.getenv("ROI_SHADOW_EXPOSE_RESPONSE", "0") == "1"
 
 # MODEL_FIRST：讓 CNN 成為使用者看到的正式答案，規則式退居 fallback。
 #
-# 為什麼不做 hybrid（低信心時退回規則式）：實測過了，沒有用。
-# 五個部位的最佳信心門檻掃描結果是「門檻 0.00」——也就是「CNN 再沒信心也比規則式準」。
-# 硬要在 brow/nose 設門檻（0.48 / 0.38），val macro 反而從 0.589->0.505、0.666->0.648 變差。
-# 校準後的規則式仍然全面輸給 CNN，所以「低信心時退回規則式」只會拖累結果。
+# 不使用低信心 hybrid：門檻掃描顯示各部位直接採用 CNN 的驗證分數較高。
+# brow 與 nose 加入回退門檻後，val macro 分別從 0.589 降到 0.505、0.666 降到 0.648。
 # 見 tools/tune_hybrid.py 與 models/basic_features_roi/hybrid_config.json。
 #
-# 誠實的限制：CNN 也還沒達到規格書的 0.70 門檻（0.378~0.666），只是遠優於原本
-# 「每個人都判成彎月眉+標準鼻」的規則式。設 ROI_MODEL_FIRST=0 可退回規則式當正式輸出。
+# CNN 目前仍未達到規格書的 0.70 門檻（0.378～0.666）。
+# 設定 ROI_MODEL_FIRST=0 可改回規則式輸出。
 MODEL_FIRST = os.getenv("ROI_MODEL_FIRST", "1") != "0"
 
 # 模型的部位代號 -> BASIC 輸出用的中文欄位名
@@ -81,7 +79,7 @@ def _retired_labels(part: str, classes: list[str]) -> set[str]:
 
     以 `{part}_classes.json`（CNN 的類別檔，隨每次重訓更新）當作目前的分類表。
     兩者不一致時代表某一邊沒跟上合併，讓不一致的那一邊安靜地繼續預測，
-    就會在線上出現使用者回饋選項裡根本沒有的類別。
+    就會在線上出現使用者回饋選項裡沒有的類別。
     """
     canonical_path = MODEL_DIR / f"{part}_classes.json"
     if not canonical_path.is_file():
@@ -94,14 +92,14 @@ def _retired_labels(part: str, classes: list[str]) -> set[str]:
 
 # ── DINOv2 shadow ────────────────────────────────────────────────────────────
 # 2026-07-19 的三模型公平比較裡，臉型／眼型／鼻型由 DINOv2 ViT-S/14 + 線性分類器勝出
-# （0.522 / 0.387 / 0.863）。但依當時的部署決策，第一階段**只跑 shadow、不接管正式輸出**：
+# （0.522 / 0.387 / 0.863）。但依當時的部署決策，第一階段只跑 shadow、不接管正式輸出：
 # 先在真實流量上驗證速度與記憶體，並累積與現行 CNN 的對照資料。
 #
 # 服務端不裝 torch —— backbone 已離線匯出成 ONNX（與 torch 原模型最大誤差 2.6e-05），
 # 用既有的 onnxruntime 推論，分類器則是 scikit-learn 的 joblib，兩者都已是相依套件。
 #
 # 看完 shadow log 要升為正式答案時，設 ROI_DINOV2_MODEL_FIRST=1 即可，不需要改程式。
-# 2026-07-31 起**預設關閉**（見下方 DINOV2_FIRST_PARTS 的說明）。
+# 2026-07-31 起預設關閉（見下方 DINOV2_FIRST_PARTS 的說明）。
 #
 # 只清空 DINOV2_FIRST_PARTS 不夠：should_run_dinov2() 會落到抽樣分支，
 # 仍有 ROI_DINOV2_SAMPLE_RATE（預設 10%）的請求要付那 330ms 去跑一個
@@ -111,7 +109,7 @@ DINOV2_MODEL_FIRST = os.getenv("ROI_DINOV2_MODEL_FIRST", "0") == "1"
 
 # 逐部位指定哪些交給 DINOv2 當正式答案（逗號分隔的部位名）。
 #
-# **不要整批切換。** 同一套 5-fold（identity 切分、40 epochs、lr 6e-4）上量到的是：
+# 不要整批切換。 同一套 5-fold（identity 切分、40 epochs、lr 6e-4）上量到的是：
 #
 #     eye_shape    CNN 0.495  DINOv2 0.542   +0.047  ← DINOv2 勝 4/5 折
 #     brow_shape   CNN 0.542  DINOv2 0.543   +0.001  （平手）
@@ -123,13 +121,11 @@ DINOV2_MODEL_FIRST = os.getenv("ROI_DINOV2_MODEL_FIRST", "0") == "1"
 # 早期「先試試看」留下的，保留是為了相容；正式部署請用這一個。
 #
 # 誠實標記：眼型的 +0.047 落在 std（0.042）之內，不是壓倒性的差距。
-# 這組數字先前記成 +0.090，那是在 identity map 過期、桃杏眼 221 張只有 1 張
-# 進過驗證集的狀態下量的（見發展歷程規格書 §7.6）；而且對手 CNN 當時用的是
-# 還沒調好的 lr 3e-4。修好之後領先幅度縮水，方向沒變。
+# 修正 identity map 與 CNN 學習率後，眼型領先幅度由 +0.090 更新為 +0.047。
 #
 # 代價：DINOv2 佔整個分析約 57% 的時間。若延遲吃不消，把這個環境變數設成空字串
 # 退回全 CNN，眼型的代價是 -0.047。
-# 2026-07-31：**預設空的**。五個部位全部改用 ConvNeXt-Tiny 之後，DINOv2 完全退場。
+# 2026-07-31：預設空的。五個部位全部改用 ConvNeXt-Tiny 之後，DINOv2 完全退場。
 #
 # 決定依據是同時量到的三件事，不是單看分數：
 #
@@ -150,7 +146,7 @@ DINOV2_FIRST_PARTS = tuple(
 #
 # 實測（12 張、本機 CPU）各段耗時佔比：
 #     InsightFace 角度 199ms(33%)　MediaPipe 17ms(3%)　規則式 21ms(4%)
-#     ROI CNN 19ms(3%)　**DINOv2 343ms(57%)**　合計 599ms
+#     ROI CNN 19ms(3%)　DINOv2 343ms(57%)　合計 599ms
 #
 # DINOv2 是整個分析裡最貴的一段，而在 shadow 模式下它的輸出只進對照 log，
 # 不影響使用者看到的任何欄位——等於每個人都替一份離線比較實驗付了 57% 的等待時間。
@@ -287,7 +283,7 @@ def _load_dinov2() -> tuple | None:
             with np.load(head_path) as data:
                 coef = data["coef"].astype(np.float32)
                 # 融合頭：輸入是 [embedding, 幾何特徵]，coef 比 embedding 寬。
-                # 幾何欄位的**順序**存在 npz 裡，推論時照它取值——順序對不上不會報錯，
+                # 幾何欄位的順序存在 npz 裡，推論時照它取值——順序對不上不會報錯，
                 # 只會讓分類器拿到打亂的輸入，然後安靜地變差。
                 geom = [str(x) for x in data["geom_features"]] if "geom_features" in data else []
                 heads[part] = (coef, data["intercept"].astype(np.float32), classes, geom)

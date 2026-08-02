@@ -1,13 +1,13 @@
 """量測五官判斷的準確率隨臉部角度怎麼衰減。
 
-要回答的問題：**正臉門檻該設在幾度？**
+要回答的問題：正臉門檻該設在幾度？
 
 `Face_analyzer_BASIC` 現在有三層角度政策（正常／標記可信度低／不輸出），
 門檻是 `FACE_YAW_UNCERTAIN` 與 `FACE_YAW_UNRELIABLE`。那兩個數字是 2026-07-22
-用這支腳本的前身量出來的，但當時**量錯了對象**——量的是規則式 `get_face_shape()`，
+用本腳本的前身量出來的，但當時量錯了對象——量的是規則式 `get_face_shape()`，
 而線上開著 `ROI_MODEL_FIRST=1`，使用者看到的是 CNN 覆蓋後的答案。
 
-所以這支工具預設走 `export_json()`，也就是線上真正輸出的那條路徑。
+所以本工具預設走 `export_json()`，也就是線上真正輸出的那條路徑。
 要跟規則式對照時才加 `--rule-only`。
 
 三個變因要分開跑，不要混在一起看：
@@ -25,15 +25,15 @@
     12-18°       0.162     0.812
     18-25°       0.031     0.781
 
-**規則式對角度極度敏感，CNN 幾乎不受影響。** 所以角度抑制預設是關的——
+規則式對角度極度敏感，CNN 幾乎不受影響。 所以角度抑制預設是關的——
 按規則式的曲線去抑制，等於把 CNN 八成準確的答案丟掉。
 
-⚠️ 但這組數字**還沒排除訓練集**。這支工具目前對整個資料夾評估，裡面可能包含
+注意： 但這組數字還沒排除訓練集。本工具目前對整個資料夾評估，裡面可能包含
 CNN 訓練過的影像，準確率與那條平坦度都可能是記憶效應。要當結論用，得先限制在
 val split——做法見 `eval_rule_baseline.py`，它 import `train_basic_cnn_roi` 的
 `build_part_data` / `split_by_identity` 用同一個 seed 重算切分。這件事還沒做。
 
-已知的另一個缺口：眼型很可能是 **pitch 敏感**的（抬頭低頭直接改變眼睛開合），
+已知的另一個缺口：眼型很可能是 pitch 敏感的（抬頭低頭直接改變眼睛開合），
 但從來沒量過，所以 `FACE_PITCH_LIMIT` 至今沒有依據。用 `--axis pitch --part eye_shape`
 就是在補這個洞。
 
@@ -51,7 +51,7 @@ val split——做法見 `eval_rule_baseline.py`，它 import `train_basic_cnn_r
 
 資料夾格式：`<--data>/<標籤>/*.jpg`，資料夾名稱就是正確答案。
 
-⚠️ Windows 注意：路徑含中文時 MediaPipe 的 C++ 載入層會失敗
+注意： Windows 注意：路徑含中文時 MediaPipe 的 C++ 載入層會失敗
 （`FileNotFoundError: face_landmark_front_cpu.binarypb`）。專案若放在
 `OneDrive - 淡江大學` 這種路徑底下，先建一條純 ASCII 的 junction 再從那裡執行：
 
@@ -117,13 +117,13 @@ def main():
         os.environ["ROI_MODEL_FIRST"] = "0"
         os.environ["ROI_DINOV2_MODEL_FIRST"] = "0"
 
-    # 把角度抑制關掉，否則這支工具會量到自己。
+    # 關閉角度抑制，才能量到分類器本身的角度敏感度。
     #
     # FaceAnalyzer 在 |yaw| 超過 FACE_YAW_UNRELIABLE 時把臉型換成「無法判斷」，
     # 那個字串永遠不等於任何標籤，於是超標的每一桶都會是 0.000——看起來像分類器
-    # 在該角度徹底崩潰，其實只是抑制生效了。第一次跑就踩到這個。
+    # 否則輸出只會反映抑制規則，而不是分類器表現。
     #
-    # 這裡要量的是**底層分類器的真實衰減**，用來決定門檻該設在哪；
+    # 這裡要量的是底層分類器的真實衰減，用來決定門檻該設在哪；
     # 門檻本身必須在量測時不存在。
     os.environ["FACE_YAW_UNRELIABLE"] = "9999"
     os.environ["FACE_YAW_UNCERTAIN"] = "9999"

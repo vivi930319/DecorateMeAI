@@ -75,16 +75,11 @@ def train_mobilenet(part, rois, labels, classes, device):
 def train_dinov2(records):
     embeddings = np.load("data/roi_cache/dinov2_embeddings.npz")["embeddings"]
     all_rois, _ = load_cache()
-    # 2026-07-31：眼型由 logistic_regression 改成 linear_svc。
-    #
-    # 原本的選擇來自 per-image 切分的比較——那正是規格書 §八 標「不可採信」的協定
-    # （同一個人的照片同時進 train 與 val）。改用 identity 切分的 5-fold 重量：
+    # 眼型依 identity 分組的 5-fold 結果選擇 linear_svc，避免同一人同時出現在訓練與驗證集。
     #
     #     眼型  SVM 0.625 ± 0.060   vs   LogReg 0.592 ± 0.058
     #
-    # ⚠️ 差距 +0.033 落在 std 內，依 §9.2 只能算並列，**不是**「SVM 明確較好」。
-    # 換過去的理由是「原本的選擇依據壞掉，重選一次比較誠實」，而且兩者是同一條
-    # DINOv2 推論路徑、只差一個線性頭，換過去零額外成本。
+    # 差距 +0.033 位於標準差內，兩者視為接近；更換線性頭不增加推論成本。
     selections = {
         "face_shape": (LinearSVC(class_weight="balanced", C=1.0, max_iter=5000), "linear_svc"),
         "eye_shape": (LinearSVC(class_weight="balanced", C=1.0, max_iter=5000), "linear_svc"),
@@ -116,9 +111,7 @@ def main():
     train_dinov2(records)
     (OUT_DIR / "model_selection.json").write_text(json.dumps({
         "dataset_images": len(records),
-        # 2026-07-31 改用 identity 切分。先前寫的是 per-image——那是規格書 §八 標
-        # 「不可採信」的協定，同一個人的照片會同時進 train 與 val，分數虛高。
-        # 眼型的分類器就是被那份比較選錯的。
+        # 使用 identity 分組切分，避免同一個人的照片同時進入訓練與驗證集。
         "selection_basis": "identity-grouped 5-fold macro accuracy (split_kfold_by_identity, seed=42)",
         "models": {
             "face_shape": "dinov2_vits14+linear_svc",

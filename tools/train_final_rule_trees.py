@@ -1,6 +1,6 @@
 """用 100% 清理後資料訓練最終的幾何決策樹，並匯出成服務可載入的檔案。
 
-## 為什麼是決策樹而不是 CNN
+選擇決策樹的原因
 
 `tools/cv_rule_baseline.py` 在與 CNN 完全相同的 5-fold 上量出來的結果：
 
@@ -13,7 +13,7 @@
 其餘三個部位（眉、鼻、唇）維持 CNN：規則式在那裡輸，但差距都小於逐 fold 差的
 標準差，屬於傾向而非定論。
 
-## 輸出
+輸出
 
     models/basic_features_roi/<part>_rule_tree.joblib   sklearn 決策樹
     models/basic_features_roi/<part>_rule_tree.json     類別、特徵順序、深度、可讀規則

@@ -164,10 +164,10 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://127.0.0.1:5500")
 def _insight_root() -> str:
     """模型放在哪。
 
-    容器裡模型烘在映像的 `/app/.insightface`，先前這個路徑是寫死的。
-    但本機沒有那個目錄，InsightFace 找不到就會**嘗試重新下載** ——
+    容器裡模型烘在映像的 `/app/.insightface`，舊版這個路徑是寫死的。
+    但本機沒有那個目錄，InsightFace 找不到就會嘗試重新下載 ——
     離線、或像這台開發機一樣有 TLS 攔截的環境，下載必定失敗，
-    於是整份分析在容器外根本跑不起來（模型明明已經在 ~/.insightface）。
+    於是整份分析在容器外實際上跑不起來（模型明明已經在 ~/.insightface）。
 
     順序：環境變數 > 容器路徑 > 使用者家目錄。三個都找不到才交給
     InsightFace 自己處理（那時下載是唯一選擇，也該讓它報錯）。
@@ -267,7 +267,7 @@ async def analyze(
 def pose_guidance(yaw: float, pitch: float, yaw_limit: float, pitch_limit: float) -> str:
     """把 yaw／pitch 的角度翻成使用者做得到的動作。
 
-    先前這裡直接把數字丟給使用者（「偏角：yaw=-19.9°, pitch=23.6°」）。沒有人知道
+    舊版這裡直接把數字丟給使用者（「偏角：yaw=-19.9°, pitch=23.6°」）。沒有人知道
     yaw 和 pitch 是什麼，所以看到訊息也不知道要動哪裡——線上日誌有人 80 秒內連試三次，
     pitch 一直停在 23.6~23.8°，他很可能一直在左右轉頭，但超標的其實是抬頭低頭。
 
@@ -437,31 +437,18 @@ def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.
         {"status": "processing", "stage": "face_analysis", "progress": 35, "startedAt": _now_iso(), "updatedAt": _now_iso()},
     ):
         return
-    # 兩個階段分開包，因為它們的失敗代表完全不同的事、該給的答覆也不同：
-    #   1. 分析本身（偵測到臉、抽特徵、跑分類）——失敗代表這張照片分析不出來，重試可能有用。
-    #   2. 把分析結果封裝／寫回 job store——失敗時「分析其實已經成功了」，把整包標成
-    #      FACE_ANALYSIS_ERROR 會誤導使用者重拍一張本來就分析得出來的照片。
-    # 先前兩段共用一個 except，封裝失敗會被講成分析失敗。現在拆成 analysis_completed
-    # vs package_build_failed，讓上層看得出到底是哪一段壞了。
+    # 分開處理分析與資料包建立錯誤，讓上層能顯示正確原因。
     try:
         result = FaceAnalyzer(contents, brightness_mode=brightness_mode, brightness_level=brightness_level).export_json()
-        # 套用這張臉先前被修正過的答案。模型的原始輸出會被留在 result["_modelRaw"]，
-        # 回饋一律回報那一份——否則訓練資料會變成模型在確認自己。
+        # 套用已儲存的修正，並在 _modelRaw 保留模型原始輸出供回饋使用。
         result = face_corrections.apply(
             result,
             face_corrections.image_hash(contents),
             owner_id=owner_id,
         )
     except ValueError as exc:
-        # FaceAnalyzer 對「這張照片本身有問題」一律 raise ValueError，而且訊息本身就是
-        # 要給使用者看的可行動指引：pose_guidance 產生的「你現在露出的是右臉，請把頭轉向
-        # 你的右邊」、「沒偵測到人臉」、「膚色區域不足，請使用光線均勻、臉部清楚的正面照片」。
-        #
-        # 先前這一段跟內部錯誤共用同一個 except Exception，於是每一句都被覆蓋成
-        # 「臉部分析失敗，請稍後再試」。那句話對使用者毫無用處——他不知道要改什麼，
-        # 只會原樣重拍同一張、再失敗一次。同步的 /analyze 端點（見上面的 except ValueError）
-        # 一直都有把訊息傳出去，但前端走的是 job 路徑，所以 pose_guidance 那段指引
-        # 實際上從來沒有被任何使用者看到過。
+        # ValueError 代表可由使用者修正的拍攝問題，例如角度、光線或未偵測到人臉。
+        # 保留原始訊息，讓前端提示正確的重拍方式。
         #
         # 錯誤碼刻意用一個前端 USER_ERROR_ZH 沒有收錄的新碼：那張表命中就會用固定字串
         # 取代訊息，收錄了反而又把這裡的具體指引蓋掉一次。沒收錄時前端會原樣顯示中文訊息。
@@ -691,9 +678,7 @@ class FaceAnalyzer:
             face = max(faces, key=lambda f: f.det_score)
 
             if hasattr(face, "pose") and face.pose is not None:
-                # 角度一律記下來，不論有沒有開 strict_angle——export_json 要靠它決定
-                # 哪些欄位該標「這個角度下不可靠」。先前只在 strict_angle 分支裡讀，
-                # 讀完就丟，後面完全不知道這張臉是正的還是斜的。
+                # 一律保存臉部角度，讓 export_json 標示不可靠的分析欄位。
                 self.pose_yaw = float(face.pose[0])
                 self.pose_pitch = float(face.pose[1])
                 if strict_angle and (
@@ -1029,8 +1014,7 @@ class FaceAnalyzer:
         # 33 個標準鼻裡有 30 個被判成窄鼻，整個類別塌陷。併成兩類重訓後
         # 兩類召回率都是 0.800（models/basic_features_roi/nose_shape_metrics.json）。
         #
-        # 這裡不需要新的校準：0.300 原本就是「寬鼻 vs 其餘」的界線，
-        # 窄鼻併進標準鼻之後，界線以下就全是標準鼻。
+        # 0.300 是寬鼻與其他鼻型的既有界線；合併後界線以下皆為標準鼻。
         if ratio_width > 0.300: return "寬鼻"
         return "標準鼻"
 
@@ -1134,7 +1118,7 @@ class FaceAnalyzer:
     def _skin_sample_reliability(self, lab_img, roi_mask) -> dict:
         """頰部取樣區的亮度離散程度——遮擋的偵測訊號，門檻由實測決定。
 
-        量的是**顏色過濾之前**的幾何取樣區：污染的證據就在那些被過濾掉、或沒被
+        量的是顏色過濾之前的幾何取樣區：污染的證據就在那些被過濾掉、或沒被
         過濾掉但明顯偏離的像素裡。過濾之後才量等於先把證據刪掉再找證據。
         """
         l_vals = lab_img[:, :, 0][roi_mask > 0].astype(np.float32) / 2.55
@@ -1291,7 +1275,7 @@ class FaceAnalyzer:
         白白丟資訊，也會讓這個標記本身失去意義——什麼都標不確定，等於沒標。
 
         眼型／鼻型／唇型／眉型同樣含水平跨距，理論上也會受影響，但還沒有實測數字，
-        所以先不列。**沒有量過就不要宣稱**，寧可少標也不要標錯。
+        所以先不列。沒有量過就不要宣稱，寧可少標也不要標錯。
         """
         if self.pose_yaw is None:
             return {"measured": False, "lowConfidenceFields": [], "suppressedFields": []}
@@ -1350,8 +1334,7 @@ class FaceAnalyzer:
         try:
             shadow = basic_roi_shadow.predict(self.frame, self._pts_cache)
 
-            # DINOv2 在臉型／眼型／鼻型勝過 CNN，但依部署決策先只跑 shadow。
-            # 必須在 apply_model_first 覆蓋 result 之前算完並記錄，否則對照的就不是原本的答案。
+            # DINOv2 的 shadow 結果要在正式模型覆蓋答案前記錄，才能正確比較。
             #
             # shadow 模式下改成抽樣：DINOv2 佔整個分析 57% 的時間，而它的輸出只進對照 log，
             # 每個使用者都替一份離線比較實驗等了那 343ms。對照要的是統計不是每一筆。
@@ -1417,9 +1400,7 @@ class FaceAnalyzer:
         except Exception:
             logging.getLogger(__name__).exception("DINOv2 逐部位覆蓋失敗，維持既有答案")
 
-        # 角度抑制必須放在最後。MODEL_FIRST 開啟時 apply_model_first() 會用 CNN 的答案
-        # 覆蓋整個 result，寫在前面的抑制會被蓋掉——先前就是這樣，日誌裡看得到
-        # 「規則=無法判斷（拍攝角度偏斜） 模型=圓形臉」，抑制等於沒做。
+        # 角度抑制要在模型覆蓋答案後執行，否則結果會再次被模型答案取代。
         #
         # 注意這裡抑制的是模型的答案，而角度衰減曲線目前只量過規則式。CNN 從
         # landmark 裁 ROI，斜臉的裁切同樣會失真，但失真多少沒有量過，所以這道抑制

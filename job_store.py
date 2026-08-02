@@ -148,7 +148,7 @@ def peek_window_quota(
     maximum: int,
     now: float | None = None,
 ) -> tuple[bool, int, int] | None:
-    """Read the current fixed-window count **without** incrementing it.
+    """Read the current fixed-window count without incrementing it.
 
     Returns ``(allowed, count, retry_after)`` or ``None`` when Firestore is
     unavailable. This exists so a login guard can *check* whether a key is over

@@ -446,7 +446,7 @@ class AiGatewayTest(unittest.TestCase):
         """CSRF cookie 刻意不是 HttpOnly，session cookie 則必須是。
 
         兩者剛好相反，很容易在複製貼上時弄錯：session 被 JS 讀到就等於 XSS 直接
-        拿到憑證；CSRF token 讀不到則 double-submit 根本無法成立，所有寫入都會 403。
+        拿到憑證；CSRF token 讀不到則 double-submit 無法成立，所有寫入都會 403。
         """
         from fastapi import Response as FastApiResponse
 
@@ -678,7 +678,7 @@ class AiGatewayTest(unittest.TestCase):
 
     def test_signup_keys_never_collide_with_the_login_bucket(self):
         # 註冊與登入共用一個桶時：十次失敗登入會讓全場都註冊不了、也收不到驗證碼
-        # （2026-07-25 Demo 前實測踩到）。scope 前綴就是那道隔離，這裡把它釘住。
+        # 此案例曾造成不同端點互相影響；scope 前綴負責隔離配額。
         from ai_gateway import _login_rate_keys
 
         req = Mock()

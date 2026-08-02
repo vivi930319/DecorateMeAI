@@ -86,7 +86,7 @@ def rate_limited_error(code: str, message: str, retry_after_seconds: int, **extr
 
     兩邊都給是有原因的：標頭是 HTTP 的標準做法（代理與瀏覽器看得懂），但瀏覽器的
     `fetch` 在跨來源時預設讀不到自訂標頭，前端要顯示「請等 43 秒」只能從回應內容拿。
-    先前每個服務各寫各的，Gateway 的登入限流只有標頭、沒有秒數，前端於是只能顯示
+    舊版每個服務各寫各的，Gateway 的登入限流只有標頭、沒有秒數，前端於是只能顯示
     一句沒有時間的「請稍後再試」——使用者不知道要等多久，就會一直重試。
     """
     seconds = max(1, int(retry_after_seconds))
@@ -224,7 +224,7 @@ def enforce_service_api_key(app: FastAPI, env_name: str) -> None:
     等十餘支），import 就炸會讓這些完全不碰網路的工具也跑不起來，測試同理。
     掛在啟動流程後，「正式環境漏設金鑰就起不來」照樣成立，import 則維持無副作用。
 
-    用包住 `lifespan_context` 的方式接上去，這樣不管該服務原本有沒有自己的
+    用包住 `lifespan_context` 的方式接上去，這樣不管該服務既有有沒有自己的
     lifespan 都適用（Starlette 在有 lifespan 時會忽略 `on_startup`）。
     """
     previous = app.router.lifespan_context

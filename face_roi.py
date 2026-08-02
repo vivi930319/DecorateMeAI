@@ -1,6 +1,6 @@
 """從 MediaPipe FaceMesh landmark 裁出各部位的 ROI 影像。
 
-訓練（train_basic_cnn_roi.py）和線上推論（Face_analyzer_BASIC.py）共用這支模組。
+訓練（train_basic_cnn_roi.py）和線上推論（Face_analyzer_BASIC.py）共用本模組。
 兩邊的裁切定義只要飄掉一點，模型看到的分佈就跟訓練時不同，準確率會無聲崩掉，
 所以 ROI_SPECS 是唯一事實來源，不要在別處另外寫一份裁切邏輯。
 
@@ -134,7 +134,7 @@ FACE_OVAL = np.array([
 def face_contour_mask(points, h, w, size):
     """把臉部外框畫成二值遮罩（size x size x 3，uint8）。
 
-    **訓練與推論必須共用這一份。** 遮罩的每個細節——外接框怎麼取、填充還是描邊、
+    訓練與推論必須共用這一份。 遮罩的每個細節——外接框怎麼取、填充還是描邊、
     線寬多少、用哪種內插縮放——都會影響模型看到的東西。複製第二份到推論端，
     兩邊遲早會走樣，屆時線上表現掉了也查不出原因，因為離線重測是好的。
     這跟 face_measurements() 註解講的是同一件事。

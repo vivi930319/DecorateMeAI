@@ -137,11 +137,7 @@ def main():
             split = "val" if idx % 5 == 0 else "train"
             writer.writerow([image_id, split])
 
-    # 標註工具的選項直接取自官方分類表，不要在這裡再抄一份——
-    # 先前這裡寫死了 7 類眼型（含丹鳳眼／杏仁眼／桃花眼／瞇縫眼）與「窄鼻」，
-    # 那些在 2026-07-24～31 陸續併掉了。拿著過期的選項去標新資料，
-    # 標出來的東西會在 prepare_roi_cache 的分類表檢查被擋下，或更糟——
-    # 被別名悄悄改成別的類別。
+    # 標註選項直接取自官方分類表，避免使用已合併或過期的類別。
     label_map = {
         ("nose_front" if part == "nose_shape" else part): sorted(labels)
         for part, labels in CANONICAL_LABELS.items()

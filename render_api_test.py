@@ -46,7 +46,7 @@ class RenderApiTest(unittest.TestCase):
     def test_member_deletion_removes_before_images_and_every_batch(self):
         """刪除會員時，妝前圖也要刪，而且不能只處理第一批。
 
-        先前只收集 afterImageUrl，所以使用者刪掉帳號之後，他上傳的原始照片
+        舊版只收集 afterImageUrl，所以使用者刪掉帳號之後，他上傳的原始照片
         還留在 GCS 上——帳號都不存在了，臉還在。而且單次 limit=500，超過的
         job 連紀錄都被刪掉，那些圖片就此失去任何追蹤依據。
         """
@@ -76,7 +76,7 @@ class RenderApiTest(unittest.TestCase):
     def test_dedup_hit_still_carries_a_before_image(self):
         """去重命中時妝前圖不能消失。
 
-        命中去重會用 _response_from_completed_job 建立一個**新的** job。先前它沒有
+        命中去重會用 _response_from_completed_job 建立一個新的 job。舊版它沒有
         帶 beforeImageUrl，於是那個新 job 從出生就沒有妝前圖——妝後圖正常出現，
         所以症狀看起來像「妝前圖偶爾會壞」，實際上是同一張照片同一個風格重渲染
         必然發生。
@@ -144,7 +144,7 @@ class RenderApiTest(unittest.TestCase):
     def test_job_polling_rejects_another_members_token(self):
         """拿到別人的 job token 也不能讀他的渲染結果（P0-8）。
 
-        簽名網址那條路徑一直有擋擁有者，輪詢這條先前只驗 token——同一份資料
+        簽名網址那條路徑一直有擋擁有者，輪詢這條舊版只驗 token——同一份資料
         兩個入口，門檻卻一鬆一緊。token 只要外流一次（分享連結、log、瀏覽器歷史）
         就足以把別人的臉部渲染整包讀走。
         """
@@ -308,7 +308,7 @@ class RenderApiTest(unittest.TestCase):
     def test_member_deletion_keeps_job_when_object_delete_fails(self):
         """P0-R7：物件刪不掉時 job 必須保留，才有重試依據。
 
-        先前忽略 delete_permanent_storage_url() 的 False：物件刪除失敗仍照樣刪 job、
+        舊版忽略 delete_permanent_storage_url() 的 False：物件刪除失敗仍照樣刪 job、
         照樣累加 jobsDeleted，臉部照片就此變成無主檔案，永遠追不回來。
         """
         job_store.create(render_api.RENDER_JOBS_COLLECTION, "jobX", {

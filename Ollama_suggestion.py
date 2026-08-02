@@ -121,18 +121,17 @@ MAKEUP_DATABASE = {
 
 # 英文 enum → 中文標籤對照
 #
-# 這張表的代碼必須跟 analysis_package.py 的 *_CODES 對得上，值則必須是**現行**分類表
+# 這張表的代碼必須跟 analysis_package.py 的 *_CODES 對得上，值則必須是現行分類表
 # 裡的名稱。兩邊任一邊沒跟上，都不會報錯：_map_or_raw 查不到就原樣回傳，
 # 於是英文代碼會直接被寫進要餵給模型的中文 prompt（實測 "眼型：peach_almond（）"）。
 #
-# 已淘汰的舊代碼保留，但一律指向合併後的**新名稱**——資料庫裡還有舊分析包，
+# 已淘汰的舊代碼保留，但一律指向合併後的新名稱——資料庫裡還有舊分析包，
 # 讀到舊代碼要顯示現在還存在的類別，不能顯示一個前端回饋選項裡已經沒有的名字。
 MAP_FACE   = {"oval": "鵝蛋臉", "round": "圓形臉", "square": "方形臉", "oblong": "長形臉", "heart": "心形臉", "unknown": "未知臉型"}
 MAP_BROW   = {"straight": "一字眉", "curved": "彎月眉", "drooping_tail": "落尾眉", "unknown": "未知眉型"}
 MAP_EYE    = {"downturned": "下垂眼", "round": "圓眼", "peach_almond": "桃杏眼",
               "phoenix": "鳳眼", "unknown": "未知眼型"}
-# 鼻型現行只有 標準鼻／寬鼻。這裡原本把 standard 顯示成「直鼻」、narrow 顯示成「短鼻」，
-# 兩個都不是分類表裡的名字——使用者在回饋面板上根本選不到「直鼻」。
+# 鼻型現行只有標準鼻與寬鼻；顯示名稱必須和回饋面板的分類表一致。
 MAP_NOSE   = {"standard": "標準鼻", "wide": "寬鼻", "unknown": "未知鼻型"}
 MAP_LIP    = {"full": "厚唇", "thin": "薄唇", "smile": "微笑唇", "petal": "花瓣唇", "unknown": "未知唇型"}
 MAP_SEASON = {"spring": "春季型", "summer": "夏季型", "autumn": "秋季型", "winter": "冬季型", "unknown": "未知膚色屬性"}

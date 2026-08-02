@@ -206,11 +206,8 @@ SESSION_TTL_SECONDS = max(300, min(int(os.getenv("GATEWAY_SESSION_TTL_SECONDS", 
 SESSION_ONLY_MODE = os.getenv("GATEWAY_SESSION_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}
 LOGIN_RATE_LIMIT_WINDOW_SECONDS = max(60, int(os.getenv("GATEWAY_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "600")))
 LOGIN_RATE_LIMIT_MAX_REQUESTS = max(1, int(os.getenv("GATEWAY_LOGIN_RATE_LIMIT_MAX_REQUESTS", "10")))
-# 註冊／寄驗證碼／驗驗證碼有自己的額度，**不與登入共用**。共用時的實際後果：有人把
-# 密碼打錯十次，接下來十分鐘全場都不能註冊也收不到驗證碼——註冊一次額度都沒用，
-# 卻要為別人的失敗登入陪葬（2026-07-25 Demo 前實測踩到）。
-# 額度給得比登入寬：這條路徑沒有「猜中就進得去」的東西可以暴力破解，真正要擋的是
-# 拿它當寄信機用，所以看的是次數而不是失敗次數。
+# 註冊與驗證碼使用獨立配額，避免登入失敗影響所有人的註冊流程。
+# 此處主要限制寄信濫用，因此配額比登入流程寬鬆。
 SIGNUP_RATE_LIMIT_WINDOW_SECONDS = max(60, int(os.getenv("GATEWAY_SIGNUP_RATE_LIMIT_WINDOW_SECONDS", "600")))
 SIGNUP_RATE_LIMIT_MAX_REQUESTS = max(1, int(os.getenv("GATEWAY_SIGNUP_RATE_LIMIT_MAX_REQUESTS", "40")))
 IS_PRODUCTION = os.getenv("APP_ENV", "").strip().lower() in {"prod", "production"}
@@ -230,8 +227,7 @@ MAX_SEALED_MEMBER_SESSION_BYTES = 3500
 # 一個瀏覽器只有一份 `__session` cookie，所以多個帳號必須共存在它裡面，做成好幾個
 # 「(gateway token, 封裝過的上游 cookie)」槽位。每個分頁用 `X-Expected-Actor`——就是
 # 分頁本來就綁的那個不含 email 的 opaque actor——選出要用哪一個槽位。旗標關掉時，
-# 登入是「覆蓋」（只有一個槽位），行為跟原本單帳號完全一樣；選擇邏輯照樣能用，因為
-# 它只是看到一個槽位而已。
+# 關閉多帳號模式時只保留一個槽位，行為與單帳號模式相同。
 MULTI_SESSION_ENABLED = os.getenv("GATEWAY_MULTI_SESSION", "").strip().lower() in {"1", "true", "yes", "on"}
 MAX_SESSION_SLOTS = max(1, min(int(os.getenv("GATEWAY_MAX_SESSION_SLOTS", "4")), 8))
 MULTI_SESSION_PREFIX = "v2."
@@ -355,10 +351,10 @@ def _login_quota_check(
     window: int = LOGIN_RATE_LIMIT_WINDOW_SECONDS,
     max_requests: int = LOGIN_RATE_LIMIT_MAX_REQUESTS,
 ) -> int | None:
-    """這個 key 目前是否超量：超量回「還要等幾秒」，否則 None。**不消耗**任何額度。
+    """這個 key 目前是否超量：超量回「還要等幾秒」，否則 None。不消耗任何額度。
 
-    只讀不寫是關鍵：登入成功不該計入限流，否則一個正在反覆測試的管理員用**正確**
-    密碼也會把自己鎖住（實測踩到）。額度只在「登入失敗」時才消耗，見
+    只讀不寫是關鍵：登入成功不該計入限流，否則一個正在反覆測試的管理員用正確
+    密碼也會把自己鎖住（實測發生過）。額度只在「登入失敗」時才消耗，見
     `record_failed_login`。
 
     `window` / `max_requests` 可以覆寫，讓註冊那組用自己的額度——key 已經帶了 scope
@@ -407,7 +403,7 @@ def _login_rate_keys(request: Request, email: str, scope: str = "login") -> list
     #
     # IP 只在「確實辨識得出呼叫端」時才當一個維度。Firebase Hosting → Cloud Run 這條
     # 路徑上，client_ip 可能因為 X-Forwarded-For 的層數而解不出真正的使用者位址，
-    # 退回 "unknown"。若照樣用 `ip:unknown` 當 key，就會把**所有人**塞進同一個桶——
+    # 退回 "unknown"。若照樣用 `ip:unknown` 當 key，就會把所有人塞進同一個桶——
     # 十次失敗就讓全站登入一起 429（實測：不同帳號、不同裝置都被擋）。辨識不出來時
     # 寧可不設 IP 維度，讓「帳號維度」單獨守著；那一維是可靠的（以雜湊帳號為鍵）。
     #
@@ -437,7 +433,7 @@ def enforce_login_rate_limit(request: Request, email: str = "") -> None:
 
 
 def enforce_signup_rate_limit(request: Request, email: str = "") -> None:
-    """註冊／寄驗證碼／驗驗證碼的額度。與登入分開，且**這裡就消耗**額度。
+    """註冊／寄驗證碼／驗驗證碼的額度。與登入分開，且這裡就消耗額度。
 
     登入是「失敗才算」，因為成功登入不是攻擊。這條路徑相反：要擋的是把它當寄信機用，
     寄成功才是要算的那一次，所以每一次請求都記。
@@ -631,7 +627,7 @@ def _audit_action(prefix: str, method: str) -> str:
 
 
 def issue_csrf_cookie(response: Response) -> str:
-    """發一個新的 CSRF token 並寫進 cookie（刻意**不是** HttpOnly——前端要讀它）。"""
+    """發一個新的 CSRF token 並寫進 cookie（刻意不是 HttpOnly——前端要讀它）。"""
     token = secrets.token_urlsafe(32)
     response.set_cookie(
         key=CSRF_COOKIE,
@@ -660,7 +656,7 @@ def _refresh_csrf_cookie(request: Request, response: Response) -> None:
 def enforce_csrf(request: Request) -> None:
     """狀態變更請求必須讓標頭與 cookie 帶著同一個 token。
 
-    先前只有 `X-Expected-Actor` 在擋跨帳號寫入——它擋的是「寫到別人的資料上」，
+    舊版只有 `X-Expected-Actor` 在擋跨帳號寫入——它擋的是「寫到別人的資料上」，
     不是「別的網站叫你的瀏覽器寫」。兩者是不同的攻擊，需要不同的檢查。
     """
     if str(request.method or "").upper() not in STATE_CHANGING_METHODS:
@@ -832,8 +828,7 @@ def select_account(request: Request, *, for_write: bool) -> dict:
         for account in accounts:
             if secret_equals(selector, account["actorId"]):
                 return account
-        # 分頁指名的帳號並沒有登入在這個瀏覽器（可能已登出、過期，或根本沒在這裡加過）。
-        # 請分頁重新建立那個帳號，而不是默默用成另一個帳號。
+        # 分頁指定的帳號不存在或已過期時要求重新登入，不能改用其他帳號。
         raise HTTPException(
             status_code=409,
             detail={"error": {"code": "ACCOUNT_NOT_AVAILABLE", "message": "登入帳號已在其他分頁變更，請重新整理頁面後再操作。"}},
@@ -1380,7 +1375,7 @@ async def login(body: LoginRequest, request: Request):
         record_failed_login(request, body.email)
         raise HTTPException(status_code=401, detail={"error": {"code": "INVALID_CREDENTIALS", "message": "Invalid email or password."}})
     if response.status_code == 429:
-        # 這個 429 是**會員資料庫**回的，不是 Gateway 自己的限流。用不同的 code 標出來，
+        # 這個 429 是會員資料庫回的，不是 Gateway 自己的限流。用不同的 code 標出來，
         # 否則兩層限流長得一模一樣，出事時分不清是哪一層在擋（實測就卡在這：不同帳號、
         # 不同裝置都被 429，需要先知道是 Gateway 還是 DB 才查得下去）。
         # 注意：若 DB 是以「呼叫端 IP」限流，而它看到的呼叫端永遠是 Gateway 的單一
@@ -1701,12 +1696,10 @@ async def admin_product(product_id: str, request: Request):
     return await proxy_admin_request(request, f"/api/products/{safe_id}")
 
 
-# 2026-07-28：爬蟲端停止提供 /api/crawler/*，改為只寫 crawler_staging_products，
-# 不再與前端直連。原本的 product-preview 與 search-preview 兩條代理已移除。
+# 爬蟲只寫入 crawler_staging_products，不再與前端直連。
+# 新流程為：爬蟲、暫存表、管理員審核、匯入正式商品。
 #
-# 以下是新流程（爬蟲 → 暫存表 → Admin 審核 → 匯入正式 products）的代理。
-#
-# **上游路徑集中在這一個常數。** 商品後端還沒回覆最終路徑，這裡先照
+# 上游路徑集中在這一個常數。 商品後端還沒回覆最終路徑，這裡先照
 # 「給商品後端_暫存商品審核與匯入_接入規格書_2026-07-29.md」§1 的提案接。
 # 對方定案後只要改這一行，四條路由與前端都不必動。
 _STAGING_BASE = "/api/crawler-staging/products"
@@ -1739,9 +1732,9 @@ async def admin_actions(request: Request):
     """Gateway 自己記的管理操作紀錄，給後台「最近操作」用。
 
     跟上面那條 `/admin-api/product-audit-logs` 的差別，也是這條要單獨存在的理由：
-    那一條是**代理商品後端的稽核表**，能不能查得到、記了什麼，都由對方決定。
+    那一條是代理商品後端的稽核表，能不能查得到、記了什麼，都由對方決定。
     這一條讀的是 `record_admin_action()` 一直在寫的 `admin_audit_events` ——
-    **每一筆經過 Gateway 的商品／會員增改刪都在裡面**，包含失敗的那些，
+    每一筆經過 Gateway 的商品／會員增改刪都在裡面，包含失敗的那些，
     而且商品後端就算掛了也照樣查得到。管理員誤刪之後要回答「誰、什麼時候、動了哪一筆」，
     靠的是這一份。
 
@@ -1808,10 +1801,8 @@ async def proxy(service: str, path: str, request: Request):
 
     if not SESSION_ONLY_MODE:
         require_client_api_key(upstream, request.headers.get("x-api-key", ""))
-    # `X-Expected-Actor` 同時負責隔離與（多帳號時）選帳號。多帳號打開時，它決定要以
-    # 哪一個已登入帳號的身分執行；關掉時，行為就是原本的單帳號路徑（單槽、寫入要帶
-    # 標頭、對不上就拒絕）。關掉時刻意維持一模一樣，所以連 bearer token（非 session-only）
-    # 的請求也照舊不受影響。
+    # X-Expected-Actor 用來隔離分頁，並在多帳號模式中選擇正確的登入槽位。
+    # 單帳號模式仍會驗證此標頭，避免寫入其他帳號。
     selected_sealed = ""
     if MULTI_SESSION_ENABLED:
         is_write = str(request.method or "").upper() in STATE_CHANGING_METHODS

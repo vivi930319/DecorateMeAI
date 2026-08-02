@@ -1,6 +1,6 @@
 """讓 MediaPipe 能在「路徑含非 ASCII 字元」的機器上跑起來。
 
-## 問題
+問題
 
 本專案放在 `C:\\Users\\user\\OneDrive - 淡江大學\\Desktop\\PythonProject12`，
 venv 自然也在這條路徑底下。MediaPipe 的模型圖（`.binarypb`）是由它的 C++ 層
@@ -16,17 +16,17 @@ venv 自然也在這條路徑底下。MediaPipe 的模型圖（`.binarypb`）是
 早期能建起快取，是因為專案當時放在 `C:\\Users\\isach\\PycharmProjects\\`——
 那是一條純英文路徑。搬到 OneDrive 之後才開始壞。
 
-## 解法
+解法
 
 把 `mediapipe` 套件整包複製到一條純 ASCII 的本機路徑，並把它插到 `sys.path`
 最前面，讓 `mediapipe.__file__` 變成 ASCII，C++ 層就找得到自己的模型檔。
 
-刻意**不**依賴手動設 `PYTHONPATH`，也不要求誰去記得先跑一支準備腳本：
+刻意不依賴手動設 `PYTHONPATH`，也不要求誰去記得先跑一支準備腳本：
 換機器、重建 venv、升級 mediapipe 之後都會自動重做，不會變成搬機地雷。
 
-## 用法
+用法
 
-在 `import mediapipe` **之前**先 import 本模組：
+在 `import mediapipe` 之前先 import 本模組：
 
     import mediapipe_ascii  # noqa: F401  # 必須早於 mediapipe
     import mediapipe as mp

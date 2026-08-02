@@ -1,6 +1,6 @@
 """用裁切後的部位 ROI 訓練 MobileNetV3-small，並做「切分方式」對照實驗。
 
-跟舊的 train_basic_features.py 的差別，也是這支存在的理由：
+跟舊的 train_basic_features.py 的差別，也是本程式存在的理由：
 
 1. 餵的是部位 ROI，不是整張臉。舊腳本把整張臉 resize 成 160x160 後要模型判斷鼻型，
    鼻子在圖裡只剩幾十個像素，模型很容易改去學「這個人是誰」。
@@ -205,7 +205,7 @@ def split_kfold_by_identity(labels, identities, n_folds, seed):
     return [(sorted(all_idx - set(val)), sorted(val)) for val in fold_val]
 
 
-# 註：先前的 --merge-eye 實驗旗標（EYE_MERGE_MAP）已於 2026-07-31 移除。
+# 已移除不再使用的 --merge-eye 實驗旗標。
 # 它把杏仁/桃花併進圓眼、丹鳳/瞇縫併進細長眼——而細長眼本身已在 07-31 併入鳳眼，
 # 那個對照表會產出不在官方分類表裡的類別。類別合併現在一律寫在
 # prepare_roi_cache.LABEL_ALIASES，是唯一事實來源。
@@ -258,7 +258,7 @@ def build_model(architecture, n_classes, pretrained=True):
     if architecture == "simple_cnn":
         return SimpleRoiCNN(n_classes)
     # 2026-07-31 加入的三個架構對照組。參數量差距很大（2.5M / 5.3M / 25M / 28M），
-    # 而每個部位只有 269~676 張——大容量預期會過擬合，加進來是為了把這件事**量出來**，
+    # 而每個部位只有 269~676 張——大容量預期會過擬合，加進來是為了把這件事量出來，
     # 而不是憑「參數多會過擬合」的通則下結論。
     #
     # 共同的結構性疑慮：這些架構都下採樣 32 倍，輸入 96×96 到最後一層只剩 3×3 的
@@ -366,7 +366,7 @@ def export_onnx(model_state, part, classes, device, architecture="mobilenet_v3_s
     name = f"{part}_simple_cnn" if architecture == "simple_cnn" else part
     onnx_path = OUT_DIR / f"{name}.onnx"
     # dynamo=False：torch 2.12 的新 exporter 預設會把權重另外存成 <name>.onnx.data。
-    # MobileNetV3-small 才 10MB，根本不需要 external data，拆成兩個檔只會讓部署多一個
+    # MobileNetV3-small 約 10 MB，不需要 external data；拆檔只會增加一個容易漏掉的
     # 「少複製一個檔就靜默壞掉」的機會。舊 exporter 直接吐單一自帶權重的 .onnx。
     torch.onnx.export(
         model, dummy, str(onnx_path),
@@ -502,7 +502,7 @@ def main():
         if args.cv:
             # 不同實驗（合併類別/剔除矛盾）各自存檔，免得互相覆蓋、事後對不出哪個數字是哪個實驗的
             # 非預設架構一律進檔名，否則不同架構的結果會互相覆蓋，事後對不出
-            # 哪個數字是哪個架構跑的（2026-07-31 加 resnet50 時差點踩到）。
+            # 哪個數字屬於哪個模型架構。
             tag = ("" if args.architecture == "mobilenet_v3_small" else f"_{args.architecture}") + \
                   ("_per_image" if args.identity_mode == "per_image" else "") + \
                   ("_contour" if args.face_input == "contour" else "") + \
