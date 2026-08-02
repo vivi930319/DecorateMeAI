@@ -329,7 +329,7 @@ function pointReasonLabel(reason) {
     return raw;
 }
 
-// 翻頁上限是保險絲不是預期值：後端若把 nextCursor 一直回同一個值，這裡不能無限打下去。
+// 最多讀取 30 頁，避免後端重複回傳同一個游標時無限請求。
 const PRODUCT_MAX_PAGES = 30;
 
 function loadGeneralProductCatalog(onDone) {
@@ -339,12 +339,7 @@ function loadGeneralProductCatalog(onDone) {
     }
     if (Router?.generalProductLoading) return;
     Router.generalProductLoading = true;
-    // 〈商品搜尋管理與推薦演算法整合規格書 2026-07-17〉§6.4 說清單回應會帶 total 與
-    // nextCursor，但資料庫端目前**不分頁**：實測 /api/products 一次回全部 1041 筆，
-    // 沒有 nextCursor，連 limit 都是忽略的。
-    //
-    // 所以第一次請求刻意不帶 limit —— 帶了才危險：萬一哪天他們實作了 limit 卻還沒實作
-    // nextCursor，我們就會安靜地只拿到前 100 筆，比現在更糟。等看到 nextCursor 再跟著翻。
+    // 第一次不限制筆數；若後端回 nextCursor，再依游標讀取後續頁面。
     (async () => {
         const all = [];
         const seen = new Set();
@@ -396,16 +391,8 @@ function getProductCatalog(){
     });
 }
 
-// 用全部商品清單裡的同一件商品補齊推薦缺的欄位（早期推薦端點回的 imageUrl 是空字串；
-// 2026-07-29 實測已經有值，但清單才有的 hex_primary 等欄位仍要靠這裡補）。
-//
-// **絕對不能用 rawId 比對。** 兩支端點的 id 不是同一個號碼系統：
-//   /recommend-products  id=93  → MAC 柔礦迷光金屬光炫彩餅（candidateKey "blushes:93"，是類別內編號）
-//   /api/products        id=93  → INTEGRATE 自由繪型柔色眉彩膏（全域編號，1~3131）
-// 先前 rawId 擺在第一順位，等於把兩個不同的商品當成同一件合併，而且合出來的東西
-// 看起來完全正常——這是回報給商品後端的第 1 項。
-// 目前唯一可靠的對應是 salePageId（推薦的 productUrl slug == 清單的 sale_page_id，實測對得上），
-// 再退而比對完整商品名稱。
+// 用完整商品清單補齊推薦資料。
+// 推薦與商品清單使用不同的 rawId，因此改用 salePageId 或完整名稱比對。
 function fillRecommendedImages(list) {
     const catalog = Array.isArray(Router?.generalProductCatalog) ? Router.generalProductCatalog : [];
     return (Array.isArray(list) ? list : []).map((raw, index) => {
@@ -421,14 +408,10 @@ function fillRecommendedImages(list) {
     });
 }
 
-// 推薦卡片最多顯示幾張。商品頁的「本次個人化推薦」與推薦彈窗共用同一個數字，
-// 不然同一份推薦在兩個地方會列出不一樣的商品，使用者只會覺得其中一邊漏了。
+// 商品頁與推薦彈窗共用相同的顯示上限。
 const RECOMMENDED_DISPLAY_LIMIT = 8;
 
-// 推薦卡的排列：每個美妝大類先各出一件分數最高的（類別依 API 回傳順序），
-// 剩下的再依分數接在後面。
-// 2026-07-15 的需求是「每個美妝大類**至少**一件」，先前的寫法卻是每類**只**留一件——
-// 比需求更嚴，於是一份六件的推薦在商品頁只剩三張，跟彈窗列出來的對不起來。
+// 每個分類先放入最高分商品，再依分數補上其餘推薦。
 function orderRecommendedProducts(list) {
     const items = Array.isArray(list) ? list : [];
     const best = new Map();
@@ -442,30 +425,12 @@ function orderRecommendedProducts(list) {
     return [...firsts, ...rest];
 }
 
-// 把後台價格欄位的輸入解析成數字；解析不出來回 null（由呼叫端擋下並告訴使用者）。
-//
-// 為什麼需要它：商品清單 API 給的 price 是 "NT$380" 這種顯示字串（見 _normalizeProduct），
-// 後台表單載入時就填這個值進去，而送出時做的是 Number(...)——`Number("NT$380")` 是 NaN，
-// `JSON.stringify({price: NaN})` 又會靜靜變成 `{"price": null}`。結果是管理員明明填了價格，
-// 寫進資料庫的卻是空值，畫面上沒有任何錯誤。欄位的 placeholder 當時還寫著「例如：NT$980」，
-// 等於主動教人輸入會壞掉的格式。
-//
-// 這裡接受 "NT$380"、"380 元"、"1,650"、" 380 " 這些人類會打出來的寫法，
-// 但**不接受**解析後不是有限正數的東西——那種情況要讓使用者知道，不能猜。
-// 把 Ollama 產出的英文渲染指令攤開來給人看。
-//
-// 這段本來是被藏起來的：Ollama 常把「中文建議」與「英文渲染指令」黏在同一串回覆裡，
-// splitOllamaTwoPartSuggestion 會把英文那半切掉，免得它出現在給使用者看的中文建議中間。
-// 切下來的內容一直存在 generativeText.ollamaRenderPromptEn，只是沒有任何地方顯示。
-//
-// 專題要交的紀錄需要它——組員得看得到「模型實際收到什麼指令」才寫得出報告，
-// 而不是只能描述輸出。所以這裡用 <details> 收起來：預設不展開，不干擾一般使用者，
-// 但點開就能複製。
+// 將 NT$380、380 元或 1,650 等價格輸入轉成正數；無效輸入回傳 null。
+// 將英文渲染指令收在可展開區塊，方便專題記錄與複製。
 function renderPromptDisclosure(pkg) {
     const gen = pkg?.generativeText || {};
     const ollama = String(gen.ollamaRenderPromptEn || '').trim();
-    // 實際送去渲染的完整 prompt（含我方疊上的 identity lock），跟 Ollama 那段不一樣，
-    // 兩段都給：報告要說明的是「誰決定了什麼」。
+    // 同時顯示模型產生的內容與後端送出的完整指令。
     const full = String(gen.renderPromptEn || '').trim();
     if (!ollama && !full) return '';
     const block = (title, note, text) => text ? `
@@ -578,10 +543,7 @@ function lookImageSrc(value){
   return '';
 }
 
-// 外部連結（商品來源頁等）只接受 http(s)。escapeHtml 擋得住屬性跳脫，卻擋不住
-// javascript: / data: 這類 scheme——爬蟲抓回來的來源網址是外部可控內容，點下去
-// 就會執行。所以放進 href 之前一定要先驗 scheme，非 http(s) 一律回空字串。
-// frontend_smoke_check.js 會斷言這個函式存在：它是資安基元，不因為一時沒有呼叫端就拿掉。
+// 外部連結只接受 http(s)，避免 javascript: 或 data: 內容被執行。
 function safeExternalUrl(value){
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -592,24 +554,9 @@ function safeExternalUrl(value){
   return '';
 }
 
-// 分析結果的「準不準」回饋。
-//
-// 每個五官預設是「準」，使用者只需要動他覺得錯的那幾個——多數人不會逐項確認，
-// 預設成未作答會讓大部分紀錄變成空的。按「這個不準」才展開選單挑正確答案。
-//
-// 不收照片，只記模型答了什麼、使用者說什麼。告知文字要講明這件事：
-// 只寫「幫助我們模型升級」而不說收了什麼，使用者無從判斷要不要按。
-// 使用者改過的答案就是正確答案。
-//
-// 這些修正原本只被存進 AnalysisFeedback 當回饋資料，從來沒有回流到分析結果本身：
-// 畫面上的五官、送去產生建議與渲染的 faceAnalysis、以及收藏起來的妝容對比圖，
-// 全都還是模型原本判斷的那一版。使用者明明把眼型改對了，收藏打開卻還是錯的。
-//
-// faceAnalysis 是從同一份中文原始結果導出的，所以改完原始結果要一起重導，
-// 否則下一次產生建議或渲染拿到的仍然是舊值。
-// AnalysisFeedback 那邊自己留著 predicted，模型原本說什麼不會因此失真。
-// predicted 一起傳進來，是為了處理「改了又改回判斷正確」：那個欄位會從 corrections
-// 消失，但 analysisResult 上還留著剛才那個值，不拿模型原本的答案蓋回去就退不回去了。
+// 使用者只需修改不準的五官；回饋只記文字，不上傳照片。
+// 修正會同步更新畫面、後續建議、渲染資料與分析紀錄。
+// predicted 保留模型原始答案，讓使用者改回「判斷正確」時可以還原。
 function applyAnalysisCorrections(corrections, predicted) {
     if (!Router.analysisResult) return;
     const fixes = corrections || {};
@@ -627,16 +574,11 @@ function applyAnalysisCorrections(corrections, predicted) {
     });
     if (!changed) return;
     if (Router.analysisPackage && typeof AnalysisPackage !== 'undefined') {
-        // 一次組好再寫一次草稿。這裡每改一次下拉就會跑，先前分兩段各存一次，
-        // 等於每個字元的操作都對 sessionStorage 寫兩份完整資料包（裡面有 base64 照片）。
+        // 合併變更後只寫一次草稿，減少含圖片資料包的重複儲存。
         const patch = {
             faceAnalysis: AnalysisPackage.fromRawFaceAnalysis(Router.analysisResult, Router.analyzeMode)
         };
-        // 已經產生過的建議是用修正前的五官跑出來的。這裡不自動重跑——那是一次 Ollama 呼叫，
-        // 而使用者可能只是順手改一項——但要標成過期，否則畫面上會是「修正後的五官」配
-        // 「修正前的建議」，正好是這次要消滅的那種不一致。
-        // update() 是頂層淺合併，下次重新生成時整個 generativeText 會被換掉，stale 自然消失。
-        // 已經標過就不再重寫，免得每次下拉都產生一份內容相同的新物件。
+        // 五官被修正後，將舊建議標成過期，等使用者主動重新產生。
         const gt = Router.analysisPackage.generativeText;
         if (gt && gt.suggestion && !gt.stale) patch.generativeText = { ...gt, stale: true };
 
@@ -668,16 +610,11 @@ function renderAnalysisFeedback(result, packageId) {
 
   const saved = AnalysisFeedback.forPackage(packageId);
   const corrections = saved ? { ...saved.corrections } : {};
-  // predicted 一律取模型的原始輸出（後端放在 _modelRaw）。後端的修正快取會把這張臉
-  // 先前被改過的答案套進 result，畫面顯示的因此是「使用者的答案」——如果連 predicted
-  // 也拿那一份送回去，訓練資料就變成模型在確認自己，face_feedback 收到的不再是
-  // 「模型錯在哪」。沒有 _modelRaw（快取關掉或舊版服務）就退回 result 本身。
+  // predicted 優先使用模型原始輸出，沒有 _modelRaw 時才使用目前結果。
   const raw = (result && typeof result._modelRaw === 'object' && result._modelRaw) || {};
   const predicted = {};
   fields.forEach(field => { predicted[field] = raw[field] || result[field]; });
-  // 本機沒有紀錄、但後端快取已經套用過修正時（換裝置、清過瀏覽器），
-  // 從「顯示值 vs 原始輸出」的差異把修正補回面板，不然那些欄位會顯示成「判斷正確」，
-  // 使用者一送出就等於親手把自己先前的修正撤回。
+  // 若後端已套用修正，從目前值與原始值的差異還原回饋面板。
   fields.forEach(field => {
     if (!corrections[field] && predicted[field] && result[field] && result[field] !== predicted[field]) {
       corrections[field] = result[field];
@@ -715,9 +652,7 @@ function renderAnalysisFeedback(result, packageId) {
       select.onchange = () => {
         const field = select.dataset.afField;
         if (select.value) corrections[field] = select.value; else delete corrections[field];
-        // 改下拉的當下就套用到資料包。畫面上的值在這一刻已經變了——要是等按「送出回饋」
-        // 才生效，使用者看著自己的答案直接去按生成建議，送出去的仍然是模型原本那版。
-        // 網路那半（回報給模型當訓練資料）留在送出鍵，不必為了每一次下拉都打一支 API。
+        // 下拉選項立即更新資料包；按下送出時才將回饋傳到後端。
         applyAnalysisCorrections(corrections, predicted);
         draw();
       };
@@ -749,14 +684,7 @@ function renderAnalysisFeedback(result, packageId) {
   box.style.display = 'block';
 }
 
-// 妝容圖載不出來時，把破圖換成看得懂的說明。
-//
-// 渲染圖只有在收藏成功時才會被 retain 保住；沒收藏成功的那些，job 紀錄一小時後
-// 就被清掉，圖片也隨之無法解析（/media/render/<id> 回 404）。但本機收藏仍留著網址，
-// 於是卡片上出現一張永遠載不出來的破圖，使用者完全不知道發生什麼事。
-//
-// 用實際載入失敗來判定，不用網址長相判定——先前只認舊的 replicate.delivery 網址，
-// 換成 /media/render 之後那個判斷就再也沒生效過。
+// 妝容圖載入失敗時，以文字說明取代破圖。
 function markLookImageUnavailable(img){
   if (!img || img.dataset.lookFailed === '1') return;
   img.dataset.lookFailed = '1';
@@ -822,8 +750,7 @@ function updateAdminNav(page){
     document.querySelectorAll('[data-admin-link]').forEach(el => {
         el.style.display = admin ? '' : 'none';
     });
-    // 管理員「身分」與管理中台「頁面」是兩件事。只有管理員真的進入 admin 頁時
-    // 才切換成獨立的後台外框；否則會員導覽、購物車與後台內容會同時出現在畫面上。
+    // 只有管理員進入 admin 頁面時才切換成後台外框。
     const activePage = page || (typeof Router !== 'undefined' ? Router.currentPage : null);
     const adminMode = admin && activePage === 'admin';
     document.body.classList.toggle('admin-mode', adminMode);
@@ -850,20 +777,13 @@ function showCartPanel(){
     overlay.className = 'cart-overlay';
     let catalogLoadAttempted = false;
     const render = () => {
-        // 購物車只存 {id, qty}，商品內容要靠 id 回查。**三個來源都要查**：
-        // demo 假商品、真實商品 API 清單、以及本次的個人化推薦。
-        //
-        // 先前只查 getProductCatalog()（僅含 ALL_PRODUCTS 與 AdminStore 的 demo 資料），
-        // 所以使用者加入的真實商品（id 形如 api-lipsticks-2656）永遠查不到，
-        // 又被下面的 filter 整筆丟掉——**畫面上購物車是空的，但數量徽章有數字**。
-        // 收藏頁（PageInit.favorites）早就是三個來源一起查，購物車這條漏了。
+        // 購物車只存 id 與數量，因此要從本機商品、API 清單與推薦資料回查內容。
         const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
         const catalog = [...getProductCatalog(), ...apiCatalog, ...getRecommendedProductCatalog()];
         const rows = Cart.list()
             .map(item => ({ ...item, product: catalog.find(p => String(p.id) === String(item.id)) }))
             .filter(item => item.product);
-        // 車裡有東西卻一件都查不到 → 多半是商品清單還沒載入。載一次再重畫，
-        // 不要讓使用者對著空車納悶（先前就是這樣，而且沒有任何提示）。
+        // 找不到商品內容時先載入清單，避免徽章有數量但購物車空白。
         if (!rows.length && Cart.count() > 0 && !apiCatalog.length
                 && !Router.generalProductLoading && !catalogLoadAttempted) {
             catalogLoadAttempted = true;
@@ -983,8 +903,7 @@ function buildCurrentLookRecord(){
         || '';
     // 存進資料庫用渲染服務給的 /media/render/<job>/before：data URL 進不了
     // String(500) 欄位，而這條路徑跟妝後圖走同一套擁有者檢查。
-    // 兩個欄位分開，是因為它們的用途本來就不同——先前只有一個，於是要嘛顯示慢、
-    // 要嘛存不進去，只能二選一。
+    // 顯示用圖片與資料庫保存用網址分開處理。
     const beforeImageForStorage = render.beforeImageUrl || '';
     const renderedImage = render.afterImageUrl || render.afterImageDataUrl || makeupOutput.imageUrl || makeupOutput.imageDataUrl || '';
     return {
@@ -1051,7 +970,7 @@ function saveCurrentLook(){
         promptGuestAuth('收藏妝容對比圖');
         return null;
     }
-    // 收藏當下重建，確保拿到最新的渲染圖與臉部分析；只有現在抓不到渲染圖時才退回先前的快照
+    // 收藏時重建最新資料；無法取得渲染圖時才使用暫存快照。
     const fresh = buildCurrentLookRecord();
     const record = fresh.renderedImage ? fresh : (Router.pendingLook || fresh);
     const stored = { ...record, timestamp: new Date().toISOString() };
@@ -1068,8 +987,7 @@ function saveCurrentLook(){
             style: stored.style || null,
             beforeImageUrl: stored.beforeImageForStorage || null,
             afterImageUrl: stored.renderedImage || null,
-            // 五官要存齊。先前只存臉型、眼型、膚色三項，但收藏的 modal 顯示的是
-            // 臉型／眼型／鼻型／膚色——鼻型從來沒被存過，所以打開收藏永遠顯示「—」。
+            // 收藏需要完整保存臉、眉、眼、鼻、唇與膚色。
             analysisSummary: {
                 faceShape: a.faceShape || a['臉型'] || null,
                 browShape: a.browShape || a['眉型'] || null,
@@ -1088,8 +1006,7 @@ function saveCurrentLook(){
                 } catch (_) {}
                 if (typeof showToast === 'function') showToast('已同步到雲端資料庫');
             } else if (r && r.skipped) {
-                // 妝後圖還沒有永久網址（通常是渲染還沒完成就按了收藏）。只存本機，
-                // 但要說出來——這裡先前是空的，雲端沒收到而畫面一切正常，沒人察覺得到。
+                // 妝後圖沒有永久網址時只存本機，並提示尚未同步。
                 if (typeof showToast === 'function') showToast('已收藏到本機；妝容圖尚未產生永久網址，未同步到雲端');
             } else {
                 if (typeof showToast === 'function') showToast('雲端同步失敗（已存本機）' + (r && r.status ? `：HTTP ${r.status}` : '，請重整後重試'));
@@ -1200,7 +1117,7 @@ analysis: `
             <div class="upload-box" id="uploadBox">
                 <div class="upload-icon"><span>＋</span></div>
                 <div class="upload-label">選擇照片</div>
-                <div class="upload-hint">正面，光線均勻，效果最佳</div>
+                <div class="upload-hint">正面、光線均勻，並把頭髮撥開露出額頭與兩頰</div>
                 <input type="file" id="fileInput" accept="image/*" style="display:none;">
             </div>
             <div class="camera-actions">
@@ -1265,7 +1182,7 @@ analysis: `
             <div class="result-cell"><div class="rlabel">嘴型</div><div class="rvalue" id="r-lip">—</div></div>
             <div class="result-cell"><div class="rlabel">色彩季型</div><div class="rvalue" id="r-season">—</div></div>
         </div>
-        <div class="skin-box"><div class="skin-title">膚 色 基 準 · M A C</div><div class="skin-row"><div class="skin-swatch" id="skinSwatch"></div><div><div class="skin-name" id="skinName">—</div><div class="skin-lab" id="skinLab"></div></div></div></div>
+        <div class="skin-box"><div class="skin-title">膚 色 基 準 · M A C</div><div class="skin-row"><div class="skin-swatch" id="skinSwatch"></div><div><div class="skin-name" id="skinName">—</div><div class="skin-lab" id="skinLab"></div></div></div><div class="skin-warn" id="skinReliabilityWarn" style="display:none;"></div></div>
         <div class="skin-box"><div class="skin-title">唇 色 原 始 值</div><div class="skin-row"><div class="skin-swatch" id="lipSwatch"></div><div><div class="skin-lab" id="lipLab"></div></div></div></div>
         <div id="analysisFeedback" class="analysis-feedback" style="display:none;"></div>
         <div style="text-align:center;margin-top:20px;"><button class="btn-gold" id="goStyleBtn" style="display:none;">選擇風格 →</button></div>
@@ -1478,13 +1395,7 @@ function openMakeupStyleModal(preselectedStyleId) {
     };
     renderOptions(); modal.classList.add('open');
 }
-// 收藏前的確認視窗。妝容對比圖原本是獨立一頁，但那一頁最後只剩「按住對比」是這裡
-// 沒有的——照片、渲染、配額、收藏都已經在妝容建議頁了。兩頁都能渲染又都能收藏，
-// 就是同一套邏輯養在兩個地方，改一邊忘一邊的傷這個專案已經吃過。
-//
-// 所以對比收進這個視窗：按住看妝前、放開回妝後，確認了才真的存。順便把原本只活在
-// 對比圖頁的兩樣東西帶過來——後端實際下的 renderPrompt，以及臨時網址的警告
-// （replicate.delivery 的圖日後會失效，不先講使用者會收藏到一堆打不開的圖）。
+// 收藏前顯示妝前／妝後對比、實際渲染指令與圖片保存狀態，確認後才儲存。
 function closeSaveLookModal(){ document.getElementById('saveLookModal')?.remove(); }
 function openSaveLookModal() {
     if (isGuest()) { promptGuestAuth('收藏妝容對比圖'); return; }
@@ -1577,10 +1488,7 @@ function openProductRecommendationModal(){
     document.body.appendChild(modal);
     const grid=modal.querySelector('.recommendation-modal-grid');
 
-    // 這裡跟商品頁的「本次個人化推薦」用同一份資料與同一種卡片：getRecommendedProductCatalog()
-    // 會把推薦端點的原始欄位正規化，並用全部商品清單補上推薦回應缺的圖與價格。
-    // 先前這個彈窗自己讀 recommendations.products 的原始欄位，所以只畫得出品牌與名稱——
-    // 沒有圖、沒有分類、沒有價格，也點不進商品詳情。
+    // 推薦彈窗與商品頁共用同一份排序、補圖與價格資料。
     const draw=()=>{
         if(!document.getElementById('productRecommendationModal'))return;
         const products=orderRecommendedProducts(getRecommendedProductCatalog());
@@ -1620,8 +1528,7 @@ function openProductRecommendationModal(){
         });
     };
     draw();
-    // 推薦端點回的 imageUrl 目前是空的，要靠全部商品清單補圖補價（見 fillRecommendedImages）。
-    // 使用者可能還沒進過商品頁，這裡自己把清單load起來，載完重畫一次。
+    // 商品清單尚未載入時，先載入後再補齊推薦圖片與價格。
     if(!Router.generalProductCatalog?.length)loadGeneralProductCatalog(draw);
 
     modal.querySelector('.makeup-style-close').onclick=closeProductRecommendationModal;
@@ -1704,9 +1611,7 @@ async function runMakeupSuggestion(onProgress) {
 // analysisPackage 並存草稿。完全不碰 DOM，進度用 onProgress 回報，畫在哪由呼叫端決定。
 // 擋下來的原因用 reason 回報，讓呼叫端決定要跳註冊、跳分析還是只顯示訊息。
 //
-// 目前只有妝容建議頁的 Step 2 呼叫它——當初是為了兩頁共用而抽出來的，後來妝容對比圖頁
-// 改成唯讀、渲染入口收斂成一個。留著仍然划算：它把「能不能渲染、渲染完要寫回哪裡」
-// 跟畫面完全分開，那一段是這個流程裡最容易出錯、也最不該跟 DOM 綁在一起的部分。
+// 將渲染條件與結果寫回邏輯集中處理，避免和畫面程式混在一起。
 async function runMakeupRender(onProgress) {
     const notify = typeof onProgress === 'function' ? onProgress : () => {};
     if (typeof isGuest === 'function' && isGuest()) return { ok: false, reason: 'guest' };
@@ -1752,8 +1657,7 @@ async function runMakeupRender(onProgress) {
                 beforeImageUrl: result.beforeImageUrl || null,
                 replicateTempUrl: result.replicateTempUrl || null,
                 savedImageId: result.savedImageId || null,
-                // 後端這次實際下給模型的指令。先前只有妝容對比圖頁把它畫在畫面上、
-                // 沒有存進資料包，所以離開那一頁就再也看不到了。收藏視窗要用。
+                // 保存後端實際送出的指令，供收藏視窗顯示。
                 renderPrompt: result.renderPrompt || null,
                 error: null
             }
@@ -1784,8 +1688,7 @@ function renderQuotaText() {
 //   'navigated' —— 已經把使用者帶去別頁，呼叫端什麼都不必做（畫面馬上就要被換掉）
 //   'failed'    —— 留在原頁，呼叫端該收拾自己的進度條與狀態字
 //   ''          —— 沒有失敗
-// 先前回布林，於是兩個呼叫端都得再自己看一次 result.missingAnalysis 才知道要不要收拾——
-// 等於這個函式宣稱處理掉了，實際上把判斷又推回去。
+// 回傳明確原因，讓呼叫端知道該跳頁或只清除進度狀態。
 function handleSuggestionFailure(result) {
     if (result.missingAnalysis) {
         showAlert('目前沒有可用的臉部分析結果，請重新完成臉部分析。', { type:'error' });
@@ -1799,8 +1702,7 @@ function handleSuggestionFailure(result) {
     return '';
 }
 
-// 風格色票列。兩頁都要畫，而「這個風格沒給色票時用哪三色」只該有一個答案——
-// 先前那組 hex 在兩個地方各寫一次，改了一邊另一邊就會安靜地不一樣。
+// 兩個頁面共用同一組風格色票與預設顏色。
 function paletteRowHtml(style) {
     const palette = (style && style.palette) || ['#D8B69E', '#B97970', '#7C544A'];
     return `<div class="palette-row" style="margin:12px 0;">${palette
@@ -1854,9 +1756,7 @@ const Router = {
 
     async go(page, opts) {
         opts = opts || {};
-        // 分析完成之後，選風格一律走彈窗，不再進「風格試妝」那一頁。
-        // （原本這裡還檢查 opts.fromStyleModal，用來讓彈窗確認後回到那一頁；
-        //   彈窗改成直接進妝容建議後就沒有人再設那個旗標，條件永遠成立。）
+        // 分析完成後，選擇風格會開啟彈窗並直接前往妝容建議。
         if (page === 'style' && hasStartedJourney()) { openMakeupStyleModal(opts.styleId); return; }
         const adminSession = typeof AdminStore !== 'undefined' && Auth.isLoggedIn() && AdminStore.isAdmin();
         if (adminSession && page !== 'admin') page = 'admin';
@@ -1916,8 +1816,7 @@ const Router = {
             }
             // 頁面初始化
             if (typeof PageInit[page] === 'function') PageInit[page](opts);
-            // 收藏頁不是只有一個 HTML 版型；每次進入都要重新向會員資料庫取回收藏。
-            // 先前只在登入時同步一次，登入當下若短暫失敗，之後打開收藏頁永遠只會看到空白。
+            // 每次進入收藏頁都重新同步，讓短暫連線失敗後仍可重試。
             if (page === 'favorites') refreshFavoritesPage();
         } catch (e) {
             const fallback = getPageFallback(page);
@@ -2837,6 +2736,17 @@ const PageInit = {
                 document.getElementById('skinLab').textContent = `L ${lab.L||0} a ${lab.a||0} b ${lab.b||0}`;
                 document.getElementById('skinSwatch').style.background = Api.labToRgb(lab.L||50, lab.a||0, lab.b||0);
 
+                // 膚色不可靠時顯示重拍提示；舊版後端沒有旗標時視為可靠。
+                const skinWarn = document.getElementById('skinReliabilityWarn');
+                if (skinWarn) {
+                    const rel = skin['可信度'] || {};
+                    const unreliable = rel.reliable === false;
+                    skinWarn.style.display = unreliable ? '' : 'none';
+                    skinWarn.textContent = unreliable
+                        ? (rel.hint || '臉頰被頭髮或陰影遮住，膚色可能不準；把頭髮撥到耳後、在均勻光線下重拍會更準確。')
+                        : '';
+                }
+
                 const lipLab = data['嘴唇_LAB'] || {};
                 document.getElementById('lipLab').textContent = `L ${lipLab.L||0} a ${lipLab.a||0} b ${lipLab.b||0}`;
                 document.getElementById('lipSwatch').style.background = Api.labToRgb(lipLab.L||40, lipLab.a||0, lipLab.b||0);
@@ -3117,9 +3027,7 @@ const PageInit = {
                 return;
             }
             const area = document.getElementById('productsArea');
-            // 這批商品每一筆本身就是一個獨立色號（不是一個商品配多組色號），色票只顯示這支商品自己的真實顏色。
-            // 清單 API 本來就給 hex_primary 與 lab，不需要再打單品詳情——
-            // /api/product/{type}/{id} 在上游根本不存在（實測 404），舊註解說的補抓從來沒成功過。
+            // 每筆商品代表一個色號，直接使用清單提供的 hex_primary 與 Lab。
             let related = catalog.filter(x => x.cat === p.cat && String(x.id) !== String(p.id)).slice(0,3);
             if (related.length < 3) related = related.concat(catalog.filter(x => x.cat !== p.cat && String(x.id) !== String(p.id)).slice(0, 3 - related.length));
             const renderColorBox = (hex) => hex
@@ -3672,15 +3580,12 @@ const PageInit = {
         const suggestions = (() => {
             try { return JSON.parse(localStorage.getItem(looksKey()) || '[]'); } catch (_) { return []; }
         })();
-        // Fav 存的是 id，數量直接數 Fav 自己的清單就好。
-        // 先前寫成 ALL_PRODUCTS.filter(p => Fav.has(p.id))——只數得到 demo 假商品，
-        // 使用者收藏的真實 API 商品一律不算，所以這個數字長期偏低（常常是 0）。
+        // 收藏數直接讀取 Fav 清單，確保 API 商品也會被計入。
         if (favEl) { favEl.textContent = Fav.list().length; favEl.classList.add('num-pop'); }
         if (anEl) { anEl.textContent = History.list().length; anEl.classList.add('num-pop'); anEl.style.animationDelay='.1s'; }
         if (suggestionEl) { suggestionEl.textContent = suggestions.length; suggestionEl.classList.add('num-pop'); suggestionEl.style.animationDelay='.16s'; }
         if (pointEl) { pointEl.textContent = MemberRewards.getPoints(profile.email); pointEl.classList.add('num-pop'); pointEl.style.animationDelay='.2s'; }
-        // 這個數字先畫本機的、拿到資料庫餘額才蓋掉。讀不到資料庫時不能讓它繼續假裝是
-        // 已同步的餘額——把標籤改成「會員點數（本機）」，看的人才知道這是還沒對上帳的數字。
+        // 先顯示本機點數；遠端失敗時標示為「本機」，避免誤認為已同步。
         const pointLabelEl = pointEl ? pointEl.parentElement?.querySelector('.stat-label') : null;
         const markPointsUnsynced = () => { if (pointLabelEl) pointLabelEl.textContent = '會員點數（本機）'; };
         if (pointEl && !isGuest() && profile.email && Api.getMemberPoints) {
@@ -3723,12 +3628,7 @@ const PageInit = {
                 const btn = document.getElementById('dailyCheckinBtn');
                 if (btn) btn.onclick = async () => {
                     btn.disabled = true;
-                    // 打卡一定要寫進會員資料庫才算數。
-                    //
-                    // 先前這裡在遠端失敗時會**靜默**改用 MemberRewards（localStorage 的 demo 模組）
-                    // 發點數，然後跳出跟成功一模一樣的「打卡成功，獲得 10 點」。使用者看到點數增加、
-                    // 資料庫卻什麼都沒收到，而且雙方都看不出寫入失敗了——點數就這樣只累積在瀏覽器裡。
-                    // 現在遠端失敗就明講失敗，不再自己在瀏覽器裡發點數。
+                    // 打卡必須成功寫入會員資料庫，失敗時不使用本機點數假裝成功。
                     const remoteResult = (!isGuest() && Api.checkInMember)
                         ? await Api.checkInMember(profile.email).catch(() => null)
                         : null;
@@ -3743,8 +3643,7 @@ const PageInit = {
                     showAlert(checkinFailureMessage(remoteResult), { type: 'error' });
                 };
             };
-            // 初始狀態不讀 localStorage：那份紀錄是舊版本機打卡留下的，拿它當「今天已打卡」
-            // 會把按鈕停用，使用者連重試的機會都沒有。先畫成未打卡，等資料庫回覆再更新。
+            // 初始顯示未打卡，等資料庫回覆後再更新狀態。
             paintCheckin({ checkedToday: false, streak: 0 }, 'unknown');
             if (!isGuest() && profile.email && Api.getCheckinStatus) {
                 Api.getCheckinStatus(profile.email).then(r => {
@@ -3922,8 +3821,7 @@ const PageInit = {
                                 // 少了這行會變成「點數扣了、主題套不上」，而且畫面還是報成功。
                                 MemberRewards.unlockTheme(profile.email, id);
                                 const applied = MemberRewards.setActiveTheme(profile.email, id);
-                                // alreadyOwned：先前兌換過但本機沒記錄到（例如當時套用失敗）。
-                                // 伺服器不會重複扣點，這裡等於把狀態補回來，不能再說一次「已兌換」。
+                                // alreadyOwned 表示伺服器已兌換，只需補回本機解鎖狀態。
                                 showToast(
                                     !applied ? '套用失敗，請重新整理後再試一次'
                                     : remote.alreadyOwned ? '你已擁有這個主題，已為你套用（未重複扣點）'
@@ -4158,7 +4056,7 @@ const PageInit = {
         };
         let filter = 'all';
 
-        // 資料來源：優先吃組員資料庫 GET /api/members；抓不到才退回本機 demo，並在工具列標明目前模式
+        // 優先讀取會員資料庫，失敗時使用本機示範資料並標示來源。
         let dbMembers = null;
         let dbMembersError = '';
         let dbMembersLoading = true;
@@ -4683,13 +4581,7 @@ const PageInit = {
             setConnectionStatus('adminProductConnection', '連線中', 'pending');
             updateOverallStatus();
             renderProducts();
-            // 資料庫端目前對這支清單端點有兩個實作缺口，後台要自己補：
-            //   1. limit 被壓在 100 —— 送 limit=200 實測還是只回 100 筆（total 仍回 1041），
-            //      但會回 nextCursor，所以照著 cursor 翻頁就能拿完整份。
-            //   2. type 參數完全不生效 —— type=lipsticks 與 type=blushes 回的內容一模一樣
-            //      （都是資料庫前 100 筆），所以商品類型下拉選什麼結果都相同。
-            // 兩者都已回報給資料庫端；在他們修好之前，這裡自己翻頁、自己過濾類型。
-            // type 仍照送，等他們補上伺服器端過濾後，下面這段就自動變成沒作用的複驗。
+            // 後端每頁最多 100 筆且類型篩選尚未生效，因此前端自行翻頁並再次篩選。
             const typeFilter = document.getElementById('adminProductTypeFilter')?.value || '';
             const baseParams = {
                 q: productSearchQuery.trim(),
@@ -4902,9 +4794,7 @@ const PageInit = {
                 showAlert('請完整填寫商品名稱、品牌、分類、價格與圖片網址', { type:'error' });
                 return;
             }
-            // 擋在這裡而不是讓它變成 null 送出去。先前 Number("NT$400") 是 NaN，
-            // JSON.stringify 再把 NaN 變成 null，於是「我明明填了價格」卻寫進一個空值，
-            // 而且畫面上沒有任何錯誤。
+            // 無效價格在送出前顯示錯誤，避免 NaN 被轉成 null。
             if (price === null) {
                 showAlert(`價格只能填數字（例如 980），目前填的是「${priceRaw}」。`, { type:'error' });
                 return;
@@ -4975,7 +4865,7 @@ const PageInit = {
         // ═══ 暫存商品審核 ═══
         // 爬蟲 2026-07-28 起只寫 crawler_staging_products，不再即時擷取。這一塊是審核那批資料。
         //
-        // **商品後端尚未回覆最終路徑。** 照規格書 §1 的提案先接起來；對方定案後只要改
+        // 商品後端尚未回覆最終路徑。 照規格書 §1 的提案先接起來；對方定案後只要改
         // ai_gateway.py 的 _STAGING_BASE 一行，這裡與 js/api.js 都不必動。
         const stagingList = document.getElementById('adminStagingList');
         if (stagingList) {
@@ -5065,7 +4955,7 @@ const PageInit = {
                 if (action === 'import') {
                     result = await Api.importStagingProduct(id);
                 } else if (action === 'rejected') {
-                    // 退回原因會顯示在清單上，讓下一個看的人知道為什麼——所以問一下，但可以不填。
+                    // 退回原因會顯示在清單上，但允許留空。
                     const reason = window.prompt('退回原因（可留空）：');
                     result = await Api.reviewStagingProduct(id, 'rejected', String(reason || '').trim());
                 } else {
@@ -5205,31 +5095,12 @@ function watchPasswordFields() {
     });
     window.addEventListener('hashchange', routeFromHash);
     window.addEventListener('decorate-me:session-expired', handleSessionExpired);
-    // 另一個分頁登入了別的帳號。
-    //
-    // Cookie 是整個網域共用的，sessionStorage 是每個分頁各自的。所以 admin 分頁登入
-    // 會蓋掉整個瀏覽器的 __session，而這個分頁的畫面仍顯示原本的會員——下一次呼叫
-    // 私人 API 時，送出去的其實是 admin 的憑證。
-    //
-    // **不要自動變成 cookie 裡的那個帳號。** 我一度那樣做，那會讓一個會員分頁靜默
-    // 取得 admin 權限、而畫面上還寫著一般會員：收藏可能寫到錯的帳號，畫面顯示的
-    // 身分與 Gateway 實際認證的身分不一致。被登出很煩，帶著別人的權限操作更糟。
-    //
-    // 正確的動作是擋下來：停掉進行中的請求、清掉這個分頁的照片與分析包、講清楚原因。
-    //
-    // 這裡只處理「有證據」的換帳號：Gateway 回 409，或 validateSession 讀回來的
-    // sub/actorId 與本機對不上。單純「這個分頁沒有 pin」不再送這個事件（見
-    // api.js 的 _protectedFetch），那種情況只擋下該次寫入，不清資料也不強制登出——
-    // 沒有證據卻做最重的處置，換來的是使用者三不五時被踢出去，還被告知一個
-    // 不存在的分頁換了帳號。
-    //
-    // 下面的 EXPECTED_ACTOR_REQUIRED 分支保留成防呆：萬一之後有人又從別處送出
-    // 這個 reason，至少訊息是照實講的，不會再誤導成「別的分頁」。
+    // Cookie 由同一網域的分頁共用，因此另一分頁登入可能改變目前 session。
+    // 只有 Gateway 或 session 驗證確認帳號不同時才停止請求並清除敏感資料。
     window.addEventListener('decorate-me:session-owner-changed', (event) => {
         const reason = (event && event.detail && event.detail.reason) || '';
         if (reason === 'EXPECTED_ACTOR_REQUIRED') {
-            // 這一條是「這個分頁根本沒有登入狀態」，不是換帳號——沒有身分可以切過去，
-            // 只能請他重新登入。
+            // 分頁沒有登入狀態時，要求使用者重新登入。
             handleSessionExpired({
                 title: '登入狀態已失效',
                 message: '這個分頁目前沒有可用的登入狀態，可能是登入階段已結束或分頁資料被清除。'
@@ -5243,7 +5114,7 @@ function watchPasswordFields() {
     });
 
     // 一個分頁登出或換帳號時通知其他分頁，不必等它們自己撞到 403 才發現。
-    // 沒有 BroadcastChannel 的瀏覽器就維持原本的被動偵測。
+    // 不支援 BroadcastChannel 時，改由 API 錯誤被動偵測帳號變更。
     if (typeof BroadcastChannel === 'function') {
         try {
             Router._authChannel = new BroadcastChannel('decorate-me-auth');
@@ -5359,17 +5230,8 @@ function showApp() {
     Router.go(landing);
 }
 
-// 換帳號時「跟著切」而不是把人踢出去。
-//
-// cookie 是整個瀏覽器共用的，分頁沒辦法各自持有不同身分——偵測得到不一致，卻永遠
-// 解不掉，所以原本只能登出。這裡改成大多數網站的做法：接受 cookie 的身分，把這個
-// 分頁切過去。那份 cookie 本來就已經通過 Gateway 驗證，再逼一次登入換不到安全性，
-// 只是把使用者趕走。
-//
-// 兩件事不能省：
-//   1. 先清掉上一個帳號留在 localStorage 的 PII（收藏臉圖、分析回饋）。不清就是把
-//      A 的臉留給 B 看。而且必須在換 profile 之前做——那個函式要用舊 email 當 key。
-//   2. 認不出 cookie 到底屬於誰時，維持原本的登出。沒有可以切過去的對象就不能用猜的。
+// 帳號切換時採用已通過 Gateway 驗證的 session，並先清除上一個帳號的本機資料。
+// 無法確認新帳號時維持登出，不猜測使用者身分。
 async function adoptSessionOwner() {
     if (Router._ownerAdoptInProgress) return;
     Router._ownerAdoptInProgress = true;
@@ -5552,11 +5414,7 @@ async function doLoginAction() {
     try {
         const data = await Api.login(email, password);
         const member = data.member || {};
-        // 登入後的 profile 以「後端這次回傳的 member」為準，本機 registered 只在後端
-        // **完全沒有帶這個欄位時**才補。先前是把整包 registered 攤平當底、再逐欄用 `||`
-        // 蓋——`||` 會把後端回的空字串／0 當成沒回，於是資料庫早就改掉的舊 name／phone／age
-        // 又從本機浮回來（例如改過手機號、登入後卻顯示舊號碼）。
-        // hasOwnProperty 分得出「後端回了空值（採信）」與「後端根本沒這個欄位（才回退本機）」。
+        // 登入資料以後端為準；只有後端缺少欄位時才補上本機註冊資料。
         const fromServer = (key, localValue, fallback) =>
             Object.prototype.hasOwnProperty.call(member, key) ? member[key] : (localValue !== undefined ? localValue : fallback);
         Auth.setProfile({
@@ -5577,8 +5435,7 @@ async function doLoginAction() {
         Router._sessionExpiryHandling = false;
         Api._sessionExpiredNotified = false;
     } catch (err) {
-        // 不管是伺服器明確拒絕，還是根本連不上會員資料庫，都不能放行——
-        // 沒有真正在資料庫裡的會員，一律不能用登入方式進去，避免有人靠擋網路/竄改 DNS 繞過驗證。
+        // 伺服器拒絕或會員資料庫無法連線時都不允許登入。
         if (err.networkFailure) {
             showAlert('無法連線到會員資料庫，請稍後再試', { type: 'error' });
             return;
@@ -5598,9 +5455,7 @@ async function doLoginAction() {
             });
             return;
         }
-        // 帳號存在但被停權／刪除（後台的刪除是軟刪除，資料列還在、email 也還被占用）。
-        // 這種情況絕對不能引導去註冊 —— 註冊一定會撞 EMAIL_EXISTS，使用者只會看到一個
-        // 跟真正原因無關的錯誤，然後卡在原地。
+        // 已停權或軟刪除的帳號應提示聯絡管理員，不能引導重新註冊。
         if (/SUSPEND|DELET|DISABLED|INACTIVE|BLOCK/i.test(err.code || '') || err.status === 403) {
             showAlert('此帳號已被停權或刪除，無法登入。請聯繫管理員處理，重新註冊不會生效。', { type: 'error' });
             return;
@@ -5642,10 +5497,7 @@ function doGuestLogin() {
     showApp();
 }
 
-// 註冊送出中的旗標。寄驗證碼要繞到外部信箱，實測會慢到使用者以為沒反應而再點一下——
-// 而這一下會送出第二次註冊：第一次已經把帳號建好了，第二次必然回 409 EMAIL_EXISTS，
-// 於是畫面告訴他「此信箱已註冊」，他卻連一次驗證碼都還沒收到，帳號就這樣卡死
-// （不能重註冊、沒有碼可驗、也因為未驗證而不能登入）。擋在送出前最省事。
+// 寄送驗證碼期間鎖定註冊按鈕，避免重複建立帳號。
 let registerInFlight = false;
 
 async function doRegisterAction() {
@@ -5805,16 +5657,7 @@ async function doVerifyForgotOTP(){
     showResetPassword();
 }
 
-// 驗證碼一律以後端結果為準，沒有任何繞過路徑。
-//
-// 這裡原本有一個 `allowInsecureOtpBypass` 旗標，開啟時「長度 ≥ 4 就放行」。它從來
-// 不是安全機制：旗標是 `window.DECORATE_ME_CONFIG` 上的瀏覽器端值，在 devtools
-// 打一行就能打開，而攻擊者根本不必經過這個前端。留著它只會讓人誤以為 OTP 有前端
-// 這一道防線，實際上沒有。
-//
-// **真正的閘門在會員資料庫端，而且目前還沒建起來**：註冊後不驗證驗證碼、直接呼叫
-// `POST /api/login` 仍會回 200（追蹤編號 S7）。移除這個旗標並不會修好那件事，
-// 只是不再假裝前端擋得住。修復規格見《給資料庫端_OTP繞過修復規格_2026-07-24》。
+// 驗證碼一律以後端結果為準，前端不提供略過驗證的開關。
 async function verifyOtp(email, code) {
     try {
         await Api.verifyOTP(email, code);
