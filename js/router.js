@@ -4118,6 +4118,13 @@ const PageInit = {
             if (/credentials|cors|failed to fetch|networkerror|load failed/i.test(String(result?.error || ''))) {
                 return '請確認後端已回 Access-Control-Allow-Credentials，且 cookie 為 SameSite=None; Secure';
             }
+            // 422 幾乎都是 members 表裡有 email 欄位不合格式的資料，讓上游的回應驗證整批擋下
+            // （issue #31）。先前這種情況會落到最後那句「請確認 admin session、CORS 與 cookie」，
+            // 把管理員導向完全錯誤的方向——session 和 CORS 都是好的，壞的是資料。
+            if (result?.status === 422) {
+                return '資料庫回 422：members 表裡有欄位格式不合法的資料（多半是 email），整批因此讀不出來。'
+                     + '這不是登入或連線問題，請資料庫端清理該筆資料';
+            }
             if (result && result.ok === false) {
                 return '請確認 members API 有回合法 JSON，且 response body 內包含 members[]';
             }
