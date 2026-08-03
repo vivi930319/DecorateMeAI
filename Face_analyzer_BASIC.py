@@ -5,6 +5,7 @@ import mediapipe as mp
 import json
 import os
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
@@ -264,6 +265,27 @@ async def analyze(
         raise HTTPException(status_code=500, detail="臉部分析服務發生錯誤，請稍後再試")
 
 
+_CJK_RE = re.compile(r"[㐀-鿿]")
+
+
+def unusable_image_message(exc: BaseException) -> str | None:
+    """這個例外是不是「寫給使用者看的照片問題」？是就回傳那句話，不是就回 None。
+
+    FaceAnalyzer 對照片本身的問題一律用**中文**訊息 raise ValueError——pose_guidance 的
+    「請把頭轉向你的右邊」、「沒偵測到人臉」、「膚色區域不足…」。那些句子是設計來直接
+    顯示給會員的。
+
+    但 numpy／cv2 或程式邏輯也會丟 ValueError，訊息是英文內部文字（例如
+    "image_input 只接受 str 或 bytes" 那類，或 cv2 的 shape 錯誤）。把它原樣當成重拍建議
+    送到前端，等於用一句使用者看不懂的話叫他重拍，而真正的 bug 只留在 INFO log 裡、
+    沒有 traceback——最難查的那種。
+
+    所以用「訊息裡有沒有中文」當分界：有中文代表是我們刻意寫給人看的，其餘一律當內部錯誤。
+    """
+    text = str(exc).strip()
+    return text if text and _CJK_RE.search(text) else None
+
+
 def pose_guidance(yaw: float, pitch: float, yaw_limit: float, pitch_limit: float) -> str:
     """把 yaw／pitch 的角度翻成使用者做得到的動作。
 
@@ -452,11 +474,22 @@ def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.
         #
         # 錯誤碼刻意用一個前端 USER_ERROR_ZH 沒有收錄的新碼：那張表命中就會用固定字串
         # 取代訊息，收錄了反而又把這裡的具體指引蓋掉一次。沒收錄時前端會原樣顯示中文訊息。
-        logging.info("臉部分析 job 因照片問題中止 job_id=%s: %s", job_id, exc)
+        hint = unusable_image_message(exc)
+        if hint is None:
+            # 不是寫給使用者看的訊息 = numpy／cv2／程式邏輯的內部錯誤。照通用路徑處理，
+            # 保留 traceback，不要把英文內部文字當成重拍建議送到前端。
+            logging.exception("臉部分析 job 失敗 job_id=%s", job_id)
+            job_store.patch_if_status(_COL, job_id, {"processing"}, {
+                "status": "failed", "stage": "failed",
+                "completedAt": _now_iso(), "updatedAt": _now_iso(),
+                "error": {"code": "FACE_ANALYSIS_ERROR", "message": "臉部分析失敗，請稍後再試", "retryable": True},
+            })
+            return
+        logging.info("臉部分析 job 因照片問題中止 job_id=%s: %s", job_id, hint)
         job_store.patch_if_status(_COL, job_id, {"processing"}, {
             "status": "failed", "stage": "unusable_image",
             "completedAt": _now_iso(), "updatedAt": _now_iso(),
-            "error": {"code": "FACE_IMAGE_UNUSABLE", "message": str(exc), "retryable": True},
+            "error": {"code": "FACE_IMAGE_UNUSABLE", "message": hint, "retryable": True},
         })
         return
     except Exception:

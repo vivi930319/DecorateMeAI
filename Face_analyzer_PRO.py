@@ -18,7 +18,7 @@ import face_feedback
 import face_corrections
 import basic_roi_shadow
 import pro_nose_side_model
-from Face_analyzer_BASIC import FaceAnalyzer, MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES
+from Face_analyzer_BASIC import FaceAnalyzer, MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES, unusable_image_message
 from dev_server_utils import get_cors_origins, run_dev_server
 from image_safety import sanitize_upload
 
@@ -98,6 +98,12 @@ def _analyze_side_supplementary(side_bytes: bytes) -> dict | None:
                     "a": float(round(a, 2)),
                     "b": float(round(b, 2)),
                 },
+                # 側面照的可信度一定要帶出去。_merge_basic_and_pro 靠它判斷平均後的 LAB
+                # 能不能信；先前這裡沒放，那邊讀到的永遠是 {}，於是 side_ok 恆為 False，
+                # **每一次帶側面照的 PRO 分析都被標成不可信**——等於關掉了所有 PRO 使用者
+                # 的粉底 ΔE 比色，而那正是規格書說 reliable:false 時不可做的事。
+                "可信度": getattr(analyzer, "skin_reliability",
+                                  {"measured": False, "reliable": True, "hint": ""}),
             },
         }
 
@@ -290,11 +296,21 @@ def _run_pro_job(job_id, front_bytes, angle_bytes, owner_id=None):
         # 你的右邊」、「沒偵測到人臉」、「膚色區域不足」）。PRO 用的是同一個 FaceAnalyzer、
         # 同樣 strict_angle=True，先前卻只有 BASIC 把訊息傳出去，PRO 這邊照舊吞掉——
         # 同一張斜臉走 BASIC 會被告知怎麼喬，走 PRO 只會拿到「請稍後再試」。
-        logging.info("PRO 臉部分析 job 因照片問題中止 job_id=%s: %s", job_id, exc)
+        hint = unusable_image_message(exc)
+        if hint is None:
+            # 同 BASIC：內部錯誤不能偽裝成重拍建議，要留 traceback。
+            logging.exception("PRO 臉部分析 job 失敗 job_id=%s", job_id)
+            job_store.patch_if_status(_COL, job_id, {"processing"}, {
+                "status": "failed", "stage": "failed",
+                "completedAt": _now_iso(), "updatedAt": _now_iso(),
+                "error": {"code": "FACE_ANALYSIS_ERROR", "message": "臉部分析失敗，請稍後再試", "retryable": True},
+            })
+            return
+        logging.info("PRO 臉部分析 job 因照片問題中止 job_id=%s: %s", job_id, hint)
         job_store.patch_if_status(_COL, job_id, {"processing"}, {
             "status": "failed", "stage": "unusable_image",
             "completedAt": _now_iso(), "updatedAt": _now_iso(),
-            "error": {"code": "FACE_IMAGE_UNUSABLE", "message": str(exc), "retryable": True},
+            "error": {"code": "FACE_IMAGE_UNUSABLE", "message": hint, "retryable": True},
         })
         return
     except Exception:
