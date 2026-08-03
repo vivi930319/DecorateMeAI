@@ -908,7 +908,9 @@ body {
 /* elegant image placeholder · 精品打光產品框 */
 .ph {
     position:relative; overflow:hidden;
-    background:#fff;
+    /* 圖片框的底。商品卡、妝容對比、收藏都用它，寫死 #fff 的話深色主題下每一張圖
+       周圍都會鑲一圈白，是「底沒有跟著主題」最明顯的來源。 */
+    background:var(--white);
     display:flex; align-items:center; justify-content:center;
 }
 .ph::before { /* 細金內框 */
@@ -1699,13 +1701,15 @@ body.admin-mode .main-content * { letter-spacing:0; }
     background-size:contain;
 }
 .compare-stage.before {
+    /* 先前這兩個顏色是寫死的米色，主題換成深色時妝前那格仍是米底、妝後那格跟著變，
+       同一張對比圖左右兩半色調對不起來。改吃跟 .after 同一組變數。 */
     background:
-        radial-gradient(120% 80% at 50% 18%, rgba(252,250,245,0.9) 0%, transparent 55%),
-        linear-gradient(165deg, #EAF0F0 0%, #E6DBC9 100%);
+        radial-gradient(120% 80% at 50% 18%, rgba(var(--surface-rgb),0.55) 0%, transparent 55%),
+        linear-gradient(165deg, var(--paper) 0%, var(--ivory-2) 100%);
 }
 .compare-stage.after {
     background:
-        radial-gradient(120% 80% at 50% 18%, rgba(252,250,245,0.9) 0%, transparent 55%),
+        radial-gradient(120% 80% at 50% 18%, rgba(var(--surface-rgb),0.55) 0%, transparent 55%),
         linear-gradient(165deg, var(--ivory-2) 0%, var(--paper) 100%);
 }
 .compare-stage.has-render::before,
