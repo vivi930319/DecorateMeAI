@@ -57,12 +57,34 @@ try {
 #
 # 另外，Firebase CLI 不受影響——Node 的 TLS 沒有這麼嚴格，前端部署照常。
 Write-Host "更新 AI Gateway..." -ForegroundColor Cyan
-gcloud run services update ai-gateway `
-    --region=$region --project=$project `
-    --update-env-vars="MEMBER_DATABASE_URL=$NewUrl,PRODUCT_DATABASE_URL=$NewUrl" `
-    --quiet | Out-Null
+# 這一段有兩個必須避開的地雷，2026-08-03 實測踩到：
+#
+# 1. Windows 上的 `gcloud` 是 gcloud.ps1（PowerShell 包裝腳本），它內部用
+#    `& "$exe_path"` 叫真正的執行檔。本檔開頭的 $ErrorActionPreference = "Stop"
+#    會傳進那層，於是 gcloud 只要往 stderr 寫任何一行（它連進度都寫 stderr），
+#    就變成終止性的 NativeCommandError——腳本死在這裡，**跑不到下面那個
+#    $LASTEXITCODE 判斷**，畫面上只留下前面驗證成功的綠字，看起來很像換好了，
+#    實際上 Gateway 一個字都沒改。改叫 gcloud.cmd 跳過那層包裝。
+#
+# 2. 即使如此仍要暫時放寬 ErrorActionPreference，因為 stderr 輸出本身就會觸發。
+#    用 try/finally 確保無論成敗都還原，後面的驗證段仍在 Stop 模式下執行。
+$updateOk = $false
+$previousEap = $ErrorActionPreference
+try {
+    $ErrorActionPreference = "Continue"
+    & gcloud.cmd run services update ai-gateway `
+        --region=$region --project=$project `
+        --update-env-vars="MEMBER_DATABASE_URL=$NewUrl,PRODUCT_DATABASE_URL=$NewUrl" `
+        --quiet
+    $updateOk = ($LASTEXITCODE -eq 0)
+} catch {
+    Write-Host "  gcloud 執行失敗：$($_.Exception.Message)" -ForegroundColor Red
+    $updateOk = $false
+} finally {
+    $ErrorActionPreference = $previousEap
+}
 
-if ($LASTEXITCODE -ne 0) {
+if (-not $updateOk) {
     Write-Host "Gateway 更新失敗，網址未變更。" -ForegroundColor Red
     exit 1
 }
