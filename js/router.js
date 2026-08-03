@@ -3634,6 +3634,9 @@ const PageInit = {
                         : null;
                     if (remoteResult?.ok) {
                         const gained = remoteResult.awarded ?? remoteResult.points ?? 0;
+                        // 只鏡射「今天打過卡」這個事實，點數由伺服器算。任務中心的
+                        // daily_checkin 判定讀的是這份本機紀錄，不寫的話那個任務永遠不會完成。
+                        MemberRewards.recordRemoteCheckin(profile.email, remoteResult.streak);
                         showToast(`打卡成功，獲得 ${gained} 點`);
                         PageInit.profile();
                         return;
@@ -4622,7 +4625,10 @@ const PageInit = {
                     usedCursors.add(next);
                     cursor = next;
                 }
-                return { ...firstRec, products: all };
+                // 迴圈是被 PRODUCT_MAX_PAGES 上限中止、而不是自然翻完的話，同樣是一份
+                // 不完整的清單。先前只有「某一頁失敗」那條標了 partial，這條沒標，於是
+                // 截斷的結果照樣掛著伺服器回的總數——同一個 bug 換一個分支重演。
+                return { ...firstRec, products: all, partial: cursor != null };
             };
             return fetchAllPages().then(rec => {
                 if (rec?.ok) {

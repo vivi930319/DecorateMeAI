@@ -1840,6 +1840,11 @@ const Api = {
                                 season: fa?.skinTone?.season || null,
                                 level:  fa?.skinTone?.level  || null,
                                 lab:    this._labToArray(fa?.skinTone?.lab),
+                                // 這支請求是白名單重組，不是把 faceAnalysis 整個送出去。
+                                // 先前只在 fromRawFaceAnalysis 補了 labReliable，卻沒補這裡——
+                                // 旗標在**下一層**被丟掉，送出去的 body 跟修之前一模一樣，
+                                // 推薦端從來沒收到過。缺欄位視為可信，維持既有行為。
+                                labReliable: fa?.skinTone?.labReliable !== false,
                             },
                             lipLab: this._labToArray(fa?.lipLab),
                         },
@@ -2698,19 +2703,25 @@ const MemberRewards = {
         const streak = row.date === this._today() || this._isYesterday(row.date) ? (row.streak || 0) : 0;
         return { checkedToday: row.date === this._today(), lastDate: row.date || null, streak };
     },
-    checkin(email) {
+    // 記下「伺服器說今天打過卡了」，只寫日期與連續天數，**不發點數**。
+    //
+    // 舊的 checkin() 把「記錄打卡」與「發點數」綁在同一個方法裡，而發點數在前端是被禁的
+    // （交接手冊 §6.2「API 失敗時不可在前端自行加點」）。移除它的呼叫端之後沒有人再寫
+    // _checkinKey，但 Tasks 的 daily_checkin 判定讀的正是那個鍵——「完成今日打卡」這個
+    // 任務因此永遠無法完成，也就永遠領不到獎勵。
+    //
+    // 拆成這一支：點數一律由伺服器計算並回傳，這裡只鏡射「哪一天打過」這個事實，
+    // 讓本機的任務視圖跟伺服器一致。
+    recordRemoteCheckin(email, streakFromServer) {
         const key = this._email(email);
-        if (key === 'guest') return { ok: false, message: '請先登入會員再打卡。' };
+        if (key === 'guest') return;
         const all = this._load(this._checkinKey, {});
         const prev = all[key] || {};
-        if (prev.date === this._today()) return { ok: false, message: '今天已經打卡過了。' };
-        const streak = this._isYesterday(prev.date) ? (prev.streak || 0) + 1 : 1;
+        const streak = Number.isFinite(Number(streakFromServer)) && Number(streakFromServer) > 0
+            ? Number(streakFromServer)
+            : (this._isYesterday(prev.date) ? (prev.streak || 0) + 1 : 1);
         all[key] = { date: this._today(), updatedAt: new Date().toISOString(), streak };
         this._save(this._checkinKey, all);
-        let balance = this.addPoints(key, 10, '每日打卡', { type: 'daily_checkin', streak });
-        const bonus = this._streakBonusTable[streak] || 0;
-        if (bonus) balance = this.addPoints(key, bonus, `連續簽到 ${streak} 天獎勵`, { type: 'streak_bonus', streak });
-        return { ok: true, points: 10 + bonus, bonus, streak, balance };
     },
     unlockedThemes(email) {
         const key = this._email(email);
