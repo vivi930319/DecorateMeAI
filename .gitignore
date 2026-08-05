@@ -187,3 +187,23 @@ local_only_notes/
 # 給演算法端的對接前提與待辦，含 job 失敗三種狀態碼的區分
 # （只有 FACE_IMAGE_UNUSABLE 的 message 可以原樣顯示給使用者）。
 !給演算法端_待辦彙總規格_2026-07-25.md
+
+# 跨端規格與修改單：對接對象照這些實作，內容都是介面約定，沒有個資也沒有金鑰。
+!MAKEUP_AI_CALLER_INTEGRATION_SPEC.md
+!OLLAMA_PROVIDER_CHANGE_REQUEST.md
+!OLLAMA_RENDER_PROMPT_FIX_RECOMMENDATION.md
+!PRODUCT_RECOMMEND_ALGORITHM_FIX_RECOMMENDATION.md
+!FRONTEND_REMOVE_FAKE_ADVICE_CHANGE_REQUEST.md
+!ollama_suggestion_merge_note.md
+!frontend-api-guide.md
+
+# Agent 設定指向的三份文件。CLAUDE.md 已入版控卻參照到未入版控的檔案，
+# 換機器就會讀到「檔案不存在」。
+!docs/
+!docs/agents/
+!docs/agents/*.md
+
+# ⚠️ MEMBER_DATABASE_SECURITY_ISSUE.md 刻意**不**入版控。
+# 它把當時實測到的回應原樣貼進去當漏洞證據，裡面是真實會員的 email 與電話。
+# 那份報告的價值在於證據，把證據去識別化就不成立了，所以整份留在本機。
+# 要對外講這個問題請引用 GitHub issue，不要引用這個檔案。
