@@ -115,7 +115,7 @@ POST /v1/analysis/full
 ```json
 {
   "id": "AN-abc123",
-  "schemaVersion": "2026-06-v1",
+  "schemaVersion": "2026-08-v2",
   "mode": "BASIC",
   "client": "web",
   "userId": "user@example.com",
@@ -160,7 +160,7 @@ POST /v1/analysis/full
 | 欄位 | 型別 | 必填 | 說明 |
 | --- | --- | --- | --- |
 | `id` | string | 是 | 分析資料包 ID |
-| `schemaVersion` | string | 是 | 資料包版本 |
+| `schemaVersion` | string | 是 | 資料包版本。2026-08-03 起為 `2026-08-v2`（新增 `labReliable`）；請以「不認得就當作新版照常處理」的方式相容，不要對版本字串做等值比對 |
 | `style` | string | 是 | 使用者選的妝容風格 |
 | `faceAnalysis.faceShape` | string | 是 | 臉型 enum |
 | `faceAnalysis.eyeShape` | string | 是 | 眼型 enum |
