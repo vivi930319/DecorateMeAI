@@ -2151,7 +2151,11 @@ const AnalysisPackage = {
     create({ mode, images = {}, status = 'draft' }) {
         const now = new Date().toISOString();
         return {
-            schemaVersion: '2026-06-v1',
+            // 這個資料包自 2026-08 起帶 labReliable／labReliability，版本號要跟著走，
+            // 否則照《給演算法端_膚色可信度旗標接入》的規則，看到 2026-06-v1 的消費端
+            // 會判定沒有可信度旗標。目前這個欄位不會離開瀏覽器（送渲染與推薦的都是
+            // 白名單重組），所以升版沒有對外風險。
+            schemaVersion: '2026-08-v2',
             id: `AN-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             mode,
             client: 'web',
@@ -2252,7 +2256,9 @@ const AnalysisPackage = {
                 season: skin['四季型'] || null,
                 level: skin['膚色分級'] || null,
                 lab: skin['LAB'] || null,
-                labSource: skin['LAB來源'] || null,
+                // PRO 自 2026-08-05 起不再做正面+側面平均，所以後端不會再送 LAB來源。
+                // 沒有這個鍵就代表膚色來自正面照，跟後端 analysis_package.py 的預設一致。
+                labSource: skin['LAB來源'] || '正面照',
                 // 頭髮或陰影蓋住臉頰時膚色會算錯。臉部分析端會標記，但**送去商品推薦的
                 // 是這個 JS 建的資料包**，不是後端 analysis_package.py 那份——先前只補了
                 // 後端那條路，這裡沒帶，於是旗標從來沒到過推薦端，整個「不可信就別比色號」
@@ -2267,9 +2273,13 @@ const AnalysisPackage = {
                 noseDeviation: sym.noseDeviation ?? null,
                 mouthSymmetry: sym.mouthSymmetry ?? null
             } : null,
-            sidePhotoUsed: proStatusRaw
-                ? proStatusRaw['多角度照片']?.startsWith('已接收')
-                : null,
+            // 後端有明講的布林就用它。先前是拿「多角度照片」這句**顯示文案**去比前綴，
+            // 而那句話會隨功能描述改寫——2026-08-05 它從「已接收，膚色已雙角度平均」
+            // 改成「已接收，用於側臉鼻型（膚色僅採正面照）」，只是剛好還以「已接收」
+            // 開頭才沒出事。舊後端沒有這個鍵，才退回看文案。
+            sidePhotoUsed: typeof raw?.['側面照已使用'] === 'boolean'
+                ? raw['側面照已使用']
+                : (proStatusRaw ? proStatusRaw['多角度照片']?.startsWith('已接收') : null),
             proStatus: proStatusRaw,
             raw: raw || null
         };

@@ -480,7 +480,7 @@ if (!gitignore.includes('config.local.js')) {
 
 // ── AnalysisPackage 基本結構 ───────────────────────────────────
 const pkg = sandbox.AnalysisPackage.create({ mode: 'basic' });
-if (pkg.schemaVersion !== '2026-06-v1') throw new Error('Bad schemaVersion');
+if (pkg.schemaVersion !== '2026-08-v2') throw new Error('Bad schemaVersion');
 if (!pkg.faceAnalysis || !pkg.generativeText || !pkg.render || !pkg.recommendations) {
   throw new Error('analysisPackage missing expected sections');
 }
