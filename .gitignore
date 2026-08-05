@@ -172,3 +172,18 @@ local_only_notes/
 
 # 文字建議服務接入規格：給跑 Ollama 那台的同學，含金鑰輪替要求（#26）。
 !給Ollama端_文字建議服務接入規格書_2026-07-25.md
+
+# Agent 設定：issue tracker 位置、triage 標籤、domain docs 採單一 context。
+# 換機器或換人接手時，沒有這份就得重新摸索一次。
+!CLAUDE.md
+
+# Ollama 資料包契約：schemaVersion 規則與每個欄位的語意，跨端對接的權威來源。
+!OLLAMA_DATA_PACKET_INTEGRATION_SPEC.md
+
+# 膚色可信度旗標 labReliable：講明什麼時候 lab 不可以拿去比色號。
+# 推薦端照這份實作，出錯就是粉底配錯色號，要能追蹤版本。
+!給演算法端_膚色可信度旗標接入_2026-08-03.md
+
+# 給演算法端的對接前提與待辦，含 job 失敗三種狀態碼的區分
+# （只有 FACE_IMAGE_UNUSABLE 的 message 可以原樣顯示給使用者）。
+!給演算法端_待辦彙總規格_2026-07-25.md
