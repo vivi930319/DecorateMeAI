@@ -1,10 +1,28 @@
 import argparse
 import csv
 import json
+import os
 import time
 from pathlib import Path
 
 import requests
+
+# 已部署的 face-basic／face-pro 除了 Cloud Run IAM，還有一層服務自己的 x-api-key
+# （見 Face_analyzer_BASIC 的 _api_key_guard），少了它每一支端點都回 401 FORBIDDEN。
+# 沒有這個的時候，這支 CLI 實際上只測得到本機開發伺服器。
+#
+# 金鑰從環境變數取得，不寫進程式也不印出來：
+#   $env:FACE_API_KEY = gcloud secrets versions access latest `
+#       --secret=decorate-me-face-upstream-key --project decorate-me
+# 本機沒有 API key 的開發伺服器不設這個變數即可，行為與先前相同。
+FACE_API_KEY = os.getenv("FACE_API_KEY", "").strip()
+
+
+def _auth_headers(existing=None):
+    headers = dict(existing or {})
+    if FACE_API_KEY:
+        headers["x-api-key"] = FACE_API_KEY
+    return headers
 
 # 本檔是可直接執行的線上 smoke-test CLI，不是 pytest 測試模組。函式保留 test_* 名稱
 # 方便閱讀既有操作紀錄，但明確禁止 pytest 收集，避免把 CLI 參數誤認成 fixtures。
@@ -48,6 +66,7 @@ def pick_default_image():
 
 
 def request_json(method, url, **kwargs):
+    kwargs["headers"] = _auth_headers(kwargs.get("headers"))
     response = requests.request(method, url, timeout=kwargs.pop("timeout", 180), **kwargs)
     try:
         payload = response.json()
@@ -134,7 +153,8 @@ def _error_code(payload):
 
 def _post_raw(url, filename, content_type, data):
     """送一段原始 bytes 當上傳檔，回 (status_code, json)；不因 4xx 丟例外。"""
-    response = requests.post(url, files={"file": (filename, data, content_type)}, timeout=60)
+    response = requests.post(url, files={"file": (filename, data, content_type)},
+                             headers=_auth_headers(), timeout=60)
     try:
         payload = response.json()
     except Exception:
