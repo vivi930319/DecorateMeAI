@@ -5,7 +5,6 @@ import mediapipe as mp
 import json
 import os
 import logging
-import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
@@ -265,25 +264,31 @@ async def analyze(
         raise HTTPException(status_code=500, detail="臉部分析服務發生錯誤，請稍後再試")
 
 
-_CJK_RE = re.compile(r"[㐀-鿿]")
+class UnusableImageError(ValueError):
+    """照片本身的問題，訊息是寫給會員看的，可以原樣顯示。
+
+    這個型別存在的意義就是把「這句話給誰看」變成明講的，而不是從訊息內容猜。
+    raise 它的時候，訊息必須是會員做得到的具體指引（「請把頭轉向你的右邊」、
+    「沒偵測到人臉」、「膚色區域不足…」）。程式邏輯或函式庫的錯誤請用一般的
+    ValueError，那些會走內部錯誤路徑並保留 traceback。
+
+    繼承 ValueError 是為了讓既有的 `except ValueError` 呼叫端行為不變。
+    """
 
 
 def unusable_image_message(exc: BaseException) -> str | None:
     """這個例外是不是「寫給使用者看的照片問題」？是就回傳那句話，不是就回 None。
 
-    FaceAnalyzer 對照片本身的問題一律用**中文**訊息 raise ValueError——pose_guidance 的
-    「請把頭轉向你的右邊」、「沒偵測到人臉」、「膚色區域不足…」。那些句子是設計來直接
-    顯示給會員的。
+    先前這裡是問「訊息裡有沒有中文」——中文就當成刻意寫給人看的。那個假設會漏：
+    `image_input 只接受 str 或 bytes` 是型別傳錯，純粹的程式 bug，但它有中文，於是
+    被當成重拍建議送到會員面前，而真正的錯誤只留在 INFO log、沒有 traceback。
+    （舊 docstring 還正好拿這句當「內部訊息」的例子，等於被自己的反例打敗。）
 
-    但 numpy／cv2 或程式邏輯也會丟 ValueError，訊息是英文內部文字（例如
-    "image_input 只接受 str 或 bytes" 那類，或 cv2 的 shape 錯誤）。把它原樣當成重拍建議
-    送到前端，等於用一句使用者看不懂的話叫他重拍，而真正的 bug 只留在 INFO log 裡、
-    沒有 traceback——最難查的那種。
-
-    所以用「訊息裡有沒有中文」當分界：有中文代表是我們刻意寫給人看的，其餘一律當內部錯誤。
+    改用型別判斷：會員看得到的訊息一律 raise UnusableImageError，其餘都是內部錯誤。
     """
-    text = str(exc).strip()
-    return text if text and _CJK_RE.search(text) else None
+    if not isinstance(exc, UnusableImageError):
+        return None
+    return str(exc).strip() or None
 
 
 def pose_guidance(yaw: float, pitch: float, yaw_limit: float, pitch_limit: float) -> str:
@@ -328,11 +333,11 @@ def _detect_pose(contents: bytes):
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     faces = _get_insight().get(rgb)
     if not faces:
-        raise ValueError("沒偵測到人臉")
+        raise UnusableImageError("沒偵測到人臉")
 
     face = max(faces, key=lambda f: f.det_score)
     if not hasattr(face, "pose") or face.pose is None:
-        raise ValueError("無法取得臉部角度")
+        raise UnusableImageError("無法取得臉部角度")
 
     yaw = float(face.pose[0])
     pitch = float(face.pose[1])
@@ -378,11 +383,11 @@ def _now_iso():
 def fail_job(col, job_id, exc, *, log_label):
     """job 失敗的統一出口。BASIC 與 PRO 共用，呼叫端只要 `fail_job(...); return`。
 
-    分岔只有一個：unusable_image_message 認得的訊息是寫給使用者看的拍攝問題，
-    原樣傳出去；其餘一律當內部錯誤，留 traceback，並用固定的中文句子回覆——
-    英文內部文字送到前端等於叫使用者重拍一句他看不懂的話。
+    分岔只有一個：UnusableImageError 的訊息是寫給使用者看的拍攝問題，原樣傳出去；
+    其餘一律當內部錯誤，留 traceback，並用固定的中文句子回覆——內部訊息送到前端
+    等於叫使用者重拍一句與他無關的話。
     """
-    hint = unusable_image_message(exc) if isinstance(exc, ValueError) else None
+    hint = unusable_image_message(exc)
     if hint is None:
         logging.exception("%s job 失敗 job_id=%s", log_label, job_id)
         patch = {
@@ -708,7 +713,7 @@ class FaceAnalyzer:
             faces = insight.get(rgb)
 
             if not faces:
-                raise ValueError("沒偵測到人臉")
+                raise UnusableImageError("沒偵測到人臉")
 
             face = max(faces, key=lambda f: f.det_score)
 
@@ -719,7 +724,7 @@ class FaceAnalyzer:
                 if strict_angle and (
                     abs(self.pose_yaw) > self.YAW_LIMIT or abs(self.pose_pitch) > self.PITCH_LIMIT
                 ):
-                    raise ValueError(
+                    raise UnusableImageError(
                         pose_guidance(self.pose_yaw, self.pose_pitch, self.YAW_LIMIT, self.PITCH_LIMIT)
                     )
 
@@ -728,7 +733,7 @@ class FaceAnalyzer:
         results = _process_face_mesh(rgb)
 
         if not results.multi_face_landmarks:
-            raise ValueError("沒偵測到人臉")
+            raise UnusableImageError("沒偵測到人臉")
 
         self.lm             = results.multi_face_landmarks[0].landmark
         self.face_landmarks = results.multi_face_landmarks[0]
@@ -1245,7 +1250,7 @@ class FaceAnalyzer:
         if cv2.countNonZero(combined_mask) < 100 and sample_mask is not face_mask:
             combined_mask = cv2.bitwise_and(face_mask, color_mask)
         if cv2.countNonZero(combined_mask) < 100:
-            raise ValueError("膚色區域不足，請使用光線均勻、臉部清楚的正面照片")
+            raise UnusableImageError("膚色區域不足，請使用光線均勻、臉部清楚的正面照片")
 
         # 顏色分不開棕髮與皮膚，紋理可以——完整理由與實測數字見 SKIN_TEXTURE_STD_MAX。
         textured = cv2.bitwise_and(combined_mask, self._skin_texture_mask())
