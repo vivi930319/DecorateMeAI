@@ -17,6 +17,7 @@
       "**/*.ps1",
       "docs/**",
       "frontend_smoke_check.js",
+      "face_job_error_check.js",
       "config.local.example.js",
       "img.png",
       "img_1.png",
