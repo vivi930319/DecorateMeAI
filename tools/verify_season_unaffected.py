@@ -1,11 +1,3 @@
-from pathlib import Path
-import sys
-
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-
-# 測試資料集。換一批照片時改這裡即可，數字要跟著重跑。
-DATASET = ROOT / "data" / "kaggle_asian_faces" / "generated_yellow-stylegan2"
 """驗證紋理過濾沒有連帶改掉四季型。
 
 _classify_season 的 clear 判定吃 v_std >= 18.0，而紋理過濾正是在剔除高變異
@@ -13,8 +5,19 @@ _classify_season 的 clear 判定吃 v_std >= 18.0，而紋理過濾正是在剔
 這支腳本比對真實 get_skin_color 的季型與「未過濾」的參考答案，應為全數一致。
 """
 import glob
-from Face_analyzer_BASIC import FaceAnalyzer
+import sys
+from pathlib import Path
+
 import numpy as np, cv2
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+# 專案模組要等 ROOT 進 sys.path 之後才 import 得到，所以這行不能往上搬。
+from Face_analyzer_BASIC import FaceAnalyzer  # noqa: E402
+
+# 測試資料集。換一批照片時改這裡即可，數字要跟著重跑。
+DATASET = ROOT / "data" / "kaggle_asian_faces" / "generated_yellow-stylegan2"
 
 def reference_season(fa):
     """完全照 get_skin_color 走到 combined_mask（不套紋理），再算季型 = 修正前的正確行為。"""

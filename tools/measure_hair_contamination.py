@@ -1,11 +1,3 @@
-from pathlib import Path
-import sys
-
-ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
-
-# 測試資料集。換一批照片時改這裡即可，數字要跟著重跑。
-DATASET = ROOT / "data" / "kaggle_asian_faces" / "generated_yellow-stylegan2"
 """量測頭髮遮擋對膚色的污染，並驗證紋理過濾與可信度標記的效果。
 
 Face_analyzer_BASIC 的 SKIN_TEXTURE_STD_MAX / SKIN_SPREAD_UNRELIABLE 註解裡
@@ -15,11 +7,21 @@ Face_analyzer_BASIC 的 SKIN_TEXTURE_STD_MAX / SKIN_SPREAD_UNRELIABLE 註解裡
 再比對膚色 LAB 與未遮擋時的差距。
 """
 import glob
+import sys
+from pathlib import Path
+
 import numpy as np
 import cv2
 
-from Face_analyzer_BASIC import FaceAnalyzer
-from analysis_package import normalize_face_analysis
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+# 專案模組要等 ROOT 進 sys.path 之後才 import 得到，所以這兩行不能往上搬。
+from Face_analyzer_BASIC import FaceAnalyzer  # noqa: E402
+from analysis_package import normalize_face_analysis  # noqa: E402
+
+# 測試資料集。換一批照片時改這裡即可，數字要跟著重跑。
+DATASET = ROOT / "data" / "kaggle_asian_faces" / "generated_yellow-stylegan2"
 
 CHEEK_L = [50, 101, 118, 117, 123, 205, 187, 147, 177, 137]
 
