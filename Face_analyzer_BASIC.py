@@ -375,6 +375,31 @@ def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def fail_job(col, job_id, exc, *, log_label):
+    """job 失敗的統一出口。BASIC 與 PRO 共用，呼叫端只要 `fail_job(...); return`。
+
+    分岔只有一個：unusable_image_message 認得的訊息是寫給使用者看的拍攝問題，
+    原樣傳出去；其餘一律當內部錯誤，留 traceback，並用固定的中文句子回覆——
+    英文內部文字送到前端等於叫使用者重拍一句他看不懂的話。
+    """
+    hint = unusable_image_message(exc) if isinstance(exc, ValueError) else None
+    if hint is None:
+        logging.exception("%s job 失敗 job_id=%s", log_label, job_id)
+        patch = {
+            "status": "failed", "stage": "failed",
+            "completedAt": _now_iso(), "updatedAt": _now_iso(),
+            "error": {"code": "FACE_ANALYSIS_ERROR", "message": "臉部分析失敗，請稍後再試", "retryable": True},
+        }
+    else:
+        logging.info("%s job 因照片問題中止 job_id=%s: %s", log_label, job_id, hint)
+        patch = {
+            "status": "failed", "stage": "unusable_image",
+            "completedAt": _now_iso(), "updatedAt": _now_iso(),
+            "error": {"code": "FACE_IMAGE_UNUSABLE", "message": hint, "retryable": True},
+        }
+    job_store.patch_if_status(col, job_id, {"processing"}, patch)
+
+
 def _parse_iso(value):
     if not value:
         return None
@@ -468,37 +493,13 @@ def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.
             face_corrections.image_hash(contents),
             owner_id=owner_id,
         )
-    except ValueError as exc:
+    except Exception as exc:
         # ValueError 代表可由使用者修正的拍攝問題，例如角度、光線或未偵測到人臉。
         # 保留原始訊息，讓前端提示正確的重拍方式。
         #
         # 錯誤碼刻意用一個前端 USER_ERROR_ZH 沒有收錄的新碼：那張表命中就會用固定字串
         # 取代訊息，收錄了反而又把這裡的具體指引蓋掉一次。沒收錄時前端會原樣顯示中文訊息。
-        hint = unusable_image_message(exc)
-        if hint is None:
-            # 不是寫給使用者看的訊息 = numpy／cv2／程式邏輯的內部錯誤。照通用路徑處理，
-            # 保留 traceback，不要把英文內部文字當成重拍建議送到前端。
-            logging.exception("臉部分析 job 失敗 job_id=%s", job_id)
-            job_store.patch_if_status(_COL, job_id, {"processing"}, {
-                "status": "failed", "stage": "failed",
-                "completedAt": _now_iso(), "updatedAt": _now_iso(),
-                "error": {"code": "FACE_ANALYSIS_ERROR", "message": "臉部分析失敗，請稍後再試", "retryable": True},
-            })
-            return
-        logging.info("臉部分析 job 因照片問題中止 job_id=%s: %s", job_id, hint)
-        job_store.patch_if_status(_COL, job_id, {"processing"}, {
-            "status": "failed", "stage": "unusable_image",
-            "completedAt": _now_iso(), "updatedAt": _now_iso(),
-            "error": {"code": "FACE_IMAGE_UNUSABLE", "message": hint, "retryable": True},
-        })
-        return
-    except Exception:
-        logging.exception("臉部分析 job 失敗 job_id=%s", job_id)
-        job_store.patch_if_status(_COL, job_id, {"processing"}, {
-            "status": "failed", "stage": "failed",
-            "completedAt": _now_iso(), "updatedAt": _now_iso(),
-            "error": {"code": "FACE_ANALYSIS_ERROR", "message": "臉部分析失敗，請稍後再試", "retryable": True},
-        })
+        fail_job(_COL, job_id, exc, log_label="臉部分析")
         return
 
     try:
