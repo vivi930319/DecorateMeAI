@@ -203,6 +203,10 @@ local_only_notes/
 !docs/agents/
 !docs/agents/*.md
 
+# 搬機環境地雷：PowerShell 版本、Big5 編碼、防毒攔憑證、私有 Cloud Run 認證。
+# 2026-08-06 全端部署那天卡住的每一件事都在這裡，換機器不看會照撞一次。
+!搬機環境地雷_工具鏈與編碼_2026-08-06.md
+
 # ⚠️ MEMBER_DATABASE_SECURITY_ISSUE.md 刻意**不**入版控。
 # 它把當時實測到的回應原樣貼進去當漏洞證據，裡面是真實會員的 email 與電話。
 # 那份報告的價值在於證據，把證據去識別化就不成立了，所以整份留在本機。
