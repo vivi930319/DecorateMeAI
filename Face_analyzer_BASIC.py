@@ -323,7 +323,7 @@ def pose_guidance(yaw: float, pitch: float, yaw_limit: float, pitch_limit: float
 def _detect_pose(contents: bytes):
     frame = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
     if frame is None:
-        raise FileNotFoundError("圖片讀取失敗")
+        raise UnusableImageError("圖片讀取失敗，請確認檔案是完整的 JPG 或 PNG 後再試一次")
 
     h0, w0 = frame.shape[:2]
     scale = MAX_IMAGE_SIZE / max(h0, w0)
@@ -668,7 +668,7 @@ class FaceAnalyzer:
             raise ValueError("image_input 只接受 str 或 bytes")
 
         if self.frame is None:
-            raise FileNotFoundError("圖片讀取失敗")
+            raise UnusableImageError("圖片讀取失敗，請確認檔案是完整的 JPG 或 PNG 後再試一次")
 
         # 沒跑 InsightFace（require_insight=False，例如訓練與校正工具）時就沒有角度可用。
         # 維持 None 而不是 0：0 會被當成「完美正臉」，讓可信度標記靜靜消失。
