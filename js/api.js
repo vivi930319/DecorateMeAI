@@ -580,7 +580,13 @@ const Api = {
                 return this.getFaceJobResult(mode, jobId, resultToken);
             }
             if (job.status === 'failed') {
-                throw new Error(job.error?.message || '臉部分析 job 失敗');
+                // 失敗碼要跟著丟出去。後端分三種失敗，只有 FACE_IMAGE_UNUSABLE 的 message
+                // 是寫給使用者看的重拍指引，另外兩碼是系統錯誤；只丟 message 的話呼叫端
+                // 無從分辨，於是指引跟系統錯誤會用同一種語氣顯示。
+                const err = new Error(job.error?.message || '臉部分析 job 失敗');
+                err.code = job.error?.code || '';
+                err.retryable = job.error?.retryable !== false;
+                throw err;
             }
             await new Promise(resolve => setTimeout(resolve, 1000));
         }

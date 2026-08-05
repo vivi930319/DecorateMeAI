@@ -2764,9 +2764,15 @@ const PageInit = {
                 updatePackageStatus();
                 setLoadingStatus('分析失敗，已保留草稿狀態', false);
                 const offline = /Failed to fetch|NetworkError|Load failed/i.test(String(err.message || err));
+                // 照片問題的 message 本身就是可行動的重拍指引（「請把頭轉向你的右邊」）。
+                // 冠上「分析失敗：」會把它講成系統壞掉，使用者反而不知道該做什麼。
+                // 其餘錯誤才需要那個前綴；把 code 一起傳給 showAlert，讓它查表把
+                // 「分析失敗：臉部分析失敗，請稍後再試」這種疊字換成單一句子。
+                const photoProblem = err.code === 'FACE_IMAGE_UNUSABLE';
                 showAlert(offline
                     ? '目前無法連接臉部分析服務，請稍後再試。'
-                    : '分析失敗：' + err.message, { type:'error' });
+                    : (photoProblem ? err.message : '分析失敗：' + err.message),
+                    { type:'error', code: err.code || '' });
             }
         };
 
