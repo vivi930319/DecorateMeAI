@@ -135,7 +135,8 @@ def normalize_face_analysis(raw_result: dict[str, Any]) -> dict[str, Any]:
         "lipLab": deepcopy(raw.get("嘴唇_LAB")),
         "symmetry": deepcopy(raw.get("臉部對稱性")),
         "noseSide": None,
-        "sidePhotoUsed": skin.get("LAB來源") == "正面+側面平均",
+        # 側面照不再參與膚色，所以不能再從 LAB來源 反推。BASIC 沒有這個鍵，預設 False。
+        "sidePhotoUsed": bool(raw.get("側面照已使用")),
         "proStatus": deepcopy(raw.get("精細分析狀態")),
         "raw": raw,
     }

@@ -18,7 +18,7 @@ import face_feedback
 import face_corrections
 import basic_roi_shadow
 import pro_nose_side_model
-from Face_analyzer_BASIC import FaceAnalyzer, MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES, unusable_image_message
+from Face_analyzer_BASIC import FaceAnalyzer, MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES, fail_job
 from dev_server_utils import get_cors_origins, run_dev_server
 from image_safety import sanitize_upload
 
@@ -82,30 +82,19 @@ async def _read_image(file: UploadFile, label: str) -> bytes:
 
 def _analyze_side_supplementary(side_bytes: bytes) -> dict | None:
     """
-    對側面照做輔助分析：膚色、對稱性確認，以及側臉鼻型分類。
+    對側面照做輔助分析：側臉鼻型分類。
     使用 strict_angle=False 跳過正面角度驗證。
     失敗時靜默回傳 None，不中斷主流程。
+
+    這裡刻意**不算膚色**。側面照的頰部 ROI 是 FaceMesh 在透視壓縮下給的，遠側臉頰
+    更是整塊腦補出來的，可信度判定在上面量不到東西——實測 120 張側面照，MAD 中位數
+    只有 2.75（正面 5.88），被判不可信的比例 3%（正面 8%）。也就是說這個訊號在側面照
+    上比正面還寬鬆，而側面照恰恰是從沒做過遮擋檢查的那一半。與其用一個量不準的閘門
+    去擋，不如不要把側面照混進膚色。
     """
     try:
         analyzer = FaceAnalyzer(side_bytes, strict_angle=False, require_insight=False)
-        lip_L, lip_a, lip_b, season, shade_label, L, a, b = analyzer.get_skin_color()
-        result = {
-            "膚色": {
-                "四季型": season,
-                "膚色分級": shade_label,
-                "LAB": {
-                    "L": float(round(L, 2)),
-                    "a": float(round(a, 2)),
-                    "b": float(round(b, 2)),
-                },
-                # 側面照的可信度一定要帶出去。_merge_basic_and_pro 靠它判斷平均後的 LAB
-                # 能不能信；先前這裡沒放，那邊讀到的永遠是 {}，於是 side_ok 恆為 False，
-                # **每一次帶側面照的 PRO 分析都被標成不可信**——等於關掉了所有 PRO 使用者
-                # 的粉底 ΔE 比色，而那正是規格書說 reliable:false 時不可做的事。
-                "可信度": getattr(analyzer, "skin_reliability",
-                                  {"measured": False, "reliable": True, "hint": ""}),
-            },
-        }
+        result = {}
 
         # 側臉鼻型（2026-07-31 接上）。餵整張圖，不做 landmark 裁切——
         # 側臉 FaceMesh 只認得 73.5%，而且失敗率依類別偏斜（塌鼻 60.4%、翹鼻 93.4%），
@@ -126,41 +115,21 @@ def _merge_basic_and_pro(front_result: dict, side_result: dict | None = None) ->
     result["分析版本"] = "PRO"
 
     side_available = side_result is not None
+    # 明講「有沒有用到側面照」，不要讓下游再從 LAB來源 的字串反推——膚色不再雙角度平均
+    # 之後那個字串永遠是「正面照」，但側面照其實有在用（側臉鼻型）。
+    result["側面照已使用"] = side_available
 
-    # 側面照膚色成功分析時，與正面取平均以減少光線誤差
+    # 膚色一律只採正面照，側面照不參與。
+    #
+    # 先前是把兩張的 LAB 平均（「減少光線誤差」），但那個效益從未被量化，代價卻是明確的：
+    # 平均後有一半的訊號來自從未做過遮擋檢查的側面照，而正面照的可信度旗標只對正面
+    # 那一半有效。想在側面照上補一個同樣的閘門也不可行——頰部 ROI 在側臉是透視壓縮
+    # 加腦補出來的，實測 MAD 中位數 2.75、只有 3% 被判不可信，比正面（5.88／8%）還寬鬆，
+    # 等於在最沒把握的那半邊裝了一個最鬆的閘門。
+    #
+    # 所以移除污染源而不是想辦法擋它：膚色沿用正面照的 LAB 與可信度，兩者本來就是
+    # 一起校準的。側面照仍然貢獻側臉鼻型。
     if side_available:
-        fs = front_result.get("膚色", {})
-        ss = side_result.get("膚色", {})
-        fl = fs.get("LAB", {})
-        sl = ss.get("LAB", {})
-        if fl and sl and all(k in fl and k in sl for k in ("L", "a", "b")):
-            avg_lab = {
-                "L": round((fl["L"] + sl["L"]) / 2, 2),
-                "a": round((fl["a"] + sl["a"]) / 2, 2),
-                "b": round((fl["b"] + sl["b"]) / 2, 2),
-            }
-            # 可信度要合併，不能直接沿用正面那張的。
-            #
-            # `{**fs, ...}` 會把正面照算出來的 可信度 原樣帶到一個「一半來自側面照」的
-            # LAB 上，而側面照從來沒做過遮擋檢查——正面乾淨、側面被頭髮蓋住時，平均值
-            # 已經被污染，旗標卻還說可信。兩張都判定可信才算可信；側面沒量過（measured
-            # 為 False）就不能替它背書，一律降為不可信並說明原因。
-            front_rel = fs.get("可信度") or {}
-            side_rel = ss.get("可信度") or {}
-            side_ok = bool(side_rel.get("measured")) and side_rel.get("reliable") is not False
-            if front_rel.get("reliable") is not False and not side_ok:
-                merged_rel = {
-                    **front_rel,
-                    "reliable": False,
-                    "hint": "側面照的膚色取樣未經遮擋檢查，這個平均值請當作參考；"
-                            "想要準確的膚色請確認兩張照片都沒有頭髮或陰影蓋住臉頰。",
-                }
-            elif front_rel.get("reliable") is False:
-                merged_rel = front_rel
-            else:
-                merged_rel = {**front_rel, "reliable": True}
-            result["膚色"] = {**fs, "LAB": avg_lab, "LAB來源": "正面+側面平均", "可信度": merged_rel}
-
         # 側臉模型的輸出屬於 PRO 結果的一部分，不能只停留在 side_result。
         # 保留完整物件（label／confidence／classes／caveat），讓前端既能顯示答案，
         # 也能誠實呈現目前驗證樣本較少的限制。
@@ -172,7 +141,7 @@ def _merge_basic_and_pro(front_result: dict, side_result: dict | None = None) ->
 
     has_symmetry = bool(front_result.get("臉部對稱性"))
     result["精細分析狀態"] = {
-        "多角度照片": "已接收，膚色已雙角度平均" if side_available else "未提供側面照",
+        "多角度照片": "已接收，用於側臉鼻型（膚色僅採正面照）" if side_available else "未提供側面照",
         "臉部對稱性": "已計算" if has_symmetry else "無法計算",
         "鼻型精細分類": (
             "已完成側臉鼻型分類（僅供參考）"
@@ -182,8 +151,8 @@ def _merge_basic_and_pro(front_result: dict, side_result: dict | None = None) ->
     }
     result["精細分析備註"] = (
         "PRO 流程採正面照 + 單側側面照。"
-        "側面照用於膚色雙角度平均與側臉鼻型輔助分類；"
-        "側臉鼻型資料量仍有限，結果會附可信度與限制說明。"
+        "膚色只採正面照（側面照的頰部取樣無法做遮擋檢查）；"
+        "側面照用於側臉鼻型輔助分類，資料量仍有限，結果會附可信度與限制說明。"
     )
     return result
 
@@ -290,36 +259,13 @@ def _run_pro_job(job_id, front_bytes, angle_bytes, owner_id=None):
         job_store.patch_if_status(_COL, job_id, {"processing"}, {"stage": "side_analysis", "progress": 65, "updatedAt": _now_iso()})
         side_bytes = angle_bytes.get("side")
         side_result = _analyze_side_supplementary(side_bytes) if side_bytes else None
-    except ValueError as exc:
+    except Exception as exc:
         # 與 BASIC 的 _run_basic_job 同一個理由：FaceAnalyzer 對「這張照片本身有問題」一律
         # raise ValueError，訊息就是要給使用者看的可行動指引（pose_guidance 的「請把頭轉向
         # 你的右邊」、「沒偵測到人臉」、「膚色區域不足」）。PRO 用的是同一個 FaceAnalyzer、
         # 同樣 strict_angle=True，先前卻只有 BASIC 把訊息傳出去，PRO 這邊照舊吞掉——
         # 同一張斜臉走 BASIC 會被告知怎麼喬，走 PRO 只會拿到「請稍後再試」。
-        hint = unusable_image_message(exc)
-        if hint is None:
-            # 同 BASIC：內部錯誤不能偽裝成重拍建議，要留 traceback。
-            logging.exception("PRO 臉部分析 job 失敗 job_id=%s", job_id)
-            job_store.patch_if_status(_COL, job_id, {"processing"}, {
-                "status": "failed", "stage": "failed",
-                "completedAt": _now_iso(), "updatedAt": _now_iso(),
-                "error": {"code": "FACE_ANALYSIS_ERROR", "message": "臉部分析失敗，請稍後再試", "retryable": True},
-            })
-            return
-        logging.info("PRO 臉部分析 job 因照片問題中止 job_id=%s: %s", job_id, hint)
-        job_store.patch_if_status(_COL, job_id, {"processing"}, {
-            "status": "failed", "stage": "unusable_image",
-            "completedAt": _now_iso(), "updatedAt": _now_iso(),
-            "error": {"code": "FACE_IMAGE_UNUSABLE", "message": hint, "retryable": True},
-        })
-        return
-    except Exception:
-        logging.exception("PRO 臉部分析 job 失敗 job_id=%s", job_id)
-        job_store.patch_if_status(_COL, job_id, {"processing"}, {
-            "status": "failed", "stage": "failed",
-            "completedAt": _now_iso(), "updatedAt": _now_iso(),
-            "error": {"code": "FACE_ANALYSIS_ERROR", "message": "臉部分析失敗，請稍後再試", "retryable": True},
-        })
+        fail_job(_COL, job_id, exc, log_label="PRO 臉部分析")
         return
 
     try:
