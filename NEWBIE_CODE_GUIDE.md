@@ -447,6 +447,15 @@ result = analyzer.export_json()
 
 這類檔案通常是開發過程中用來確認資料格式是否正確。
 
+## 膚色取樣的驗證腳本：tools/
+
+`tools/` 底下大多是訓練與實驗用的一次性腳本，不影響線上服務，這裡不逐支說明。但有兩支跟膚色取樣綁在一起，改動 `Face_analyzer_BASIC` 的膚色相關常數前應該先跑過：
+
+- `tools/measure_hair_contamination.py`：把每張照片自己的頭髮移植到臉頰，量測膚色 LAB 被污染多少。`SKIN_TEXTURE_STD_MAX` 與 `SKIN_SPREAD_UNRELIABLE` 註解裡引用的數字就出自這支。
+- `tools/verify_season_unaffected.py`：確認紋理過濾沒有順手改掉四季型。紋理過濾在剔除高變異像素，而季型的 clear 判定正好也吃變異量，兩者共用遮罩會讓季型被靜默改掉。這支比對「有過濾」與「未過濾」的季型，應為全數一致。
+
+兩支都要有測試照片資料集才能跑，路徑寫在各自檔案開頭的 `DATASET`。
+
 ## Dockerfile
 
 `Dockerfile` 是用來把後端服務包成 Docker image 的設定。
