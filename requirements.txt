@@ -12,5 +12,8 @@ Pillow
 tqdm
 pandas
 google-cloud-firestore
+# 使用者同意提供的五官裁切要寫進 GCS（face_contributions）。
+# google.cloud 是命名空間套件——裝了 firestore 不代表有 storage。
+google-cloud-storage
 scikit-learn
 joblib

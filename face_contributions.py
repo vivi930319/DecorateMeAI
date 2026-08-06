@@ -31,6 +31,8 @@
 每筆都記 `face_roi.specs_version()`，之後才分得出哪些是舊規格。
 混用而不自知，就是 identity_map 那種靜默失效。
 """
+import base64
+import binascii
 import io
 import json
 import logging
@@ -51,6 +53,41 @@ PREFIX = os.getenv("FACE_CONTRIB_PREFIX", "user_contributed")
 ENABLED = os.getenv("FACE_CONTRIB_ENABLED", "0") == "1"
 
 _MAX_IMAGE_BYTES = 12 * 1024 * 1024
+
+
+
+def data_url_to_image_bytes(data_url: str) -> bytes:
+    """把 data URL 拆成驗過、去掉 EXIF 的影像位元組。
+
+    刻意不 import replicate_render 的同名函式——那是渲染服務的模組，不在 face 映像裡。
+    第一版就是這樣寫的，本機測全過（檔案都在磁碟上），部署後直接 ModuleNotFoundError，
+    而且因為失敗被吞掉，只有翻 Cloud Run 日誌才看得出來。三份白名單那條註解講的
+    就是這種錯：本機跟映像的可見範圍不一樣。
+
+    驗證沿用 `image_safety`（face 映像本來就有）：magic bytes 白名單、偽 MIME、
+    解壓縮炸彈、移除中繼資料。這條路徑吃的是使用者上傳的影像，驗證不能省——
+    而且我們要存下來，EXIF 裡的拍攝地點與機身序號更不該留著。
+    """
+    from image_safety import ImageRejected, sanitize_image_bytes
+
+    if not data_url.startswith("data:") or ";base64," not in data_url:
+        raise ValueError("需要 base64 data URL")
+    header, encoded = data_url.split(",", 1)
+    content_type = (header[5:].split(";", 1)[0] or "image/png").lower()
+    if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise ValueError("只接受 JPEG／PNG／WebP")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("data URL 的 base64 不合法") from exc
+    try:
+        cleaned, detected = sanitize_image_bytes(
+            raw, max_bytes=_MAX_IMAGE_BYTES, label="貢獻樣本")
+    except ImageRejected as exc:
+        raise ValueError(exc.detail["error"]["message"]) from exc
+    if detected != content_type:
+        raise ValueError("宣告的格式與實際內容不符")
+    return cleaned
 
 
 def _client():

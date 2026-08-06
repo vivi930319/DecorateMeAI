@@ -155,9 +155,9 @@ def _store_contribution(mode: str, job_id: str, payload: dict, corrections: dict
     if not data_url:
         return
     try:
-        from replicate_render import data_url_to_bytes
-
-        image_bytes = data_url_to_bytes(data_url)
+        # 用 face_contributions 自己那支，不要 import replicate_render——
+        # 那是渲染服務的模組，face 映像裡沒有（部署後才會發現）。
+        image_bytes = face_contributions.data_url_to_image_bytes(data_url)
     except Exception:
         logging.exception("貢獻樣本解析影像失敗 job_id=%s", job_id)
         return

@@ -263,5 +263,73 @@ class MemberDeletionRouteTest(unittest.TestCase):
         self.assertEqual(self.deleted, ["actor_someone"])
 
 
+class ImageOnlyDependsOnModulesInTheFaceImageTest(unittest.TestCase):
+    """貢獻路徑只能用 face 映像裡有的模組。
+
+    第一版從 replicate_render import data_url_to_bytes。本機測全過——磁碟上檔案都在——
+    但那是渲染服務的模組，Dockerfile 沒有 COPY 它，部署後直接 ModuleNotFoundError，
+    而且失敗被吞掉，只有翻 Cloud Run 日誌才看得出來。
+
+    這個測試讀 Dockerfile 的 COPY 清單，確保貢獻路徑不會再依賴映像外的東西。
+    """
+
+    def _copied_modules(self):
+        text = Path(__file__).resolve().parent.joinpath("Dockerfile").read_text(encoding="utf-8")
+        names = set()
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("COPY ") and line.endswith(" ."):
+                target = line[5:-2].strip()
+                if target.endswith(".py"):
+                    names.add(target[:-3])
+        return names
+
+    def test_face_contributions_imports_are_available_in_the_image(self):
+        import ast
+
+        source = Path(__file__).resolve().parent.joinpath("face_contributions.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module.split(".")[0])
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported.add(alias.name.split(".")[0])
+
+        stdlib = {
+            "base64", "binascii", "io", "json", "logging", "os", "datetime",
+        }
+        third_party = {"cv2": "opencv", "numpy": "numpy", "google": "google-cloud"}
+        local = imported - stdlib - set(third_party)
+        copied = self._copied_modules()
+        missing = {m for m in local if m not in copied}
+        self.assertEqual(missing, set(),
+                         f"這些模組 face 映像裡沒有，部署後會 ModuleNotFoundError：{missing}")
+
+    def test_google_cloud_subpackages_are_in_requirements(self):
+        """`from google.cloud import X` 的 X 要真的裝在 face 映像裡。
+
+        google.cloud 是命名空間套件——firestore 有裝不代表 storage 也有。
+        第一版就是這樣：import google.cloud.storage 在本機成功（venv 裝了兩個），
+        映像裡只有 firestore，於是 ImportError，而且一樣被吞掉。
+        """
+        import re
+
+        source = Path(__file__).resolve().parent.joinpath("face_contributions.py").read_text(encoding="utf-8")
+        used = set(re.findall(r"from google\.cloud import (\w+)", source))
+        reqs = Path(__file__).resolve().parent.joinpath("requirements.txt").read_text(encoding="utf-8").lower()
+        missing = {name for name in used if f"google-cloud-{name}" not in reqs}
+        self.assertEqual(missing, set(),
+                         f"requirements.txt 缺 google-cloud-{{{'、'.join(sorted(missing))}}}，"
+                         f"face 映像會 ImportError")
+
+    def test_data_url_parser_lives_here_not_in_the_render_service(self):
+        """明確擋掉退回去 import replicate_render 的改法。"""
+        source = Path(__file__).resolve().parent.joinpath("face_feedback.py").read_text(encoding="utf-8")
+        self.assertNotIn("from replicate_render import", source,
+                         "replicate_render 不在 face 映像裡，改用 face_contributions 那支")
+
+
 if __name__ == "__main__":
     unittest.main()
