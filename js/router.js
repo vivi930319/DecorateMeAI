@@ -621,12 +621,14 @@ function renderAnalysisFeedback(result, packageId) {
     }
   });
 
+  let allowTraining = false;
+
   const draw = () => {
     box.innerHTML = `
       <div class="af-head">
         <b>這些判斷準嗎？</b>
         <p>覺得哪一項不對就改掉，其餘視為正確。你的修正會<strong>立刻套用</strong>到這次的妝容建議與收藏，
-           並回報給分析模型作為訓練資料；<strong>這一步不會上傳你的照片</strong>，只送出判斷結果與你的修正。</p>
+           並回報給分析模型作為訓練資料；<strong>預設只送出判斷結果與你的修正，不會上傳你的照片</strong>。</p>
       </div>
       <div class="af-rows">${fields.map(field => {
         const chosen = corrections[field];
@@ -643,6 +645,15 @@ function renderAnalysisFeedback(result, packageId) {
           </select>
         </div>`;
       }).join('')}</div>
+      ${Object.keys(corrections).length ? `
+      <div class="af-consent">
+        <label>
+          <input type="checkbox" id="afAllowTraining"${allowTraining ? ' checked' : ''}>
+          <span>同意提供這次修正部位的<strong>局部裁切</strong>協助改善模型</span>
+        </label>
+        <p class="af-consent-note">只會上傳你改過的那幾個部位的小圖（例如眼睛、鼻子那一小塊），
+           <strong>不是完整照片</strong>；僅用於模型訓練，刪除帳號時一併移除。不勾選也能送出修正。</p>
+      </div>` : ''}
       <div class="af-foot">
         <button class="btn-gold btn-sm" id="afSubmit">送出回饋</button>
         <span class="af-note" id="afNote">${saved ? '已送出，可再修改' : ''}</span>
@@ -657,6 +668,8 @@ function renderAnalysisFeedback(result, packageId) {
         draw();
       };
     });
+    const consent = document.getElementById('afAllowTraining');
+    if (consent) consent.onchange = () => { allowTraining = consent.checked; };
     const submit = document.getElementById('afSubmit');
     if (submit) submit.onclick = () => {
       AnalysisFeedback.save(packageId, predicted, corrections);
@@ -670,7 +683,13 @@ function renderAnalysisFeedback(result, packageId) {
               resultToken: Router.analysisPackage?.async?.resultToken,
               packageId,
               predicted,
-              corrections
+              corrections,
+              allowTrainingUse: allowTraining,
+              // 只有勾選時才取照片。沒勾選就連讀都不讀，照片不會離開這個瀏覽器。
+              imageDataUrl: allowTraining
+                  ? (Router.analysisPackage?.images?.front?.compressedDataUrl
+                     || Router.analysisPackage?.images?.front?.dataUrl || '')
+                  : ''
           }).catch(() => {});
       }
       const changed = Object.keys(corrections).length;

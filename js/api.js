@@ -536,7 +536,10 @@ const Api = {
 
     // 將五官修正回傳給分析服務，作為後續模型改善資料。
     // 回傳失敗不影響本次建議與收藏；confirmed 表示使用者是否接受原判斷。
-    async sendAnalysisFeedback({ mode, jobId, resultToken, packageId, predicted, corrections }) {
+    // allowTrainingUse 為 true 時才會帶 imageDataUrl。預設不帶——「沒同意就不上傳照片」
+    // 是靠這裡結構性保證的，不是靠後端自律：沒勾選，照片根本不會離開瀏覽器。
+    async sendAnalysisFeedback({ mode, jobId, resultToken, packageId, predicted, corrections,
+                                 allowTrainingUse = false, imageDataUrl = '' }) {
         if (!jobId) return { ok: false, reason: 'no-job' };
         const service = mode === 'pro' ? 'facePro' : 'faceBasic';
         const fixes = corrections || {};
@@ -549,7 +552,12 @@ const Api = {
                     packageId: packageId || null,
                     predicted: predicted || {},
                     corrections: fixes,
-                    confirmed: Object.keys(fixes).length === 0
+                    confirmed: Object.keys(fixes).length === 0,
+                    // 只有「明確同意」且「真的有修正」時才送照片。沒有修正就沒有值得
+                    // 保存的樣本，送了也只是白白多傳一次臉部資料。
+                    ...(allowTrainingUse && imageDataUrl && Object.keys(fixes).length
+                        ? { allowTrainingUse: true, imageDataUrl }
+                        : {})
                 })
             });
             return { ok: res.ok, status: res.status };

@@ -110,6 +110,40 @@ async function jobFailingWith(error) {
   check('router 有把 code 傳給 showAlert',
     /showAlert\([\s\S]{0,400}?code: err\.code/.test(routerSource), true);
 
+  console.log('\n-- 同意才上傳照片（介面對使用者的承諾）--');
+  let captured = null;
+  sandbox.Api._protectedFetch = async (url, opts) => {
+    captured = JSON.parse(opts.body);
+    return { ok: true, status: 204 };
+  };
+  const base = {
+    mode: 'basic', jobId: 'j9', resultToken: 't', packageId: 'AN-1',
+    predicted: { '眼型': '鳳眼' }, corrections: { '眼型': '圓眼' },
+    imageDataUrl: 'data:image/png;base64,AAAA'
+  };
+
+  await sandbox.Api.sendAnalysisFeedback({ ...base });
+  check('未同意時不帶 imageDataUrl', 'imageDataUrl' in captured, false);
+  check('未同意時不帶 allowTrainingUse', 'allowTrainingUse' in captured, false);
+  check('但修正本身照樣送出', captured.corrections, { '眼型': '圓眼' });
+
+  await sandbox.Api.sendAnalysisFeedback({ ...base, allowTrainingUse: true });
+  check('同意時才帶照片', captured.imageDataUrl, base.imageDataUrl);
+  check('同意時帶 allowTrainingUse', captured.allowTrainingUse, true);
+
+  await sandbox.Api.sendAnalysisFeedback({ ...base, allowTrainingUse: true, corrections: {} });
+  check('沒有修正就不送照片（沒有樣本可存）', 'imageDataUrl' in captured, false);
+
+  await sandbox.Api.sendAnalysisFeedback({ ...base, allowTrainingUse: true, imageDataUrl: '' });
+  check('同意但沒有照片時不亂送', 'imageDataUrl' in captured, false);
+
+  console.log('\n-- 介面文案不能宣稱絕不上傳（那樣勾選就變成謊話）--');
+  check('文案改成講明預設行為',
+    routerSource.includes('預設只送出判斷結果與你的修正，不會上傳你的照片'), true);
+  check('舊的絕對承諾已移除',
+    routerSource.includes('<strong>這一步不會上傳你的照片</strong>'), false);
+  check('勾選預設不打勾', /let allowTraining = false;/.test(routerSource), true);
+
   console.log('');
   console.log('='.repeat(62));
   if (failures.length) {
