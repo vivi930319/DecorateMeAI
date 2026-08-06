@@ -32,12 +32,15 @@ $common = @(
     "--quiet"
 )
 
+# FACE_CONTRIB_ENABLED=1：開啟「使用者同意提供的五官裁切」保存（見 face_contributions）。
+# 這條路徑會保存臉部資料，所以刻意做成部署時明確開啟，程式碼上線不等於功能生效。
+# 要關掉就把值改成 0 重新部署——不要只改程式碼，那樣舊修訂版還在跑。
 Write-Host "Deploying face-basic..."
-& gcloud.cmd run deploy face-basic @common --update-env-vars "SERVICE_NAME=basic,ROI_MODEL_FIRST=1"
+& gcloud.cmd run deploy face-basic @common --update-env-vars "SERVICE_NAME=basic,ROI_MODEL_FIRST=1,FACE_CONTRIB_ENABLED=1"
 if ($LASTEXITCODE -ne 0) { throw "face-basic deployment failed" }
 
 Write-Host "Deploying face-pro..."
-& gcloud.cmd run deploy face-pro @common --update-env-vars "SERVICE_NAME=pro,ROI_MODEL_FIRST=1,PRO_NOSE_SIDE_ENABLED=1"
+& gcloud.cmd run deploy face-pro @common --update-env-vars "SERVICE_NAME=pro,ROI_MODEL_FIRST=1,PRO_NOSE_SIDE_ENABLED=1,FACE_CONTRIB_ENABLED=1"
 if ($LASTEXITCODE -ne 0) { throw "face-pro deployment failed" }
 
 foreach ($service in @("face-basic", "face-pro")) {
