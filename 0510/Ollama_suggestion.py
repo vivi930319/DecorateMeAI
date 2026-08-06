@@ -17,7 +17,7 @@ import uvicorn
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("ollama-suggestion")
 
-app = FastAPI(title="Ollama 妝容真實個人化修飾服務", version="2026-07-31-Japanese-Heavy-Eyelash-Fix")
+app = FastAPI(title="Ollama 妝容真實個人化修飾服務", version="2026-08-06-Syntax-Fix")
 
 app.add_middleware(
     CORSMiddleware,
@@ -87,7 +87,6 @@ def sign_render_prompt(render_prompt_en: str) -> Optional[str]:
     ).hexdigest()
 
 def build_luxury_rich_girl_prompt() -> str:
-    """ 千金妝精細控制鏈 """
     prompt = (
         "Apply a luxurious elegant makeup look to the face, as a photorealistic makeup-only retouch of the original photo.\n\n"
         "Eyes: highly visible, bold and significantly thickened jet-black eyeliner that dynamically extends straight and long past the outer corner of the eyes with a subtle elegant lift, "
@@ -102,7 +101,6 @@ def build_luxury_rich_girl_prompt() -> str:
     return prompt
 
 def build_hong_kong_glam_prompt() -> str:
-    """ 港風妝精細控制鏈 """
     prompt = (
         "Apply a classic 1990s Hong Kong cinema glam makeup look to the face, as a photorealistic makeup-only retouch of the original photo.\n\n"
         "Face: ultra-clean, flawless matte velvet skin texture with smooth porcelain clarity and zero unwanted shine, softly carved with sophisticated warm dark brown contouring along the nose bridge, cheekbones, and jawline, subtle warm terracotta blush seamlessly diffused into the cheek contours.\n\n"
@@ -113,7 +111,6 @@ def build_hong_kong_glam_prompt() -> str:
     return prompt
 
 def build_korean_abg_prompt() -> str:
-    """ 韓系亞裔妝控制鏈 """
     prompt = (
         "Apply a trendy Korean Asian Baby Girl (ABG) instagram-style makeup look to the face, as a photorealistic makeup-only retouch of the original photo.\n\n"
         "Brows: sharply arched and lifted dark brown eyebrows with voluminous, feathery hair-like strokes highlighting high brow bones.\n\n"
@@ -127,7 +124,6 @@ def build_korean_abg_prompt() -> str:
     return prompt
 
 def build_men_clean_water_prompt() -> str:
-    """ 男士白開水妝控制鏈 """
     prompt = (
         "Apply a ultra-clean no-makeup natural groom look for men to the face, as a photorealistic natural retouch of the original photo.\n\n"
         "Face: ultra-clean, flawless natural matte masculine skin texture with refined smoothness, zero unwanted shine, subtle healthy skin glow, and microscopic skin detail; delicate, invisible contouring along the nose bridge and jawline for structural masculine depth.\n\n"
@@ -138,7 +134,6 @@ def build_men_clean_water_prompt() -> str:
     return prompt
 
 def build_sick_cute_yandere_prompt() -> str:
-    """ 病嬌妝控制鏈 """
     prompt = (
         "Apply a subtle sick-cute yandere e-girl style makeup look to the face, as a photorealistic makeup-only retouch of the original photo.\n\n"
         "Eyes: a prominent, continuous jet-black full-encircling eyeliner precisely tightlining both upper lash line and lower waterline, "
@@ -152,13 +147,6 @@ def build_sick_cute_yandere_prompt() -> str:
     return prompt
 
 def build_japanese_translucent_prompt() -> str:
-    """
-    日雜清透妝（強效醒目眼妝 ＋ 重磅 Igari 潮紅腮紅 ＋ 潤澤裸粉唇）重構控制鏈：
-    1. 強制顯眼黑眼線與太陽花睫毛：清晰的黑色內外眼线、極致卷翹長的太陽花束感睫毛，強制模型把眼睛描繪清楚，擺脫素顏感。
-    2. 澎潤閃亮臥蠶：高對比香檳金珍珠光澤爆閃點亮眼頭與臥蠶。
-    3. 重磅 Igari 潮紅腮紅：鮮豔草莓蜜桃粉腮紅，橫跨眼下、蘋果肌與鼻尖大面積暈染。
-    4. 高光水光奶油肌與草莓裸粉唇：晶瑩透明的水光玻璃唇釉，全臉水光折射。
-    """
     prompt = (
         "Apply a Japanese magazine model beauty style makeup look to the face, as a photorealistic makeup-only retouch of the original photo.\n\n"
         "Eyes: defined, highly visible jet-black upper eyeliner extending slightly at the outer corners, long, dramatically curled, and sharply separated spiky mascaraed eyelashes defining both lash lines, bright crystalline champagne shimmer strongly illuminating the inner corners and plump three-dimensional aegyosal (charming fat), soft peach-coral eyeshadow shading the eye sockets.\n\n"
@@ -251,28 +239,79 @@ async def extract_image_features_with_llava(base64_image_url: str) -> str:
         return res.json().get("response", "").strip()
 
 def build_gemma3_prompts(face_analysis: dict, style: str, user_note: Optional[str], vision_feedback: str) -> Tuple[str, str]:
-    f_shape = face_analysis.get('臉型', '未提供')
-    b_shape = face_analysis.get('眉型', '未提供')
-    e_shape = face_analysis.get('眼型', '未提供')
-    n_front = face_analysis.get('鼻型', '未提供')
-    l_shape = face_analysis.get('嘴型', '未提供') or "標準比例唇（偏向柔和輪廓）"
+    def is_valid_value(val: Any) -> bool:
+        if not val:
+            return False
+        val_str = str(val).strip()
+        return val_str not in {"", "未提供", "None", "null", "undefined"}
 
-    skin_obj = face_analysis.get('膚色', {})
+    f_shape = face_analysis.get('臉型') if is_valid_value(face_analysis.get('臉型')) else None
+    b_shape = face_analysis.get('眉型') if is_valid_value(face_analysis.get('眉型')) else None
+    e_shape = face_analysis.get('眼型') if is_valid_value(face_analysis.get('眼型')) else None
+    n_front = face_analysis.get('鼻型') if is_valid_value(face_analysis.get('鼻型')) else None
+    l_shape = face_analysis.get('嘴型') if is_valid_value(face_analysis.get('嘴型')) else None
+
+    s_season, s_level = None, None
+    skin_obj = face_analysis.get('膚色')
     if isinstance(skin_obj, dict):
-        s_season = skin_obj.get('四季型', '未提供')
-        s_level = skin_obj.get('膚色分級', '未提供')
+        if is_valid_value(skin_obj.get('四季型')):
+            s_season = str(skin_obj.get('四季型')).strip()
+        if is_valid_value(skin_obj.get('膚色分級')):
+            s_level = str(skin_obj.get('膚色分級')).strip()
+    elif is_valid_value(skin_obj):
+        s_season = str(skin_obj).strip()
+
+    features_zh_list = []
+    if f_shape:
+        features_zh_list.append(f"- 臉型：{f_shape}")
+    if b_shape:
+        features_zh_list.append(f"- 眉型：{b_shape}")
+    if e_shape:
+        features_zh_list.append(f"- 眼型：{e_shape}")
+    if n_front:
+        features_zh_list.append(f"- 鼻型：{n_front}")
+    if l_shape:
+        features_zh_list.append(f"- 唇型：{l_shape}")
+    if s_season:
+        features_zh_list.append(f"- 膚色季型：{s_season}")
+    if s_level:
+        features_zh_list.append(f"- 膚色級別：{s_level}")
+
+    detected_features_text = "\n".join(features_zh_list) if features_zh_list else "- 未提供特定五官結構 JSON，請完全依據 AI 視覺相片提取細節做總體修飾建議。"
+
+    dynamic_instructions = []
+    if f_shape or n_front:
+        target_parts = []
+        if f_shape: target_parts.append(f"【{f_shape}】")
+        if n_front: target_parts.append(f"【{n_front}】")
+        parts_str = "與".join(target_parts)
+        dynamic_instructions.append(f"1. 底妝建議：針對寶寶天生的{parts_str}設計，說明如何利用高光與陰影重塑輪廓流暢度並拔高鼻樑。")
     else:
-        s_season = '暖色調'
-        s_level = str(skin_obj)
+        dynamic_instructions.append("1. 底妝建議：根據當前風格與相片光影，提供打造清透立體底妝的操作步驟。")
+
+    if e_shape or b_shape:
+        target_parts = []
+        if e_shape: target_parts.append(f"【{e_shape}】")
+        if b_shape: target_parts.append(f"【{b_shape}】")
+        parts_str = "與".join(target_parts)
+        dynamic_instructions.append(f"2. 眉眼妝建議：針對寶寶天生的{parts_str}，詳細指導如何利用眼影暈染、眼線延伸與臥蠶刻畫重塑眼型限制。")
+    else:
+        dynamic_instructions.append("2. 眉眼妝建議：根據指定風格，詳細指導眼影暈染邊界、眼線延伸與臥蠶刻畫手法。")
+
+    dynamic_instructions.append("3. 腮紅修容：說明腮紅與修容的位置擺放。")
+
+    if l_shape:
+        dynamic_instructions.append(f"4. 唇妝建議：針對寶寶天生的【{l_shape}】，詳細說明如何利用唇線模糊與擴唇手法優化唇形。")
+    else:
+        dynamic_instructions.append("4. 唇妝建議：說明如何打造符合目標風格的立體唇妝。")
+
+    instructions_str = "\n".join(dynamic_instructions)
 
     system_prompt_zh = (
-        "你是明星御用高端彩妝顧問。你的任務是結合寶寶的原生五官數據與指定妝容風格，產生繁體中文客製化修容與彩妝手法建議，並搭配推薦具體開架商品（給寶寶看）。\n\n"
+        "你是明星御用高端彩妝顧問。你的任務是結合寶寶有偵測到的原生五官數據與指定妝容風格，產生繁體中文客製化修容與彩妝手法建議，並搭配推薦具體開架商品（給寶寶看）。\n\n"
         "【核心任務：視覺骨相微調與整形修飾】\n"
-        "妳的建議必須死死咬住寶寶原生的五官結構進行針對性『視覺骨相微調與整形修飾』！\n"
-        f"1. 底妝建議：必須針對寶寶天生的【{f_shape}】與【{n_front}】設計。說明如何利用高光與立體陰影交錯，在視覺上重塑天生【{f_shape}】的輪廓線條，達到向內收縮 or 流暢臉型的骨相改變，並讓【{n_front}】在視覺上骨幹拔高。\n"
-        f"2. 眉眼妝建議：必須針對寶寶天生的【{e_shape}】與【{b_shape}】。詳細指導如何利用眼影暈染邊界、眼線延伸、倒影與臥蠶刻畫，在視覺上『徹底重塑並改變』原本的【{e_shape}】限制，達到眼型放大、下至 or 微整形矯正的視覺震撼效果。\n"
-        f"3. 腮紅修容：必須說明腮紅與修容的位置擺放。\n"
-        f"4. 唇妝建議：必須針對寶寶天生的【{l_shape}】。詳細說明如何利用唇線模糊與擴唇手法，在視覺上重塑並優化【{l_shape}】的厚薄比例與嘴角弧度，打造微翹的嘟嘟唇妝效。\n\n"
+        "妳的建議必須針對寶寶有提供的五官數據與相片細節進行微調！未提到的五官部位請直接給予通用風格建議，絕不要印出『未提供』字樣！\n"
+        f"{instructions_str}\n\n"
         "妳的輸出必須嚴格分為以下七個段落，標題獨立佔一行，不加 any Markdown 符號：\n"
         "1. 整體妝容方向\n"
         "2. 底妝建議\n"
@@ -287,7 +326,7 @@ def build_gemma3_prompts(face_analysis: dict, style: str, user_note: Optional[st
         "3. 全文嚴禁使用 any Markdown 符號（如 *、#、** 等），一律使用純文字輸出。"
     )
 
-    user_prompt_zh = f"【當前寶寶真實特徵與需求數據】\n- 目標妝容風格：{style}\n- 使用者偏好與備註：{user_note if user_note else '無特別要求'}\n- 臉型：{f_shape}\n- 眉型：{b_shape}\n- eye型：{e_shape}\n- 正面鼻型：{n_front}\n- 唇型：{l_shape}\n- 膚色季型：{s_season}\n- 膚色級別：{s_level}\n\n【AI 視覺照片提取細節】\n{vision_feedback}\n\n請立刻執行最高排版鐵律，產生溫柔親切、富含具體操作步驟與推薦開架彩妝商品的七段純繁中建議。"
+    user_prompt_zh = f"【當前寶寶真實特徵與需求數據】\n- 目標妝容風格：{style}\n- 使用者偏好與備註：{user_note if user_note else '無特別要求'}\n{detected_features_text}\n\n【AI 視覺照片提取細節】\n{vision_feedback}\n\n請立刻執行最高排版鐵律，產生溫柔親切、富含具體操作步驟與推薦開架彩妝商品的七段純繁中建議。"
 
     return system_prompt_zh, user_prompt_zh
 
@@ -354,6 +393,7 @@ async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(Non
         sys_zh, usr_zh = build_gemma3_prompts(face_analysis, normalized_style, payload.userNote, vision_feedback)
         suggestion_part = await call_gemma3_generate(sys_zh, usr_zh)
 
+        # 清理可能夾帶的 Markdown 與程式碼標籤
         suggestion_part = suggestion_part.replace("```json", "").replace("```text", "").replace("```", "").strip()
         suggestion_part = suggestion_part.replace("*", "").replace("#", "")
 
@@ -382,7 +422,6 @@ async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(Non
         elif "病嬌" in normalized_style:
             flux_prompt_part = build_sick_cute_yandere_prompt()
         elif "日雜清透" in normalized_style:
-            # 🚀【日雜清透妝強效修復：強拉黑眼線、太陽花睫毛與大面積潮紅腮紅】
             flux_prompt_part = build_japanese_translucent_prompt()
         else:
             flux_prompt_part = f"high quality professional {normalized_style} makeup, flawless skin texture, natural soft diffused cosmetics rendering, seamlessly blended edges, highly realistic"
