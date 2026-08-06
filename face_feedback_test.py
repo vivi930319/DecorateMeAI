@@ -214,5 +214,54 @@ class RoiSpecsVersionTest(unittest.TestCase):
         self.assertEqual(face_roi.specs_version(), before, "改回來要復原，否則版本沒有意義")
 
 
+class MemberDeletionRouteTest(unittest.TestCase):
+    """會員刪除端點：本人或管理員才能刪，而且真的要刪得掉。
+
+    存得下卻刪不掉的臉部資料，比一開始就不存更糟——所以這條路徑的權限與行為
+    都要有測試守著。
+    """
+
+    def setUp(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        self.deleted = []
+        self._real = ff.face_contributions.delete_for_owner
+        ff.face_contributions.delete_for_owner = lambda owner: (self.deleted.append(owner) or 3)
+
+        app = FastAPI()
+        ff.register_route(app, mode="basic", jobs_collection="face_jobs_basic",
+                          verify_job_token=lambda *a, **k: None)
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        ff.face_contributions.delete_for_owner = self._real
+
+    def test_owner_can_delete_their_own(self):
+        r = self.client.delete("/v1/face/users/actor_me", headers={"X-User-ID": "actor_me"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["contributions"], 3, "要回報刪了幾筆，呼叫端才知道有沒有生效")
+        self.assertEqual(self.deleted, ["actor_me"])
+
+    def test_stranger_cannot_delete_someone_else(self):
+        r = self.client.delete("/v1/face/users/actor_victim",
+                               headers={"X-User-ID": "actor_attacker"})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(self.deleted, [], "被擋下時不能真的刪到任何東西")
+
+    def test_missing_identity_is_refused(self):
+        """沒帶身分不能通過——否則把標頭拿掉就繞過了。"""
+        r = self.client.delete("/v1/face/users/actor_victim")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(self.deleted, [])
+
+    def test_admin_may_delete_on_behalf(self):
+        """會員刪除是由後台流程觸發的，管理員要能代為執行。"""
+        r = self.client.delete("/v1/face/users/actor_someone",
+                               headers={"X-Admin-Request": "1"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.deleted, ["actor_someone"])
+
+
 if __name__ == "__main__":
     unittest.main()

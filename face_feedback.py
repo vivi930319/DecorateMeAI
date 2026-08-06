@@ -279,3 +279,31 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
                 status_code=400,
                 detail={"error": {"code": "INVALID_FEEDBACK", "message": str(exc)}},
             )
+
+    @app.delete("/v1/face/users/{owner_id}")
+    async def delete_member_face_data(  # noqa: ANN202
+        owner_id: str,
+        x_user_id: str | None = Header(default=None),
+        x_admin_request: str | None = Header(default=None),
+    ):
+        """刪除這個會員留在臉部服務的資料。會員刪除流程必須呼叫這一條。
+
+        目前只有一種：使用者同意提供的部位 ROI（見 face_contributions）。
+        分析用的照片本來就不保存，job 文件會自己過期，所以沒有別的要清。
+
+        鏡射 render 服務的 `DELETE /render/users/{owner_id}`：本人或管理員才能刪。
+        少了這條端點，那些 ROI 就變成刪不掉的臉部資料——存得下卻刪不掉，
+        比一開始就不存更糟。
+
+        回傳刪了幾筆。呼叫端據此判斷要不要重試，也讓稽核看得出實際影響範圍。
+        """
+        is_admin = str(x_admin_request or "").strip() == "1"
+        if not is_admin and str(x_user_id or "").strip() != owner_id:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": {"code": "FORBIDDEN",
+                                  "message": "只能刪除自己的資料"}},
+            )
+        removed = face_contributions.delete_for_owner(owner_id)
+        logging.info("刪除會員臉部貢獻樣本 owner=%s removed=%d", owner_id, removed)
+        return {"status": "deleted", "contributions": removed}
