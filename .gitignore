@@ -57,6 +57,8 @@
 # 上傳圖片的共用安全處理（分段讀取／magic bytes／EXIF 清除），四個服務共用
 !image_safety.py
 !image_safety_test.py
+# 五官修正回饋的測試：它產出的是訓練資料與線上信任分數的分母，兩邊都不能靜默壞掉。
+!face_feedback_test.py
 !replicate_render.py
 !replicate_render_api.py
 !requirements.render.txt

@@ -32,6 +32,11 @@ MODEL_DIR = Path(os.getenv("ROI_MODEL_DIR", "models/basic_features_roi"))
 
 FEEDBACK_COL = "face_feedback"
 
+# 線上準確率的量測用集合。跟 FEEDBACK_COL 分開，理由見 save() 的說明：
+# 那一個是**訓練資料**，只收模型答錯的；這一個是**評分紀錄**，答對答錯都收，
+# 但只存結果不存修正內容。混在一起的話，重訓時會被大量「模型答對了」淹沒。
+EVAL_COL = "face_eval_events"
+
 # 單筆修正最多五個部位，值就是類別字串。設上限是因為這是公開端點，
 # 沒有上限就等於讓人塞任意大小的 JSON 進資料庫。
 _MAX_FIELDS = len(PART_TO_FIELD)
@@ -95,6 +100,43 @@ def validate(corrections: dict) -> None:
             raise FeedbackRejected(f"{field} 沒有「{value}」這個類別，前端選項可能與模型分類表不同步")
 
 
+def _record_eval_event(mode: str, job_id: str, predicted: dict, corrections: dict) -> None:
+    """記一筆「模型這次答得如何」，給線上信任分數用。
+
+    這是線上量測的**分母**來源。線下的固定保留集量的是「模型在我們蒐集的素材上
+    學得如何」，這裡量的是「模型對真實使用者的照片管不管用」——兩批資料的分布不同
+    （影劇截圖 vs 手機自拍），所以兩個數字要分開看，它們的差距本身就是結論。
+
+    只記結果不記內容：哪些部位使用者接受、哪些被改。不存修正後的值（那在
+    FEEDBACK_COL 裡，是訓練資料），不存 packageId 也不存任何身分。
+
+    文件 id 用 job_id，跟 FEEDBACK_COL 一致：同一個 job 重送就覆蓋。使用者改完
+    又改回去時不會被算成兩次，否則分母會被同一個人重送灌大。
+
+    寫失敗不能影響使用者。 這是量測，不是功能——回饋已經收下了，不該因為
+    統計寫不進去而讓使用者看到錯誤、再送一次。
+    """
+    try:
+        fields = allowed_classes()
+        asked = [f for f in fields if f in predicted]
+        if not asked:
+            return
+        changed = [f for f in asked if f in corrections]
+        job_store.create(EVAL_COL, job_id, {
+            "jobId": job_id,
+            "mode": mode,
+            "createdAt": datetime.now(timezone.utc).isoformat(),
+            # 使用者接受的部位＝模型答對；被改的＝答錯。兩者相加就是分母。
+            "agreed": [f for f in asked if f not in corrections],
+            "corrected": changed,
+            # 模型當時說什麼。留著才能算出「哪一類最常被改成哪一類」的混淆矩陣，
+            # 那比單一準確率更有用——它會指出是哪兩類分不開。
+            "predicted": {f: predicted[f] for f in asked},
+        })
+    except Exception:
+        logging.exception("寫入線上評分紀錄失敗 job_id=%s（不影響使用者的回饋）", job_id)
+
+
 def save(mode: str, job_id: str, payload: dict) -> str | None:
     """存下一筆修正，回傳文件 id。沒有修正時刪掉既有紀錄並回 None。
 
@@ -105,21 +147,27 @@ def save(mode: str, job_id: str, payload: dict) -> str | None:
     早退，那筆已經寫進去的錯誤修正就會永遠留在訓練集裡——而且無聲無息。前端寫著
     「已送出，可再修改」，那句話必須在資料層也成立。
 
-    confirmed 的不另存一筆，是產品決定：重訓要的是答錯的那些，全部留著只會被大量
-    「模型答對了」塞滿。代價是算不出準確率的分母（總共問了幾次、對了幾次），
-    所以這個集合的筆數不能拿來估線上準確率——那是有偏樣本。想要分母就在這裡
-    改成也存一筆精簡計數。
+    confirmed 的不另存進 FEEDBACK_COL，是產品決定：重訓要的是答錯的那些，
+    全部留著只會被大量「模型答對了」塞滿。
+
+    但那樣就算不出分母（總共問了幾次、對了幾次），FEEDBACK_COL 的筆數因此
+    **不能**拿來估線上準確率——那是有偏樣本。所以 2026-08-06 起同時往 EVAL_COL
+    寫一筆精簡計數：答對答錯都寫，只記「哪些部位使用者接受、哪些被改」，
+    不記修正後的值也不記任何身分。線上信任分數由那個集合算，見
+    tools/online_trust_score.py。
 
     文件 id 用 job_id：同一個 job 重送就覆蓋，不會累積成好幾筆互相矛盾的標註。
     """
     corrections = payload.get("corrections") or {}
+    predicted = payload.get("predicted") or {}
+    _record_eval_event(mode, job_id, predicted, corrections)
+
     if payload.get("confirmed") or not corrections:
         job_store.delete(FEEDBACK_COL, job_id)
         return None
 
     validate(corrections)
 
-    predicted = payload.get("predicted") or {}
     fields = allowed_classes()
     doc = {
         # 跟文件 id 一樣用 job_id 衍生。先前每次覆寫都給新的 uuid，等於同一份紀錄在
