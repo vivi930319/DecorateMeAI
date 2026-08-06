@@ -4305,21 +4305,12 @@ const PageInit = {
                         title: '刪除會員資料', type: 'error', okText: '刪除會員', cancelText: '保留',
                         onOk: async () => {
                             btn.disabled = true;
-                            // 先清影像再刪帳號，順序不能反。
+                            // 影像清除由 Gateway 在轉發刪除前自己做掉，這裡不必先呼叫。
                             //
-                            // 臉部與渲染服務認的是從 email 推導的 opaque ownerId；帳號一旦刪掉，
-                            // 就再也推導不回去，那些影像會變成沒有帳號對應、也刪不掉的孤兒資料。
-                            // 所以清不乾淨時就停在這裡，不要刪帳號——留著帳號至少還能重試。
-                            const purge = await Api.purgeMemberMedia(email);
-                            if (!purge || !purge.ok) {
-                                btn.disabled = false;
-                                showAlert(`臉部影像清除失敗，已停止刪除會員：${purge?.error || '請稍後重試'}
-
-`
-                                    + '帳號仍在，可以重試。若先刪帳號，那些影像將無法再對應與清除。',
-                                    { type: 'error' });
-                                return;
-                            }
+                            // 曾經在這裡先打一次清除端點，但那樣「先清後刪」是靠呼叫端自律——
+                            // 任何繞過這個按鈕的刪除都會留下孤兒影像。改成 Gateway 保證之後，
+                            // 順序變成結構上的，繞不過去；在這裡再做一次只是把同一個保證
+                            // 放到兩個地方，遲早有一邊被改壞而沒人發現。
                             const result = await Api.deleteMember(email);
                             if (!result || !result.ok) {
                                 btn.disabled = false;
@@ -4329,8 +4320,7 @@ const PageInit = {
                             dbMembers = dbMembers.filter(member => String(member.email).toLowerCase() !== String(email).toLowerCase());
                             delete looksByEmail[email];
                             delete pointsByEmail[email];
-                            const removed = purge.removed || {};
-                            showToast(`會員已刪除；臉部裁切 ${removed.face ?? 0} 筆、渲染影像已一併清除`);
+                            showToast('會員已刪除，臉部與渲染影像已一併清除');
                             render();
                         }
                     });

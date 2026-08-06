@@ -144,36 +144,17 @@ async function jobFailingWith(error) {
     routerSource.includes('<strong>這一步不會上傳你的照片</strong>'), false);
   check('勾選預設不打勾', /let allowTraining = false;/.test(routerSource), true);
 
-  console.log('\n-- 刪會員：先清影像，清不掉就不准刪帳號 --');
-  const order = [];
-  sandbox.Api._protectedFetch = async (url) => {
-    order.push('purge');
-    return { ok: purgeOk, status: purgeOk ? 200 : 502,
-             json: async () => purgeOk ? { removed: { face: 2 } }
-                                       : { error: { message: 'render 沒有清除成功' } } };
-  };
-  sandbox.Api._protectedWrite = async (_x, fn) => { order.push('delete'); return fn(); };
-  sandbox.Api._fetchWithRelogin = async () => ({ ok: true, json: async () => ({ member: {} }) });
-
-  let purgeOk = true;
-  order.length = 0;
-  let p = await sandbox.Api.purgeMemberMedia('v@example.com');
-  check('清除成功時回 ok', p.ok, true);
-  check('回報刪了幾筆', p.removed, { face: 2 });
-
-  purgeOk = false;
-  p = await sandbox.Api.purgeMemberMedia('v@example.com');
-  check('清除失敗時回 not ok', p.ok, false);
-  check('把上游訊息帶回來', p.error, 'render 沒有清除成功');
-
-  console.log('\n-- 後台真的照這個順序寫 --');
-  check('刪除前先呼叫 purgeMemberMedia',
-    /const purge = await Api\.purgeMemberMedia\(email\);[\s\S]{0,600}?await Api\.deleteMember\(email\)/.test(routerSource), true);
-  check('清除失敗就 return，不往下刪',
-    /if \(!purge \|\| !purge\.ok\)[\s\S]{0,500}?return;/.test(routerSource), true);
-  check('告訴管理員帳號還在、可以重試',
-    routerSource.includes('帳號仍在，可以重試'), true);
-  check('確認視窗有提到臉部影像',
+  console.log('\n-- 刪會員：順序保證在 Gateway，不在後台 --');
+  // 先前後台自己「先清後刪」。那樣的保證靠呼叫端自律——繞過這個按鈕的任何刪除
+  // 都會留下孤兒影像。移到 Gateway 之後順序是結構性的，這裡就不該再做一次：
+  // 同一個保證放兩個地方，遲早有一邊被改壞而沒人發現。
+  check('後台不再自己先呼叫清除',
+    routerSource.includes('Api.purgeMemberMedia(email)'), false);
+  check('後台直接呼叫刪除',
+    /const result = await Api\.deleteMember\(email\);/.test(routerSource), true);
+  check('註解說明為什麼不在這裡做',
+    routerSource.includes('順序變成結構上的，繞不過去'), true);
+  check('確認視窗仍告知會刪除臉部影像',
     routerSource.includes('以及他上傳的臉部影像都會一併移除'), true);
 
   console.log('');
