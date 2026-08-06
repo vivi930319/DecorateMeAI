@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 from collections import Counter, defaultdict
@@ -37,7 +38,11 @@ from torchvision.models import (
 from face_roi import IMAGENET_MEAN, IMAGENET_STD, PARTS, ROI_SPECS
 
 CACHE_DIR = Path("data/roi_cache")
-OUT_DIR = Path("models/basic_features_roi")
+# 正式模型的預設輸出位置。**這是線上服務讀的目錄**——不加 --out-dir 就會直接覆蓋它。
+# 2026-08-06 因此發生過兩次誤覆蓋：一次把線上的 ConvNeXt 換成 MobileNetV3（架構預設值），
+# 一次差點把對照實驗的產物寫進來。做對照實驗一律要指定 --out-dir。
+DEFAULT_OUT_DIR = Path("models/basic_features_roi")
+OUT_DIR = DEFAULT_OUT_DIR
 
 
 class RoiDataset(Dataset):
@@ -80,9 +85,54 @@ def load_cache():
     return {part: rois[part] for part in PARTS}, index["records"]
 
 
-def build_part_data(part: str, all_rois, records):
+def load_excluded_rows(records, holdout_split: str | None, exclude_file: str | None) -> set[int]:
+    """算出「訓練時完全不能碰」的 record 索引。
+
+    回傳的是索引而不是過濾後的 records，因為 `all_rois[part]` 是用**原始索引**取值的；
+    從 records 刪元素會讓兩者錯位，而且錯得很安靜——ROI 會配到別人的標籤。
+
+    比對用相對路徑（快），對不上的再用 sha256 補（慢但穩）。數量對不上會直接喊，
+    不會默默少排除幾張——`identity_map.json` 就是靠絕對路徑比對而靜默失效的，
+    當時 101 張照片查不到、一律留在 train，眼型有 15% 的資料從此不曾當過考題。
+    """
+    wanted: set[str] = set()
+    label = []
+    if holdout_split:
+        path = CACHE_DIR / f"holdout_split_{holdout_split}.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        keys = {s["sha256"] for s in data["samples"] if s["split"] == "holdout"}
+        wanted |= keys
+        label.append(f"保留集 {holdout_split}（{len(keys)} 張）")
+    if exclude_file:
+        lines = [l.strip() for l in Path(exclude_file).read_text(encoding="utf-8").splitlines()]
+        keys = {l for l in lines if l and not l.startswith("#")}
+        wanted |= keys
+        label.append(f"額外排除清單（{len(keys)} 張）")
+    if not wanted:
+        return set()
+
+    excluded, seen = set(), set()
+    for i, r in enumerate(records):
+        p = Path(r["path"])
+        if not p.exists():
+            continue
+        h = hashlib.sha256(p.read_bytes()).hexdigest()
+        if h in wanted:
+            excluded.add(i)
+            seen.add(h)
+
+    print(f"訓練排除：{'、'.join(label)} -> 命中 {len(excluded)} 筆")
+    missed = wanted - seen
+    if missed:
+        print(f"  ⚠ 有 {len(missed)} 個 sha256 在快取裡找不到對應樣本。"
+              f"可能是快取過期，請重跑 prepare_roi_cache.py 再訓練。")
+    return excluded
+
+
+def build_part_data(part: str, all_rois, records, exclude_rows=frozenset()):
     """挑出有這個部位標籤的樣本，回傳 (ROI 陣列, 類別索引, identity, 類別名稱)。"""
-    rows = [i for i, r in enumerate(records) if part in r["labels"]]
+    rows = [i for i, r in enumerate(records)
+            if part in r["labels"] and i not in exclude_rows]
     classes = sorted({records[i]["labels"][part] for i in rows})
     class_to_idx = {name: i for i, name in enumerate(classes)}
 
@@ -399,6 +449,16 @@ def parse_args():
                         "CV 讓每張圖都輪流當過考題，數字才穩得住")
     p.add_argument("--drop-conflicts", action="store_true",
                    help="剔除標註矛盾的身分（同一人同部位被標成多個類別）的所有照片")
+    p.add_argument("--out-dir", default=None, metavar="DIR",
+                   help=f"模型與指標的輸出目錄，預設 {DEFAULT_OUT_DIR}（**線上服務讀的那個**）。"
+                        "做對照實驗請指定別的目錄，否則會覆蓋線上模型")
+    p.add_argument("--holdout-split", default=None, metavar="VERSION",
+                   help="讀 data/roi_cache/holdout_split_<VERSION>.json，把保留集完全排除在訓練外。"
+                        "要拿 tools/eval_on_holdout.py 做跨版本比較時**必須**指定，"
+                        "否則模型看過考題，分數不能跟別版比")
+    p.add_argument("--exclude-list", default=None, metavar="FILE",
+                   help="額外排除的照片清單（每行一個 sha256）。用於「假裝某批資料還沒加入」"
+                        "的對照實驗")
     p.add_argument("--architecture",
                    choices=("mobilenet_v3_small", "simple_cnn", "resnet50",
                             "efficientnet_b0", "convnext_tiny", "alexnet"),
@@ -467,7 +527,13 @@ def main():
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    global OUT_DIR
+    if args.out_dir:
+        OUT_DIR = Path(args.out_dir)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    if OUT_DIR == DEFAULT_OUT_DIR and not args.cv:
+        print(f"⚠ 即將覆蓋線上模型目錄 {OUT_DIR}。對照實驗請加 --out-dir。")
+    print(f"輸出目錄：{OUT_DIR}")
     print(f"device={device}  epochs={args.epochs}\n")
 
     all_rois, records = load_cache()
@@ -478,10 +544,11 @@ def main():
         print(f"臉型改用輪廓遮罩：{contour_file} {all_rois['face_shape'].shape}")
     for part in args.contour_parts:
         all_rois[part] = np.load(CACHE_DIR / f"{part}_contour.npy")
+    excluded_rows = load_excluded_rows(records, args.holdout_split, args.exclude_list)
     summary = {}
 
     for part in args.parts:
-        rois, labels, identities, classes = build_part_data(part, all_rois, records)
+        rois, labels, identities, classes = build_part_data(part, all_rois, records, excluded_rows)
 
         if args.identity_mode == "per_image":
             # 這批資料是一個人的五官分別分類；在單一部位內每張圖都是獨立人物。

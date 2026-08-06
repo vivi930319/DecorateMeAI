@@ -213,6 +213,16 @@ local_only_notes/
 !data/basic_full/
 !data/basic_full/跨類別重複清單_*.csv
 
+# 固定保留測試集：跨版本比較的唯一基準，**一定要入版控**。
+# 它就是「同一份考卷」——換機器、換人接手都必須拿到同一份，否則分數不能互相比較，
+# 整套評估流程就退回「每次換考卷」的狀態（見 tools/build_holdout_split.py 的說明）。
+# 檔案裡只有 sha256、相對路徑與標籤，沒有影像。
+!data/roi_cache/
+!data/roi_cache/holdout_split_*.json
+
+# 各版本模型在保留集上的分數，累積比較用。
+!models/holdout_scores.json
+
 # ── 2026-08-06：根目錄文件改為預設入版控 ──────────────────────────────
 #
 # 原本的政策是「所有 Markdown 只留在本機」，再逐份加 ! 放行。那是把 GitHub 當備份
