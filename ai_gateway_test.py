@@ -933,5 +933,114 @@ class MultiSessionTest(unittest.TestCase):
         self.assertNotIn("session=BBB", asyncio.run(session_status(request)).body.decode("utf-8"))
 
 
+class MemberMediaPurgeTest(unittest.TestCase):
+    """刪會員前先清影像。這條端點的重點是**失敗不能被吞掉**。
+
+    臉部與渲染服務認的是 opaque ownerId，只有 Gateway 算得出來，所以會員資料庫端
+    自己刪不掉那些影像。如果這裡清除失敗卻回成功，管理員會以為刪乾淨了，
+    實際上使用者的臉部裁切還留在 GCS——而且帳號一刪就再也對應不回去，變成孤兒資料。
+    """
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        import ai_gateway
+        import job_store
+
+        self._job_store = job_store
+        # 稽核會寫 Firestore；測試環境連不上時每筆都要等重試逾時，整個類別跑 159 秒。
+        # 關掉走記憶體版本——這裡要驗的是端點行為，不是稽核的儲存後端。
+        self._fs = (job_store.firestore, job_store._client)
+        job_store.firestore, job_store._client = None, None
+
+        self.gw = ai_gateway
+        token, _ = issue_access_token("admin@example.com", "admin", "active")
+        self.cookies = session_cookies(token)
+        self.calls = []
+
+        async def fake_face(request, method, path, *, user_id="", admin=False):
+            self.calls.append(("face", method, path, user_id, admin))
+            return self._face_response
+
+        async def fake_render(request, method, path, *, user_id="", admin=False, json_body=None):
+            self.calls.append(("render", method, path, user_id, admin))
+            return self._render_response
+
+        self._orig_face = getattr(ai_gateway, "_face_internal_request", None)
+        self._orig_render = ai_gateway._render_internal_request
+        ai_gateway._face_internal_request = fake_face
+        ai_gateway._render_internal_request = fake_render
+        self._face_response = self._ok({"contributions": 2})
+        self._render_response = self._ok({"status": "deleted"})
+        self.client = TestClient(ai_gateway.app)
+
+    def tearDown(self):
+        self._job_store.firestore, self._job_store._client = self._fs
+        if self._orig_face:
+            self.gw._face_internal_request = self._orig_face
+        self.gw._render_internal_request = self._orig_render
+
+    def _ok(self, payload):
+        r = Mock()
+        r.is_success = True
+        r.json = lambda: payload
+        return r
+
+    def _fail(self):
+        r = Mock()
+        r.is_success = False
+        r.json = lambda: {}
+        return r
+
+    def test_purges_both_services_with_the_derived_owner_id(self):
+        res = self.client.request("DELETE", "/admin-api/members/Victim@Example.com/media",
+                                  cookies=self.cookies)
+        self.assertEqual(res.status_code, 200, res.text)
+        expected_owner = self.gw.opaque_actor_id("victim@example.com")
+        self.assertEqual(res.json()["ownerId"], expected_owner)
+        # email 大小寫不該影響推導出來的身分，否則清不到同一個人的資料
+        for service, method, path, user_id, admin in self.calls:
+            self.assertEqual(method, "DELETE")
+            self.assertIn(expected_owner, path)
+            self.assertTrue(admin, f"{service} 沒有以管理員身分呼叫")
+        self.assertEqual({c[0] for c in self.calls}, {"face", "render"})
+
+    def test_partial_failure_is_reported_not_swallowed(self):
+        """臉部清掉了、渲染沒有 -> 必須回錯，不能回成功。"""
+        self._render_response = self._fail()
+        res = self.client.request("DELETE", "/admin-api/members/v@example.com/media",
+                                  cookies=self.cookies)
+        self.assertEqual(res.status_code, 502)
+        # Gateway 有例外處理器把 detail 攤平成頂層 error，這裡照實際回應斷言
+        detail = res.json()["error"]
+        self.assertEqual(detail["code"], "MEDIA_PURGE_INCOMPLETE")
+        self.assertIn("render", detail["message"])
+        self.assertIn("不要刪除會員帳號", detail["message"],
+                      "沒有告訴管理員該怎麼做，他會直接去刪帳號")
+
+    def test_upstream_unreachable_is_a_failure_not_a_success(self):
+        """服務連不上時 _face_internal_request 回 None——那不是「沒東西可刪」。"""
+        async def unreachable(request, method, path, *, user_id="", admin=False):
+            return None
+
+        self.gw._face_internal_request = unreachable
+        res = self.client.request("DELETE", "/admin-api/members/v@example.com/media",
+                                  cookies=self.cookies)
+        self.assertEqual(res.status_code, 502)
+        self.assertIn("face", res.json()["error"]["message"])
+
+    def test_non_admin_is_refused(self):
+        token, _ = issue_access_token("member@example.com", "member", "active")
+        res = self.client.request("DELETE", "/admin-api/members/v@example.com/media",
+                                  cookies=session_cookies(token))
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(self.calls, [], "被擋下時不能真的去刪任何東西")
+
+    def test_malformed_email_is_refused(self):
+        res = self.client.request("DELETE", "/admin-api/members/not-an-email/media",
+                                  cookies=self.cookies)
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(self.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1760,6 +1760,91 @@ async def admin_staging_import(staging_id: str, request: Request):
     return await proxy_admin_request(request, f"{_STAGING_BASE}/{validate_path_segment(staging_id)}/import")
 
 
+
+async def _face_internal_request(request: Request, method: str, path: str, *,
+                                 user_id: str = "", admin: bool = False):
+    """打臉部服務的內部呼叫。跟 _render_internal_request 同一套，只是換上游。
+
+    BASIC 與 PRO 是兩個部署，但貢獻樣本存在同一個 GCS 前綴，所以刪除打其中一個就夠。
+    這裡固定用 face-basic：PRO 不見得有部署，而刪除不該因為某個服務沒開就漏做。
+    """
+    upstream = UPSTREAMS["face-basic"]
+    if not upstream.base_url:
+        return None
+    try:
+        identity_token = ""
+        if upstream.requires_cloud_run_iam:
+            identity_token = await asyncio.to_thread(TOKEN_CACHE.get, upstream.base_url)
+        headers = {"Accept": "application/json", "X-API-Key": upstream.api_key}
+        if identity_token:
+            headers["X-Serverless-Authorization"] = f"Bearer {identity_token}"
+        if user_id:
+            headers["X-User-ID"] = user_id
+        if admin:
+            headers["X-Admin-Request"] = "1"
+        return await request.app.state.http_client.request(
+            method=method, url=f"{upstream.base_url}/{path}", headers=headers, timeout=60,
+        )
+    except Exception:
+        return None
+
+
+@app.delete("/admin-api/members/{email}/media")
+async def admin_purge_member_media(email: str, request: Request):
+    """刪除這個會員留在臉部與渲染服務的影像。**刪會員之前要先呼叫這一條。**
+
+    為什麼一定要經過 Gateway：那兩個服務認的是 opaque `ownerId`，而它是
+    `sha256(SESSION_SECRET + email)` 算出來的——只有 Gateway 有那把金鑰。
+    會員資料庫端拿不到、也不該拿到，所以它自己刪不了那些影像。
+
+    為什麼是獨立的一條而不是併進刪會員：刪會員是資料庫端的端點，前端後台直接打它。
+    要它反過來呼叫我們，等於多一個跨團隊相依。這條讓後台在刪除前自己先清乾淨，
+    順序由呼叫端掌握。
+
+    **回傳每個服務各刪幾筆，而且失敗不會被吞掉**——刪不掉要讓管理員知道，
+    不能顯示「已刪除」而實際留著臉部資料。
+    """
+    claims = require_admin_access(request)
+    target = str(email or "").strip().lower()
+    if not target or "@" not in target or len(target) > 254:
+        raise HTTPException(status_code=400,
+                            detail={"error": {"code": "INVALID_REQUEST", "message": "Invalid email."}})
+    owner_id = opaque_actor_id(target)
+
+    results, failed = {}, []
+    face = await _face_internal_request(request, "DELETE", f"v1/face/users/{owner_id}",
+                                        user_id=owner_id, admin=True)
+    if face is not None and face.is_success:
+        results["face"] = face.json().get("contributions", 0)
+    else:
+        failed.append("face")
+    render = await _render_internal_request(request, "DELETE", f"render/users/{owner_id}",
+                                            user_id=owner_id, admin=True)
+    if render is not None and render.is_success:
+        results["render"] = "deleted"
+    else:
+        failed.append("render")
+
+    # 稽核一定要記：這是管理員代替使用者刪除臉部資料，而且刪了就回不來。
+    record_admin_action(
+        "member.purge_media",
+        actor_id=opaque_actor_id(str(claims.get("sub") or "")),
+        target_ref=owner_id,          # 不記 email，那是個資；owner_id 已足以追蹤
+        status_code=200 if not failed else 502,
+        request_id=request.headers.get("x-request-id", "")[:128],
+        failed_services=",".join(failed),
+    )
+    if failed:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": {"code": "MEDIA_PURGE_INCOMPLETE",
+                              "message": f"這些服務沒有清除成功：{'、'.join(failed)}。"
+                                         f"請重試，成功之前不要刪除會員帳號。",
+                              "retryable": True, "details": results}},
+        )
+    return {"status": "purged", "ownerId": owner_id, "removed": results}
+
+
 @app.get("/admin-api/product-audit-logs")
 async def admin_product_audit_logs(request: Request):
     return await proxy_admin_request(request, "/api/admin/product-audit-logs")
