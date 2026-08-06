@@ -4301,10 +4301,25 @@ const PageInit = {
                     const row = btn.closest('[data-admin-email]');
                     const email = row?.dataset.adminEmail;
                     if (!email || btn.disabled) return;
-                    showConfirm(`確定要刪除會員「${email}」嗎？會員資料、點數與收藏關聯可能一併移除，此動作無法復原。`, {
+                    showConfirm(`確定要刪除會員「${email}」嗎？會員資料、點數、收藏關聯，以及他上傳的臉部影像都會一併移除，此動作無法復原。`, {
                         title: '刪除會員資料', type: 'error', okText: '刪除會員', cancelText: '保留',
                         onOk: async () => {
                             btn.disabled = true;
+                            // 先清影像再刪帳號，順序不能反。
+                            //
+                            // 臉部與渲染服務認的是從 email 推導的 opaque ownerId；帳號一旦刪掉，
+                            // 就再也推導不回去，那些影像會變成沒有帳號對應、也刪不掉的孤兒資料。
+                            // 所以清不乾淨時就停在這裡，不要刪帳號——留著帳號至少還能重試。
+                            const purge = await Api.purgeMemberMedia(email);
+                            if (!purge || !purge.ok) {
+                                btn.disabled = false;
+                                showAlert(`臉部影像清除失敗，已停止刪除會員：${purge?.error || '請稍後重試'}
+
+`
+                                    + '帳號仍在，可以重試。若先刪帳號，那些影像將無法再對應與清除。',
+                                    { type: 'error' });
+                                return;
+                            }
                             const result = await Api.deleteMember(email);
                             if (!result || !result.ok) {
                                 btn.disabled = false;
@@ -4314,7 +4329,8 @@ const PageInit = {
                             dbMembers = dbMembers.filter(member => String(member.email).toLowerCase() !== String(email).toLowerCase());
                             delete looksByEmail[email];
                             delete pointsByEmail[email];
-                            showToast('會員已從資料庫刪除');
+                            const removed = purge.removed || {};
+                            showToast(`會員已刪除；臉部裁切 ${removed.face ?? 0} 筆、渲染影像已一併清除`);
                             render();
                         }
                     });

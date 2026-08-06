@@ -144,6 +144,38 @@ async function jobFailingWith(error) {
     routerSource.includes('<strong>這一步不會上傳你的照片</strong>'), false);
   check('勾選預設不打勾', /let allowTraining = false;/.test(routerSource), true);
 
+  console.log('\n-- 刪會員：先清影像，清不掉就不准刪帳號 --');
+  const order = [];
+  sandbox.Api._protectedFetch = async (url) => {
+    order.push('purge');
+    return { ok: purgeOk, status: purgeOk ? 200 : 502,
+             json: async () => purgeOk ? { removed: { face: 2 } }
+                                       : { error: { message: 'render 沒有清除成功' } } };
+  };
+  sandbox.Api._protectedWrite = async (_x, fn) => { order.push('delete'); return fn(); };
+  sandbox.Api._fetchWithRelogin = async () => ({ ok: true, json: async () => ({ member: {} }) });
+
+  let purgeOk = true;
+  order.length = 0;
+  let p = await sandbox.Api.purgeMemberMedia('v@example.com');
+  check('清除成功時回 ok', p.ok, true);
+  check('回報刪了幾筆', p.removed, { face: 2 });
+
+  purgeOk = false;
+  p = await sandbox.Api.purgeMemberMedia('v@example.com');
+  check('清除失敗時回 not ok', p.ok, false);
+  check('把上游訊息帶回來', p.error, 'render 沒有清除成功');
+
+  console.log('\n-- 後台真的照這個順序寫 --');
+  check('刪除前先呼叫 purgeMemberMedia',
+    /const purge = await Api\.purgeMemberMedia\(email\);[\s\S]{0,600}?await Api\.deleteMember\(email\)/.test(routerSource), true);
+  check('清除失敗就 return，不往下刪',
+    /if \(!purge \|\| !purge\.ok\)[\s\S]{0,500}?return;/.test(routerSource), true);
+  check('告訴管理員帳號還在、可以重試',
+    routerSource.includes('帳號仍在，可以重試'), true);
+  check('確認視窗有提到臉部影像',
+    routerSource.includes('以及他上傳的臉部影像都會一併移除'), true);
+
   console.log('');
   console.log('='.repeat(62));
   if (failures.length) {

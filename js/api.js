@@ -1402,6 +1402,30 @@ const Api = {
         });
     },
 
+    // 刪帳號前先清掉臉部與渲染服務裡的影像。
+    //
+    // 那兩個服務認的是 opaque ownerId，由 Gateway 用 SESSION_SECRET 從 email 推導，
+    // 會員資料庫端算不出來也拿不到那把金鑰——所以它刪會員時清不掉那些圖。
+    // 這條要在 deleteMember 之前呼叫：帳號一旦刪掉，就再也對應不回那些影像，
+    // 它們會變成刪不掉的孤兒資料。
+    async purgeMemberMedia(email) {
+        if (!email) return { ok: false, error: 'email 未提供' };
+        try {
+            const res = await this._protectedFetch(
+                `${gatewayService('admin-api')}/members/${encodeURIComponent(email)}/media`,
+                { method: 'DELETE', credentials: 'include' }
+            );
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                return { ok: false, status: res.status,
+                         error: data?.error?.message || `HTTP ${res.status}` };
+            }
+            return { ok: true, removed: data.removed || {} };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
     async deleteMember(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false, error: 'memberDatabaseUrl 或 email 未設定' };
