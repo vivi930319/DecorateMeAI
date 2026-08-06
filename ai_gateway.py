@@ -1244,7 +1244,18 @@ async def render_media(job_id: str, request: Request):
 
 
 async def _serve_render_media(job_id: str, request: Request, variant: str = "after"):
-    """Authenticate a member, then redirect to a ten-minute private GCS URL."""
+    """Authenticate a member, then redirect to a ten-minute private GCS URL.
+
+    兩件 2026-07-29 加上的事：
+
+    1. **妝前圖不給管理員看。** 妝後圖是產品功能的一部分（後台要看得到使用者收藏了什麼），
+       但妝前圖是使用者自己上傳的**原始臉部照片**，那是生物特徵資料。管理員需要它的
+       正當理由不存在，所以這裡不送 admin 旗標，讓渲染服務照擁有者規則擋下來。
+       渲染服務自己也擋了一次——只靠呼叫端自律不算防線。
+
+    2. **管理員讀圖一律留稽核。** 先前這條路完全不寫 admin_audit_events，
+       等於管理員看了誰的臉、看了幾次，系統裡查不到任何痕跡。成功與失敗都記。
+    """
     if not re.fullmatch(RENDER_JOB_ID, job_id):
         raise HTTPException(status_code=404, detail={"error": {"code": "MEDIA_NOT_FOUND", "message": "Render image was not found."}})
     # variant 只會是這兩個字面值，直接拼進 query 沒有注入空間
@@ -1252,16 +1263,38 @@ async def _serve_render_media(job_id: str, request: Request, variant: str = "aft
     claims = require_member_access(request)
     is_admin = str(claims.get("role") or "").strip().lower() == "admin"
     owner_id = opaque_actor_id(str(claims.get("sub") or ""))
+    # 妝前圖不套用管理員豁免：本人以外誰都不能看。
+    admin_bypass = is_admin and variant != "before"
+
+    audited = False
+
+    def _audit(status_code: int) -> None:
+        """管理員讀圖時留一筆。只在 is_admin 記——一般會員讀的一定是自己的，
+        擁有者檢查已經保證了這件事，全部記只會把稽核表塞滿而看不出重點。"""
+        nonlocal audited
+        if not is_admin or audited:
+            return
+        audited = True
+        record_admin_action(
+            "render_media.view",
+            actor_id=owner_id,
+            target_ref=job_id,          # 隨機 32 位十六進位，不是個資
+            status_code=status_code,
+            request_id=request.headers.get("x-request-id", "")[:128],
+            variant=variant,
+        )
     response = await _render_internal_request(
         request,
         "GET",
         f"render/jobs/{job_id}/signed-url{query}",
         user_id=owner_id,
-        admin=is_admin,
+        admin=admin_bypass,
     )
     if response is None:
+        _audit(503)
         raise HTTPException(status_code=503, detail={"error": {"code": "MEDIA_UNAVAILABLE", "message": "Render image is temporarily unavailable."}})
     if response.status_code in {403, 404}:
+        _audit(response.status_code)
         raise HTTPException(status_code=response.status_code, detail={"error": {"code": "MEDIA_NOT_FOUND", "message": "Render image was not found."}})
     if not response.is_success:
         fallback = await _render_internal_request(
@@ -1269,13 +1302,16 @@ async def _serve_render_media(job_id: str, request: Request, variant: str = "aft
             "GET",
             f"render/jobs/{job_id}/content{query}",
             user_id=owner_id,
-            admin=is_admin,
+            admin=admin_bypass,
         )
         if fallback is None or not fallback.is_success:
+            _audit(fallback.status_code if fallback is not None else 503)
             raise HTTPException(status_code=503, detail={"error": {"code": "MEDIA_UNAVAILABLE", "message": "Render image is temporarily unavailable."}})
         content_type = str(fallback.headers.get("content-type") or "")
         if not content_type.startswith("image/"):
+            _audit(503)
             raise HTTPException(status_code=503, detail={"error": {"code": "MEDIA_UNAVAILABLE", "message": "Render image is temporarily unavailable."}})
+        _audit(200)
         return Response(
             content=fallback.content,
             media_type=content_type.split(";", 1)[0],
@@ -1287,7 +1323,9 @@ async def _serve_render_media(job_id: str, request: Request, variant: str = "aft
         signed_url = ""
     parsed = urlsplit(signed_url)
     if parsed.scheme != "https" or parsed.netloc != "storage.googleapis.com":
+        _audit(503)
         raise HTTPException(status_code=503, detail={"error": {"code": "MEDIA_UNAVAILABLE", "message": "Render image is temporarily unavailable."}})
+    _audit(302)
     return RedirectResponse(
         url=signed_url,
         status_code=302,

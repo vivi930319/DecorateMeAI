@@ -101,8 +101,23 @@ def _job_expiry(seconds_from_now: int) -> datetime:
     return datetime.fromtimestamp(time.time() + seconds_from_now, timezone.utc)
 
 
-def _require_job_owner(job: dict, user_id: str | None, admin_request: str | None = None) -> None:
-    if str(admin_request or "").strip() == "1":
+def _require_job_owner(
+    job: dict,
+    user_id: str | None,
+    admin_request: str | None = None,
+    *,
+    variant: str = "",
+) -> None:
+    """確認呼叫者是這個 job 的擁有者。管理員可豁免，但**妝前圖除外**。
+
+    妝後圖是產品功能的一部分（後台要看得到使用者收藏了什麼妝容）。妝前圖不是——
+    那是使用者自己上傳的原始臉部照片，屬於生物特徵資料，管理員需要它的正當理由不存在。
+    2026-07-29 起 `variant="before"` 一律走擁有者檢查，管理員也擋。
+
+    Gateway 那邊已經不對妝前圖送 `X-Admin-Request`，這裡是第二道：
+    只靠呼叫端自律不算防線，執行點必須自己守住。
+    """
+    if str(admin_request or "").strip() == "1" and variant != "before":
         return
     expected = str(job.get("ownerId") or "").strip()
     supplied = str(user_id or "").strip()
@@ -987,7 +1002,7 @@ async def get_render_signed_url(
         )
     # 擁有者檢查對兩種 variant 完全相同——妝前圖是使用者的臉，
     # 保護只能更嚴，不能因為它「只是原圖」就放寬。
-    _require_job_owner(job, x_user_id, x_admin_request)
+    _require_job_owner(job, x_user_id, x_admin_request, variant=variant)
     try:
         signed_url = create_signed_storage_url(media_url)
     except Exception as exc:
@@ -1015,7 +1030,7 @@ async def get_render_content(
             status_code=404,
             detail=error_payload("JOB_NOT_FOUND", "Render image was not found.", retryable=False),
         )
-    _require_job_owner(job, x_user_id, x_admin_request)
+    _require_job_owner(job, x_user_id, x_admin_request, variant=variant)
     try:
         content, content_type = download_private_storage_url(media_url)
     except Exception as exc:

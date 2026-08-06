@@ -500,5 +500,58 @@ class SecretEqualsTest(unittest.TestCase):
         self.assertTrue(secret_equals("金鑰", "金鑰"))
 
 
+class BeforeImageAdminBlockTest(unittest.TestCase):
+    """妝前原圖不給管理員看（2026-07-29 的 patch，2026-08-06 套用）。
+
+    妝後圖是產品功能的一部分——後台要看得到使用者收藏了什麼妝容。妝前圖不是：
+    那是使用者自己上傳的原始臉部照片，屬於生物特徵資料，管理員需要它的正當理由不存在。
+
+    這條路徑先前**完全沒有測試**，而它是安全邊界。線上驗證又需要真的 admin 帳號
+    （被 issue #30 卡住），所以這裡是唯一能驗證邏輯的地方。
+    """
+
+    def _job(self):
+        return {"jobId": "job-x", "ownerId": "actor_owner"}
+
+    def test_admin_may_see_the_after_image(self):
+        """妝後圖維持管理員豁免——這是後台既有功能，patch 不該改掉它。"""
+        render_api._require_job_owner(self._job(), "actor_someone_else", "1", variant="after")
+
+    def test_admin_is_blocked_from_the_before_image(self):
+        """同一個管理員、同一個 job，只因為 variant 是 before 就必須被擋。"""
+        with self.assertRaises(Exception) as raised:
+            render_api._require_job_owner(self._job(), "actor_someone_else", "1", variant="before")
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_owner_still_sees_their_own_before_image(self):
+        """擋的是別人，不是本人。使用者永遠看得到自己上傳的照片。"""
+        render_api._require_job_owner(self._job(), "actor_owner", None, variant="before")
+
+    def test_stranger_is_blocked_from_the_before_image(self):
+        """沒有 admin 旗標的陌生人本來就該擋，patch 不能讓這條變鬆。"""
+        with self.assertRaises(Exception) as raised:
+            render_api._require_job_owner(self._job(), "actor_someone_else", None, variant="before")
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_admin_flag_must_be_exactly_one(self):
+        """只有 "1" 算數，其餘一律不給豁免。
+
+        前後空白會被 strip 掉，所以 "1 " 仍然算數——HTTP 標頭帶到空白是常態，
+        那是刻意的容忍，不是漏洞。這裡把它跟真正該擋的值放在一起測，
+        免得日後有人「順手」把 strip 拿掉而沒發現行為變了。
+        """
+        for flag in ("0", "true", "yes", "", None, "11", " "):
+            with self.subTest(rejected=flag):
+                with self.assertRaises(Exception):
+                    render_api._require_job_owner(self._job(), "actor_someone_else", flag, variant="after")
+        for flag in ("1", " 1", "1 "):
+            with self.subTest(accepted=flag):
+                render_api._require_job_owner(self._job(), "actor_someone_else", flag, variant="after")
+
+    def test_variant_defaults_to_owner_check_not_bypass(self):
+        """沒帶 variant 時要維持既有行為（admin 可看），不能因為預設值而改變語意。"""
+        render_api._require_job_owner(self._job(), "actor_someone_else", "1")
+
+
 if __name__ == "__main__":
     unittest.main()
