@@ -10,6 +10,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 import cv2
 import numpy as np
 
@@ -50,6 +53,24 @@ ROI_SPECS = {
 }
 
 PARTS = tuple(ROI_SPECS)
+
+
+def specs_version() -> str:
+    """ROI_SPECS 的內容指紋。改過 points／margin／size 就會變。
+
+    使用者貢獻的訓練樣本存的是**已裁切**的 ROI，原圖不留。所以裁切規格一旦改變，
+    那些樣本就跟新資料對不起來，而且**沒辦法重裁**。把版本跟樣本一起存，
+    之後才分得出哪些是舊規格、可以選擇排除或分開處理。
+
+    不存版本的話，舊樣本會靜默混進新訓練集——那正是 identity_map 出事的模式：
+    資料換了、對照表沒跟上、沒有任何地方報錯。
+    """
+    payload = json.dumps(
+        {p: {"points": list(v["points"]), "margin": v["margin"], "size": v["size"]}
+         for p, v in sorted(ROI_SPECS.items())},
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def roi_bbox(points: np.ndarray, part: str, frame_h: int, frame_w: int) -> tuple[int, int, int, int]:

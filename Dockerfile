@@ -53,6 +53,7 @@ COPY basic_roi_shadow.py .
 # 五官判斷回饋的驗證與儲存。BASIC 與 PRO 都 import 它，少了一樣是 import 階段就掛。
 # 它會讀 models/basic_features_roi/*_classes.json 當合法類別表——那批檔案在下面一起複製。
 COPY face_feedback.py .
+COPY face_contributions.py .
 COPY face_corrections.py .
 # face_corrections 需要 canonical_label（把已淘汰的類別名換成合併後的現行名稱）。
 # 少了這支，容器會在 import 階段就 ModuleNotFoundError 起不來 —— 2026-07-31 踩過。

@@ -34,6 +34,8 @@ tools/*
 # 五官判斷回饋（BASIC 與 PRO 都 import）。新增會被 COPY 的檔案時，
 # .dockerignore 與 .gcloudignore 兩份都要放行，少一邊就會在該邊的建置炸掉。
 !face_feedback.py
+# 使用者同意提供的訓練樣本（只存部位 ROI，不存原圖）。face_feedback 會 import。
+!face_contributions.py
 !face_corrections.py
 
 # ROI CNN shadow 模型。只放推論要用的 .onnx 與類別表；

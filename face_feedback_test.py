@@ -15,6 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import face_feedback as ff
 
+# 真的 PNG。用截斷的假資料會被 data_url_to_bytes 的驗證擋掉，
+# 那樣測到的是「驗證有效」而不是「同意閘門有效」。
+_TINY_PNG_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAJElEQVQIHW3BAQEAAAABIP4fa5YDqshT5CnyFHmKPEWeIk+RZxykEskvcOowAAAAAElFTkSuQmCC"
+
 PREDICTED = {
     "臉型": "圓形臉", "眉型": "一字眉", "眼型": "鳳眼",
     "鼻型": "寬鼻", "嘴型": "薄唇",
@@ -124,6 +128,90 @@ class FeedbackTest(unittest.TestCase):
                                       "corrections": {"眼型": "圓眼"}, "predicted": PREDICTED})
         self.assertIsNotNone(ff.job_store.docs.get((ff.FEEDBACK_COL, "job-boom")),
                              "評分紀錄失敗時，訓練資料仍要收下")
+
+
+class ContributionConsentTest(unittest.TestCase):
+    """使用者貢獻的訓練樣本：沒有明確同意就不能存下任何東西。
+
+    這條路徑會保存臉部裁切，所以「預設不存」必須是結構保證，不是靠後端自律。
+    """
+
+    def setUp(self):
+        self.store = _FakeStore()
+        self._real_store = ff.job_store
+        ff.job_store = self.store
+        self.calls = []
+        self._real_contrib = ff.face_contributions.store
+        ff.face_contributions.store = lambda *a, **k: self.calls.append((a, k)) or 1
+
+    def tearDown(self):
+        ff.job_store = self._real_store
+        ff.face_contributions.store = self._real_contrib
+
+    def _payload(self, **over):
+        base = {
+            "confirmed": False,
+            "corrections": {"眼型": "圓眼"},
+            "predicted": PREDICTED,
+            "allowTrainingUse": True,
+            "imageDataUrl": _TINY_PNG_DATA_URL,
+        }
+        base.update(over)
+        return base
+
+    def test_nothing_stored_without_consent(self):
+        """沒勾同意 → 一張都不能存，即使照片就在請求裡。"""
+        ff.save("basic", "job-a", self._payload(allowTrainingUse=False))
+        self.assertEqual(self.calls, [], "未同意卻保存了臉部裁切")
+
+    def test_nothing_stored_without_an_image(self):
+        """同意了但沒帶照片 → 沒有東西可存，不該當成錯誤，也不該亂猜。"""
+        ff.save("basic", "job-b", self._payload(imageDataUrl=None))
+        self.assertEqual(self.calls, [])
+
+    def test_nothing_stored_when_user_confirmed_the_model(self):
+        """使用者按「判斷正確」→ 沒有修正，就沒有值得保存的樣本。"""
+        ff.save("basic", "job-c", self._payload(confirmed=True, corrections={}))
+        self.assertEqual(self.calls, [])
+
+    def test_stored_only_with_explicit_consent_and_corrections(self):
+        """三個條件齊備才會存，而且只帶被修正的部位。"""
+        ff.save("basic", "job-d", self._payload())
+        self.assertEqual(len(self.calls), 1)
+        args, kwargs = self.calls[0]
+        self.assertEqual(args[0], "job-d")
+        self.assertEqual(args[2], {"眼型": "圓眼"}, "只該帶被修正的部位")
+
+    def test_contribution_failure_never_breaks_the_feedback(self):
+        """保存樣本失敗，使用者的修正仍要收下——那是加值功能，不是主流程。"""
+        def explode(*a, **k):
+            raise RuntimeError("gcs down")
+
+        ff.face_contributions.store = explode
+        ff.save("basic", "job-e", self._payload())
+        self.assertIsNotNone(self.store.docs.get((ff.FEEDBACK_COL, "job-e")),
+                             "貢獻失敗時，訓練修正仍要進 face_feedback")
+
+
+class RoiSpecsVersionTest(unittest.TestCase):
+    """裁切規格的版本指紋。
+
+    貢獻樣本存的是**已裁切**的影像，原圖不留，所以規格一改就無法重裁。
+    版本要跟樣本一起存，否則舊樣本會靜默混進新訓練集。
+    """
+
+    def test_version_changes_when_the_crop_changes(self):
+        import face_roi
+
+        before = face_roi.specs_version()
+        original = face_roi.ROI_SPECS["eye_shape"]["margin"]
+        try:
+            face_roi.ROI_SPECS["eye_shape"]["margin"] = original + 0.05
+            self.assertNotEqual(face_roi.specs_version(), before,
+                                "改了裁切卻沿用同一個版本，舊樣本會被靜默混用")
+        finally:
+            face_roi.ROI_SPECS["eye_shape"]["margin"] = original
+        self.assertEqual(face_roi.specs_version(), before, "改回來要復原，否則版本沒有意義")
 
 
 if __name__ == "__main__":

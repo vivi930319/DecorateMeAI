@@ -59,6 +59,8 @@
 !image_safety_test.py
 # 五官修正回饋的測試：它產出的是訓練資料與線上信任分數的分母，兩邊都不能靜默壞掉。
 !face_feedback_test.py
+# 使用者同意提供的訓練樣本（只存部位 ROI，不存原圖）。face_feedback 會 import。
+!face_contributions.py
 !replicate_render.py
 !replicate_render_api.py
 !requirements.render.txt

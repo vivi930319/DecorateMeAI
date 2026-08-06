@@ -22,6 +22,7 @@ from pathlib import Path
 from fastapi import Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+import face_contributions
 import face_corrections
 import job_store
 from basic_roi_shadow import PART_TO_FIELD
@@ -137,6 +138,40 @@ def _record_eval_event(mode: str, job_id: str, predicted: dict, corrections: dic
         logging.exception("寫入線上評分紀錄失敗 job_id=%s（不影響使用者的回饋）", job_id)
 
 
+def _store_contribution(mode: str, job_id: str, payload: dict, corrections: dict) -> None:
+    """使用者同意時，保存被修正部位的 ROI 裁切當訓練樣本。
+
+    三個條件缺一不可：明確同意、有修正、有照片。少任何一個就什麼都不存——
+    這裡刻意不做「合理推測」，同意這件事不能靠推論。
+
+    照片由前端在同意時一併重傳（分析當下的 bytes 早就釋放了）。不同意就不會傳，
+    所以「未同意不保存」是結構保證，不是後端自律。
+
+    失敗只記 log。使用者的修正已經收下了，不該因為加值功能失敗而讓他重送一次。
+    """
+    if not payload.get("allowTrainingUse") or not corrections:
+        return
+    data_url = payload.get("imageDataUrl")
+    if not data_url:
+        return
+    try:
+        from replicate_render import data_url_to_bytes
+
+        image_bytes = data_url_to_bytes(data_url)
+    except Exception:
+        logging.exception("貢獻樣本解析影像失敗 job_id=%s", job_id)
+        return
+    try:
+        face_contributions.store(
+            job_id, image_bytes, corrections,
+            owner_id=payload.get("ownerId"),
+            mode=mode,
+            field_to_part={v: k for k, v in PART_TO_FIELD.items()},
+        )
+    except Exception:
+        logging.exception("貢獻樣本保存失敗 job_id=%s", job_id)
+
+
 def save(mode: str, job_id: str, payload: dict) -> str | None:
     """存下一筆修正，回傳文件 id。沒有修正時刪掉既有紀錄並回 None。
 
@@ -161,6 +196,7 @@ def save(mode: str, job_id: str, payload: dict) -> str | None:
     corrections = payload.get("corrections") or {}
     predicted = payload.get("predicted") or {}
     _record_eval_event(mode, job_id, predicted, corrections)
+    _store_contribution(mode, job_id, payload, corrections)
 
     if payload.get("confirmed") or not corrections:
         job_store.delete(FEEDBACK_COL, job_id)
@@ -192,6 +228,12 @@ class FeedbackIn(BaseModel):
     # 前端在送出當下就判定好，不要在這裡用 corrections 是否為空去反推——
     # 語意留在產生它的那一刻，接收端不做推論。
     confirmed: bool = False
+    # 使用者是否同意把這次的部位裁切用於改善模型。**預設 False**：
+    # 沒有明確表示就是不同意，不能用「沒反對」當同意。
+    allowTrainingUse: bool = False
+    # 同意時前端一併重傳照片；不同意就不會有這個欄位，後端也就無從保存。
+    # 「未同意時什麼都不存」因此是結構上保證的，不是靠後端自律。
+    imageDataUrl: str | None = None
 
 
 def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) -> None:
