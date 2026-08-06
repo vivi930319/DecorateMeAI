@@ -182,6 +182,27 @@ class ContributionConsentTest(unittest.TestCase):
         self.assertEqual(args[0], "job-d")
         self.assertEqual(args[2], {"眼型": "圓眼"}, "只該帶被修正的部位")
 
+    def test_owner_comes_from_the_job_not_the_request(self):
+        """ownerId 必須來自 job 文件，不能來自客戶端送的 payload。
+
+        第一版寫成 payload.get("ownerId")，而 FeedbackIn 根本沒有那個欄位，
+        所以每一筆都是空的——物件存進了 GCS 卻沒有擁有者，delete_for_owner
+        永遠找不到它們。存得下、刪不掉，比一開始就不存更糟。
+
+        而且就算補了那個欄位也不能用：payload 是客戶端送的，
+        讓它自稱擁有者等於誰都能把樣本掛到別人名下。
+        """
+        ff.save("basic", "job-f", self._payload(ownerId="actor_client_claims"),
+                owner_id="actor_from_job")
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0][1]["owner_id"], "actor_from_job",
+                         "採用了客戶端宣稱的身分，而不是 job 上記錄的")
+
+    def test_missing_owner_is_still_recorded_as_such(self):
+        """沒有 ownerId（訪客）時仍要能看出來，不要靜默存成空字串就算了。"""
+        ff.save("basic", "job-g", self._payload(), owner_id=None)
+        self.assertIsNone(self.calls[0][1]["owner_id"])
+
     def test_contribution_failure_never_breaks_the_feedback(self):
         """保存樣本失敗，使用者的修正仍要收下——那是加值功能，不是主流程。"""
         def explode(*a, **k):
