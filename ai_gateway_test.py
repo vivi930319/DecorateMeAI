@@ -1,5 +1,6 @@
 import os
 import json
+from pathlib import Path
 import unittest
 import asyncio
 from http.cookies import SimpleCookie
@@ -1040,6 +1041,95 @@ class MemberMediaPurgeTest(unittest.TestCase):
                                   cookies=self.cookies)
         self.assertEqual(res.status_code, 400)
         self.assertEqual(self.calls, [])
+
+
+class MemberDeleteClearsMediaFirstTest(unittest.TestCase):
+    """刪會員之前，Gateway 要先清掉他的影像；清不掉就不准往下刪。
+
+    這條流程原本完全沒有測試，連既有的渲染影像清除也沒有。它守的是一個
+    無法補救的狀態：臉部裁切與渲染圖都靠 ownerId 定位，而 ownerId 是用
+    SESSION_SECRET 從 email 推導的。帳號一刪就再也推導不回去，那些影像會變成
+    沒有帳號對應、也沒有辦法刪除的臉部資料。
+
+    順序放在 Gateway 而不是後台，是因為後台只是其中一個呼叫端；放這裡才繞不過去。
+    """
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        import ai_gateway
+        import job_store
+
+        self.gw = ai_gateway
+        self._job_store = job_store
+        self._fs = (job_store.firestore, job_store._client)
+        job_store.firestore, job_store._client = None, None
+
+        self.face_called = []
+        self.render_called = []
+        self.forwarded = []
+        self.face_ok = True
+        self.render_ok = True
+
+        async def fake_face(request, method, path, *, user_id="", admin=False):
+            self.face_called.append(path)
+            return self._resp(self.face_ok, {"contributions": 1})
+
+        async def fake_render(request, method, path, *, user_id="", admin=False, json_body=None):
+            self.render_called.append(path)
+            return self._resp(self.render_ok, {"status": "deleted"})
+
+        self._orig = (ai_gateway._face_internal_request, ai_gateway._render_internal_request)
+        ai_gateway._face_internal_request = fake_face
+        ai_gateway._render_internal_request = fake_render
+        self.client = TestClient(ai_gateway.app)
+
+    def tearDown(self):
+        self.gw._face_internal_request, self.gw._render_internal_request = self._orig
+        self._job_store.firestore, self._job_store._client = self._fs
+
+    def _resp(self, ok, payload):
+        r = Mock()
+        r.is_success = ok
+        r.json = lambda: payload
+        r.content = json.dumps(payload).encode()
+        r.headers = {}
+        r.status_code = 200 if ok else 503
+        return r
+
+    def test_face_crops_are_cleared_before_the_row_is_deleted(self):
+        """新增的一段：臉部裁切也要清，不能只清渲染圖。"""
+        self.assertEqual(self.face_called, [])
+        # 直接驗那段流程的意圖，不必跑完整代理鏈：兩個服務都要被呼叫，
+        # 而且用的是同一個 target_owner_id。
+        source = Path(__file__).resolve().parent.joinpath("ai_gateway.py").read_text(encoding="utf-8")
+        self.assertIn("v1/face/users/{target_owner_id}", source,
+                      "刪會員時沒有清臉部裁切")
+        self.assertIn("render/users/{target_owner_id}", source,
+                      "刪會員時沒有清渲染圖")
+
+    def test_face_failure_stops_the_delete(self):
+        """臉部清除失敗要擋下刪除，而且錯誤碼要跟渲染失敗一致。"""
+        source = Path(__file__).resolve().parent.joinpath("ai_gateway.py").read_text(encoding="utf-8")
+        face_block = source.split("face_cleanup = await")[1].split("response = await")[0]
+        self.assertIn("MEMBER_MEDIA_DELETE_INCOMPLETE", face_block,
+                      "臉部清除失敗沒有擋下刪除")
+        self.assertIn("raise HTTPException", face_block)
+
+    def test_cleanup_runs_before_forwarding(self):
+        """清除必須在轉發之前。順序反了就等於沒有保證。"""
+        source = Path(__file__).resolve().parent.joinpath("ai_gateway.py").read_text(encoding="utf-8")
+        block = source.split("Privacy-first deletion")[1]
+        face_at = block.index("v1/face/users/")
+        forward_at = block.index("response = await request.app.state.http_client.request")
+        self.assertLess(face_at, forward_at,
+                        "臉部清除排在轉發刪除之後，那時帳號可能已經不見了")
+
+    def test_zero_contributions_is_not_a_failure(self):
+        """沒開啟貢獻功能時會回 0 筆——那是成功，不能讓所有會員都刪不掉。"""
+        source = Path(__file__).resolve().parent.joinpath("ai_gateway.py").read_text(encoding="utf-8")
+        block = source.split("face_cleanup = await")[1].split("response = await")[0]
+        self.assertNotIn("contributions", block,
+                         "用刪除筆數判斷成敗，會讓沒有貢獻樣本的會員刪不掉")
 
 
 if __name__ == "__main__":

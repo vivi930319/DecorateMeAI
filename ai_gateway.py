@@ -2025,6 +2025,25 @@ async def proxy(service: str, path: str, request: Request):
                         status_code=503,
                         detail={"error": {"code": "MEMBER_MEDIA_DELETE_INCOMPLETE", "message": "會員圖片刪除尚未完成，請稍後重試。"}},
                     )
+                # 臉部服務也有這個會員的影像：他同意提供的五官裁切（face_contributions）。
+                # 跟渲染圖同樣的理由要在刪 row 之前清掉——那些物件靠 ownerId 定位，
+                # 而 ownerId 是用 SESSION_SECRET 從 email 推導的。帳號一刪就再也推導不回去，
+                # 剩下的是沒有帳號對應、也沒有辦法刪除的臉部資料。
+                #
+                # 沒開啟貢獻功能時這條會回 0 筆，一樣是成功——不能因為「沒東西可刪」
+                # 就當失敗，那會讓所有會員都刪不掉。
+                face_cleanup = await _face_internal_request(
+                    request,
+                    "DELETE",
+                    f"v1/face/users/{target_owner_id}",
+                    user_id=target_owner_id,
+                    admin=is_admin,
+                )
+                if face_cleanup is None or not face_cleanup.is_success:
+                    raise HTTPException(
+                        status_code=503,
+                        detail={"error": {"code": "MEMBER_MEDIA_DELETE_INCOMPLETE", "message": "會員圖片刪除尚未完成，請稍後重試。"}},
+                    )
         response = await request.app.state.http_client.request(
             method=request.method,
             url=f"{upstream.base_url}/{path}",
