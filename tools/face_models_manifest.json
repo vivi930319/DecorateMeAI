@@ -1,36 +1,36 @@
 {
-  "version": "20260731",
-  "gcsPrefix": "gs://decorate-me-models/20260731",
+  "version": "20260806",
+  "gcsPrefix": "gs://decorate-me-models/20260806",
   "files": [
     {
       "path": "models/basic_features_roi/face_shape.onnx",
       "object": "basic_features_roi/face_shape.onnx",
       "size": 111380414,
-      "sha256": "ec2b8f74c9099611ecc84d76c8e0974b712d2e85b9d363602c6ca7ed18142961"
+      "sha256": "953b8d001988cf98d54820bc642bc076a96ac7a2edab8d90810350d286eacd5b"
     },
     {
       "path": "models/basic_features_roi/brow_shape.onnx",
       "object": "basic_features_roi/brow_shape.onnx",
       "size": 111374260,
-      "sha256": "005e8b9f1d44c9a0db5c841ffe1be7302f22043d2505d88f622be06aeece747b"
+      "sha256": "40cebcd3b9eae7cf5ba53dba488829020e2d57c23fc98500008b780f26356d1c"
     },
     {
       "path": "models/basic_features_roi/eye_shape.onnx",
       "object": "basic_features_roi/eye_shape.onnx",
       "size": 111377336,
-      "sha256": "949004207e350718a31f72bfb07e920c47280fbba4c008a0de2ff8be522154ae"
+      "sha256": "9eb605e24fbe8e3cf5d60298f3b462e192aa78efe4203bdc4bd495c09686374c"
     },
     {
       "path": "models/basic_features_roi/nose_shape.onnx",
       "object": "basic_features_roi/nose_shape.onnx",
       "size": 111371184,
-      "sha256": "b04b9792b3ca6cd03507db34e2679d124ca89d629a75331e781d91dce6d13425"
+      "sha256": "3e8b8320c179117d9d79d6103fcbd876a60bb74568dad208c19b385c437328d9"
     },
     {
       "path": "models/basic_features_roi/lip_shape.onnx",
       "object": "basic_features_roi/lip_shape.onnx",
       "size": 111377336,
-      "sha256": "56d75a4cfcae32f642981512f78402fa9135317c234cb6a6fedc53a675e4a8cf"
+      "sha256": "627aa20c68ee6aa8a765db2df9e49d74697decef31f29fa7a28f991b64b28432"
     },
     {
       "path": "models/pro_nose_side/nose_shape_side.onnx",

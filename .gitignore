@@ -219,6 +219,8 @@ local_only_notes/
 # 檔案裡只有 sha256、相對路徑與標籤，沒有影像。
 !data/roi_cache/
 !data/roi_cache/holdout_split_*.json
+# v1 的作廢說明，跟切分檔放在一起才不會有人先看到 json 就拿去用。
+!data/roi_cache/holdout_split_*.md
 
 # 各版本模型在保留集上的分數，累積比較用。
 !models/holdout_scores.json

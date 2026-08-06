@@ -576,5 +576,359 @@
     }
    }
   }
+ },
+ "final_全資料_s42": {
+  "split": "v1",
+  "model_dir": "models\\final_s42",
+  "parts": {
+   "face_shape": {
+    "architecture": "convnext_tiny",
+    "n": 111,
+    "macro_recall": 0.7627,
+    "accuracy": 0.7658,
+    "per_class": {
+     "圓形臉": {
+      "recall": 0.5714,
+      "n": 21
+     },
+     "心形臉": {
+      "recall": 0.8276,
+      "n": 29
+     },
+     "方形臉": {
+      "recall": 0.85,
+      "n": 20
+     },
+     "長形臉": {
+      "recall": 0.7143,
+      "n": 21
+     },
+     "鵝蛋臉": {
+      "recall": 0.85,
+      "n": 20
+     }
+    }
+   },
+   "brow_shape": {
+    "architecture": "convnext_tiny",
+    "n": 93,
+    "macro_recall": 0.6029,
+    "accuracy": 0.5914,
+    "per_class": {
+     "一字眉": {
+      "recall": 0.5455,
+      "n": 44
+     },
+     "彎月眉": {
+      "recall": 0.68,
+      "n": 25
+     },
+     "落尾眉": {
+      "recall": 0.5833,
+      "n": 24
+     }
+    }
+   },
+   "eye_shape": {
+    "architecture": "convnext_tiny",
+    "n": 183,
+    "macro_recall": 0.8466,
+    "accuracy": 0.8415,
+    "per_class": {
+     "下垂眼": {
+      "recall": 0.7895,
+      "n": 38
+     },
+     "圓眼": {
+      "recall": 0.9062,
+      "n": 32
+     },
+     "桃杏眼": {
+      "recall": 0.7869,
+      "n": 61
+     },
+     "鳳眼": {
+      "recall": 0.9038,
+      "n": 52
+     }
+    }
+   },
+   "nose_shape": {
+    "architecture": "convnext_tiny",
+    "n": 46,
+    "macro_recall": 0.9308,
+    "accuracy": 0.9348,
+    "per_class": {
+     "寬鼻": {
+      "recall": 0.9,
+      "n": 20
+     },
+     "標準鼻": {
+      "recall": 0.9615,
+      "n": 26
+     }
+    }
+   },
+   "lip_shape": {
+    "architecture": "convnext_tiny",
+    "n": 109,
+    "macro_recall": 0.4634,
+    "accuracy": 0.4495,
+    "per_class": {
+     "厚唇": {
+      "recall": 0.5217,
+      "n": 23
+     },
+     "微笑唇": {
+      "recall": 0.1053,
+      "n": 19
+     },
+     "花瓣唇": {
+      "recall": 0.3696,
+      "n": 46
+     },
+     "薄唇": {
+      "recall": 0.8571,
+      "n": 21
+     }
+    }
+   }
+  }
+ },
+ "final_全資料_s43": {
+  "split": "v1",
+  "model_dir": "models\\final_s43",
+  "parts": {
+   "face_shape": {
+    "architecture": "convnext_tiny",
+    "n": 111,
+    "macro_recall": 0.7512,
+    "accuracy": 0.7568,
+    "per_class": {
+     "圓形臉": {
+      "recall": 0.619,
+      "n": 21
+     },
+     "心形臉": {
+      "recall": 0.8276,
+      "n": 29
+     },
+     "方形臉": {
+      "recall": 0.8,
+      "n": 20
+     },
+     "長形臉": {
+      "recall": 0.8095,
+      "n": 21
+     },
+     "鵝蛋臉": {
+      "recall": 0.7,
+      "n": 20
+     }
+    }
+   },
+   "brow_shape": {
+    "architecture": "convnext_tiny",
+    "n": 93,
+    "macro_recall": 0.7522,
+    "accuracy": 0.7527,
+    "per_class": {
+     "一字眉": {
+      "recall": 0.75,
+      "n": 44
+     },
+     "彎月眉": {
+      "recall": 0.84,
+      "n": 25
+     },
+     "落尾眉": {
+      "recall": 0.6667,
+      "n": 24
+     }
+    }
+   },
+   "eye_shape": {
+    "architecture": "convnext_tiny",
+    "n": 183,
+    "macro_recall": 0.7409,
+    "accuracy": 0.7268,
+    "per_class": {
+     "下垂眼": {
+      "recall": 0.9737,
+      "n": 38
+     },
+     "圓眼": {
+      "recall": 0.625,
+      "n": 32
+     },
+     "桃杏眼": {
+      "recall": 0.5574,
+      "n": 61
+     },
+     "鳳眼": {
+      "recall": 0.8077,
+      "n": 52
+     }
+    }
+   },
+   "nose_shape": {
+    "architecture": "convnext_tiny",
+    "n": 46,
+    "macro_recall": 0.9808,
+    "accuracy": 0.9783,
+    "per_class": {
+     "寬鼻": {
+      "recall": 1.0,
+      "n": 20
+     },
+     "標準鼻": {
+      "recall": 0.9615,
+      "n": 26
+     }
+    }
+   },
+   "lip_shape": {
+    "architecture": "convnext_tiny",
+    "n": 109,
+    "macro_recall": 0.7796,
+    "accuracy": 0.7982,
+    "per_class": {
+     "厚唇": {
+      "recall": 0.9565,
+      "n": 23
+     },
+     "微笑唇": {
+      "recall": 0.5263,
+      "n": 19
+     },
+     "花瓣唇": {
+      "recall": 0.8261,
+      "n": 46
+     },
+     "薄唇": {
+      "recall": 0.8095,
+      "n": 21
+     }
+    }
+   }
+  }
+ },
+ "final_全資料_s44": {
+  "split": "v1",
+  "model_dir": "models\\final_s44",
+  "parts": {
+   "face_shape": {
+    "architecture": "convnext_tiny",
+    "n": 111,
+    "macro_recall": 0.7727,
+    "accuracy": 0.7748,
+    "per_class": {
+     "圓形臉": {
+      "recall": 0.4762,
+      "n": 21
+     },
+     "心形臉": {
+      "recall": 0.8276,
+      "n": 29
+     },
+     "方形臉": {
+      "recall": 0.85,
+      "n": 20
+     },
+     "長形臉": {
+      "recall": 0.8095,
+      "n": 21
+     },
+     "鵝蛋臉": {
+      "recall": 0.9,
+      "n": 20
+     }
+    }
+   },
+   "brow_shape": {
+    "architecture": "convnext_tiny",
+    "n": 93,
+    "macro_recall": 0.6597,
+    "accuracy": 0.6989,
+    "per_class": {
+     "一字眉": {
+      "recall": 0.8409,
+      "n": 44
+     },
+     "彎月眉": {
+      "recall": 0.68,
+      "n": 25
+     },
+     "落尾眉": {
+      "recall": 0.4583,
+      "n": 24
+     }
+    }
+   },
+   "eye_shape": {
+    "architecture": "convnext_tiny",
+    "n": 183,
+    "macro_recall": 0.8079,
+    "accuracy": 0.7814,
+    "per_class": {
+     "下垂眼": {
+      "recall": 0.9474,
+      "n": 38
+     },
+     "圓眼": {
+      "recall": 0.9062,
+      "n": 32
+     },
+     "桃杏眼": {
+      "recall": 0.7049,
+      "n": 61
+     },
+     "鳳眼": {
+      "recall": 0.6731,
+      "n": 52
+     }
+    }
+   },
+   "nose_shape": {
+    "architecture": "convnext_tiny",
+    "n": 46,
+    "macro_recall": 0.8865,
+    "accuracy": 0.8913,
+    "per_class": {
+     "寬鼻": {
+      "recall": 0.85,
+      "n": 20
+     },
+     "標準鼻": {
+      "recall": 0.9231,
+      "n": 26
+     }
+    }
+   },
+   "lip_shape": {
+    "architecture": "convnext_tiny",
+    "n": 109,
+    "macro_recall": 0.7745,
+    "accuracy": 0.7248,
+    "per_class": {
+     "厚唇": {
+      "recall": 0.913,
+      "n": 23
+     },
+     "微笑唇": {
+      "recall": 0.7368,
+      "n": 19
+     },
+     "花瓣唇": {
+      "recall": 0.5435,
+      "n": 46
+     },
+     "薄唇": {
+      "recall": 0.9048,
+      "n": 21
+     }
+    }
+   }
+  }
  }
 }
