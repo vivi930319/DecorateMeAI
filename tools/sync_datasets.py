@@ -1,4 +1,6 @@
-"""訓練資料集的雲端同步：新機器用這支把照片拉下來。
+"""雲端同步：新機器用這支把 git 裡沒有的東西拉下來。
+
+管三類：訓練照片、正式模型、技術文件。
 
 為什麼資料集不進 git
 --------------------
@@ -10,6 +12,7 @@
 
     GitHub   程式碼、訓練腳本、保留集切分、評估分數、訓練紀錄（含完整歷史）
     GCS      照片本身（私有 bucket，強制封鎖公開存取）
+             ＋正式模型的整個目錄（不是只有 .onnx，見 MODELS 的說明）
              ＋技術文件的一份副本，讓「還沒 clone」也拿得到
 
 技術文件兩邊都有，這是刻意的重複：git 是它們的歷史，GCS 是它們的取用點。
@@ -39,8 +42,10 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-BUCKET = "gs://decorate-me-datasets"
 PROJECT = "decorate-me"
+
+DATA_BUCKET = "gs://decorate-me-datasets"
+MODEL_BUCKET = "gs://decorate-me-models"
 
 # 本機路徑 -> 雲端前綴。
 #
@@ -48,8 +53,19 @@ PROJECT = "decorate-me"
 # 2026-08-06 對照實驗的依據），本機只需要目前這一版。
 # 換了資料集版本就改這裡，並在訓練紀錄裡寫明從哪一版換到哪一版。
 DATASETS = {
-    "data/basic_full/grouped": "basic_full/grouped_post-merge_20260806",
-    "data/pro_full/grouped": "pro_full/grouped_20260807",
+    "data/basic_full/grouped": f"{DATA_BUCKET}/basic_full/grouped_post-merge_20260806",
+    "data/pro_full/grouped": f"{DATA_BUCKET}/pro_full/grouped_20260807",
+}
+
+# 正式環境的模型。**整個目錄**，不是只有 `.onnx`。
+#
+# 雲端原本的 `20260806/` 只放了 5 個 `.onnx`，那還原不出能跑的服務：
+# Dockerfile 第 70、72 行複製的是整個目錄，而 `face_feedback.py` 會讀
+# `*_classes.json` 當合法類別表。少了它，修正回饋收到任何標籤都無從驗證。
+# 只備份權重不備份標籤對應，是「檔案都在但系統起不來」的典型。
+MODELS = {
+    "models/basic_features_roi": f"{MODEL_BUCKET}/20260807_complete/basic_features_roi",
+    "models/pro_nose_side": f"{MODEL_BUCKET}/20260807_complete/pro_nose_side",
 }
 
 # 技術文件。這些在 git 裡就有，而且 git 才是它們的歷史——這裡放一份，是為了
@@ -58,12 +74,17 @@ DATASETS = {
 # 所以路徑刻意不帶日期：git 已經記得每一版長什麼樣，雲端再壓一層版本只會兩邊
 # 對不起來。照片的情況相反——照片不進 git，雲端是它們唯一的歷史，才需要日期。
 DOCS = {
-    "docs/技術文件書_詳細版": "docs/技術文件書_詳細版",
+    "docs/技術文件書_詳細版": f"{DATA_BUCKET}/docs/技術文件書_詳細版",
 }
 
 # 只讀不寫的歷史快照，`--push` 不會動到它們。
 ARCHIVED = {
-    "basic_full/grouped_pre-merge_20260806": "2026-08-06 眼型合併前的狀態，對照實驗用",
+    f"{DATA_BUCKET}/basic_full/grouped_pre-merge_20260806":
+        "2026-08-06 眼型合併前的狀態，對照實驗用",
+    f"{MODEL_BUCKET}/20260731":
+        "2026-07-31 上線版，含 DINOv2 融合頭與規則樹",
+    f"{MODEL_BUCKET}/20260806":
+        "⚠ 只有 5 個 .onnx，缺 classes.json，單獨還原不出可用服務",
 }
 
 
@@ -98,7 +119,7 @@ def count_remote(prefix: str) -> int:
     壞掉的字元不影響計數。
     """
     proc = subprocess.run(
-        [gcloud(), "storage", "ls", "--recursive", f"{BUCKET}/{prefix}/**", "--project", PROJECT],
+        [gcloud(), "storage", "ls", "--recursive", f"{prefix}/**", "--project", PROJECT],
         capture_output=True,
     )
     out = (proc.stdout or b"").decode("utf-8", errors="replace")
@@ -106,7 +127,7 @@ def count_remote(prefix: str) -> int:
 
 
 def main():
-    p = argparse.ArgumentParser(description="訓練資料集的雲端同步")
+    p = argparse.ArgumentParser(description="雲端同步：訓練照片、正式模型、技術文件")
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--pull", action="store_true", help="從 GCS 拉到本機（新機器用這個）")
     mode.add_argument("--push", action="store_true", help="把本機的變更推上 GCS")
@@ -114,10 +135,10 @@ def main():
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
 
-    print(f"bucket: {BUCKET}\n")
+    print(f"資料 {DATA_BUCKET}\n模型 {MODEL_BUCKET}\n")
     failed = []
 
-    for local_rel, remote in {**DATASETS, **DOCS}.items():
+    for local_rel, remote in {**DATASETS, **MODELS, **DOCS}.items():
         local = ROOT / local_rel
         n_local, n_remote = count_local(local), count_remote(remote)
         print(f"{local_rel}")
@@ -135,13 +156,13 @@ def main():
             local.mkdir(parents=True, exist_ok=True)
             # 不加 --delete-unmatched-destination-objects：拉取不該刪掉本機的東西。
             # 本機多出來的檔案可能是還沒推上去的新標註，靜默刪掉會弄丟人工成果。
-            code = run([gcloud(), "storage", "rsync", f"{BUCKET}/{remote}", str(local),
+            code = run([gcloud(), "storage", "rsync", remote, str(local),
                         "--recursive", "--project", PROJECT], args.dry_run)
         else:
             if not local.exists():
                 print("   本機沒有這個目錄，略過（避免把雲端清空）")
                 continue
-            code = run([gcloud(), "storage", "rsync", str(local), f"{BUCKET}/{remote}",
+            code = run([gcloud(), "storage", "rsync", str(local), remote,
                         "--recursive", "--project", PROJECT], args.dry_run)
         if code != 0:
             print(f"   ✗ 失敗（結束碼 {code}）")
