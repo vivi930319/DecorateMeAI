@@ -149,17 +149,28 @@ body {
 .cart-close { width:40px; height:40px; border:1px solid var(--line-gold); background:var(--glass); color:var(--ink-soft); font-size:23px; cursor:pointer; }
 .cart-items { flex:1; overflow:auto; padding:10px 28px; }
 .cart-item { display:grid; grid-template-columns:78px 1fr auto; gap:14px; align-items:center; padding:18px 0; border-bottom:1px solid var(--line); }
-.cart-thumb { width:78px; aspect-ratio:1; overflow:hidden; background:#fff; }
+/* 縮圖改成 <button> 才能用鍵盤開啟商品詳情，所以要把瀏覽器預設的按鈕外觀清掉，
+   否則會多出邊框與內距，跟其他縮圖對不齊。 */
+.cart-thumb { width:78px; aspect-ratio:1; overflow:hidden; background:#fff;
+  padding:0; border:1px solid rgba(138,86,72,.22); cursor:pointer; display:block;
+  transition:border-color .18s ease, transform .18s ease; }
+.cart-thumb:hover { border-color:rgba(138,86,72,.55); transform:translateY(-1px); }
+.cart-thumb:focus-visible { outline:2px solid #8A5648; outline-offset:2px; }
 .cart-thumb .ph { min-height:100%; }
-.cart-item-info span { color:var(--gold); font:400 9px/1 var(--sans); letter-spacing:.18em; }
+/* 購物車面板是近白底（rgba(255,250,247,.96)），--gold 與 --muted 是為深色背景挑的，
+   放在這裡量到的對比只有 2.85:1 與 2.99:1，WCAG AA 要 4.5:1。分類標籤只有 9px，
+   更需要對比。以下兩色是在這個底色上量過的：5.7:1 與 7.1:1。 */
+.cart-item-info span { color:#8A5648; font:400 9px/1 var(--sans); letter-spacing:.18em; }
 .cart-item-info h3 { margin:6px 0 4px; font:400 17px/1.4 var(--cjk); }
-.cart-item-info p { margin:0; color:var(--muted); font-size:13px; }
+.cart-item-info p { margin:0; color:#6E4F48; font-size:13px; }
 .cart-qty { display:grid; grid-template-columns:28px 24px 28px; align-items:center; text-align:center; }
-.cart-qty button { width:28px; height:30px; border:1px solid var(--line-gold); background:var(--glass); color:var(--ink-soft); cursor:pointer; }
+/* 加減按鈕的邊框原本是 --line-gold（30% 透明度），在近白底上幾乎看不見邊界，
+   使用者不知道那是可以按的。加深到看得出是按鈕。 */
+.cart-qty button { width:28px; height:30px; border:1px solid rgba(138,86,72,.45); background:#fff; color:var(--ink-soft); cursor:pointer; }
 .cart-qty b { font:400 12px/1 var(--sans); }
-.cart-empty { padding:80px 0; text-align:center; color:var(--muted); letter-spacing:.12em; }
+.cart-empty { padding:80px 0; text-align:center; color:#6E4F48; letter-spacing:.12em; }
 .cart-panel footer { padding:20px 28px 28px; border-top:1px solid var(--line); }
-.cart-panel footer span { display:block; margin-bottom:12px; color:var(--muted); font-size:12px; }
+.cart-panel footer span { display:block; margin-bottom:12px; color:#6E4F48; font-size:12px; }
 .cart-checkout { width:100%; min-height:50px; border:1px solid rgba(188,146,100,.55); background:var(--glass); color:var(--ink-soft); box-shadow:inset 0 1px 0 var(--sheen); cursor:pointer; }
 .cart-checkout:disabled { opacity:.45; cursor:not-allowed; }
 

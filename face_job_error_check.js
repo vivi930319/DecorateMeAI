@@ -157,6 +157,35 @@ async function jobFailingWith(error) {
   check('確認視窗仍告知會刪除臉部影像',
     routerSource.includes('以及他上傳的臉部影像都會一併移除'), true);
 
+  console.log('\n-- 分析紀錄：拿到結果就記，不等畫面畫完 --');
+  // 原本 History.add 排在十幾個 getElementById().textContent 之後，任何一個元素
+  // 不存在就整段拋例外——分析成功卻沒記錄，畫面還顯示「分析失敗」。
+  const addAt = routerSource.indexOf('History.add(');
+  const paintAt = routerSource.indexOf("document.getElementById('r-eye')");
+  check('History.add 排在畫面更新之前', addAt > 0 && addAt < paintAt, true);
+  check('只有一處寫入紀錄',
+    (routerSource.match(/History\.add\(/g) || []).length, 1);
+  check('storage 寫滿時不再靜默丟棄',
+    apiSource.includes('分析紀錄空間不足，已保留最近'), true);
+
+  console.log('\n-- 收藏：面板數量與實際顯示要對得起來 --');
+  check('算出查不到的差額',
+    routerSource.includes('const missingCount = Math.max(0, Fav.list().length - items.length)'), true);
+  check('把差額告訴使用者，不要靜默消失',
+    routerSource.includes('件收藏的商品目前查不到資料'), true);
+  check('載入中不要誤報找不到',
+    /missingCount && !Router\.generalProductLoading && syncState !== 'loading'/.test(routerSource), true);
+
+  console.log('\n-- 購物車：縮圖可點看詳情 --');
+  check('縮圖是 button 不是 div',
+    /<button class="cart-thumb" type="button" data-cart-open=/.test(routerSource), true);
+  check('點了會開商品詳情',
+    /data-cart-open[\s\S]{0,400}?Router\.go\('products', \{ productId: id \}\)/.test(routerSource), true);
+  check('先關購物車再換頁',
+    /overlay\.remove\(\);[\s\S]{0,120}?Router\.go\('products'/.test(routerSource), true);
+  check('有無障礙標籤',
+    routerSource.includes('的商品詳情"'), true);
+
   console.log('');
   console.log('='.repeat(62));
   if (failures.length) {

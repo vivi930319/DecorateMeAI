@@ -816,7 +816,7 @@ function showCartPanel(){
         overlay.innerHTML = `<section class="cart-panel" role="dialog" aria-modal="true" aria-label="購物車">
             <header><div><span>Shopping Bag</span><h2>購物車</h2></div><button class="cart-close" aria-label="關閉購物車">×</button></header>
             <div class="cart-items">${rows.length ? rows.map(item => `<article class="cart-item">
-                <div class="cart-thumb">${phBox('', item.product.name, item.product.img)}</div>
+                <button class="cart-thumb" type="button" data-cart-open="${escapeHtml(item.id)}" aria-label="查看 ${escapeHtml(item.product.name)} 的商品詳情">${phBox('', item.product.name, item.product.img)}</button>
                 <div class="cart-item-info"><span>${escapeHtml(CAT_EN[item.product.cat] || item.product.cat)}</span><h3>${escapeHtml(item.product.name)}</h3><p>${escapeHtml(item.product.price)}</p></div>
                 <div class="cart-qty"><button data-cart-minus="${escapeHtml(item.id)}" aria-label="減少 ${escapeHtml(item.product.name)}">−</button><b>${escapeHtml(item.qty)}</b><button data-cart-plus="${escapeHtml(item.id)}" aria-label="增加 ${escapeHtml(item.product.name)}">＋</button></div>
             </article>`).join('') : `<div class="cart-empty">${emptyMessage}</div>`}</div>
@@ -825,6 +825,14 @@ function showCartPanel(){
         overlay.querySelector('.cart-close').onclick = () => overlay.remove();
         overlay.querySelectorAll('[data-cart-minus]').forEach(btn => btn.onclick = () => { Cart.change(btn.dataset.cartMinus, -1); updateCartBadge(); render(); });
         overlay.querySelectorAll('[data-cart-plus]').forEach(btn => btn.onclick = () => { Cart.change(btn.dataset.cartPlus, 1); updateCartBadge(); render(); });
+        // 點縮圖看商品詳情。用 <button> 不是掛 onclick 的 <div>——Tab 到得了、Enter 有作用、
+        // 螢幕閱讀器唸得出是按鈕，跟這個檔案裡會員中心那幾張統計卡同一個理由。
+        // 要先關掉購物車覆蓋層，否則詳情頁被蓋在後面看不到。
+        overlay.querySelectorAll('[data-cart-open]').forEach(btn => btn.onclick = () => {
+            const id = btn.dataset.cartOpen;
+            overlay.remove();
+            Router.go('products', { productId: id });
+        });
         const checkout = overlay.querySelector('.cart-checkout');
         if (checkout && !checkout.disabled) checkout.onclick = () => showToast('結帳功能開發中，敬請期待');
     };
@@ -2705,6 +2713,13 @@ const PageInit = {
                 });
                 const data = response.result || response.data || response;
                 Router.analysisResult = data;
+                // 拿到結果就先記下來，不要等畫面畫完。
+                //
+                // 這一段後面有十幾個 document.getElementById(...).textContent = ...，
+                // 任何一個元素不存在就整段拋例外 —— 分析其實成功了，卻既沒寫進紀錄、
+                // 畫面又顯示「分析失敗」。紀錄是這次分析的成果，畫面只是呈現，
+                // 呈現壞掉不該讓成果跟著消失。
+                History.add({ ...data, analysisPackageId: Router.analysisPackage.id, mode: Router.analyzeMode });
                 setLoadingStatus('分析完成，正在壓縮圖片並封裝資料包', true);
                 const packagedImages = await compressImagesForPackage();
                 const completedAt = Date.now();
@@ -2771,7 +2786,6 @@ const PageInit = {
                 document.getElementById('lipSwatch').style.background = Api.labToRgb(lipLab.L||40, lipLab.a||0, lipLab.b||0);
 
                 document.getElementById('goStyleBtn').style.display = 'inline-block';
-                History.add({ ...data, analysisPackageId: Router.analysisPackage.id, mode: Router.analyzeMode });
                 renderAnalysisFeedback(data, Router.analysisPackage.id);
             } catch (err) {
                 bar.style.display = 'none'; fill.style.width = '0';
@@ -3141,6 +3155,10 @@ const PageInit = {
             return true;
         });
         const items = catalog.filter(p => Fav.has(p.id));
+        // 收藏了、但在三個來源都查不到的商品。會員中心數的是 Fav.list()（全部），
+        // 這一頁只畫得出查得到的，兩邊因此對不上——而且差額是靜默消失的：
+        // 使用者收藏過，回來卻不見了，也沒有任何說明。
+        const missingCount = Math.max(0, Fav.list().length - items.length);
         const area = document.getElementById('favArea');
         if (!area) return;
         const syncState = Router.favoriteSyncState || 'idle';
@@ -3156,13 +3174,18 @@ const PageInit = {
         if (!apiCatalog.length && !Router.generalProductLoading) {
             loadGeneralProductCatalog(() => { if (Router.currentPage === 'favorites') PageInit.favorites(); });
         }
+        // 目錄還在載的時候先不要說「找不到」——那時候差額只是還沒載完。
+        const missingNote = (missingCount && !Router.generalProductLoading && syncState !== 'loading')
+            ? `<div class="fav-sync-note">另有 ${missingCount} 件收藏的商品目前查不到資料，可能已經下架。`
+              + `它們仍留在你的收藏裡，商品重新上架就會出現。</div>`
+            : '';
         if (!items.length) {
             const emptyText = syncState === 'loading' ? '正在讀取收藏商品' : '目前尚無收藏商品';
-            area.innerHTML = syncNote + `<div class="empty-state">${emptyText}</div>`;
+            area.innerHTML = syncNote + missingNote + `<div class="empty-state">${emptyText}</div>`;
             bindRetry();
             return;
         }
-        area.innerHTML = syncNote + `<div class="prod-count">${items.length} 件收藏</div><div class="prod-grid">` + items.map((p, i) => `
+        area.innerHTML = syncNote + missingNote + `<div class="prod-count">${items.length} 件收藏</div><div class="prod-grid">` + items.map((p, i) => `
             <div class="prod-card reveal-in" data-pid="${p.id}" style="animation-delay:${Math.min(i*0.035,0.4)}s">
                 <div class="pc-imgwrap">
                     ${phBox('', p.name, p.img)}

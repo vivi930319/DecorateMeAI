@@ -3183,7 +3183,25 @@ const History = {
     add(record) {
         const arr = this.list();
         arr.unshift({ ...this._textOnly(record), timestamp: new Date().toISOString() });
-        try { localStorage.setItem(this._accountKey(), JSON.stringify(arr)); } catch (_) {}
+        try {
+            localStorage.setItem(this._accountKey(), JSON.stringify(arr));
+            return true;
+        } catch (err) {
+            // 多半是 localStorage 滿了。原本這裡直接吞掉，於是那次分析靜默消失——
+            // 使用者以為記錄下來了，回頭看卻沒有，而且沒有任何跡象。
+            //
+            // 丟掉最舊的幾筆再試一次：留下新的比整批寫不進去好，而且分析紀錄本來
+            // 就是愈近期愈有用。真的還是寫不進去才回 false，讓呼叫端知道。
+            for (const keep of [Math.floor(arr.length / 2), 20, 5]) {
+                try {
+                    localStorage.setItem(this._accountKey(), JSON.stringify(arr.slice(0, keep)));
+                    console.warn('分析紀錄空間不足，已保留最近', keep, '筆');
+                    return true;
+                } catch (_) { /* 再縮小 */ }
+            }
+            console.error('分析紀錄寫入失敗', err);
+            return false;
+        }
     },
     // 五官修正後同步更新對應的分析紀錄。
     applyCorrections(packageId, corrections) {
