@@ -8,8 +8,12 @@
 
 所以分工是：
 
-    GitHub   程式碼、訓練腳本、保留集切分、評估分數、訓練紀錄
+    GitHub   程式碼、訓練腳本、保留集切分、評估分數、訓練紀錄（含完整歷史）
     GCS      照片本身（私有 bucket，強制封鎖公開存取）
+             ＋技術文件的一份副本，讓「還沒 clone」也拿得到
+
+技術文件兩邊都有，這是刻意的重複：git 是它們的歷史，GCS 是它們的取用點。
+改文件請改 repo 裡的，然後 `--push`；不要只改雲端那份，那樣 git 就不知道。
 
 可重現性不因此受損：保留集用 sha256 當鍵，clone 下來配上這支還原的照片，
 就能重跑出同樣的數字（見 tools/build_holdout_split.py）。
@@ -48,6 +52,15 @@ DATASETS = {
     "data/pro_full/grouped": "pro_full/grouped_20260807",
 }
 
+# 技術文件。這些在 git 裡就有，而且 git 才是它們的歷史——這裡放一份，是為了
+# 「還沒 clone 就想看」和「git 拿不到時仍然拿得到」。
+#
+# 所以路徑刻意不帶日期：git 已經記得每一版長什麼樣，雲端再壓一層版本只會兩邊
+# 對不起來。照片的情況相反——照片不進 git，雲端是它們唯一的歷史，才需要日期。
+DOCS = {
+    "docs/技術文件書_詳細版": "docs/技術文件書_詳細版",
+}
+
 # 只讀不寫的歷史快照，`--push` 不會動到它們。
 ARCHIVED = {
     "basic_full/grouped_pre-merge_20260806": "2026-08-06 眼型合併前的狀態，對照實驗用",
@@ -74,10 +87,21 @@ def count_local(path: Path) -> int:
 
 
 def count_remote(prefix: str) -> int:
-    out = subprocess.run(
+    """數雲端有幾個物件。
+
+    刻意收 bytes 再自己解碼，不用 `text=True, encoding="utf-8"`：這台是繁中 Windows，
+    gcloud 的訊息裡只要出現中文路徑（專案路徑本身就有「淡江大學」）就是 CP950 位元組，
+    utf-8 解碼會在讀取執行緒裡炸掉，而那個例外**不會傳回主執行緒**——
+    `.stdout` 只是變成 None，然後在下一行以 AttributeError 現形，看起來像別的問題。
+
+    `errors="replace"` 讓壞位元組變成問號而不是中斷。這裡只數開頭是 gs:// 的行，
+    壞掉的字元不影響計數。
+    """
+    proc = subprocess.run(
         [gcloud(), "storage", "ls", "--recursive", f"{BUCKET}/{prefix}/**", "--project", PROJECT],
-        capture_output=True, text=True, encoding="utf-8",
-    ).stdout
+        capture_output=True,
+    )
+    out = (proc.stdout or b"").decode("utf-8", errors="replace")
     return sum(1 for line in out.splitlines() if line.startswith("gs://") and not line.endswith("/"))
 
 
@@ -93,7 +117,7 @@ def main():
     print(f"bucket: {BUCKET}\n")
     failed = []
 
-    for local_rel, remote in DATASETS.items():
+    for local_rel, remote in {**DATASETS, **DOCS}.items():
         local = ROOT / local_rel
         n_local, n_remote = count_local(local), count_remote(remote)
         print(f"{local_rel}")
