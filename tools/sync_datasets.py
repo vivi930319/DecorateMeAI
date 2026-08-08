@@ -77,6 +77,18 @@ DOCS = {
     "docs/技術文件書_詳細版": f"{DATA_BUCKET}/docs/技術文件書_詳細版",
 }
 
+# 散在根目錄的單獨檔案（不是目錄），用萬用字元指定。
+#
+# 實驗的原始 console 輸出。不進 git——訓練紀錄與 holdout_scores.json 已經有結論，
+# 這些是產生那些結論的當下畫面。留著是為了「數字對不起來時能回頭看當時發生什麼」，
+# 那種需求在新機器上重跑實驗、發現和紀錄不一致的時候才會出現。
+#
+# 刻意不把它們搬進某個 logs/ 目錄再同步：那會動到你的檔案配置，
+# 而這支工具的職責是搬運，不是重整。
+LOOSE = {
+    "*.log": f"{DATA_BUCKET}/experiment_logs/20260807",
+}
+
 # 只讀不寫的歷史快照，`--push` 不會動到它們。
 ARCHIVED = {
     f"{DATA_BUCKET}/basic_full/grouped_pre-merge_20260806":
@@ -167,6 +179,35 @@ def main():
         if code != 0:
             print(f"   ✗ 失敗（結束碼 {code}）")
             failed.append(local_rel)
+        print()
+
+    for pattern, remote in LOOSE.items():
+        matches = sorted(ROOT.glob(pattern))
+        n_local, n_remote = len(matches), count_remote(remote)
+        print(f"{pattern}（根目錄散檔）")
+        print(f"   本機 {n_local} 檔   雲端 {n_remote} 檔")
+
+        if args.verify:
+            if n_local != n_remote:
+                print(f"   ⚠ 數量不一致，差 {abs(n_local - n_remote)} 個")
+                failed.append(pattern)
+            else:
+                print("   一致")
+            continue
+
+        # 用 cp 不用 rsync：rsync 的來源必須是目錄，會把整個專案根目錄拿去比對。
+        if args.pull:
+            code = run([gcloud(), "storage", "cp", f"{remote}/*", str(ROOT),
+                        "--project", PROJECT], args.dry_run)
+        elif not matches:
+            print("   本機沒有符合的檔案，略過")
+            continue
+        else:
+            code = run([gcloud(), "storage", "cp", *[str(m) for m in matches],
+                        f"{remote}/", "--project", PROJECT], args.dry_run)
+        if code != 0:
+            print(f"   ✗ 失敗（結束碼 {code}）")
+            failed.append(pattern)
         print()
 
     if ARCHIVED:
