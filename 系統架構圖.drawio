@@ -1,0 +1,94 @@
+<mxfile host="app.diagrams.net" version="24.0.0">
+  <diagram name="技術架構" id="arch">
+    <mxGraphModel dx="1000" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="700" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="user" value="使用者瀏覽器" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;fontStyle=1" vertex="1" parent="1">
+          <mxGeometry x="330" y="30" width="190" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="fe" value="前端 · Firebase Hosting  (decorate-me.web.app)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;verticalAlign=top;fontStyle=1;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="290" y="110" width="290" height="115" as="geometry" />
+        </mxCell>
+        <mxCell id="app" value="Vanilla JS：config / data / api / router" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12" vertex="1" parent="fe">
+          <mxGeometry x="20" y="30" width="250" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="ls" value="localStorage / sessionStorage（收藏·購物車·點數·草稿 暫存）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef7ea;strokeColor=#82b366;fontSize=10;dashed=1" vertex="1" parent="fe">
+          <mxGeometry x="20" y="72" width="250" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ours" value="我方後端 · Google Cloud Run (asia-east1)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff5eb;strokeColor=#d79b00;verticalAlign=top;fontStyle=1;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="40" y="300" width="360" height="185" as="geometry" />
+        </mxCell>
+        <mxCell id="fb" value="face-basic — BASIC 臉部分析&#10;FastAPI + InsightFace / MediaPipe" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11" vertex="1" parent="ours">
+          <mxGeometry x="20" y="30" width="320" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="fp" value="face-pro — PRO 臉部分析" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11" vertex="1" parent="ours">
+          <mxGeometry x="20" y="88" width="320" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="rd" value="replicate-render — AI 妝容渲染&#10;FastAPI（API key + 限流 + 去重）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11" vertex="1" parent="ours">
+          <mxGeometry x="20" y="132" width="320" height="45" as="geometry" />
+        </mxCell>
+
+        <mxCell id="team" value="組員服務 · Cloudflare Tunnel（網址重啟就變）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f7f0fb;strokeColor=#9673a6;verticalAlign=top;fontStyle=1;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="440" y="300" width="360" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="mdb" value="會員 + 商品資料庫  (quickly-tend-sun-rod)&#10;login / register / members / products / recommend / saved-looks / points" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10" vertex="1" parent="team">
+          <mxGeometry x="20" y="30" width="320" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="oll" value="Ollama 文字建議  (morning-deeper-kick)&#10;黃姵錚的 Mac" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10" vertex="1" parent="team">
+          <mxGeometry x="20" y="105" width="320" height="35" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ext" value="外部 / 儲存" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fffdf5;strokeColor=#d6b656;verticalAlign=top;fontStyle=1;fontSize=12" vertex="1" parent="1">
+          <mxGeometry x="40" y="540" width="760" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="rep" value="Replicate&#10;flux-kontext-pro" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11" vertex="1" parent="ext">
+          <mxGeometry x="30" y="35" width="210" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="gcs" value="GCS bucket&#10;decorate-me-renders（公開讀）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11" vertex="1" parent="ext">
+          <mxGeometry x="275" y="35" width="210" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="fs" value="Firestore&#10;job_store（分析 job）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11" vertex="1" parent="ext">
+          <mxGeometry x="520" y="35" width="210" height="50" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e_user_app" style="endArrow=classic;html=1;strokeColor=#333333" edge="1" parent="1" source="user" target="app"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_app_fb" value="X-API-Key" style="endArrow=classic;html=1;strokeColor=#d79b00;fontSize=10" edge="1" parent="1" source="app" target="fb"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_app_rd" value="X-API-Key" style="endArrow=classic;html=1;strokeColor=#d79b00;fontSize=10" edge="1" parent="1" source="app" target="rd"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_app_mdb" value="session cookie" style="endArrow=classic;html=1;strokeColor=#9673a6;fontSize=10" edge="1" parent="1" source="app" target="mdb"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_app_oll" value="X-API-Key" style="endArrow=classic;html=1;strokeColor=#9673a6;fontSize=10" edge="1" parent="1" source="app" target="oll"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_fb_fs" style="endArrow=classic;html=1;strokeColor=#d6b656" edge="1" parent="1" source="fb" target="fs"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_rd_rep" style="endArrow=classic;html=1;strokeColor=#d6b656" edge="1" parent="1" source="rd" target="rep"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_rd_gcs" style="endArrow=classic;html=1;strokeColor=#d6b656" edge="1" parent="1" source="rd" target="gcs"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e_app_gcs" value="顯示渲染圖" style="endArrow=classic;html=1;dashed=1;strokeColor=#999999;fontSize=10" edge="1" parent="1" source="ls" target="gcs"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+
+  <diagram name="主串接流程" id="flow">
+    <mxGraphModel dx="1000" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="500" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="s1" value="① 上傳照片" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12" vertex="1" parent="1"><mxGeometry x="40" y="80" width="130" height="50" as="geometry" /></mxCell>
+        <mxCell id="s2" value="② 前端壓縮&#10;1024px / 0.78&#10;(Web Worker)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=11" vertex="1" parent="1"><mxGeometry x="210" y="75" width="140" height="60" as="geometry" /></mxCell>
+        <mxCell id="s3" value="③ 臉部分析&#10;face-basic/pro&#10;(X-API-Key, job輪詢)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11" vertex="1" parent="1"><mxGeometry x="390" y="75" width="150" height="60" as="geometry" /></mxCell>
+        <mxCell id="s4" value="④ Ollama 建議&#10;妝容文字 + 英文 renderPrompt" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11" vertex="1" parent="1"><mxGeometry x="580" y="75" width="160" height="60" as="geometry" /></mxCell>
+        <mxCell id="s5" value="⑤ AI 渲染&#10;replicate-render&#10;(去重快取)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11" vertex="1" parent="1"><mxGeometry x="780" y="75" width="150" height="60" as="geometry" /></mxCell>
+        <mxCell id="s6" value="⑥ Replicate 生成&#10;→ 上傳 GCS&#10;→ 永久網址" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=11" vertex="1" parent="1"><mxGeometry x="780" y="230" width="150" height="65" as="geometry" /></mxCell>
+        <mxCell id="s7" value="⑦ 收藏妝容對比圖&#10;POST saved-looks&#10;(session cookie)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=11" vertex="1" parent="1"><mxGeometry x="560" y="230" width="160" height="65" as="geometry" /></mxCell>
+
+        <mxCell id="f12" style="endArrow=classic;html=1" edge="1" parent="1" source="s1" target="s2"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="f23" style="endArrow=classic;html=1" edge="1" parent="1" source="s2" target="s3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="f34" style="endArrow=classic;html=1" edge="1" parent="1" source="s3" target="s4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="f45" style="endArrow=classic;html=1" edge="1" parent="1" source="s4" target="s5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="f56" style="endArrow=classic;html=1" edge="1" parent="1" source="s5" target="s6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="f67" value="afterImageUrl" style="endArrow=classic;html=1;fontSize=10" edge="1" parent="1" source="s6" target="s7"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

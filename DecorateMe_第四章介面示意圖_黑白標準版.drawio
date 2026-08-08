@@ -1,0 +1,463 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="app.diagrams.net" modified="2026-07-21T00:00:00.000Z" agent="Codex" version="24.7.17" type="device" compressed="false">
+  <diagram id="page-1" name="操作總流程">
+    <mxGraphModel dx="1169" dy="827" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="Decorate Me 使用者介面與操作流程（圖4-1至圖4-10）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="1109" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="圖4-1&#10;會員登入／註冊" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="55" y="160" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="圖4-2&#10;選擇BASIC／PRO" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="277" y="160" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="圖4-3&#10;上傳或拍攝照片" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="499" y="160" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="圖4-4&#10;臉部分析結果" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="721" y="160" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="圖4-5&#10;選擇妝容風格" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="943" y="160" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="圖4-6&#10;Ollama妝容建議" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="55" y="460" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="圖4-7&#10;AI妝容渲染" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="277" y="460" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="圖4-8&#10;妝前妝後對比／收藏" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="499" y="460" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="圖4-9&#10;個人化商品推薦" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="721" y="460" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="圖4-10&#10;購物車／個人紀錄" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="943" y="460" width="170" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;strokeWidth=1.5;endArrow=block;endFill=1;fontColor=#000000;fontSize=11;" edge="1" parent="1" source="3" target="4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="14" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;strokeWidth=1.5;endArrow=block;endFill=1;fontColor=#000000;fontSize=11;" edge="1" parent="1" source="4" target="5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="15" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;strokeWidth=1.5;endArrow=block;endFill=1;fontColor=#000000;fontSize=11;" edge="1" parent="1" source="5" target="6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="16" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;strokeWidth=1.5;endArrow=block;endFill=1;fontColor=#000000;fontSize=11;" edge="1" parent="1" source="6" target="7">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="17" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;strokeWidth=1.5;endArrow=block;endFill=1;fontColor=#000000;fontSize=11;" edge="1" parent="1" source="7" target="8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;strokeWidth=1.5;endArrow=block;endFill=1;fontColor=#000000;fontSize=11;" edge="1" parent="1" source="8" target="9">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="19" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;strokeWidth=1.5;endArrow=block;endFill=1;fontColor=#000000;fontSize=11;" edge="1" parent="1" source="9" target="10">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="20" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;strokeWidth=1.5;endArrow=block;endFill=1;fontColor=#000000;fontSize=11;" edge="1" parent="1" source="10" target="11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="21" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;strokeWidth=1.5;endArrow=block;endFill=1;fontColor=#000000;fontSize=11;" edge="1" parent="1" source="11" target="12">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="22" value="標準流程：身分驗證 → 臉部分析 → 妝容建議 → 影像渲染 → 商品導購與紀錄管理" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="55" y="690" width="1059" height="45" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="page-2" name="圖4-1">
+    <mxGraphModel dx="1169" dy="827" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="圖4-1　系統登入與會員註冊畫面" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="1109" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="120" width="550" height="560" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="Decorate Me　會員入口" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="310" y="120" width="550" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="電子郵件" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#000000;fontSize=12;align=left;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="370" y="215" width="430" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="請輸入電子郵件" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="370" y="260" width="430" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="密碼" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#000000;fontSize=12;align=left;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="370" y="325" width="430" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="請輸入密碼" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="370" y="370" width="430" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="登入" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="370" y="455" width="205" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="註冊新會員" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="595" y="455" width="205" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="登入成功後進入主系統；工作階段由JWT與安全Cookie驗證。" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="370" y="540" width="430" height="70" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="page-3" name="圖4-2">
+    <mxGraphModel dx="1169" dy="827" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="圖4-2　BASIC／PRO臉部分析模式選擇畫面" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="1109" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="660" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="Decorate Me　｜　臉部分析模式　　　　　　　　　　　　　　　　　會員中心　登出" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="臉部分析&#10;&#10;妝容風格&#10;&#10;妝容建議&#10;&#10;商品推薦&#10;&#10;分析紀錄&#10;&#10;妝容對比圖&#10;&#10;購物車" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#000000;fontSize=12;align=left;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="70" y="132" width="190" height="618" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="BASIC模式&#10;&#10;適用對象：一般使用者／訪客&#10;照片需求：一張清楚正面照&#10;分析內容：正面五官、膚色與輪廓&#10;用途：快速分析及妝容推薦" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="175" width="350" height="360" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="PRO模式&#10;&#10;適用對象：VIP會員&#10;照片需求：正面照＋側面輔助照&#10;分析內容：完整BASIC結果＋雙角度膚色輔助&#10;限制：側面深度特徵仍為未來擴充" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="700" y="175" width="350" height="360" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="選擇BASIC" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="395" y="565" width="180" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="選擇PRO" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="785" y="565" width="180" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="page-4" name="圖4-3">
+    <mxGraphModel dx="1169" dy="827" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="圖4-3　照片上傳或相機拍攝畫面" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="1109" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="660" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="Decorate Me　｜　照片輸入　　　　　　　　　　　　　　　　　會員中心　登出" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="臉部分析&#10;&#10;妝容風格&#10;&#10;妝容建議&#10;&#10;商品推薦&#10;&#10;分析紀錄&#10;&#10;妝容對比圖&#10;&#10;購物車" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#000000;fontSize=12;align=left;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="70" y="132" width="190" height="618" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="拖曳照片至此處&#10;或按下「選擇圖片」&#10;&#10;［正面人臉取景框］&#10;&#10;支援有效圖片格式&#10;預設上限：8 MB／1,600萬像素" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="330" y="180" width="430" height="330" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="拍攝指引&#10;正面、自然表情、均勻光線" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="790" y="180" width="240" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="避免事項&#10;遮擋、濾鏡、濃妝、過大偏角" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="790" y="270" width="240" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="開啟相機" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="790" y="390" width="240" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="選擇圖片" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="790" y="465" width="240" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="送出臉部分析" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="560" y="555" width="240" height="55" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="page-5" name="圖4-4">
+    <mxGraphModel dx="1169" dy="827" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="圖4-4　臉部分析結果畫面" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="1109" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="660" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="Decorate Me　｜　臉部分析結果　　　　　　　　　　　　　　　　　會員中心　登出" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="臉部分析&#10;&#10;妝容風格&#10;&#10;妝容建議&#10;&#10;商品推薦&#10;&#10;分析紀錄&#10;&#10;妝容對比圖&#10;&#10;購物車" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#000000;fontSize=12;align=left;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="70" y="132" width="190" height="618" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="［使用者照片］&#10;&#10;姿態檢查：通過&#10;分析版本：BASIC／PRO" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="315" y="175" width="260" height="290" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="臉型：＿＿＿＿" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="175" width="390" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="眉型：＿＿＿＿" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="230" width="390" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="眼型：＿＿＿＿" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="285" width="390" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="鼻型：＿＿＿＿" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="340" width="390" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="唇型：＿＿＿＿" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="395" width="390" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="膚色：＿＿＿＿" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="450" width="390" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="13" value="LAB：L＿＿ a＿＿ b＿＿" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="615" y="505" width="390" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="14" value="重新分析" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="420" y="605" width="240" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="15" value="選擇妝容風格" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="710" y="605" width="240" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="page-6" name="圖4-5">
+    <mxGraphModel dx="1169" dy="827" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="圖4-5　妝容風格選擇畫面" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="1109" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="660" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="Decorate Me　｜　妝容風格　　　　　　　　　　　　　　　　　會員中心　登出" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="臉部分析&#10;&#10;妝容風格&#10;&#10;妝容建議&#10;&#10;商品推薦&#10;&#10;分析紀錄&#10;&#10;妝容對比圖&#10;&#10;購物車" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#000000;fontSize=12;align=left;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="70" y="132" width="190" height="618" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="［風格預覽］&#10;&#10;韓系清透" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="175" width="160" height="165" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="［風格預覽］&#10;&#10;日系透明感" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="495" y="175" width="160" height="165" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="［風格預覽］&#10;&#10;港風" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="680" y="175" width="160" height="165" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="［風格預覽］&#10;&#10;千金感" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="865" y="175" width="160" height="165" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="［風格預覽］&#10;&#10;Soft Baddie" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="385" width="160" height="165" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="［風格預覽］&#10;&#10;病嬌風" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="495" y="385" width="160" height="165" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="［風格預覽］&#10;&#10;男士自然妝" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="680" y="385" width="160" height="165" as="geometry" />
+        </mxCell>
+        <mxCell id="13" value="確認所選妝容風格" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="565" y="610" width="260" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="page-7" name="圖4-6">
+    <mxGraphModel dx="1169" dy="827" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="圖4-6　Ollama個人化妝容建議畫面" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="1109" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="660" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="Decorate Me　｜　個人化妝容建議　　　　　　　　　　　　　　　　　會員中心　登出" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="臉部分析&#10;&#10;妝容風格&#10;&#10;妝容建議&#10;&#10;商品推薦&#10;&#10;分析紀錄&#10;&#10;妝容對比圖&#10;&#10;購物車" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#000000;fontSize=12;align=left;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="70" y="132" width="190" height="618" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="分析摘要：臉型／眉型／眼型／鼻型／唇型／膚色　｜　目標風格：＿＿＿＿" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="175" width="740" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="底妝：依膚色與風格調整質感及遮瑕方式" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="260" width="740" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="眉妝：依眉型提供填補、眉峰與眉尾建議" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="328" width="740" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="眼妝：說明眼影層次、眼線方向與睫毛重點" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="396" width="740" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="腮紅／修容：依臉型說明位置、方向與範圍" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="464" width="740" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="唇妝：依唇型與風格提供質地及塗抹方式" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="532" width="740" height="52" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="產生AI妝容渲染" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="550" y="625" width="260" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="page-8" name="圖4-7">
+    <mxGraphModel dx="1169" dy="827" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="圖4-7　AI妝容渲染進度與結果畫面" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="1109" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="660" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="Decorate Me　｜　AI妝容渲染　　　　　　　　　　　　　　　　　會員中心　登出" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="臉部分析&#10;&#10;妝容風格&#10;&#10;妝容建議&#10;&#10;商品推薦&#10;&#10;分析紀錄&#10;&#10;妝容對比圖&#10;&#10;購物車" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#000000;fontSize=12;align=left;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="70" y="132" width="190" height="618" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="［原始照片］&#10;&#10;工作編號：＿＿＿＿&#10;風格：＿＿＿＿" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="325" y="180" width="310" height="360" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="［渲染結果／處理中］&#10;&#10;狀態：等待中／處理中／完成／失敗&#10;&#10;處理進度：＿＿＿＿" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="680" y="180" width="355" height="360" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="取消／返回" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="400" y="590" width="220" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="查看妝前妝後對比" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="730" y="590" width="220" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="page-9" name="圖4-8">
+    <mxGraphModel dx="1169" dy="827" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="圖4-8　妝前妝後對比與收藏畫面" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="1109" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="660" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="Decorate Me　｜　妝容對比圖　　　　　　　　　　　　　　　　　會員中心　登出" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="臉部分析&#10;&#10;妝容風格&#10;&#10;妝容建議&#10;&#10;商品推薦&#10;&#10;分析紀錄&#10;&#10;妝容對比圖&#10;&#10;購物車" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#000000;fontSize=12;align=left;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="70" y="132" width="190" height="618" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="妝前&#10;&#10;［原始照片］" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="175" width="335" height="380" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="妝後&#10;&#10;［AI渲染圖片］" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="700" y="175" width="335" height="380" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="返回風格選擇" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="430" y="595" width="210" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="收藏此妝容對比" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="705" y="595" width="210" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="page-10" name="圖4-9">
+    <mxGraphModel dx="1169" dy="827" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="圖4-9　個人化商品推薦畫面" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="1109" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="660" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="Decorate Me　｜　商品推薦　　　　　　　　　　　　　　　　　會員中心　登出" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="臉部分析&#10;&#10;妝容風格&#10;&#10;妝容建議&#10;&#10;商品推薦&#10;&#10;分析紀錄&#10;&#10;妝容對比圖&#10;&#10;購物車" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#000000;fontSize=12;align=left;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="70" y="132" width="190" height="618" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="推薦條件：膚色＿＿　唇色LAB＿＿　妝容風格＿＿　｜　排序：適配程度" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="165" width="740" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="［商品圖片］&#10;商品名稱 1&#10;類別／色系／價格&#10;適配原因&#10;［加入購物車］" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="250" width="220" height="155" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="［商品圖片］&#10;商品名稱 2&#10;類別／色系／價格&#10;適配原因&#10;［加入購物車］" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="560" y="250" width="220" height="155" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="［商品圖片］&#10;商品名稱 3&#10;類別／色系／價格&#10;適配原因&#10;［加入購物車］" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="810" y="250" width="220" height="155" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="［商品圖片］&#10;商品名稱 4&#10;類別／色系／價格&#10;適配原因&#10;［加入購物車］" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="435" width="220" height="155" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="［商品圖片］&#10;商品名稱 5&#10;類別／色系／價格&#10;適配原因&#10;［加入購物車］" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="560" y="435" width="220" height="155" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="［商品圖片］&#10;商品名稱 6&#10;類別／色系／價格&#10;適配原因&#10;［加入購物車］" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="810" y="435" width="220" height="155" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="page-11" name="圖4-10">
+    <mxGraphModel dx="1169" dy="827" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="圖4-10　購物車與個人紀錄畫面" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="30" y="20" width="1109" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="3" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="660" as="geometry" />
+        </mxCell>
+        <mxCell id="4" value="Decorate Me　｜　購物車／個人紀錄　　　　　　　　　　　　　　　　　會員中心　登出" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="70" y="90" width="1029" height="42" as="geometry" />
+        </mxCell>
+        <mxCell id="5" value="臉部分析&#10;&#10;妝容風格&#10;&#10;妝容建議&#10;&#10;商品推薦&#10;&#10;分析紀錄&#10;&#10;妝容對比圖&#10;&#10;購物車" style="text;html=1;strokeColor=none;fillColor=none;fontColor=#000000;fontSize=12;align=left;verticalAlign=middle;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="70" y="132" width="190" height="618" as="geometry" />
+        </mxCell>
+        <mxCell id="6" value="頁籤：購物車　｜　分析紀錄　｜　收藏妝容　｜　會員資料" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=14;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="310" y="170" width="740" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="7" value="商品／紀錄項目　　　　　　　　　數量／日期　　　　狀態　　　　操作" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="250" width="740" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="8" value="項目 1　　　　　　　　　　　　　＿＿＿＿　　　　　＿＿＿＿　　　查看／移除" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="315" width="740" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="9" value="項目 2　　　　　　　　　　　　　＿＿＿＿　　　　　＿＿＿＿　　　查看／移除" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="385" width="740" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="10" value="項目 3　　　　　　　　　　　　　＿＿＿＿　　　　　＿＿＿＿　　　查看／移除" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="455" width="740" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="11" value="項目 4　　　　　　　　　　　　　＿＿＿＿　　　　　＿＿＿＿　　　查看／移除" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;align=center;verticalAlign=middle;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="310" y="525" width="740" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="12" value="確認購物車／查看紀錄" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontColor=#000000;fontSize=12;fontStyle=1;align=center;verticalAlign=middle;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="790" y="625" width="260" height="50" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
