@@ -39,6 +39,7 @@ import argparse
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -66,6 +67,67 @@ DATASETS = {
 MODELS = {
     "models/basic_features_roi": f"{MODEL_BUCKET}/20260807_complete/basic_features_roi",
     "models/pro_nose_side": f"{MODEL_BUCKET}/20260807_complete/pro_nose_side",
+}
+
+# 對照實驗的權重。這些可以用資料集加訓練腳本重跑出來，結論也已經在
+# models/holdout_scores.json（在 git 裡，記著每個實驗的切分、目錄與逐部位準確率）。
+# 之所以還是搬上來，是為了免去「想確認一個數字就得重跑一次」。
+EXPERIMENTS = {
+    f"models/{name}": f"{MODEL_BUCKET}/experiments_20260809/{name}"
+    for name in (
+        "_onnx_backup_20260729", "_rule_tree_backup_20260729",
+        "candidate_A_premerge", "candidate_B_postmerge",
+        "final_features_20260719", "final_s42", "final_s43", "final_s44",
+        "segmentation",
+        "sweep_A_eye_s42", "sweep_A_eye_s43", "sweep_A_eye_s44",
+        "sweep_B_eye_s42", "sweep_B_eye_s43", "sweep_B_eye_s44",
+        "sweep_B_nose_s43", "sweep_B_nose_s44",
+    )
+}
+
+# 資料集的來源素材與合併溯源。
+#
+# `grouped/` 是合併後的結果，這些是合併**之前**的樣子與過程紀錄。留著的理由是
+# 「這批照片為什麼長這樣」只能靠它們回答——標註複核時要追一張圖從哪來，
+# 沒有這些就只能猜。
+SOURCE = {
+    "data/basic_full/grouped_yun": f"{DATA_BUCKET}/source_material/grouped_yun",
+    "data/group_yun": f"{DATA_BUCKET}/source_material/group_yun",
+    "data/asian_faces": f"{DATA_BUCKET}/source_material/asian_faces",
+    "data/basic_full/_replaced_by_yun_20260729-152347":
+        f"{DATA_BUCKET}/source_material/basic_full_merge_history/_replaced_by_yun_20260729-152347",
+    "data/basic_full/_normalised_20260729-162342":
+        f"{DATA_BUCKET}/source_material/basic_full_merge_history/_normalised_20260729-162342",
+    "data/basic_full/_eye_merge_20260730-003227":
+        f"{DATA_BUCKET}/source_material/basic_full_merge_history/_eye_merge_20260730-003227",
+}
+
+# 週邊工作目錄：設計稿、樣式圖、部署暫存、複核表。
+# 都不進 git（二進位或體積大），但重畫、重做的成本比存起來高。
+WORKSPACE = {
+    "design-prototypes": f"{DATA_BUCKET}/workspace/design-prototypes",
+    "training-backup-20260719-020047": f"{DATA_BUCKET}/workspace/training-backup-20260719",
+    "style-images-dev-makeup": f"{DATA_BUCKET}/workspace/style-images-dev-makeup",
+    "formal-deploy-staging": f"{DATA_BUCKET}/workspace/formal-deploy-staging",
+    "firebase-hosting-full": f"{DATA_BUCKET}/workspace/firebase-hosting-full_已停用",
+    "review_sheets": f"{DATA_BUCKET}/workspace/review_sheets",
+    "outputs": f"{DATA_BUCKET}/workspace/outputs",
+    "_secfix_backup": f"{DATA_BUCKET}/workspace/_secfix_backup",
+    "member-full-dev-makeup": f"{DATA_BUCKET}/workspace/member-full-dev-makeup",
+}
+
+# 只拉不推，而且**不比對數量**。
+#
+# `kaggle_asian_faces` 本機有 10000 張、12 GB，但那是公開的 Kaggle StyleGAN2
+# 生成臉資料集，隨時可以重新下載，沒有理由自己扛一份。而腳本實際取用的是
+# 「排序後的前幾張」——最多的 measure_hair_contamination 與 verify_season_unaffected
+# 取 [:40]，其餘取 [0]。所以雲端只放前 60 張，新機器拉下來就足以跑完所有檢查。
+#
+# 因此本機 10000 對雲端 60 是**預期的**，不是不一致。要完整資料集請去 Kaggle 下載。
+PULL_ONLY = {
+    "data/kaggle_asian_faces/generated_yellow-stylegan2":
+        (f"{DATA_BUCKET}/test_fixtures/kaggle_stylegan2_first60",
+         "公開 Kaggle 資料集，雲端只留腳本會取到的前 60 張"),
 }
 
 # 技術文件。這些在 git 裡就有，而且 git 才是它們的歷史——這裡放一份，是為了
@@ -138,6 +200,18 @@ def count_remote(prefix: str) -> int:
     return sum(1 for line in out.splitlines() if line.startswith("gs://") and not line.endswith("/"))
 
 
+def count_remote_many(prefixes) -> dict:
+    """一次數多個前綴。
+
+    同步項目長到 39 個之後，逐一呼叫 gcloud 要跑兩三分鐘——慢到會讓人跳過驗證，
+    而跳過的驗證等於沒有驗證。這裡開執行緒池同時發，因為每一個都只是在等網路。
+    上限 8 條是留給 gcloud 自己的併發，不要把本機的連線數吃光。
+    """
+    prefixes = list(prefixes)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        return dict(zip(prefixes, pool.map(count_remote, prefixes)))
+
+
 def main():
     p = argparse.ArgumentParser(description="雲端同步：訓練照片、正式模型、技術文件")
     mode = p.add_mutually_exclusive_group(required=True)
@@ -150,9 +224,17 @@ def main():
     print(f"資料 {DATA_BUCKET}\n模型 {MODEL_BUCKET}\n")
     failed = []
 
-    for local_rel, remote in {**DATASETS, **MODELS, **DOCS}.items():
+    everything = {**DATASETS, **MODELS, **EXPERIMENTS, **SOURCE, **WORKSPACE, **DOCS}
+    # 先把所有遠端數量一次問完，再逐項印。
+    remote_counts = count_remote_many(
+        list(everything.values())
+        + [r for r, _ in PULL_ONLY.values()]
+        + list(LOOSE.values())
+    )
+
+    for local_rel, remote in everything.items():
         local = ROOT / local_rel
-        n_local, n_remote = count_local(local), count_remote(remote)
+        n_local, n_remote = count_local(local), remote_counts[remote]
         print(f"{local_rel}")
         print(f"   本機 {n_local} 檔   雲端 {n_remote} 檔")
 
@@ -181,9 +263,25 @@ def main():
             failed.append(local_rel)
         print()
 
+    for local_rel, (remote, why) in PULL_ONLY.items():
+        local = ROOT / local_rel
+        n_local, n_remote = count_local(local), remote_counts[remote]
+        print(f"{local_rel}（只拉不推）")
+        print(f"   本機 {n_local} 檔   雲端 {n_remote} 檔   ← {why}")
+        # 這裡刻意不比對數量，也不列入 failed：兩邊本來就不該一樣。
+        # 拿數量當一致性判準在這一項會永遠紅燈，紅燈久了就沒有人看了。
+        if args.pull:
+            local.mkdir(parents=True, exist_ok=True)
+            code = run([gcloud(), "storage", "rsync", remote, str(local),
+                        "--recursive", "--project", PROJECT], args.dry_run)
+            if code != 0:
+                print(f"   ✗ 失敗（結束碼 {code}）")
+                failed.append(local_rel)
+        print()
+
     for pattern, remote in LOOSE.items():
         matches = sorted(ROOT.glob(pattern))
-        n_local, n_remote = len(matches), count_remote(remote)
+        n_local, n_remote = len(matches), remote_counts[remote]
         print(f"{pattern}（根目錄散檔）")
         print(f"   本機 {n_local} 檔   雲端 {n_remote} 檔")
 
