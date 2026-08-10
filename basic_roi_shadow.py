@@ -18,11 +18,13 @@ import json
 import logging
 import os
 import random
+import threading
 from pathlib import Path
 
 import numpy as np
 
 import rule_features
+from eye_features import eye_features_from_points
 from face_roi import PARTS, crop_roi, roi_to_tensor
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,20 @@ PART_TO_FIELD = {
 
 ENCODER = "convnext_tiny"
 PROVIDER = "roi_cnn"
+
+# ── 眼型精密幾何融合(shadow)────────────────────────────────────────────────
+# 眼型只用 3 個幾何特徵(ear/angle/ratio),明顯特徵不足(對照鼻型加特徵後 +0.044)。
+# 加入虹膜露出(refine_landmarks)、上/下瞼曲率、上瞼頂點位置共 9 個精密特徵,
+# 與 eye CNN 機率做線性融合,holdout macro F1 由 0.737 → 0.755(+0.018)。
+# 見 tools/eye_precision_experiment.py 與 tools/train_eye_fusion.py。
+#
+# 預設只跑 shadow:把融合結果放在獨立的「眼型融合」欄位、寫進對照 log,不動使用者看到的
+# 「眼型」。ROI_EYE_FUSION_FIRST=1 才會讓融合接管眼型正式答案(需搭配 MODEL_FIRST)。
+# 需要 refine_landmarks(478 點含虹膜)——這裡自己跑一次 refine mesh,不動主分析的 468 點,
+# 因此不會讓臉型/鼻型/唇型等既有特徵漂移。整段包 try,失敗一律略過,絕不拖垮正式分析。
+EYE_FUSION_ENABLED = os.getenv("ROI_EYE_FUSION_ENABLED", "1") != "0"
+EYE_FUSION_FIRST = os.getenv("ROI_EYE_FUSION_FIRST", "0") == "1"
+EYE_FUSION_PROVIDER = "eye_fusion_geo+cnn"
 
 
 def model_status() -> dict:
@@ -183,6 +199,11 @@ _sessions: dict[str, tuple] | None = None
 _load_failed = False
 _dino: tuple | None = None
 _dino_load_failed = False
+_eye_fusion: tuple | None = None
+_eye_fusion_failed = False
+_refine_mesh = None
+_refine_failed = False
+_refine_lock = threading.Lock()
 
 
 def _load() -> dict[str, tuple]:
@@ -226,6 +247,110 @@ def _load() -> dict[str, tuple]:
 def _softmax(logits: np.ndarray) -> np.ndarray:
     exp = np.exp(logits - logits.max())
     return exp / exp.sum()
+
+
+def _load_eye_fusion() -> tuple | None:
+    """Lazy load 眼型線性融合頭(coef/intercept + 特徵順序)。任何一步失敗就永久停用。"""
+    global _eye_fusion, _eye_fusion_failed
+    if _eye_fusion is not None or _eye_fusion_failed:
+        return _eye_fusion
+    if not EYE_FUSION_ENABLED:
+        _eye_fusion_failed = True
+        return None
+    try:
+        path = MODEL_DIR / "eye_shape_fusion_head.npz"
+        if not path.is_file():
+            logger.info("眼型融合 shadow：找不到 %s,停用", path)
+            _eye_fusion_failed = True
+            return None
+        with np.load(path, allow_pickle=False) as data:
+            coef = data["coef"].astype(np.float64)
+            intercept = data["intercept"].astype(np.float64)
+            geom = [str(x) for x in data["geom_features"]]
+            classes = [str(x) for x in data["classes"]]
+            cnn_classes = [str(x) for x in data["cnn_classes"]]
+        # 守衛:融合頭類別若含目前分類表已淘汰的名稱,就不要載入(同 DINOv2 head 的守衛)。
+        retired = _retired_labels("eye_shape", classes)
+        if retired:
+            logger.warning("眼型融合 shadow：head 含舊類別 %s,與現行分類表不一致,跳過",
+                           "、".join(sorted(retired)))
+            _eye_fusion_failed = True
+            return None
+        _eye_fusion = (coef, intercept, geom, classes, cnn_classes)
+        logger.info("眼型融合 shadow：載入 head(%d 類,%d 維)", len(classes), coef.shape[1])
+    except Exception:
+        _eye_fusion_failed = True
+        logger.exception("眼型融合 shadow：載入失敗")
+    return _eye_fusion
+
+
+def _refine_points(frame_bgr: np.ndarray) -> np.ndarray | None:
+    """跑一次 refine_landmarks=True 的 FaceMesh,取 478 點(含虹膜)。
+
+    自成一個 mesh,不動主分析的 468 點——refine 會微調眼/唇區域,若拿去餵已用 468 點
+    訓練的臉型/鼻型/唇型特徵會造成無聲漂移,所以只在這裡、只給眼型融合用。
+    MediaPipe 不是 thread-safe,process 包在鎖裡。
+    """
+    global _refine_mesh, _refine_failed
+    if _refine_failed:
+        return None
+    try:
+        import cv2
+        import mediapipe as mp
+
+        with _refine_lock:
+            if _refine_mesh is None:
+                _refine_mesh = mp.solutions.face_mesh.FaceMesh(
+                    static_image_mode=True, max_num_faces=1,
+                    refine_landmarks=True, min_detection_confidence=0.5,
+                )
+            res = _refine_mesh.process(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+        if not res.multi_face_landmarks:
+            return None
+        h, w = frame_bgr.shape[:2]
+        lm = res.multi_face_landmarks[0].landmark
+        return np.array([[p.x * w, p.y * h] for p in lm], dtype=np.float32)
+    except Exception:
+        _refine_failed = True
+        logger.exception("眼型融合 shadow：refine landmark 取得失敗,本次起停用")
+        return None
+
+
+def _eye_fusion_predict(frame_bgr: np.ndarray, eye_probs: np.ndarray, cnn_classes: list[str]) -> dict | None:
+    """精密幾何(含虹膜)+ eye CNN 機率 → 線性融合頭。失敗回 None。
+
+    eye_probs 必須依 eye CNN 的類別順序(cnn_classes);融合頭訓練時就是這個順序。
+    """
+    head = _load_eye_fusion()
+    if not head:
+        return None
+    coef, intercept, geom_names, head_classes, head_cnn_classes = head
+    # 訓練與推論的 CNN 類別順序必須一致,否則機率欄位錯位、分類器安靜地變差。
+    if list(cnn_classes) != list(head_cnn_classes):
+        logger.warning("眼型融合 shadow：CNN 類別順序與 head 不符,跳過(%s vs %s)",
+                       cnn_classes, head_cnn_classes)
+        return None
+    pts = _refine_points(frame_bgr)
+    if pts is None:
+        return None
+    try:
+        feats = eye_features_from_points(pts)
+        geo = np.array([feats[n] for n in geom_names], dtype=np.float64)
+        x = np.concatenate([geo, np.asarray(eye_probs, dtype=np.float64)])
+        if x.shape[0] != coef.shape[1]:
+            logger.warning("眼型融合 shadow：輸入維度 %d 與 head 的 %d 不符", x.shape[0], coef.shape[1])
+            return None
+        scores = x @ coef.T + intercept
+        best = int(np.argmax(scores))
+        prob = _softmax(scores)
+        return {
+            "label": head_classes[best],
+            "confidence": round(float(prob[best]), 3),
+            "source": EYE_FUSION_PROVIDER,
+        }
+    except Exception:
+        logger.exception("眼型融合 shadow：預測失敗")
+        return None
 
 
 def _load_dinov2() -> tuple | None:
@@ -461,6 +586,8 @@ def predict(frame_bgr: np.ndarray, points: np.ndarray) -> dict | None:
         "mode": "shadow",
     }
     predicted = 0
+    eye_probs = None
+    eye_classes = None
 
     for part, (session, classes) in sessions.items():
         try:
@@ -473,10 +600,21 @@ def predict(frame_bgr: np.ndarray, points: np.ndarray) -> dict | None:
                 "confidence": round(float(probs[best]), 3),
                 "source": f"{PROVIDER}_{ENCODER}",
             }
+            if part == "eye_shape":
+                eye_probs, eye_classes = probs, classes
             predicted += 1
         except Exception:
             # 單一部位失敗不影響其他部位，也不影響正式輸出
             logger.exception("ROI shadow：%s 預測失敗", part)
+
+    # 眼型精密幾何融合：放進獨立的「眼型融合」欄位（shadow）；只有 EYE_FUSION_FIRST 時
+    # 才讓它接管正式的「眼型」欄位（供 apply_model_first 使用）。失敗一律略過。
+    if EYE_FUSION_ENABLED and eye_probs is not None:
+        fused = _eye_fusion_predict(frame_bgr, eye_probs, eye_classes)
+        if fused is not None:
+            result["眼型融合"] = fused
+            if EYE_FUSION_FIRST:
+                result[PART_TO_FIELD["eye_shape"]] = fused
 
     return result if predicted else None
 
@@ -534,6 +672,17 @@ def log_comparison(rule_result: dict, shadow: dict | None) -> None:
                 "ROI shadow 對照：一致 %d/%d%s",
                 len(agree), total,
                 ("　差異 -> " + "；".join(differ)) if differ else "",
+            )
+
+        # 眼型融合對照：規則 vs 純 CNN vs 精密幾何融合,shadow 階段用來累積線上表現。
+        fusion = shadow.get("眼型融合")
+        cnn_eye = shadow.get(PART_TO_FIELD["eye_shape"])
+        if isinstance(fusion, dict):
+            logger.info(
+                "眼型融合 shadow：規則=%s　CNN=%s　融合=%s(%.2f)",
+                rule_result.get(PART_TO_FIELD["eye_shape"]),
+                cnn_eye["label"] if isinstance(cnn_eye, dict) else None,
+                fusion["label"], fusion["confidence"],
             )
     except Exception:
         logger.exception("ROI shadow：對照記錄失敗")

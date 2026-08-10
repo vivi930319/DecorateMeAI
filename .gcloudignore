@@ -32,6 +32,7 @@
 !analysis_package.py
 !face_roi.py
 !basic_roi_shadow.py
+!eye_features.py
 # 五官判斷回饋（BASIC 與 PRO 都 import）。同上：漏放行的話 build 會停在
 # 「COPY failed: file not found in build context」。
 !face_feedback.py

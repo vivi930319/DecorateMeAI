@@ -66,6 +66,8 @@ COPY pro_nose_side_model.py .
 # 它不再提供任何正式答案；保留是為了讓回滾路徑可用（把部位加回去就能生效）。
 COPY basic_rule_trees.py .
 COPY rule_features.py .
+# 眼型精密幾何融合(shadow)的特徵定義；缺它 basic_roi_shadow import 會失敗。
+COPY eye_features.py .
 # 五個 BASIC ConvNeXt-Tiny ONNX（每個約 106MB）是正式答案。
 COPY models/basic_features_roi/ ./models/basic_features_roi/
 # PRO 側臉鼻型的 ConvNeXt-Tiny。程式與模型必須一起進映像，否則 PRO 會靜默降級。

@@ -31,7 +31,6 @@ sys.path.insert(0, str(ROOT))
 import onnxruntime as ort  # noqa: E402
 from face_roi import roi_to_tensor  # noqa: E402
 
-CACHE = ROOT / "data" / "roi_cache"
 SCORES = ROOT / "models" / "holdout_scores.json"
 
 
@@ -49,8 +48,11 @@ def main():
     p.add_argument("--model-dir", default="models/basic_features_roi")
     p.add_argument("--label", required=True, help="這次評估的名稱，會寫進結果檔")
     p.add_argument("--parts", nargs="*", default=None)
+    p.add_argument("--cache", default="data/roi_cache",
+                   help="ROI 快取目錄（含 rois.npz / index.json / holdout_split_*.json）")
     args = p.parse_args()
 
+    CACHE = ROOT / args.cache
     split_file = CACHE / f"holdout_split_{args.split}.json"
     if not split_file.exists():
         print(f"找不到 {split_file.name}，請先跑 tools/build_holdout_split.py")
@@ -102,43 +104,67 @@ def main():
         arr = rois[part]
 
         correct = 0
-        per_class = {c: [0, 0] for c in classes}  # [命中, 總數]
+        tp = {c: 0 for c in classes}      # 各類 true positive
+        fp = {c: 0 for c in classes}      # 各類被誤判成它的次數（算 precision 用）
+        support = {c: 0 for c in classes}  # 各類在 holdout 的真實張數
         unknown = 0
         for digest, s in sel:
             truth = s["label"]
-            if truth not in per_class:
+            if truth not in support:
                 unknown += 1
                 continue
             logits = sess.run(None, {in_name: roi_to_tensor(arr[row_of[digest]])})[0][0]
             pred = classes[int(np.argmax(logits))]
-            per_class[truth][1] += 1
+            support[truth] += 1
             if pred == truth:
-                per_class[truth][0] += 1
+                tp[truth] += 1
                 correct += 1
+            elif pred in fp:
+                fp[pred] += 1
 
-        recalls = [hit / tot for hit, tot in per_class.values() if tot]
-        macro = float(np.mean(recalls)) if recalls else 0.0
-        n = sum(t for _, t in per_class.values())
+        # 規格書門檻是 macro F1，不是 recall：只押某一類會讓該類 recall 高、precision 低，
+        # 光看 recall 會高估。macro 只對「實際出現在 holdout 的類別」平均；
+        # 有真實樣本卻從沒被預測到的類別，precision 視為 0（與 sklearn 一致）。
+        per_class = {}
+        f1s, precisions, recalls = [], [], []
+        for c in classes:
+            tot = support[c]
+            if not tot:
+                per_class[c] = {"f1": None, "precision": None, "recall": None, "n": 0}
+                continue
+            rec = tp[c] / tot
+            denom_p = tp[c] + fp[c]
+            prec = (tp[c] / denom_p) if denom_p else 0.0
+            f1 = (2 * prec * rec / (prec + rec)) if (prec + rec) else 0.0
+            f1s.append(f1); precisions.append(prec); recalls.append(rec)
+            per_class[c] = {"f1": round(f1, 4), "precision": round(prec, 4),
+                            "recall": round(rec, 4), "n": tot}
+
+        n = sum(support.values())
         results[part] = {
             "architecture": arch,
             "n": n,
-            "macro_recall": round(macro, 4),
+            "macro_f1": round(float(np.mean(f1s)), 4) if f1s else 0.0,
+            "macro_precision": round(float(np.mean(precisions)), 4) if precisions else 0.0,
+            "macro_recall": round(float(np.mean(recalls)), 4) if recalls else 0.0,
             "accuracy": round(correct / n, 4) if n else 0.0,
-            "per_class": {c: {"recall": round(h / t, 4) if t else None, "n": t}
-                          for c, (h, t) in per_class.items()},
+            "per_class": per_class,
         }
         if unknown:
             results[part]["skipped_unknown_label"] = unknown
 
     print(f"\n=== {args.label}（模型目錄 {args.model_dir}）===")
-    print(f"{'部位':<12}{'架構':<18}{'n':>5}{'macro':>8}{'acc':>8}")
-    print("-" * 52)
+    print(f"{'部位':<12}{'架構':<16}{'n':>5}{'macroF1':>9}{'macroP':>8}{'macroR':>8}{'acc':>8}")
+    print("-" * 66)
     for part, r in results.items():
-        print(f"{part:<12}{r['architecture']:<18}{r['n']:>5}{r['macro_recall']:>8.3f}{r['accuracy']:>8.3f}")
-    print("\n各類別 recall：")
+        print(f"{part:<12}{r['architecture']:<16}{r['n']:>5}"
+              f"{r['macro_f1']:>9.3f}{r['macro_precision']:>8.3f}{r['macro_recall']:>8.3f}{r['accuracy']:>8.3f}")
+    print("\n各類別 F1（P=precision R=recall, n=張數）：")
     for part, r in results.items():
-        cells = "、".join(f"{c}={v['recall']:.2f}({v['n']})" if v["recall"] is not None else f"{c}=無樣本"
-                         for c, v in r["per_class"].items())
+        cells = "、".join(
+            f"{c}=F1{v['f1']:.2f}(P{v['precision']:.2f}/R{v['recall']:.2f},{v['n']})"
+            if v["f1"] is not None else f"{c}=無樣本"
+            for c, v in r["per_class"].items())
         print(f"  {part:<12}{cells}")
 
     all_scores = json.loads(SCORES.read_text(encoding="utf-8")) if SCORES.exists() else {}

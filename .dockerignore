@@ -13,6 +13,7 @@
 !basic_rule_trees.py
 !pro_nose_side_model.py
 !rule_features.py
+!eye_features.py
 !tools
 tools/*
 !tools/download_face_models.py

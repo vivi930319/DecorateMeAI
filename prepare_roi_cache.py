@@ -26,8 +26,9 @@ import numpy as np
 
 from face_roi import PARTS, crop_roi
 
-ROOT = Path("data/basic_full/grouped")
-OUT_DIR = Path("data/roi_cache")
+# 可用環境變數指定來源與輸出目錄，方便在不動到既有資料/快取的情況下重建。
+ROOT = Path(os.environ.get("ROI_DATASET_ROOT", "data/basic_full/grouped"))
+OUT_DIR = Path(os.environ.get("ROI_CACHE_DIR", "data/roi_cache"))
 EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_IMAGE_SIZE = 1024  # 跟 Face_analyzer_BASIC 的預設一致，讓 landmark 尺度對得上
 
