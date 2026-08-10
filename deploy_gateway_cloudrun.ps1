@@ -14,7 +14,7 @@ if (-not $SkipTests) {
     $env:GATEWAY_SESSION_SECRET = "local-deploy-check-secret-at-least-32-bytes"
     $env:GATEWAY_FACE_API_KEY = "local-deploy-check"
     $env:GATEWAY_RENDER_API_KEY = "local-deploy-check"
-    & $python -m unittest ai_gateway_test.py render_api_test.py image_safety_test.py
+    & $python -m unittest ai_gateway_test.py api_errors_test.py render_api_test.py image_safety_test.py
     if ($LASTEXITCODE -ne 0) { throw "Deployment stopped: backend tests failed." }
 }
 

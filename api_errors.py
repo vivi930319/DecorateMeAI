@@ -7,6 +7,7 @@ iOS clients do not need service-specific parsing rules.
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 import os
 import re
@@ -16,7 +17,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 
 # ── Log 敏感資料遮罩（訊息「與」例外堆疊都要洗）────────────────────────────
@@ -79,6 +80,79 @@ def error_payload(code: str, message: str, *, retryable: bool = False, **extra) 
     }
     payload.update(extra)
     return {"error": payload}
+
+
+# ── 統一錯誤 envelope 正規化 ──────────────────────────────────────────────
+# 錯誤在系統裡有三種產生途徑：例外處理器、端點直接 return JSONResponse、以及
+# 代理下游時把上游的 body 原樣帶回。三者形狀不一（有的帶 success、有的 detail 多包
+# 一層、代理商品錯誤還夾帶 products）。所有回應都會經過 middleware 這個單一出口，
+# 因此在這裡把任何 >=400 的 JSON 錯誤回應收斂成同一份契約：
+#     {"success": false, "status": "error",
+#      "error": {"code", "message", "retryable", "details", "requestId", ...}}
+# 只動「外層形狀」，不改 error.code——前端（js/api.js）大量依賴既有錯誤碼，
+# 改名會連帶弄壞前端；碼與規格文件的對齊改在文件那一側處理。
+
+
+def _coerce_error_dict(raw, status_code: int) -> dict:
+    # 代理下游有時多包一層 {"detail": {"error": {...}}}，先攤平。
+    if isinstance(raw, dict) and "error" not in raw and isinstance(raw.get("detail"), dict):
+        raw = raw["detail"]
+    err = None
+    if isinstance(raw, dict):
+        candidate = raw.get("error")
+        if isinstance(candidate, dict):
+            err = dict(candidate)
+        elif isinstance(candidate, str):
+            err = {"code": "HTTP_ERROR", "message": candidate}
+        elif "code" in raw or "message" in raw:
+            err = {"code": raw.get("code", "HTTP_ERROR"), "message": raw.get("message", "Request failed.")}
+    if err is None:
+        err = {"code": "HTTP_ERROR", "message": "Request failed."}
+    err.setdefault("code", "HTTP_ERROR")
+    err.setdefault("message", "Request failed.")
+    err.setdefault("retryable", status_code >= 500)
+    err.setdefault("details", {})
+    return err
+
+
+def normalize_error_body(raw, request_id: str, status_code: int) -> dict:
+    """把任何來源的錯誤 body 收斂成統一 envelope。丟掉夾帶在錯誤回應裡的資料欄位
+    （例如商品推薦錯誤帶的 products），只保留 success/status/error 三個頂層鍵。"""
+    err = _coerce_error_dict(raw, status_code)
+    # 單一追蹤碼：body 的 requestId 一律對齊 X-Request-ID 標頭，避免兩個 id 對不上。
+    err["requestId"] = request_id
+    return {"success": False, "status": "error", "error": err}
+
+
+async def normalize_error_response(response, request_id: str):
+    """對 >=400 的 JSON 回應做 envelope 正規化；其餘（成功、媒體、重導）原樣通過。"""
+    if response.status_code < 400:
+        return response
+    if "application/json" not in response.headers.get("content-type", ""):
+        return response
+    body = b""
+    async for chunk in response.body_iterator:
+        body += chunk
+    try:
+        raw = json.loads(body) if body else {}
+    except (ValueError, TypeError):
+        # 不是可解析的 JSON：原樣重建，不吞掉 body。
+        return Response(
+            content=body,
+            status_code=response.status_code,
+            headers=dict(response.headers),
+            media_type=response.headers.get("content-type"),
+        )
+    normalized = JSONResponse(
+        status_code=response.status_code,
+        content=normalize_error_body(raw, request_id, response.status_code),
+    )
+    # 保留原回應的其他標頭（如 429 的 Retry-After、Set-Cookie），只讓 JSONResponse
+    # 自己算 content-length／content-type。
+    for key, value in response.headers.items():
+        if key.lower() not in ("content-length", "content-type"):
+            normalized.headers[key] = value
+    return normalized
 
 
 def rate_limited_error(code: str, message: str, retry_after_seconds: int, **extra) -> HTTPException:
@@ -271,6 +345,9 @@ def install_api_error_handling(app: FastAPI, service_name: str) -> None:
                 extra={"request_id": request_id},
             )
             raise
+        # 統一錯誤 envelope：不論錯誤來自例外處理器、端點直接回傳、或代理下游，
+        # 都在這個單一出口收斂成同一份契約，並讓 body 的 requestId 對齊標頭。
+        response = await normalize_error_response(response, request_id)
         elapsed_ms = (time.perf_counter() - started) * 1000
         response.headers["X-Request-ID"] = request_id
         logger.info(
