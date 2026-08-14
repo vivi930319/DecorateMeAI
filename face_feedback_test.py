@@ -214,6 +214,44 @@ class ContributionConsentTest(unittest.TestCase):
                              "貢獻失敗時，訓練修正仍要進 face_feedback")
 
 
+class ProNoseSideFieldTest(unittest.TestCase):
+    """PRO 側臉鼻型是獨立欄位、獨立分類法，不能跟 BASIC 的正面鼻型混用。
+
+    兩顆模型的類別完全不重疊（正面：寬鼻／標準鼻；側臉：塌鼻／直挺鼻／翹鼻／
+    蒜頭鼻／駝峰鼻）。混用不會壞在畫面上，會壞在重訓時——BASIC 的訓練集裡
+    混進五個它不認識的類別，而那正是 validate() 存在的理由。
+    """
+
+    def setUp(self):
+        ff._allowed_cache = None      # 分類表有快取，測試之間要清掉
+
+    def tearDown(self):
+        ff._allowed_cache = None
+
+    def _pro_available(self) -> bool:
+        return bool(ff.allowed_classes().get(ff.PRO_NOSE_FIELD))
+
+    def test_pro_classes_are_loaded_from_the_pro_model_dir(self):
+        if not self._pro_available():
+            self.skipTest("這個環境沒有 PRO 模型目錄（BASIC 服務屬正常）")
+        classes = ff.allowed_classes()[ff.PRO_NOSE_FIELD]
+        self.assertIn("駝峰鼻", classes)
+        self.assertNotIn("寬鼻", classes, "側臉分類表混進了正面鼻型的類別")
+
+    def test_front_and_side_taxonomies_do_not_leak_into_each_other(self):
+        if not self._pro_available():
+            self.skipTest("這個環境沒有 PRO 模型目錄")
+        ff.validate({ff.PRO_NOSE_FIELD: "駝峰鼻"})        # 合法
+        with self.assertRaises(ff.FeedbackRejected):
+            ff.validate({ff.PRO_NOSE_FIELD: "寬鼻"})      # 正面的類別不能進側臉欄位
+        with self.assertRaises(ff.FeedbackRejected):
+            ff.validate({"鼻型": "駝峰鼻"})                # 側臉的類別也不能進正面欄位
+
+    def test_field_budget_leaves_room_for_the_pro_field(self):
+        """上限要含 PRO 那一欄，否則五個部位加側臉鼻型會被當成超量而整包退回。"""
+        self.assertEqual(ff._MAX_FIELDS, 6)
+
+
 class RoiSpecsVersionTest(unittest.TestCase):
     """裁切規格的版本指紋。
 

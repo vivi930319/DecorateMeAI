@@ -31,6 +31,17 @@ from basic_roi_shadow import PART_TO_FIELD
 # 抄了就會有「模型已經合併類別、驗證還在擋舊類別」這種對不上的情況。
 MODEL_DIR = Path(os.getenv("ROI_MODEL_DIR", "models/basic_features_roi"))
 
+# PRO 的側臉鼻型是**另一顆模型、另一套分類法**（塌鼻／直挺鼻／翹鼻／蒜頭鼻／駝峰鼻），
+# 跟 BASIC 的正面鼻型（寬鼻／標準鼻）不共用類別，也不共用模型目錄。
+#
+# 所以它必須是獨立欄位，不能借用「鼻型」：借用的話，使用者把「駝峰鼻」送進來會被
+# validate() 擋掉（不在 BASIC 分類表裡），而且就算放行，重訓時兩套標籤混在同一欄
+# 會直接汙染 BASIC 的訓練集——那正是 validate() 存在的理由。
+PRO_MODEL_DIR = Path(os.getenv("PRO_MODEL_DIR", "models/pro_nose_side"))
+PRO_NOSE_FIELD = "側臉鼻型"
+PRO_NOSE_PART = "nose_shape_side"
+PRO_NOSE_CLASSES_FILE = "nose_shape_side_classes.json"
+
 FEEDBACK_COL = "face_feedback"
 
 # 線上準確率的量測用集合。跟 FEEDBACK_COL 分開，理由見 save() 的說明：
@@ -40,7 +51,7 @@ EVAL_COL = "face_eval_events"
 
 # 單筆修正最多五個部位，值就是類別字串。設上限是因為這是公開端點，
 # 沒有上限就等於讓人塞任意大小的 JSON 進資料庫。
-_MAX_FIELDS = len(PART_TO_FIELD)
+_MAX_FIELDS = len(PART_TO_FIELD) + 1   # +1 = PRO 的側臉鼻型
 _MAX_VALUE_LEN = 40
 
 _allowed_cache: dict[str, set[str]] | None = None
@@ -65,11 +76,23 @@ def allowed_classes() -> dict[str, set[str]]:
 
     table: dict[str, set[str]] = {}
     complete = True
-    for part, field in PART_TO_FIELD.items():
-        path = MODEL_DIR / f"{part}_classes.json"
+    sources = [(field, MODEL_DIR / f"{part}_classes.json")
+               for part, field in PART_TO_FIELD.items()]
+    # PRO 的側臉鼻型分類表在另一個模型目錄。BASIC 服務沒有這個目錄是正常的
+    # （它根本沒有這顆模型），讀不到就讓這個欄位維持空集合＝擋下該欄位的修正，
+    # 不影響其他五個部位——所以它不算 complete 的失敗條件。
+    sources.append((PRO_NOSE_FIELD, PRO_MODEL_DIR / PRO_NOSE_CLASSES_FILE))
+
+    for field, path in sources:
         try:
             table[field] = set(json.loads(path.read_text(encoding="utf-8"))["classes"])
         except Exception:
+            if field == PRO_NOSE_FIELD:
+                # 只記一行，不印堆疊：BASIC 服務每次啟動都會走到這裡。
+                logging.info("沒有 %s，%s 的修正會被擋下（BASIC 服務屬正常）",
+                             path, PRO_NOSE_FIELD)
+                table[field] = set()
+                continue
             logging.exception("讀不到分類表 %s，這個部位的修正會被擋下", path)
             table[field] = set()
             complete = False
@@ -158,21 +181,41 @@ def _store_contribution(mode: str, job_id: str, payload: dict, corrections: dict
     if not payload.get("allowTrainingUse") or not corrections:
         return
     data_url = payload.get("imageDataUrl")
-    if not data_url:
+    side_data_url = payload.get("sideImageDataUrl")
+    if not data_url and not side_data_url:
         return
-    try:
-        # 用 face_contributions 自己那支，不要 import replicate_render——
-        # 那是渲染服務的模組，face 映像裡沒有（部署後才會發現）。
-        image_bytes = face_contributions.data_url_to_image_bytes(data_url)
-    except Exception:
-        logging.exception("貢獻樣本解析影像失敗 job_id=%s", job_id)
+
+    def _decode(url: str | None, what: str) -> bytes | None:
+        if not url:
+            return None
+        try:
+            # 用 face_contributions 自己那支，不要 import replicate_render——
+            # 那是渲染服務的模組，face 映像裡沒有（部署後才會發現）。
+            return face_contributions.data_url_to_image_bytes(url)
+        except Exception:
+            logging.exception("貢獻樣本解析影像失敗 job_id=%s（%s）", job_id, what)
+            return None
+
+    image_bytes = _decode(data_url, "正面照")
+    # 側臉鼻型那顆模型吃的是整張側臉圖，不是 ROI 裁切，所以它要的是**另一張照片**。
+    # 沒有側面照時，側臉鼻型的修正就只會留下標籤（進 FEEDBACK_COL），不產生影像樣本。
+    side_bytes = _decode(side_data_url, "側面照")
+    if image_bytes is None and side_bytes is None:
         return
     try:
         face_contributions.store(
             job_id, image_bytes, corrections,
             owner_id=owner_id,
             mode=mode,
-            field_to_part={v: k for k, v in PART_TO_FIELD.items()},
+            field_to_part={
+                **{v: k for k, v in PART_TO_FIELD.items()},
+                PRO_NOSE_FIELD: PRO_NOSE_PART,
+            },
+            side_image_bytes=side_bytes,
+            # 這兩個部位存整張圖，其餘存 ROI 裁切。臉型用正面照、側臉鼻型用側面照。
+            # 臉型之所以不存裁切：它的 ROI 是外框 +8%，本來就接近整張臉，而原圖不留
+            # 就永遠無法在改了裁切規格之後重裁——臉型正是最可能要改裁切範圍的一項。
+            whole_image_parts={"face_shape": "front", PRO_NOSE_PART: "side"},
         )
     except Exception:
         logging.exception("貢獻樣本保存失敗 job_id=%s", job_id)
@@ -240,6 +283,10 @@ class FeedbackIn(BaseModel):
     # 同意時前端一併重傳照片；不同意就不會有這個欄位，後端也就無從保存。
     # 「未同意時什麼都不存」因此是結構上保證的，不是靠後端自律。
     imageDataUrl: str | None = None
+    # PRO 才會有：側臉鼻型模型吃的是整張側臉圖，正面照對它沒有訓練價值。
+    # 同意文案必須分開講清楚這一張是「整張側臉照」而不是局部裁切——
+    # 兩種樣本的可辨識性差很多，用同一句話帶過就是不實陳述。
+    sideImageDataUrl: str | None = None
 
 
 def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) -> None:
@@ -285,6 +332,51 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
                 status_code=400,
                 detail={"error": {"code": "INVALID_FEEDBACK", "message": str(exc)}},
             )
+
+    @app.get("/v1/face/feedback")
+    async def list_feedback(  # noqa: ANN202
+        limit: int = Query(default=50, ge=1, le=200),
+        x_admin_request: str | None = Header(default=None),
+    ):
+        """列出最近的使用者修正，給管理端做第二次人工檢查。
+
+        為什麼需要這條：修正會直接變成重訓的標籤，但寫進去之前**沒有任何人看過**。
+        使用者可能誤點、可能自己也判斷錯——尤其眉型、唇型這種本來就主觀的部位。
+        一筆錯的標籤進了訓練集，之後分數變差還很難查回來是哪來的。
+
+        只回管理員。這裡面是「某次分析的模型答案與使用者的修正」，雖然不含 email，
+        但一筆一筆看下去仍然是行為資料，不該公開。
+
+        **不回任何身分欄位**：FEEDBACK_COL 的文件本來就不存 email、不存 ownerId
+        （見 save() 的說明），這裡也不去別的地方湊。要對照影像請走 GCS 的
+        user_contributed 前綴，那邊才有同意過的樣本。
+        """
+        if str(x_admin_request or "").strip() != "1":
+            raise HTTPException(
+                status_code=403,
+                detail={"error": {"code": "ADMIN_REQUIRED", "message": "只有管理員可以檢視修正紀錄"}},
+            )
+        rows = job_store.all_jobs(FEEDBACK_COL, limit=limit,
+                                  order_by="createdAt", descending=True)
+        items = []
+        for row in rows:
+            predicted = row.get("predicted") or {}
+            corrections = row.get("corrections") or {}
+            items.append({
+                "feedbackId": row.get("feedbackId"),
+                "jobId": row.get("jobId"),
+                "mode": row.get("mode"),
+                "createdAt": row.get("createdAt"),
+                # 把「模型答什麼、使用者改成什麼」併成一筆一筆的差異，
+                # 讓前端不必自己對照兩個字典——那種對照最容易在畫面上顯示錯邊。
+                "changes": [
+                    {"field": field,
+                     "predicted": predicted.get(field),
+                     "corrected": value}
+                    for field, value in corrections.items()
+                ],
+            })
+        return {"status": "ok", "count": len(items), "items": items}
 
     @app.delete("/v1/face/users/{owner_id}")
     async def delete_member_face_data(  # noqa: ANN202
