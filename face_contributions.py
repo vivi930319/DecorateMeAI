@@ -103,32 +103,59 @@ def _decode(image_bytes: bytes):
     return frame
 
 
-def store(job_id: str, image_bytes: bytes, corrections: dict, *,
-          owner_id: str | None, mode: str, field_to_part: dict) -> int:
-    """把使用者修正過的部位裁切存起來，回傳存了幾張。
+def store(job_id: str, image_bytes: bytes | None, corrections: dict, *,
+          owner_id: str | None, mode: str, field_to_part: dict,
+          side_image_bytes: bytes | None = None,
+          whole_image_parts: dict[str, str] | None = None) -> int:
+    """把使用者修正過的部位存起來，回傳存了幾張。
 
     只處理**被修正的部位**：使用者沒改的代表模型答對了，那些不缺樣本。
     這也讓儲存量跟資訊量成正比——存的每一張都是模型答錯的例子。
+
+    兩種樣本，來源與形式都不同
+    --------------------------
+    ROI 部位（眉／眼／鼻／嘴）    正面照 → landmark → 裁切成訓練用的 96²
+    whole_image_parts             整張圖，不裁切。`{部位: "front" | "side"}` 指定用哪張照片
+
+        nose_shape_side → side   側臉鼻型模型線上吃的就是整張側臉圖（側臉 FaceMesh
+                                 只認得 73.5%，失敗率還依類別偏斜，裁切會扭曲類別分布）
+        face_shape      → front  臉型要看整張臉的長寬比例與下顎輪廓。128² 的裁切
+                                 事後**無法重裁**（原圖不留），而臉型正是最可能需要
+                                 改裁切範圍的一項——留原圖才留得住重做的可能
+
+    但整張圖的可辨識性比 ROI 高得多——**它就是一張人臉照片**。所以這些部位只在
+    使用者對著「會上傳完整照片」那句話明確同意時才會送到這裡；
+    同意文案與這個參數必須一起改，不能只改一邊。
 
     任何一步失敗都只記 log 不拋出。這是加值功能，不能讓使用者的修正因此送不出去。
     """
     if not ENABLED:
         return 0
-    if not corrections or not image_bytes:
+    if not corrections:
         return 0
-    if len(image_bytes) > _MAX_IMAGE_BYTES:
-        logging.warning("貢獻樣本過大，略過 job_id=%s size=%d", job_id, len(image_bytes))
-        return 0
+    whole_image_parts = whole_image_parts or {}
+    sources = {"front": image_bytes, "side": side_image_bytes}
+    for label, payload in (("正面照", image_bytes), ("側面照", side_image_bytes)):
+        if payload and len(payload) > _MAX_IMAGE_BYTES:
+            logging.warning("貢獻樣本過大，略過 job_id=%s %s size=%d",
+                            job_id, label, len(payload))
+            return 0
 
-    try:
-        from Face_analyzer_BASIC import FaceAnalyzer
+    # landmark 只有 ROI 裁切需要，而且只在正面照上算。整張圖的部位（側臉鼻型）
+    # 不需要它——先前是無條件先算 landmark，於是「只修正了側臉鼻型、沒有正面照」
+    # 的情況會在這裡直接 return，樣本一張都存不到。
+    frame = None
+    points = None
+    needs_roi = any(field_to_part.get(f) not in whole_image_parts for f in corrections)
+    if needs_roi and image_bytes:
+        try:
+            from Face_analyzer_BASIC import FaceAnalyzer
 
-        frame = _decode(image_bytes)
-        analyzer = FaceAnalyzer(image_bytes, strict_angle=False, require_insight=False)
-        points = np.array([analyzer._pt(i) for i in range(len(analyzer.lm))])
-    except Exception:
-        logging.exception("貢獻樣本取 landmark 失敗 job_id=%s", job_id)
-        return 0
+            frame = _decode(image_bytes)
+            analyzer = FaceAnalyzer(image_bytes, strict_angle=False, require_insight=False)
+            points = np.array([analyzer._pt(i) for i in range(len(analyzer.lm))])
+        except Exception:
+            logging.exception("貢獻樣本取 landmark 失敗 job_id=%s", job_id)
 
     version = face_roi.specs_version()
     stamp = datetime.now(timezone.utc)
@@ -141,11 +168,23 @@ def store(job_id: str, image_bytes: bytes, corrections: dict, *,
 
     for field, label in corrections.items():
         part = field_to_part.get(field)
-        if not part or part not in face_roi.ROI_SPECS:
+        if not part:
+            continue
+        whole_source = whole_image_parts.get(part)
+        whole = whole_source is not None
+        if not whole and (part not in face_roi.ROI_SPECS or points is None):
+            continue
+        raw_bytes = sources.get(whole_source) if whole else None
+        if whole and not raw_bytes:
             continue
         try:
-            crop = face_roi.crop_roi(frame, points, part)
-            ok, buf = cv2.imencode(".png", crop)
+            if whole:
+                # 不裁切、不縮放：線上推論自己會縮到模型的輸入尺寸，
+                # 這裡留原圖才有機會在換輸入尺寸或改裁切規格後重用。
+                image = _decode(raw_bytes)
+            else:
+                image = face_roi.crop_roi(frame, points, part)
+            ok, buf = cv2.imencode(".png", image)
             if not ok:
                 continue
             # 路徑本身就帶著「哪個規格、哪個部位、標成哪一類」，不必開檔就分得出來。
@@ -155,7 +194,11 @@ def store(job_id: str, image_bytes: bytes, corrections: dict, *,
                 "mode": mode,
                 "part": part,
                 "label": label,
-                "roiSpecsVersion": version,
+                # 整張圖的樣本不受 ROI_SPECS 影響，標成 whole_image 免得日後
+                # 被當成某個版本的裁切去重裁——它根本沒有裁切規格可言。
+                "roiSpecsVersion": "whole_image" if whole else version,
+                # 可辨識性差很多，保留政策與審查標準可能不同，要能一眼分出來。
+                "sampleForm": f"whole_{whole_source}_image" if whole else "roi_crop",
                 # 刪除會員時要靠這個找到並清除。沒有它就變成刪不掉的臉部資料。
                 "ownerId": str(owner_id or ""),
                 "contributedAt": stamp.isoformat(),
