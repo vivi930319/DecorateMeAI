@@ -339,6 +339,35 @@ def build_model(architecture, n_classes, pretrained=True):
     return model
 
 
+class FocalLoss(nn.Module):
+    """對「已經分得很好」的樣本降權，把梯度留給難分的那些。
+
+    `(1 - pt) ** gamma` 這一項是全部的重點：模型已經很有把握的樣本，pt 接近 1，
+    這個係數就趨近 0，等於自動退場；分不開的樣本 pt 小，係數接近 1，權重不變。
+    gamma=0 時退化成一般的 CrossEntropy。
+
+    label_smoothing 沿用外面原本的設定（0.05），不然「換損失」會同時換掉兩個變因，
+    分數變動就分不出是誰造成的。
+    """
+
+    def __init__(self, weight=None, gamma=2.0, label_smoothing=0.0):
+        super().__init__()
+        self.weight = weight
+        self.gamma = gamma
+        self.label_smoothing = label_smoothing
+
+    def forward(self, logits, target):
+        ce = nn.functional.cross_entropy(
+            logits, target, weight=self.weight,
+            label_smoothing=self.label_smoothing, reduction="none",
+        )
+        # pt 要用「沒有加權、沒有 smoothing」的機率，否則 focal 係數會被 class weight
+        # 二次放大，稀有類的梯度會爆掉。
+        with torch.no_grad():
+            pt = nn.functional.softmax(logits, dim=1).gather(1, target[:, None]).squeeze(1)
+        return ((1.0 - pt) ** self.gamma * ce).mean()
+
+
 def train_one(part, rois, labels, identities, classes, split_name, train_idx, val_idx, args, device):
     n_classes = len(classes)
 
@@ -363,7 +392,36 @@ def train_one(part, rois, labels, identities, classes, split_name, train_idx, va
     model = build_model(args.architecture, n_classes, pretrained=True)
     model.to(device)
 
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
+    # 損失函數：預設維持原本的 CrossEntropy（既有結果才比得下去），
+    # 另外提供 class weight 與 focal loss 兩個開關，兩者可以疊加。
+    #
+    # 為什麼在已經有 WeightedRandomSampler 的情況下還需要它們：sampler 治的是
+    # 「稀有類被看到的次數太少」，focal loss 治的是「**已經看過但仍然分不開**」。
+    # 眉型的病症是後者——落尾眉變成垃圾桶（precision 0.355、recall 0.592，一字眉有
+    # 29%、彎月眉有 41% 被倒進去），那是模型對難分樣本沒有額外用力，多抽幾次也沒用。
+    # 用 getattr 取，不要直接 args.class_weight：`train_one` 是公開給其他工具用的
+    # （tools/find_label_errors.py、tools/train_final_rule_trees.py），那些工具自己組
+    # Namespace，不會有這裡新增的旗標。直接取屬性的話，這支腳本每加一個參數就會
+    # 讓那些工具在跑到一半時 AttributeError——2026-08-14 已經發生過一次。
+    # 預設值＝原本的行為，所以沒帶這些旗標的呼叫端結果完全不變。
+    loss_kind = getattr(args, "loss", "ce")
+    focal_gamma = getattr(args, "focal_gamma", 2.0)
+    class_weight = None
+    if getattr(args, "class_weight", "none") == "balanced":
+        # 有 sampler 在前面時，這裡的權重是疊在「已經被平衡過的抽樣」之上，
+        # 效果比單獨使用溫和；counts 用該折的訓練集算，不能用全體，否則等於偷看驗證集。
+        totals = torch.tensor(
+            [max(1, counts[i]) for i in range(n_classes)], dtype=torch.float
+        )
+        class_weight = (totals.sum() / (n_classes * totals)).to(device)
+        print(f"    class weight: {[round(float(w), 3) for w in class_weight]}", flush=True)
+
+    if loss_kind == "focal":
+        criterion = FocalLoss(weight=class_weight, gamma=focal_gamma,
+                              label_smoothing=0.05)
+        print(f"    loss: focal(gamma={focal_gamma})", flush=True)
+    else:
+        criterion = nn.CrossEntropyLoss(weight=class_weight, label_smoothing=0.05)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
@@ -435,6 +493,12 @@ def export_onnx(model_state, part, classes, device, architecture="mobilenet_v3_s
 
 def parse_args():
     p = argparse.ArgumentParser(description="用部位 ROI 訓練 BASIC 臉部特徵分類器")
+    p.add_argument("--loss", choices=("ce", "focal"), default="ce",
+                   help="ce=CrossEntropy（預設，與既有結果可比）；focal=對難分樣本加重")
+    p.add_argument("--focal-gamma", type=float, default=2.0,
+                   help="focal loss 的 gamma；0 等於退化成 CrossEntropy")
+    p.add_argument("--class-weight", choices=("none", "balanced"), default="none",
+                   help="balanced=用該折訓練集的類別頻率倒數當損失權重")
     p.add_argument("--epochs", type=int, default=20)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--learning-rate", type=float, default=3e-4)
@@ -515,6 +579,10 @@ def run_cv(part, rois, labels, identities, classes, args, device):
         "drop_conflicts": bool(args.drop_conflicts),
         "epochs": args.epochs,
         "architecture": args.architecture,
+        # 損失設定要寫進結果，否則兩個 metrics 檔擺在一起沒人分得出哪個是 focal 跑的。
+        "loss": args.loss,
+        "focal_gamma": args.focal_gamma if args.loss == "focal" else None,
+        "class_weight": args.class_weight,
         "identity_mode": args.identity_mode,
         "face_input": args.face_input,
         "contour_parts": list(args.contour_parts),
@@ -570,7 +638,11 @@ def main():
             # 不同實驗（合併類別/剔除矛盾）各自存檔，免得互相覆蓋、事後對不出哪個數字是哪個實驗的
             # 非預設架構一律進檔名，否則不同架構的結果會互相覆蓋，事後對不出
             # 哪個數字屬於哪個模型架構。
+            # 損失設定也要進檔名。少了這一段，focal 那一輪會直接蓋掉同架構的 CE 基準線，
+            # 而「對照實驗」把基準線蓋掉就沒有東西可以對照了。
             tag = ("" if args.architecture == "mobilenet_v3_small" else f"_{args.architecture}") + \
+                  ("" if args.loss == "ce" else f"_{args.loss}{args.focal_gamma:g}") + \
+                  ("" if args.class_weight == "none" else "_cw") + \
                   ("_per_image" if args.identity_mode == "per_image" else "") + \
                   ("_contour" if args.face_input == "contour" else "") + \
                   ("_feature_contour" if args.contour_parts else "") + \
