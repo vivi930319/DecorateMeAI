@@ -6,7 +6,7 @@ import json
 import hashlib
 import hmac
 from datetime import datetime, timezone
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Tuple, List
 from fastapi import FastAPI, HTTPException, Request, status, Header
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -17,7 +17,7 @@ import uvicorn
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("ollama-suggestion")
 
-app = FastAPI(title="Ollama 妝容真實個人化修飾服務", version="2026-08-06-JSON-Structured")
+app = FastAPI(title="Ollama 妝容真實個人化修飾服務", version="2026-08-15-Render-Prompt-Restored")
 
 app.add_middleware(
     CORSMiddleware,
@@ -86,7 +86,7 @@ def sign_render_prompt(render_prompt_en: str) -> Optional[str]:
         hashlib.sha256,
     ).hexdigest()
 
-# ----------------- 英文 Render Prompt 風格函式組 -----------------
+# ----------------- 英文 Render Prompt 風格控制鏈 -----------------
 def build_luxury_rich_girl_prompt() -> str:
     return (
         "Apply a luxurious elegant makeup look to the face, as a photorealistic makeup-only retouch of the original photo.\n\n"
@@ -164,31 +164,160 @@ async def limit_payload_size(request: Request, call_next):
         return make_error_response(413, "PAYLOAD_TOO_LARGE", "上傳的資料過大，請縮小檔案後再試。", False)
     return await call_next(request)
 
-if not IS_PRODUCTION:
-    @app.middleware("http")
-    async def log_incoming_headers(request: Request, call_next):
-        if request.url.path == "/suggest":
-            header_names = list(request.headers.keys())
-            logger.info(f"[DEBUG 偵測] /suggest 收到的所有 Header 名稱: {header_names}")
-            for possible_name in ["x-api-key", "x_api_key", "apikey", "api-key", "authorization"]:
-                if possible_name in [h.lower() for h in header_names]:
-                    logger.info(f"[DEBUG 偵測] 發現疑似金鑰相關 Header: '{possible_name}'（但可能非標準名稱 X-API-Key）")
-        return await call_next(request)
+# 深度遞迴搜尋字典中的特定 Key
+def _deep_search_keys(data: Any, target_keys: set) -> dict:
+    found = {}
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if k in target_keys and v is not None and str(v).strip().lower() not in {"null", "none", "undefined", "未提供", ""}:
+                found[k] = str(v).strip()
+            if isinstance(v, (dict, list)):
+                found.update(_deep_search_keys(v, target_keys))
+    elif isinstance(data, list):
+        for item in data:
+            found.update(_deep_search_keys(item, target_keys))
+    return found
 
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    logger.error(f"校驗失敗: {exc.errors()}")
-    return make_error_response(status.HTTP_422_UNPROCESSABLE_ENTITY, "VALIDATION_ERROR", "欄位型別、結構或不支援的系統特徵代碼", False)
+def build_gemma3_json_prompts(payload_dict: dict, style: str, user_note: Optional[str], vision_feedback: str) -> Tuple[str, str, bool, List[str]]:
+    search_keys = {
+        "faceShape", "臉型",
+        "browShape", "眉型",
+        "eyeShape", "眼型",
+        "noseFront", "noseSide", "noseShape", "鼻型",
+        "lipShape", "嘴型", "唇型",
+        "season", "level", "skinTone", "膚色", "四季型", "膚色分級"
+    }
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    logger.error(f"HTTP 異常: 狀態碼 {exc.status_code} - 原因: {exc.detail}")
-    return make_error_response(exc.status_code, "HTTP_EXCEPTION", exc.detail, False)
+    extracted = _deep_search_keys(payload_dict, search_keys)
+    logger.info(f"🔍 [五官提取結果]: {json.dumps(extracted, ensure_ascii=False)}")
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"未捕捉的系統例外: {str(exc)}")
-    return make_error_response(500, "INTERNAL_SERVER_ERROR", f"後端崩潰或例外錯誤: {str(exc)}", True)
+    f_shape = extracted.get("faceShape") or extracted.get("臉型")
+    b_shape = extracted.get("browShape") or extracted.get("眉型")
+    e_shape = extracted.get("eyeShape") or extracted.get("眼型")
+    n_shape = extracted.get("noseFront") or extracted.get("noseSide") or extracted.get("noseShape") or extracted.get("鼻型")
+    l_shape = extracted.get("lipShape") or extracted.get("嘴型") or extracted.get("唇型")
+    s_season = extracted.get("season") or extracted.get("四季型") or extracted.get("膚色")
+
+    missing_fields = []
+    if not f_shape: missing_fields.append("faceShape")
+    if not b_shape: missing_fields.append("browShape")
+    if not e_shape: missing_fields.append("eyeShape")
+    if not n_shape: missing_fields.append("noseShape")
+    if not l_shape: missing_fields.append("lipShape")
+    if not s_season: missing_fields.append("skinTone.season")
+
+    face_analysis_used = len(missing_fields) < 5
+
+    f_str = f"臉型：{f_shape}" if f_shape else f"根據相片輪廓修飾臉型（搭配{style}）"
+    b_str = f"眉型：{b_shape}" if b_shape else f"根據原生眉骨梳理眉型（搭配{style}）"
+    e_str = f"眼型：{e_shape}" if e_shape else f"根據眼窩結構刻畫眼型（搭配{style}）"
+    n_str = f"鼻型：{n_shape}" if n_shape else f"根據鼻樑山根修容鼻型（搭配{style}）"
+    l_str = f"唇型：{l_shape}" if l_shape else f"根據唇形飽滿度優化唇妝（搭配{style}）"
+    s_str = f"膚色季型：{s_season}" if s_season else f"根據原生膚色調配底妝（搭配{style}）"
+
+    system_prompt = (
+        "你是一位高階明星御用彩妝顧問。請根據傳入的使用者特徵與目標風格，輸出極具個人化、具體可執行的彩妝建議 JSON。\n\n"
+        "【輸出規範與鐵律】\n"
+        "1. 必須嚴格輸出合法的單一 JSON 物件，不得包含 any 思考過程或 Markdown 標籤。\n"
+        "2. 嚴禁使用『寶寶』、『親愛的』等客套用語，語氣保持客觀、專業、技術導向。\n"
+        "3. 嚴禁使用『資料不足』、『通用方式建議』這種字眼！請直接依據特徵數據與風格撰寫專業修飾手法。\n"
+        "4. analysis 欄位：必須明確寫出該部位的特徵分析與修飾目標（例：『眼型：圓眼（眼尾微下垂，需提升眼尾拉長效果）』）。\n"
+        "5. steps 欄位：給出極度具體、有技術細節的操作步驟（包含毫米 mm、彩妝色系、質地與暈染方向），每個步驟 25–45 字。\n"
+        "6. 每個部位包含 2 個具體步驟，avoid 陣列包含 1 個明確避免事項。\n"
+        "7. 嚴禁產生任何品牌名稱。\n\n"
+        "【JSON 輸出結構範例】\n"
+        "{\n"
+        '  "overall": {\n'
+        '    "summary": "針對原生骨相優化，打造高對比且極具質感的港風復古妝效。"\n'
+        '  },\n'
+        '  "parts": {\n'
+        '    "base": {\n'
+        '      "analysis": "臉型：鵝蛋臉（輪廓流暢，加強面中立體度）",\n'
+        '      "steps": [\n'
+        '        "選用高遮瑕霧面粉底液，由面中向外均勻拍開，建立無瑕絨光底妝。",\n'
+        '        "使用灰棕色修容餅輕掃顴骨下緣與下巴輪廓線，強化立體骨相收斂感。"\n'
+        '      ],\n'
+        '      "avoid": ["避免使用大面積珠光高光，防止破壞霧面絨光質感。"]\n'
+        '    },\n'
+        '    "eyebrow": {\n'
+        '      "analysis": "眉型：彎月眉（弧度柔和，需拉長眉尾線條）",\n'
+        '      "steps": [\n'
+        '        "順著原生毛流使用深棕色眉筆補強眉峰結構，創造向上微挑英氣感。",\n'
+        '        "眉尾拉長 2–3 mm 並收細，使用定型眉膠梳理出根根分明毛流。"\n'
+        '      ],\n'
+        '      "avoid": ["避免將眉頭填得過滿過黑，保持自然漸層感。"]\n'
+        '    },\n'
+        '    "eyes": {\n'
+        '      "analysis": "眼型：圓眼（眼窩深邃，強化眼尾平拉）",\n'
+        '      "steps": [\n'
+        '        "用深棕色眼線液填滿上睫毛根部，眼尾順著眼型平拉延伸 3 mm 後微微上揚。",\n'
+        '        "大地色眼影於眼窩重度暈染，眼尾三角區加深，打造深邃復古眼窩。"\n'
+        '      ],\n'
+        '      "avoid": ["避免畫過粗的下眼線，以免眼神顯得死板僵硬。"]\n'
+        '    },\n'
+        '    "cheeks": {\n'
+        '      "analysis": "膚色季型：暖色調（需斜向提亮蘋果肌）",\n'
+        '      "steps": [\n'
+        '        "選擇低飽和陶土橘粉色腮紅，從顴骨最高點向太陽穴方向斜向暈染。",\n'
+        '        "餘粉輕帶過鼻樑中段，增加整體妝容的復古和煦血色感。"\n'
+        '      ],\n'
+        '      "avoid": ["避免將腮紅打在低於鼻翼的位置，防止臉部視覺下垂。"]\n'
+        '    },\n'
+        '    "lips": {\n'
+        '      "analysis": "唇型：薄唇（需擴畫唇峰增加豐滿度）",\n'
+        '      "steps": [\n'
+        '        "使用紅棕色唇線筆稍微擴畫唇峰，打造豐滿飽滿的復古唇形。",\n'
+        '        "填滿濃郁復古紅棕色絨霧唇膏，邊緣用棉花棒微暈染呈現高級質感。"\n'
+        '      ],\n'
+        '      "avoid": ["避免使用過度黏膩高光亮面的水光唇釉。"]\n'
+        '    }\n'
+        '  }\n'
+        "}"
+    )
+
+    user_prompt = (
+        f"目標風格：{style}\n"
+        f"使用者偏好：{user_note if user_note else '無特別要求'}\n"
+        f"已知分析特徵：\n"
+        f"- {f_str}\n"
+        f"- {b_str}\n"
+        f"- {e_str}\n"
+        f"- {n_str}\n"
+        f"- {l_str}\n"
+        f"- {s_str}\n\n"
+        f"視覺提取細節：{vision_feedback}\n\n"
+        f"請立刻輸出極具個人化技術細節的純繁體中文 JSON 物件。"
+    )
+
+    return system_prompt, user_prompt, face_analysis_used, missing_fields
+
+async def call_gemma3_generate_json(system_instruction: str, user_prompt: str) -> dict:
+    url = f"{OLLAMA_BASE_URL}/api/generate"
+    full_combined_prompt = f"{system_instruction}\n\n[Current Request]:\n{user_prompt}"
+
+    payload = {
+        "model": MODEL_TEXT,
+        "prompt": full_combined_prompt,
+        "format": "json",
+        "stream": False,
+        "options": {
+            "num_predict": OLLAMA_NUM_PREDICT,
+            "temperature": 0.3,
+            "top_p": 0.85
+        }
+    }
+
+    async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
+        get_res = await client.post(url, json=payload)
+        if get_res.status_code != 200:
+            raise RuntimeError(f"{MODEL_TEXT} Server 異常: {get_res.status_code}")
+
+        raw_response = get_res.json().get("response", "").strip()
+        try:
+            return json.loads(raw_response)
+        except json.JSONDecodeError:
+            clean_str = raw_response.replace("```json", "").replace("```", "").strip()
+            return json.loads(clean_str)
 
 @app.get("/health")
 async def health_check():
@@ -204,10 +333,7 @@ async def health_check():
     return {
         "status": "ok",
         "service": "ollama-suggestion",
-        "ollama": {
-            "reachable": ollama_reachable,
-            "model": MODEL_TEXT
-        },
+        "ollama": {"reachable": ollama_reachable, "model": MODEL_TEXT},
         "api_key_required": True,
         "api_key_configured": bool(SUGGESTION_API_KEY)
     }
@@ -226,175 +352,34 @@ async def extract_image_features_with_llava(base64_image_url: str) -> str:
         "options": {"num_predict": 150, "temperature": 0.2}
     }
 
-    logger.info("啟動 Llava 視覺分析...")
     async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
         res = await client.post(url, json=payload)
         if res.status_code != 200:
             raise RuntimeError(f"Llava Vision Server 異常: {res.status_code}")
         return res.json().get("response", "").strip()
 
-def build_gemma3_json_prompts(face_analysis: dict, style: str, user_note: Optional[str], vision_feedback: str) -> Tuple[str, str]:
-    """
-    依照組長規範建立全 JSON 結構化 Prompt
-    要點：
-    1. 不提及「寶寶」、無贅字、無浮誇詞彙（如重塑、整形）。
-    2. 無資料時顯式寫出「資料不足」。
-    3. 禁止產生商業品牌名稱。
-    4. 回傳格式嚴格為 JSON。
-    """
-    def is_valid_value(val: Any) -> bool:
-        if not val:
-            return False
-        val_str = str(val).strip()
-        return val_str not in {"", "未提供", "None", "null", "undefined"}
-
-    f_shape = face_analysis.get('臉型') if is_valid_value(face_analysis.get('臉型')) else "資料不足"
-    b_shape = face_analysis.get('眉型') if is_valid_value(face_analysis.get('眉型')) else "資料不足"
-    e_shape = face_analysis.get('眼型') if is_valid_value(face_analysis.get('眼型')) else "資料不足"
-    n_front = face_analysis.get('鼻型') if is_valid_value(face_analysis.get('鼻型')) else "資料不足"
-    l_shape = face_analysis.get('嘴型') if is_valid_value(face_analysis.get('嘴型')) else "資料不足"
-
-    s_season = "資料不足"
-    skin_obj = face_analysis.get('膚色')
-    if isinstance(skin_obj, dict):
-        if is_valid_value(skin_obj.get('四季型')):
-            s_season = str(skin_obj.get('四季型')).strip()
-    elif is_valid_value(skin_obj):
-        s_season = str(skin_obj).strip()
-
-    system_prompt = (
-        "你是一位專業彩妝顧問。請根據傳入的使用者特徵資料與目標風格，輸出結構化的繁體中文彩妝建議 JSON。\n\n"
-        "【輸出規範與鐵律】\n"
-        "1. 必須嚴格輸出合法的單一 JSON 物件，不得包含 any 思考過程、開頭結尾客套話或 Markdown 標籤。\n"
-        "2. 嚴禁使用『寶寶』、『親愛的』等客套用語，語氣保持客觀、專業、可執行。\n"
-        "3. 嚴禁使用『整形』、『徹底重塑』等誇張詞彙。\n"
-        "4. 嚴禁產生任何彩妝商品品牌名稱（如 1028、KATE、SOFINA 等）。\n"
-        "5. 若部位資料為『資料不足』，請於 analysis 欄位顯式說明『目前[部位]資料不足，以[目標風格]的通用方式建議。』\n"
-        "6. 步驟（steps）必須為可執行的具體動作，每個步驟控制在 20–45 字。\n"
-        "7. 每個部位的 steps 陣列包含 2–3 個步驟，avoid 陣列包含 1–2 個避免事項。\n\n"
-        "【JSON 輸出範例結構】\n"
-        "{\n"
-        '  "overall": {\n'
-        '    "summary": "風格整體概述（約 30 字）"\n'
-        '  },\n'
-        '  "parts": {\n'
-        '    "base": {\n'
-        '      "analysis": "臉型：圓臉；鼻型：資料不足",\n'
-        '      "steps": [\n'
-        '        "底妝採用輕薄霧面粉底，均勻塗抹於全臉。",\n'
-        '        "修容餅掃於兩頰外側與下巴輪廓線，打造收斂效果。"\n'
-        '      ],\n'
-        '      "avoid": ["避免過度使用亮面高光提亮全臉。"]\n'
-        '    },\n'
-        '    "eyebrow": {\n'
-        '      "analysis": "眉型資料不足，以通用方式建議",\n'
-        '      "steps": [\n'
-        '        "使用眉粉填補眉毛空隙，順著毛流梳理。",\n'
-        '        "眉尾適度拉長，維持自然弧度。"\n'
-        '      ],\n'
-        '      "avoid": ["避免畫成線條僵硬的粗平眉。"]\n'
-        '    },\n'
-        '    "eyes": {\n'
-        '      "analysis": "眼型：杏眼",\n'
-        '      "steps": [\n'
-        '        "眼線填滿睫毛根部，眼尾平拉微微上揚 2 mm。",\n'
-        '        "深色眼影集中在眼尾斜上方暈染。"\n'
-        '      ],\n'
-        '      "avoid": ["避免眼尾向下延伸，以免眼神疲憊。"]\n'
-        '    },\n'
-        '    "cheeks": {\n'
-        '      "analysis": "膚色季型：暖色調",\n'
-        '      "steps": [\n'
-        '        "腮紅從蘋果肌向顴骨斜上方大面積輕掃。",\n'
-        '        "餘粉微量刷於鼻頭增加氣色。"\n'
-        '      ],\n'
-        '      "avoid": ["避免腮紅位置低於鼻翼下緣。"]\n'
-        '    },\n'
-        '    "lips": {\n'
-        '      "analysis": "唇型：薄唇",\n'
-        '      "steps": [\n'
-        '        "使用唇線筆微幅向外擴畫唇形邊界。",\n'
-        '        "塗抹水光唇釉於唇心並向外暈染。"\n'
-        '      ],\n'
-        '      "avoid": ["避免使用深色霧面唇膏讓唇部顯薄。"]\n'
-        '    }\n'
-        '  }\n'
-        "}"
-    )
-
-    user_prompt = (
-        f"目標妝容風格：{style}\n"
-        f"偏好與備註：{user_note if user_note else '無特別要求'}\n"
-        f"已知分析數據：\n"
-        f"- 臉型：{f_shape}\n"
-        f"- 眉型：{b_shape}\n"
-        f"- 眼型：{e_shape}\n"
-        f"- 鼻型：{n_front}\n"
-        f"- 唇型：{l_shape}\n"
-        f"- 膚色：{s_season}\n\n"
-        f"相片視覺提取細節：{vision_feedback}\n\n"
-        f"請立刻輸出符合上述結構與限制條件的純繁體中文 JSON 物件。"
-    )
-
-    return system_prompt, user_prompt
-
-async def call_gemma3_generate_json(system_instruction: str, user_prompt: str) -> dict:
-    url = f"{OLLAMA_BASE_URL}/api/generate"
-    full_combined_prompt = f"{system_instruction}\n\n[Current Request]:\n{user_prompt}"
-
-    payload = {
-        "model": MODEL_TEXT,
-        "prompt": full_combined_prompt,
-        "format": "json",  # 強制 Ollama 開啟 JSON Mode
-        "stream": False,
-        "options": {
-            "num_predict": OLLAMA_NUM_PREDICT,
-            "temperature": 0.2,
-            "top_p": 0.8
-        }
-    }
-
-    logger.info(f"呼叫 {MODEL_TEXT} 進行 JSON 結構化彩妝推理...")
-    async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
-        get_res = await client.post(url, json=payload)
-        if get_res.status_code != 200:
-            raise RuntimeError(f"{MODEL_TEXT} Server 異常: {get_res.status_code}")
-        
-        raw_response = get_res.json().get("response", "").strip()
-        try:
-            # 嘗試解析 JSON，確保回傳合法的 JSON 物件
-            return json.loads(raw_response)
-        except json.JSONDecodeError:
-            logger.warning("模型回傳含有額外字串，執行清理...")
-            clean_str = raw_response.replace("```json", "").replace("```", "").strip()
-            return json.loads(clean_str)
-
 @app.post("/suggest")
-async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
+async def suggest(request: Request, payload: SuggestRequest, x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
     if not verify_api_key(x_api_key):
-        logger.warning("驗證失敗：拒絕 /suggest 請求 (HTTP 401)")
         return make_error_response(401, "UNAUTHORIZED", "Invalid or missing API key", False)
 
-    logger.info("金鑰驗證成功！開始執行彩妝推理流水線...")
+    try:
+        raw_body = await request.json()
+    except Exception:
+        raw_body = payload.model_dump()
 
-    face_analysis = payload.faceAnalysis or (payload.analysisPackage.get("faceAnalysis") if payload.analysisPackage else None)
     analysis_pkg = payload.analysisPackage or {}
-
-    if not face_analysis:
-        return make_error_response(400, "MISSING_FACE_ANALYSIS", "缺少有效 analysisPackage 內部的分析資料包", False)
-
     images_obj = analysis_pkg.get("images", {})
     front_image_obj = images_obj.get("front", {})
     base64_image_url = front_image_obj.get("compressedDataUrl")
 
     if not base64_image_url:
-        vision_feedback = "No image context provided. Rely solely on structured JSON parameters."
+        vision_feedback = "No image context provided. Rely solely on structured parameters."
     else:
         try:
             vision_feedback = await extract_image_features_with_llava(base64_image_url)
-        except Exception as ve:
-            logger.error(f"Llava 看圖失敗: {str(ve)}，自動降級。")
-            vision_feedback = "Vision analysis failed or timed out. Rely on JSON metrics."
+        except Exception:
+            vision_feedback = "Vision analysis timed out."
 
     normalized_style = payload.style.strip()
     if normalized_style in {"韓系亞裔", "日雜清透", "千金", "港風", "病嬌", "男士白開水"}:
@@ -403,15 +388,14 @@ async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(Non
     elif normalized_style in {"Soft Baddie", "Soft baddie"}:
         normalized_style = "Soft baddie"
 
-    if normalized_style not in VALID_STYLES:
-        return make_error_response(422, "VALIDATION_ERROR", f"不支援的妝容風格: '{payload.style}'", False)
-
     try:
-        # 1. 產生 JSON 結構化中文建議
-        sys_zh, usr_zh = build_gemma3_json_prompts(face_analysis, normalized_style, payload.userNote, vision_feedback)
+        # 1. 產生個人化中文建議 JSON
+        sys_zh, usr_zh, face_analysis_used, missing_fields = build_gemma3_json_prompts(
+            raw_body, normalized_style, payload.userNote, vision_feedback
+        )
         suggestion_json = await call_gemma3_generate_json(sys_zh, usr_zh)
 
-        # 2. 匹配專屬風格之英文 Render Prompt
+        # 2. 🚀【完整接回 8 大風格英文 Prompt 控制鏈，重啟精細渲染！】
         if "日常自然" in normalized_style:
             flux_prompt_part = (
                 "Apply a clean no-makeup makeup look to this person, as a photorealistic makeup-only retouch of the original photo. "
@@ -443,7 +427,7 @@ async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(Non
 
         signature = sign_render_prompt(flux_prompt_part)
 
-        logger.info("推理完成，順利產生 JSON 結構化建議與簽章。")
+        logger.info(f"推理完成！英文 Prompt 長度: {len(flux_prompt_part)}，已簽章。")
 
         return {
             "status": "completed",
@@ -451,7 +435,9 @@ async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(Non
             "model": MODEL_TEXT,
             "fallbackUsed": False,
             "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-            "suggestion": suggestion_json,  # 直接回傳結構化 JSON，前端可零代價轉換卡片
+            "faceAnalysisUsed": face_analysis_used,
+            "missingFields": missing_fields,
+            "suggestion": suggestion_json,
             "renderPromptEn": flux_prompt_part,
             "fluxPromptEn": flux_prompt_part,
             "promptSignature": signature
@@ -461,6 +447,4 @@ async def suggest(payload: SuggestRequest, x_api_key: Optional[str] = Header(Non
         return make_error_response(502, "OLLAMA_UNAVAILABLE", f"文字建議服務目前無法連線，請稍後再試: {str(exc)}", True)
 
 if __name__ == "__main__":
-    if not IS_PRODUCTION and not SUGGESTION_API_KEY:
-        logger.warning("開發模式：未設定 SUGGESTION_API_KEY，啟用內建相容金鑰清單。正式環境部署時必須設定此變數，否則服務會拒絕啟動。")
     uvicorn.run(app, host="0.0.0.0", port=OLLAMA_SUGGESTION_PORT)
