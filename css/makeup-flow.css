@@ -1,0 +1,1240 @@
+/* 正式妝容流程與會員主題擴充：臉部分析 → 風格選擇 → Ollama 建議
+   → 妝容渲染 → 中央人像互動結果頁。 */
+
+.journey-dialog {
+    position: relative;
+    width: min(680px, 100%);
+    max-height: 92vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* 頭部與底部動作列固定,中間內容可捲動:手機上內容再長,右上 ✕ 與底部按鈕一定看得到、關得掉。 */
+.journey-dialog .makeup-style-head,
+.journey-dialog .journey-actions { flex-shrink: 0; }
+.journey-dialog .journey-body { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+/* 右上角關閉鈕(取代原本純裝飾的 ✦):最小 40px 觸控目標,始終浮在右上。 */
+.journey-dialog-close {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    z-index: 3;
+    width: 40px;
+    height: 40px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--line-gold);
+    border-radius: 50%;
+    background: var(--white, #fff);
+    color: var(--ink-soft, #5b4b4c);
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background .2s ease;
+}
+.journey-dialog-close:hover { background: var(--paper, #f7f2ee); }
+
+.journey-dialog .makeup-style-head {
+    padding-right: 52px;
+    margin-bottom: 20px;
+}
+
+.journey-comic-mark {
+    position: absolute;
+    top: 24px;
+    right: 28px;
+    width: 42px;
+    height: 42px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--line-gold);
+    border-radius: 50%;
+    color: var(--gold-deep);
+    background: var(--white);
+    font-size: 18px;
+}
+
+.journey-body { min-height: 250px; }
+.journey-actions { border-top: 1px solid var(--line); padding-top: 18px; }
+
+.beauty-progress-list {
+    list-style: none;
+    display: grid;
+    gap: 0;
+    margin: 4px 0 22px;
+}
+
+.beauty-progress-list li {
+    position: relative;
+    display: grid;
+    grid-template-columns: 46px minmax(0, 1fr);
+    gap: 16px;
+    min-height: 76px;
+    color: var(--muted);
+}
+
+.beauty-progress-list li:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    left: 22px;
+    top: 42px;
+    bottom: 5px;
+    width: 1px;
+    background: var(--line-gold);
+}
+
+.beauty-progress-dot {
+    position: relative;
+    z-index: 1;
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--line-gold);
+    border-radius: 50%;
+    background: var(--paper);
+    font: 500 11px/1 var(--sans);
+    letter-spacing: .08em;
+}
+
+.beauty-progress-list b,
+.beauty-progress-list small { display: block; }
+.beauty-progress-list b { padding-top: 2px; font-size: 16px; font-weight: 500; color: inherit; }
+.beauty-progress-list small { margin-top: 5px; font-size: 13px; color: var(--muted); }
+.beauty-progress-list li.active { color: var(--ink-soft); }
+.beauty-progress-list li.active .beauty-progress-dot {
+    color: var(--btn-ink);
+    border-color: var(--gold-deep);
+    background: var(--btn-grad);
+    box-shadow: 0 0 0 7px var(--gold-dim);
+}
+.beauty-progress-list li.done { color: var(--gold-deep); }
+.beauty-progress-list li.done .beauty-progress-dot { color: var(--btn-ink); background: var(--btn-grad); border-color: transparent; }
+
+.journey-wait-note,
+.journey-next-note {
+    margin-top: 18px;
+    padding: 14px 16px;
+    border-left: 2px solid var(--gold);
+    background: var(--glass-surface);
+    color: var(--mid);
+    font-size: 13px;
+}
+
+.journey-ready-card {
+    display: grid;
+    grid-template-columns: 62px minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+    padding: 24px;
+    border: 1px solid var(--line-gold);
+    background: var(--glass-surface);
+}
+
+.journey-ready-check {
+    width: 58px;
+    height: 58px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    color: var(--btn-ink);
+    background: var(--btn-grad);
+    font: 500 24px/1 var(--sans);
+}
+
+.journey-ready-card b { display: block; font-size: 19px; font-weight: 500; }
+.journey-ready-card p { margin-top: 8px; color: var(--mid); line-height: 1.8; }
+.journey-palette { display: flex; justify-content: center; gap: 10px; margin: 24px 0 4px; }
+.journey-palette span { width: 42px; height: 42px; border-radius: 50%; border: 3px solid var(--paper); box-shadow: 0 0 0 1px var(--line-gold); }
+
+.render-estimate {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    padding: 16px;
+    border: 1px solid var(--line-gold);
+    background: var(--glass-surface);
+}
+.render-estimate b,
+.render-estimate small { display: block; }
+.render-estimate small { margin-top: 4px; color: var(--muted); }
+.render-estimate strong { font: 500 23px/1 var(--serif); color: var(--gold-deep); }
+.render-spinner { width: 34px; height: 34px; border: 2px solid var(--line-gold); border-top-color: var(--gold-deep); border-radius: 50%; animation: renderSpin 1s linear infinite; }
+@keyframes renderSpin { to { transform: rotate(360deg); } }
+
+.part-advice-analysis {
+    display: grid;
+    grid-template-columns: 58px minmax(0, 1fr);
+    gap: 14px;
+    padding: 16px 0;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+}
+.part-advice-analysis span { color: var(--gold-deep); font: 500 11px/1.6 var(--sans); letter-spacing: .18em; }
+.part-advice-analysis p { color: var(--mid); }
+.part-advice-section { padding: 22px 0 16px; }
+.part-advice-section h3 { margin-bottom: 12px; font-size: 17px; font-weight: 500; }
+.part-advice-section ol { display: grid; gap: 10px; padding-left: 24px; color: var(--ink-soft); }
+.part-advice-section li { padding-left: 5px; line-height: 1.75; }
+.part-advice-avoid { padding: 14px 16px; border: 1px dashed var(--gold); background: color-mix(in srgb, var(--blush-panel) 58%, transparent); }
+.part-advice-avoid b { color: var(--gold-deep); font-size: 13px; }
+.part-advice-avoid p { margin-top: 4px; color: var(--mid); }
+
+.lookbook-result {
+    position: relative;
+    overflow: hidden;
+    padding: clamp(24px, 4vw, 54px);
+    border: 1px solid var(--line-gold);
+    background:
+        radial-gradient(circle at 50% 38%, color-mix(in srgb, var(--blush-lt) 42%, transparent), transparent 37%),
+        var(--paper);
+    box-shadow: 0 24px 80px rgba(45, 25, 27, .10);
+}
+
+.lookbook-result::before,
+.lookbook-result::after {
+    content: '';
+    position: absolute;
+    width: 160px;
+    height: 160px;
+    border: 1px solid var(--line-gold);
+    border-radius: 50%;
+    pointer-events: none;
+}
+.lookbook-result::before { left: -94px; top: 120px; }
+.lookbook-result::after { right: -88px; bottom: 150px; }
+
+.lookbook-heading {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: space-between;
+    align-items: end;
+    gap: 24px;
+    max-width: 1000px;
+    margin: 0 auto;
+}
+.lookbook-heading h2 { margin-top: 9px; font-size: clamp(28px, 4vw, 46px); font-weight: 500; letter-spacing: .06em; }
+.lookbook-palette { display: flex; padding-bottom: 5px; }
+.lookbook-palette span { width: 32px; height: 32px; margin-left: -5px; border: 3px solid var(--paper); border-radius: 50%; box-shadow: 0 0 0 1px var(--line-gold); }
+.lookbook-summary { position: relative; z-index: 1; max-width: 760px; margin: 18px auto 34px; text-align: center; color: var(--mid); line-height: 1.9; }
+
+.look-map-shell {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: minmax(155px, 1fr) minmax(310px, 510px) minmax(155px, 1fr);
+    gap: clamp(18px, 3vw, 50px);
+    align-items: stretch;
+    width: min(1120px, 100%);
+    margin: 0 auto;
+}
+
+.look-portrait-frame {
+    position: relative;
+    min-width: 0;
+    aspect-ratio: .75;
+    overflow: hidden;
+    border: 1px solid var(--gold-deep);
+    background: var(--ivory-2);
+    box-shadow: 16px 18px 0 color-mix(in srgb, var(--gold-dim) 74%, transparent);
+}
+.look-portrait-frame img { width: 100%; height: 100%; display: block; object-fit: cover; object-position: center top; transition: opacity .25s ease; }
+.look-portrait-frame figcaption { position: absolute; left: 18px; bottom: 18px; padding: 7px 15px; border: 1px solid var(--line-gold); border-radius: 999px; background: color-mix(in srgb, var(--paper) 86%, transparent); backdrop-filter: blur(10px); font-size: 12px; color: var(--ink-soft); }
+
+.look-pin-lane { position: relative; min-height: 100%; }
+.look-pin {
+    position: absolute;
+    width: 100%;
+    min-height: 64px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    border: 0;
+    background: transparent;
+    color: var(--ink-soft);
+    cursor: pointer;
+    font-family: var(--cjk);
+}
+.look-pin.left { justify-content: flex-start; text-align: right; }
+.look-pin.right { justify-content: flex-end; text-align: left; }
+.look-pin.top { top: 18%; }
+.look-pin.middle { top: 45%; }
+.look-pin.bottom { top: 70%; }
+.right-lane .look-pin.bottom { top: 62%; }
+.look-pin span { position: relative; z-index: 1; padding: 14px 20px; border: 1px solid var(--line-gold); border-radius: 999px; background: var(--paper); font-size: 28px; line-height: 1.15; transition: .24s var(--ease); white-space: nowrap; }
+.look-pin i { position: relative; display: block; width: clamp(44px, 4vw, 72px); height: 1px; background: var(--gold-deep); flex: 0 0 clamp(44px, 4vw, 72px); }
+.look-pin.right i { order: -1; }
+.look-pin i::after { content: ''; position: absolute; top: 50%; width: 7px; height: 7px; border-radius: 50%; background: var(--gold-deep); transform: translateY(-50%); }
+.look-pin.left i::after { right: -1px; }
+.look-pin.right i::after { left: -1px; }
+.look-pin:hover span,
+.look-pin:focus-visible span { color: var(--btn-ink); border-color: transparent; background: var(--btn-grad); transform: translateY(-2px); }
+.look-pin:focus-visible { outline: none; }
+
+.look-photo-switch { display: flex; justify-content: center; gap: 8px; margin-top: 34px; }
+.look-photo-switch button { min-width: 108px; padding: 10px 24px; border: 1px solid var(--line-gold); border-radius: 999px; background: var(--btn-glass); color: var(--btn-glass-ink); cursor: pointer; font-family: var(--cjk); }
+.look-photo-switch button.active { color: var(--btn-ink); background: var(--btn-grad); border-color: transparent; }
+.look-pin-hint { margin-top: 14px; color: var(--muted); text-align: center; font-size: 12.5px; }
+.lookbook-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line); }
+
+/* Only the green member theme becomes comic/anime. Other themes continue to
+   use the original restrained editorial treatment from main.css. */
+body[data-member-theme="jade"] .app-shell,
+body[data-member-theme="jade"] .main-content {
+    background-color: #DDEEE3;
+    background-image: radial-gradient(rgba(38, 64, 51, .12) 1.1px, transparent 1.1px);
+    background-size: 17px 17px;
+}
+body[data-member-theme="jade"] .topbar { border-bottom: 3px solid #243C31; box-shadow: 0 5px 0 rgba(36, 60, 49, .18); }
+body[data-member-theme="jade"] .page-header h1,
+body[data-member-theme="jade"] .lookbook-heading h2 { text-shadow: 2px 2px 0 rgba(255, 255, 255, .88); }
+body[data-member-theme="jade"] .makeup-style-dialog,
+body[data-member-theme="jade"] .lookbook-result,
+body[data-member-theme="jade"] .analysis-feedback,
+body[data-member-theme="jade"] .theme-card,
+body[data-member-theme="jade"] .prod-card {
+    border: 2px solid #263E33;
+    border-radius: 18px;
+    box-shadow: 7px 8px 0 #779D87;
+}
+body[data-member-theme="jade"] .makeup-style-option { border: 2px solid #263E33; border-radius: 12px; overflow: hidden; box-shadow: 4px 4px 0 #A8C9B5; }
+body[data-member-theme="jade"] .makeup-style-option.selected { border-color: #263E33; box-shadow: 5px 5px 0 #F2B7B8; transform: translate(-2px, -2px); }
+body[data-member-theme="jade"] .btn-gold,
+body[data-member-theme="jade"] .btn-outline,
+body[data-member-theme="jade"] .look-photo-switch button,
+body[data-member-theme="jade"] .look-pin span {
+    border: 2px solid #263E33;
+    border-radius: 12px;
+    box-shadow: 3px 3px 0 #263E33;
+}
+body[data-member-theme="jade"] .btn-gold { background: #FFD873; color: #263E33; }
+body[data-member-theme="jade"] .btn-outline { background: #FFF8EC; color: #263E33; }
+body[data-member-theme="jade"] .look-pin span { background: #FFF8EC; }
+body[data-member-theme="jade"] .look-pin:hover span,
+body[data-member-theme="jade"] .look-pin:focus-visible span { background: #F5B3B7; }
+body[data-member-theme="jade"] .look-portrait-frame { border: 3px solid #263E33; border-radius: 120px 120px 24px 24px; box-shadow: 12px 14px 0 #F5B3B7; }
+body[data-member-theme="jade"] .journey-comic-mark { border: 2px solid #263E33; background: #FFD873; color: #263E33; box-shadow: 3px 3px 0 #263E33; }
+body[data-member-theme="jade"] .part-advice-avoid { border: 2px dashed #263E33; border-radius: 12px; background: #FFF0C9; }
+
+/* 銀霧：冷銀科技美妝。科技感集中在頁面切換、流程節點與等待狀態，
+   內容閱讀區仍保留安靜、精緻的美妝編輯質感。 */
+body[data-member-theme="rose"] {
+    --ivory: #070B10;
+    --ivory-2: #0B1118;
+    --paper: #101720;
+    --white: #1B1C1D;
+    --gold: #B8BEC6;
+    --gold-lt: #E6F5FB;
+    --gold-deep: #B6BBC3;
+    --gold-soft: #D2D8E1;
+    --gold-dim: rgba(175, 180, 188, .22);
+    --gold-grad: linear-gradient(105deg, #707378 0%, #BFC5CD 28%, #F2FAFD 50%, #C6CCD5 72%, #6A6E72 100%);
+    --blush: #8E9298;
+    --blush-lt: #212224;
+    --blush-deep: #D3DAE2;
+    --blush-panel: #1D1E1F;
+    --terra: #B5BBC2;
+    --terra-lt: #D4DAE3;
+    --terra-deep: #989DA3;
+    --terra-grad: linear-gradient(135deg, #EDF9FC 0%, #C4CAD2 45%, #9CA1A7 100%);
+    --ink: #EDF7FA;
+    --ink-2: #DBE2EB;
+    --ink-3: #C5CBD4;
+    --ink-soft: #ECF6F9;
+    --mid: #A6ABB2;
+    --lt: #868A8F;
+    --muted: #999EA4;
+    --line: rgba(214, 238, 246, .12);
+    --line-gold: rgba(181, 186, 194, .34);
+    --line-dk: rgba(181, 186, 194, .22);
+    --glass: rgba(9, 15, 21, .78);
+    --sheen: rgba(205, 242, 250, .10);
+    --glass-surface: rgba(22, 23, 24, .78);
+    --glass-surface-hover: rgba(34, 35, 37, .92);
+    --glass-surface-hover-soft: rgba(28, 29, 30, .86);
+    --glass-surface-solid: rgba(12, 19, 26, .97);
+    --surface-rgb: 12, 19, 26;
+    --edge: rgba(184, 190, 198, .35);
+    --btn-grad: linear-gradient(105deg, #696C71 0%, #B7BCC4 37%, #ECF8FB 56%, #AFB4BB 100%);
+    --btn-ink: #071016;
+    --btn-glass: linear-gradient(122deg, rgba(35, 36, 37, .95), rgba(9, 15, 21, .95));
+    --btn-glass-hover: linear-gradient(122deg, rgba(48, 50, 52, .97), rgba(12, 22, 29, .97));
+    --btn-glass-ink: #EAF6F9;
+    --btn-glass-on: linear-gradient(118deg, rgba(196, 203, 211, .94), rgba(154, 159, 166, .92));
+    background: #070B10;
+}
+
+body[data-member-theme="rose"] .app-shell {
+    background:
+        linear-gradient(rgba(182, 187, 195, .035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(182, 187, 195, .035) 1px, transparent 1px),
+        radial-gradient(circle at 18% 8%, rgba(160, 165, 172, .13), transparent 27%),
+        radial-gradient(circle at 84% 76%, rgba(124, 128, 134, .11), transparent 31%),
+        linear-gradient(148deg, #070B10 0%, #101821 52%, #06090D 100%);
+    background-size: 44px 44px, 44px 44px, auto, auto, auto;
+}
+body[data-member-theme="rose"] .main-content { background: linear-gradient(180deg, rgba(8, 13, 18, .52), rgba(8, 13, 18, .20)); }
+body[data-member-theme="rose"] ::selection { background: #B4BAC1; color: #071016; }
+
+body[data-member-theme="rose"] .topbar {
+    background: rgba(6, 11, 16, .92);
+    border-bottom: 1px solid rgba(181, 187, 194, .38);
+    box-shadow: 0 16px 52px rgba(0, 0, 0, .44), 0 1px 20px rgba(166, 171, 178, .07);
+    backdrop-filter: blur(22px) saturate(125%);
+}
+body[data-member-theme="rose"] .topbar-brand,
+body[data-member-theme="rose"] .page-header h1,
+body[data-member-theme="rose"] .lookbook-heading h2,
+body[data-member-theme="rose"] .member-section-head h2 { color: #EDF8FB; text-shadow: 0 0 28px rgba(178, 184, 191, .10); }
+body[data-member-theme="rose"] .eyebrow,
+body[data-member-theme="rose"] .section-label,
+body[data-member-theme="rose"] .member-section-head span {
+    color: #BAC0C8;
+    font-family: var(--sans);
+    letter-spacing: .30em;
+}
+body[data-member-theme="rose"] .divider {
+    height: 1px;
+    background: linear-gradient(90deg, #B6BBC3, rgba(182, 187, 195, .18), transparent);
+    box-shadow: 0 0 14px rgba(182, 187, 195, .30);
+}
+
+/* 銀霧專屬頁面切換：短暫霧化、分層顯影，再由冷銀掃描線收尾。 */
+@keyframes silverPageEnter {
+    0% { opacity: 0; transform: translateY(15px) scale(.994); filter: blur(9px) saturate(.65); }
+    62% { opacity: 1; filter: blur(0) saturate(1.08); }
+    100% { transform: none; filter: none; }
+}
+@keyframes silverHeaderLock {
+    0% { opacity: 0; transform: translateX(-18px); letter-spacing: .20em; }
+    68% { opacity: 1; transform: translateX(2px); }
+    100% { transform: none; letter-spacing: inherit; }
+}
+@keyframes silverScanSweep {
+    0% { opacity: 0; transform: translateY(-8px) scaleX(.15); }
+    18% { opacity: .95; transform: translateY(8vh) scaleX(.82); }
+    100% { opacity: 0; transform: translateY(68vh) scaleX(1); }
+}
+body[data-member-theme="rose"] #mainContent.page-enter,
+body[data-member-theme="rose"] #mainContent.page-back { animation: silverPageEnter .64s cubic-bezier(.2, .76, .22, 1) both; }
+body[data-member-theme="rose"] #mainContent.page-enter::after,
+body[data-member-theme="rose"] #mainContent.page-back::after {
+    content: '';
+    position: absolute;
+    z-index: 12;
+    left: 3%;
+    right: 3%;
+    top: 0;
+    height: 1px;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(216, 222, 231, .92) 28%, #B5BBC2 50%, rgba(216, 222, 231, .92) 72%, transparent);
+    box-shadow: 0 0 8px #B3B8C0, 0 8px 28px rgba(175, 181, 188, .22);
+    transform-origin: center;
+    animation: silverScanSweep .78s ease-out both;
+}
+body[data-member-theme="rose"] #mainContent.page-enter .page-header,
+body[data-member-theme="rose"] #mainContent.page-back .page-header { animation: silverHeaderLock .62s cubic-bezier(.2, .76, .22, 1) .06s both; }
+body[data-member-theme="rose"] #mainContent.page-enter .reveal-in,
+body[data-member-theme="rose"] #mainContent.page-back .reveal-in { animation: silverPageEnter .58s cubic-bezier(.2, .76, .22, 1) .12s both; }
+
+body[data-member-theme="rose"] .member-dashboard-hero .member-id,
+body[data-member-theme="rose"] .member-dashboard-hero .member-stats,
+body[data-member-theme="rose"] .member-tier,
+body[data-member-theme="rose"] .member-suggestions,
+body[data-member-theme="rose"] .member-action-card,
+body[data-member-theme="rose"] .theme-card,
+body[data-member-theme="rose"] .point-ledger,
+body[data-member-theme="rose"] .saved-look-card,
+body[data-member-theme="rose"] .dash-card,
+body[data-member-theme="rose"] .glow-card,
+body[data-member-theme="rose"] .style-card,
+body[data-member-theme="rose"] .trend-card,
+body[data-member-theme="rose"] .insp-card,
+body[data-member-theme="rose"] .analysis-workbench > div,
+body[data-member-theme="rose"] .analysis-info-strip article,
+body[data-member-theme="rose"] .analysis-feedback,
+body[data-member-theme="rose"] .makeup-style-dialog,
+body[data-member-theme="rose"] .journey-dialog-shell,
+body[data-member-theme="rose"] .lookbook-result,
+body[data-member-theme="rose"] .prod-card,
+body[data-member-theme="rose"] .admin-demo-grid article {
+    border-color: rgba(184, 190, 198, .29);
+    background:
+        linear-gradient(118deg, transparent 0 73%, rgba(201, 208, 216, .022) 73.2% 73.6%, transparent 73.8%),
+        linear-gradient(150deg, rgba(32, 33, 35, .95), rgba(8, 14, 20, .98));
+    box-shadow: 0 24px 72px rgba(0, 0, 0, .42), inset 0 1px 0 rgba(219, 246, 251, .055);
+}
+body[data-member-theme="rose"] .member-dashboard-hero .member-id,
+body[data-member-theme="rose"] .member-dashboard-hero .member-stats,
+body[data-member-theme="rose"] .member-tier,
+body[data-member-theme="rose"] .member-suggestions,
+body[data-member-theme="rose"] .analysis-workbench > div,
+body[data-member-theme="rose"] .analysis-info-strip article,
+body[data-member-theme="rose"] .journey-dialog-shell { border-radius: 8px; }
+
+body[data-member-theme="rose"] .member-id {
+    background:
+        radial-gradient(circle at 50% 22%, rgba(180, 186, 193, .12), transparent 30%),
+        linear-gradient(155deg, #1E1F20, #080D12 76%);
+}
+body[data-member-theme="rose"] .member-avatar {
+    border-color: #BBC0C8;
+    background: #091017;
+    box-shadow: 0 0 0 5px #0A1118, 0 0 0 6px rgba(184, 190, 197, .42), 0 0 34px rgba(171, 177, 184, .16);
+}
+body[data-member-theme="rose"] .member-name { color: #EEF8FA; }
+body[data-member-theme="rose"] .member-role { color: #C6CCD5; }
+body[data-member-theme="rose"] .member-stats { gap: 1px; background: rgba(184, 190, 197, .18); }
+body[data-member-theme="rose"] .member-stats .stat-cell {
+    background: linear-gradient(150deg, rgba(28, 29, 30, .97), rgba(8, 14, 20, .98));
+    border-color: rgba(184, 190, 197, .13);
+}
+body[data-member-theme="rose"] .member-stats .stat-cell:hover,
+body[data-member-theme="rose"] .member-stats .stat-cell:focus-visible {
+    background: linear-gradient(150deg, rgba(43, 44, 46, .98), rgba(17, 17, 18, .98));
+    box-shadow: inset 0 0 28px rgba(175, 181, 188, .07);
+}
+
+body[data-member-theme="rose"] .theme-card { position: relative; overflow: hidden; border-radius: 7px; }
+body[data-member-theme="rose"] .theme-card::before {
+    content: '';
+    position: absolute;
+    inset: 6px;
+    border: 1px solid rgba(196, 202, 210, .10);
+    border-left-color: rgba(196, 202, 210, .30);
+    pointer-events: none;
+}
+body[data-member-theme="rose"] .theme-card.active {
+    border-color: rgba(200, 207, 215, .72);
+    box-shadow: 0 0 0 1px rgba(174, 179, 186, .42) inset, 0 0 34px rgba(168, 173, 180, .11), 0 24px 68px rgba(0, 0, 0, .42);
+}
+body[data-member-theme="rose"] .theme-swatches span { border-color: rgba(212, 243, 250, .34); box-shadow: 0 0 14px rgba(176, 181, 188, .13); }
+body[data-member-theme="rose"] .point-ledger div,
+body[data-member-theme="rose"] .af-row { border-color: rgba(208, 239, 246, .10); }
+body[data-member-theme="rose"] .point-ledger b.plus { color: #BCC2C9; }
+
+body[data-member-theme="rose"] .btn-gold,
+body[data-member-theme="rose"] .add-bag,
+body[data-member-theme="rose"] .look-photo-switch button.active {
+    border: 1px solid rgba(220, 247, 252, .50);
+    border-radius: 5px;
+    background: var(--btn-grad);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .52), 0 0 22px rgba(175, 180, 187, .13);
+    letter-spacing: .12em;
+}
+body[data-member-theme="rose"] .btn-outline,
+body[data-member-theme="rose"] .look-photo-switch button {
+    border: 1px solid rgba(184, 190, 198, .42);
+    border-radius: 5px;
+    background: linear-gradient(135deg, rgba(32, 33, 34, .96), rgba(8, 14, 20, .97));
+    color: #E8F5F8;
+    box-shadow: inset 0 1px 0 rgba(224, 248, 252, .04);
+}
+body[data-member-theme="rose"] .btn-outline:hover,
+body[data-member-theme="rose"] .look-photo-switch button:hover {
+    border-color: #BEC4CC;
+    color: #F3FBFD;
+    box-shadow: inset 0 0 26px rgba(175, 181, 188, .08), 0 0 18px rgba(175, 181, 188, .08);
+}
+
+body[data-member-theme="rose"] .makeup-style-modal { background: rgba(4, 8, 12, .80); backdrop-filter: blur(17px); }
+body[data-member-theme="rose"] .makeup-style-dialog {
+    border-radius: 8px;
+    box-shadow: 0 34px 110px rgba(0, 0, 0, .68), 0 0 0 1px rgba(177, 182, 190, .08), 0 0 46px rgba(177, 182, 190, .06);
+}
+body[data-member-theme="rose"] .makeup-style-close,
+body[data-member-theme="rose"] .journey-dialog-close {
+    border-color: rgba(186, 192, 200, .55);
+    border-radius: 5px;
+    background: #091017;
+    color: #CDD3DC;
+    box-shadow: inset 0 0 18px rgba(175, 180, 187, .06);
+}
+body[data-member-theme="rose"] .makeup-style-option {
+    border-color: rgba(193, 199, 207, .15);
+    border-radius: 6px;
+    background: #0B1219;
+    box-shadow: 0 15px 40px rgba(0, 0, 0, .30);
+    overflow: hidden;
+}
+body[data-member-theme="rose"] .makeup-style-option:hover { border-color: rgba(186, 192, 200, .68); box-shadow: 0 0 28px rgba(173, 178, 185, .10), 0 22px 50px rgba(0, 0, 0, .44); }
+body[data-member-theme="rose"] .makeup-style-option.selected { border-color: #BAC0C7; box-shadow: 0 0 0 1px rgba(212, 219, 227, .32), 0 0 30px rgba(172, 177, 184, .16); }
+
+/* Ollama 與妝容渲染的進度視覺。 */
+@keyframes silverNodePulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(180, 186, 194, .26), inset 0 0 18px rgba(180, 186, 194, .08); }
+    50% { box-shadow: 0 0 0 8px rgba(180, 186, 194, 0), 0 0 24px rgba(180, 186, 194, .22), inset 0 0 20px rgba(180, 186, 194, .15); }
+}
+@keyframes silverTrackFlow { from { background-position: 0 0; } to { background-position: 32px 0; } }
+@keyframes silverDataSweep { from { transform: translateX(-120%); } to { transform: translateX(160%); } }
+@keyframes silverStatusPulse { 50% { border-color: rgba(192, 198, 206, .68); box-shadow: 0 0 24px rgba(172, 177, 185, .10), inset 0 0 28px rgba(172, 177, 185, .05); } }
+
+body[data-member-theme="rose"] .beauty-progress-list li { color: #7C8085; }
+body[data-member-theme="rose"] .beauty-progress-list li:not(:last-child)::after {
+    width: 2px;
+    background: repeating-linear-gradient(180deg, rgba(178, 184, 191, .60) 0 6px, rgba(178, 184, 191, .10) 6px 12px);
+    box-shadow: 0 0 9px rgba(178, 184, 191, .15);
+}
+body[data-member-theme="rose"] .beauty-progress-dot {
+    border-color: rgba(185, 190, 198, .40);
+    border-radius: 4px;
+    clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0 calc(100% - 8px), 0 8px);
+    background: #0A1219;
+    color: #9BA0A7;
+    font-family: var(--sans);
+}
+body[data-member-theme="rose"] .beauty-progress-list li.active { color: #EAF7FA; }
+body[data-member-theme="rose"] .beauty-progress-list li.active .beauty-progress-dot {
+    border-color: #BFC5CD;
+    background: linear-gradient(145deg, rgba(145, 149, 155, .34), rgba(16, 16, 17, .98));
+    color: #DFF7FC;
+    animation: silverNodePulse 1.15s ease-in-out infinite;
+}
+body[data-member-theme="rose"] .beauty-progress-list li.done { color: #C0C6CE; }
+body[data-member-theme="rose"] .beauty-progress-list li.done .beauty-progress-dot {
+    border-color: #BAC0C8;
+    background: linear-gradient(145deg, #CBD2DA, #9FA4AB);
+    color: #061117;
+    box-shadow: 0 0 20px rgba(179, 185, 192, .18);
+}
+body[data-member-theme="rose"] .journey-wait-note,
+body[data-member-theme="rose"] .journey-next-note {
+    border-left-color: #B9BFC7;
+    background: linear-gradient(90deg, rgba(111, 115, 119, .12), rgba(9, 16, 22, .64));
+}
+body[data-member-theme="rose"] .journey-ready-card,
+body[data-member-theme="rose"] .render-estimate {
+    position: relative;
+    overflow: hidden;
+    border-color: rgba(186, 192, 200, .36);
+    background:
+        repeating-linear-gradient(90deg, transparent 0 31px, rgba(182, 188, 195, .025) 31px 32px),
+        linear-gradient(130deg, rgba(33, 34, 36, .94), rgba(8, 15, 21, .96));
+}
+body[data-member-theme="rose"] .render-estimate::after {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 35%;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(195, 202, 210, .10), transparent);
+    animation: silverDataSweep 1.6s linear infinite;
+}
+body[data-member-theme="rose"] .journey-ready-check,
+body[data-member-theme="rose"] .journey-comic-mark {
+    border: 1px solid rgba(205, 244, 252, .56);
+    border-radius: 5px;
+    background: linear-gradient(145deg, #DEE5EE, #AAB0B7);
+    color: #061117;
+    box-shadow: 0 0 25px rgba(178, 184, 191, .19);
+}
+body[data-member-theme="rose"] .render-spinner {
+    border: 1px solid rgba(185, 190, 198, .26);
+    background: conic-gradient(from 0deg, transparent 0 28%, #BBC1C9 46%, #E8FAFD 55%, transparent 72%);
+    box-shadow: 0 0 20px rgba(178, 184, 191, .18), inset 0 0 12px rgba(8, 15, 21, .78);
+    animation: renderSpin .78s linear infinite;
+}
+body[data-member-theme="rose"] .render-estimate strong {
+    position: relative;
+    z-index: 1;
+    color: #C2C8D0;
+    font-family: var(--sans);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .06em;
+    text-shadow: 0 0 18px rgba(181, 187, 194, .30);
+}
+body[data-member-theme="rose"] .loading-status.active,
+body[data-member-theme="rose"] .ai-render-status:not(:empty),
+body[data-member-theme="rose"] .suggestion-status.active {
+    border-color: rgba(187, 193, 201, .48);
+    border-radius: 5px;
+    background:
+        repeating-linear-gradient(90deg, rgba(177, 182, 190, .07) 0 10px, transparent 10px 20px),
+        #0B141C;
+    color: #CDD3DB;
+    animation: silverTrackFlow .7s linear infinite, silverStatusPulse 1.4s ease-in-out infinite;
+}
+body[data-member-theme="rose"] .progress-fill,
+body[data-member-theme="rose"] .admin-demo-progress-track i {
+    background: linear-gradient(90deg, #787C81, #B7BDC4 42%, #E6F9FC 58%, #ABB1B8);
+    background-size: 180% 100%;
+    box-shadow: 0 0 14px rgba(178, 183, 191, .30);
+    animation: silverTrackFlow .8s linear infinite;
+}
+body[data-member-theme="rose"] .progress-fill::after {
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .82), transparent);
+    animation: silverDataSweep 1.05s linear infinite;
+}
+body[data-member-theme="rose"] .scan-progress span,
+body[data-member-theme="rose"] .package-status,
+body[data-member-theme="rose"] .pro-scan-panel {
+    border-color: rgba(182, 188, 195, .28);
+    background: rgba(9, 18, 25, .74);
+}
+body[data-member-theme="rose"] .scan-progress span.done {
+    border-color: rgba(188, 194, 202, .62);
+    color: #C8CFD7;
+    background: rgba(119, 123, 128, .14);
+    box-shadow: inset 0 0 18px rgba(176, 182, 189, .07);
+}
+
+body[data-member-theme="rose"] .lookbook-result {
+    border-color: rgba(188, 194, 202, .42);
+    border-radius: 8px;
+    background:
+        linear-gradient(rgba(177, 182, 190, .025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(177, 182, 190, .025) 1px, transparent 1px),
+        radial-gradient(circle at 50% 38%, rgba(171, 177, 184, .10), transparent 33%),
+        linear-gradient(145deg, rgba(28, 28, 30, .98), rgba(7, 12, 17, .99));
+    background-size: 36px 36px, 36px 36px, auto, auto;
+    box-shadow: 0 36px 100px rgba(0, 0, 0, .56), inset 0 1px 0 rgba(219, 246, 251, .06);
+}
+body[data-member-theme="rose"] .lookbook-result::before,
+body[data-member-theme="rose"] .lookbook-result::after {
+    width: 72px;
+    height: 72px;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+body[data-member-theme="rose"] .lookbook-result::before {
+    left: 17px;
+    right: auto;
+    top: 17px;
+    bottom: auto;
+    border-right: 0;
+    border-bottom: 0;
+}
+body[data-member-theme="rose"] .lookbook-result::after {
+    left: auto;
+    right: 17px;
+    top: auto;
+    bottom: 17px;
+    border-left: 0;
+    border-top: 0;
+}
+body[data-member-theme="rose"] .look-portrait-frame {
+    border: 1px solid #C0C6CE;
+    border-radius: 8px;
+    background: #080E14;
+    outline: 1px solid rgba(192, 198, 206, .18);
+    outline-offset: 6px;
+    box-shadow: 0 30px 70px rgba(0, 0, 0, .60), 0 0 38px rgba(175, 180, 187, .10);
+}
+body[data-member-theme="rose"] .look-portrait-frame figcaption {
+    border-color: rgba(192, 198, 206, .48);
+    border-radius: 4px;
+    background: rgba(7, 14, 19, .84);
+    color: #E6F6F9;
+}
+body[data-member-theme="rose"] .look-pin span {
+    border-color: rgba(185, 190, 198, .45);
+    border-radius: 4px;
+    background: linear-gradient(135deg, rgba(30, 31, 32, .97), rgba(8, 15, 21, .97));
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .34), inset 0 0 18px rgba(175, 180, 187, .04);
+}
+body[data-member-theme="rose"] .look-pin i { background: linear-gradient(90deg, rgba(180, 185, 193, .22), #BBC1C9); box-shadow: 0 0 8px rgba(180, 185, 193, .17); }
+body[data-member-theme="rose"] .look-pin i::after { background: #D1D7E0; box-shadow: 0 0 0 3px rgba(180, 185, 193, .13), 0 0 15px rgba(180, 185, 193, .36); }
+body[data-member-theme="rose"] .look-pin:hover span,
+body[data-member-theme="rose"] .look-pin:focus-visible span {
+    border-color: #CED4DD;
+    background: linear-gradient(105deg, #878C91, #D7DEE7 58%, #ABB0B8);
+    color: #061117;
+    box-shadow: 0 0 25px rgba(175, 181, 188, .18);
+}
+body[data-member-theme="rose"] .part-advice-avoid {
+    border: 1px solid rgba(175, 180, 187, .34);
+    background: linear-gradient(120deg, rgba(81, 84, 87, .14), rgba(8, 15, 21, .76));
+}
+body[data-member-theme="rose"] .prod-card .pc-imgwrap { border: 1px solid rgba(185, 191, 198, .18); background: #081017; }
+body[data-member-theme="rose"] .prod-card:hover { border-color: rgba(193, 199, 207, .60); box-shadow: 0 0 28px rgba(174, 179, 187, .08), 0 24px 65px rgba(0, 0, 0, .45); }
+body[data-member-theme="rose"] .af-row { background: rgba(8, 15, 21, .72); }
+body[data-member-theme="rose"] .af-row.changed { border-color: rgba(186, 192, 200, .54); background: rgba(106, 109, 113, .12); }
+body[data-member-theme="rose"] .af-select { border-color: rgba(183, 189, 197, .36); background: #0A1219; color: #E5F3F6; }
+body[data-member-theme="rose"] .topbar-nav { border-color: rgba(188, 194, 202, .46); background: #081017; box-shadow: 0 28px 86px rgba(0, 0, 0, .64), 0 0 28px rgba(176, 181, 188, .06); }
+body[data-member-theme="rose"] .topbar-nav a:hover,
+body[data-member-theme="rose"] .topbar-nav a:focus-visible { background: linear-gradient(90deg, rgba(128, 132, 137, .20), rgba(178, 183, 191, .06)); }
+
+@media (prefers-reduced-motion: reduce) {
+    body[data-member-theme="rose"] #mainContent.page-enter,
+    body[data-member-theme="rose"] #mainContent.page-back,
+    body[data-member-theme="rose"] #mainContent.page-enter::after,
+    body[data-member-theme="rose"] #mainContent.page-back::after,
+    body[data-member-theme="rose"] #mainContent.page-enter .page-header,
+    body[data-member-theme="rose"] #mainContent.page-back .page-header,
+    body[data-member-theme="rose"] #mainContent.page-enter .reveal-in,
+    body[data-member-theme="rose"] #mainContent.page-back .reveal-in,
+    body[data-member-theme="rose"] .beauty-progress-list li.active .beauty-progress-dot,
+    body[data-member-theme="rose"] .render-estimate::after,
+    body[data-member-theme="rose"] .loading-status.active,
+    body[data-member-theme="rose"] .ai-render-status:not(:empty),
+    body[data-member-theme="rose"] .suggestion-status.active,
+    body[data-member-theme="rose"] .progress-fill,
+    body[data-member-theme="rose"] .progress-fill::after { animation: none !important; }
+}
+
+/* 黑金 PRO：貴族黑。以黑曜石、香檳金與少量深酒紅組成精品晚宴感；
+   只套用 noir，其他三套會員主題維持原有設計。 */
+/* ⚠ 這一份才是黑金主題的**最終值**：index.html 先載 main.css、後載本檔，
+   同樣是 body[data-member-theme="noir"] 的規則，後載的贏。改黑金配色請改這裡，
+   只改 main.css 那份不會有任何效果（2026-08-13 就是這樣白改了一輪）。
+
+   2026-08-13：底色一律改純黑 #000。原本是 #060607 這種「近黑」，加上底下
+   .app-shell 疊的兩層金色 radial-gradient 與奶油色文字，整體會被看成帶黃的深灰，
+   而不是香奈兒那種黑。純黑打底、金只留在細線與 eyebrow 這些點綴上。 */
+body[data-member-theme="noir"] {
+    --ivory: #000000;
+    --ivory-2: #0A0A0A;
+    --paper: #050505;
+    --white: #121212;
+    --gold: #C8A65E;
+    --gold-lt: #F1DDA5;
+    --gold-deep: #D0AE64;
+    --gold-soft: #E2C783;
+    --gold-dim: rgba(200, 166, 94, .22);
+    --gold-grad: linear-gradient(105deg, #8E6928 0%, #C8A65E 27%, #F2DEA4 50%, #C6A054 72%, #8A6425 100%);
+    --blush: #71243A;
+    --blush-lt: #28131A;
+    --blush-deep: #B75B73;
+    --blush-panel: #211217;
+    --terra: #B59048;
+    --terra-lt: #D5B977;
+    --terra-deep: #8E6928;
+    --terra-grad: linear-gradient(150deg, #E0C885 0%, #B38B42 58%, #76521B 100%);
+    /* 文字改中性近白。奶油色(#F7ECD5)整片鋪開來就是「黃」的主要來源之一——
+       香奈兒是黑與白的對比，金只是點綴。 */
+    --ink: #F7F7F5;
+    --ink-2: #E7E7E4;
+    --ink-3: #D2D2CE;
+    --ink-soft: #FFFFFF;
+    --mid: #A5A5A0;
+    --lt: #87877F;
+    --muted: #97978F;
+    --line: rgba(255, 255, 255, .12);
+    --line-gold: rgba(211, 177, 103, .38);
+    --line-dk: rgba(211, 177, 103, .22);
+    --glass: rgba(0, 0, 0, .84);
+    --sheen: rgba(255, 255, 255, .06);
+    --glass-surface: rgba(12, 12, 12, .76);
+    --glass-surface-hover: rgba(24, 24, 24, .90);
+    --glass-surface-hover-soft: rgba(20, 20, 20, .84);
+    --glass-surface-solid: rgba(10, 10, 10, .97);
+    --surface-rgb: 10, 10, 10;
+    --edge: rgba(219, 185, 111, .34);
+    --btn-grad: linear-gradient(104deg, #896323 0%, #C9A65A 38%, #F1DCA0 58%, #B78D3B 100%);
+    --btn-ink: #171006;
+    --btn-glass: linear-gradient(125deg, rgba(29, 26, 28, .96), rgba(13, 12, 14, .94));
+    --btn-glass-hover: linear-gradient(125deg, rgba(43, 36, 39, .98), rgba(18, 16, 18, .96));
+    --btn-glass-ink: #F4E8D0;
+    --btn-glass-on: linear-gradient(118deg, rgba(207, 171, 94, .94), rgba(153, 113, 42, .92));
+    background: #000000;
+}
+
+/* 這兩層金色 radial-gradient 是「黑帶黃」最直接的兇手：它們鋪滿整個 app-shell，
+   在手機上看就是一片暖灰。斜紋那層留著（純白的 1.2% 透明度，只有極輕微的織理感，
+   不帶色相），底色改成純黑。 */
+body[data-member-theme="noir"] .app-shell {
+    background:
+        repeating-linear-gradient(118deg, transparent 0 108px, rgba(255, 255, 255, .012) 109px, transparent 110px),
+        #000000;
+}
+
+body[data-member-theme="noir"] .main-content { background: transparent; }
+body[data-member-theme="noir"] ::selection { background: #C8A65E; color: #090708; }
+
+body[data-member-theme="noir"] .topbar {
+    background: rgba(0, 0, 0, .94);
+    border-bottom: 1px solid rgba(213, 177, 99, .42);
+    box-shadow: 0 18px 55px rgba(0, 0, 0, .42), inset 0 -1px 0 rgba(255, 240, 205, .035);
+    backdrop-filter: blur(22px) saturate(118%);
+}
+body[data-member-theme="noir"] .topbar-brand,
+body[data-member-theme="noir"] .page-header h1,
+body[data-member-theme="noir"] .lookbook-heading h2,
+body[data-member-theme="noir"] .member-section-head h2 {
+    color: #F7F7F5;
+    text-shadow: none;
+}
+body[data-member-theme="noir"] .eyebrow,
+body[data-member-theme="noir"] .section-label,
+body[data-member-theme="noir"] .member-section-head span {
+    color: #D6B66F;
+    letter-spacing: .28em;
+}
+body[data-member-theme="noir"] .divider {
+    background: linear-gradient(90deg, transparent, #D6B66F 18%, #8C6727 82%, transparent);
+    box-shadow: 0 0 18px rgba(211, 174, 94, .18);
+}
+
+body[data-member-theme="noir"] .member-dashboard-hero .member-id,
+body[data-member-theme="noir"] .member-dashboard-hero .member-stats,
+body[data-member-theme="noir"] .member-tier,
+body[data-member-theme="noir"] .member-suggestions,
+body[data-member-theme="noir"] .member-action-card,
+body[data-member-theme="noir"] .theme-card,
+body[data-member-theme="noir"] .point-ledger,
+body[data-member-theme="noir"] .saved-look-card,
+body[data-member-theme="noir"] .dash-card,
+body[data-member-theme="noir"] .glow-card,
+body[data-member-theme="noir"] .style-card,
+body[data-member-theme="noir"] .trend-card,
+body[data-member-theme="noir"] .insp-card,
+body[data-member-theme="noir"] .analysis-workbench > div,
+body[data-member-theme="noir"] .analysis-info-strip article,
+body[data-member-theme="noir"] .analysis-feedback,
+body[data-member-theme="noir"] .makeup-style-dialog,
+body[data-member-theme="noir"] .journey-dialog-shell,
+body[data-member-theme="noir"] .lookbook-result,
+body[data-member-theme="noir"] .prod-card,
+body[data-member-theme="noir"] .admin-demo-grid article {
+    border-color: rgba(211, 177, 103, .32);
+    /* 卡片底色原本是帶紫褐的 rgba(25,22,24)，跟純黑背景並排時那點色偏很明顯。
+       改成純中性灰階，只留金色邊框當點綴。 */
+    background:
+        linear-gradient(145deg, rgba(255, 255, 255, .022), transparent 38%),
+        linear-gradient(152deg, rgba(17, 17, 17, .97), rgba(8, 8, 8, .985));
+    box-shadow: 0 26px 78px rgba(0, 0, 0, .42), inset 0 1px 0 rgba(255, 255, 255, .05);
+}
+
+body[data-member-theme="noir"] .member-dashboard-hero .member-id,
+body[data-member-theme="noir"] .member-dashboard-hero .member-stats,
+body[data-member-theme="noir"] .member-tier,
+body[data-member-theme="noir"] .member-suggestions,
+body[data-member-theme="noir"] .analysis-workbench > div,
+body[data-member-theme="noir"] .analysis-info-strip article,
+body[data-member-theme="noir"] .journey-dialog-shell {
+    border-radius: 4px;
+}
+
+body[data-member-theme="noir"] .member-id {
+    background:
+        radial-gradient(circle at 50% 22%, rgba(221, 185, 105, .14), transparent 29%),
+        linear-gradient(155deg, #171316, #080708 76%);
+}
+body[data-member-theme="noir"] .member-avatar {
+    border: 1px solid #D0AA5B;
+    background: #0C0A0B;
+    box-shadow: 0 0 0 6px #0C0A0B, 0 0 0 7px rgba(208, 170, 91, .38), 0 18px 45px rgba(0, 0, 0, .54);
+}
+body[data-member-theme="noir"] .member-name { color: #F7ECD5; font-family: var(--serif); letter-spacing: .10em; }
+body[data-member-theme="noir"] .member-role { color: #D9BB78; }
+body[data-member-theme="noir"] .member-stats { gap: 0; background: rgba(211, 177, 103, .17); }
+body[data-member-theme="noir"] .member-stats .stat-cell {
+    background: linear-gradient(145deg, rgba(24, 21, 23, .97), rgba(9, 8, 10, .98));
+    border-color: rgba(211, 177, 103, .16);
+}
+body[data-member-theme="noir"] .member-stats .stat-cell:hover,
+body[data-member-theme="noir"] .member-stats .stat-cell:focus-visible { background: rgba(105, 31, 52, .16); }
+
+body[data-member-theme="noir"] .theme-card {
+    position: relative;
+    border-radius: 2px;
+    overflow: hidden;
+}
+body[data-member-theme="noir"] .theme-card::before {
+    content: '';
+    position: absolute;
+    inset: 6px;
+    border: 1px solid rgba(214, 179, 102, .12);
+    pointer-events: none;
+}
+body[data-member-theme="noir"] .theme-card.active {
+    border-color: rgba(239, 213, 153, .68);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, .48), 0 0 0 1px #A87E33 inset, 0 0 34px rgba(189, 146, 63, .08);
+}
+body[data-member-theme="noir"] .theme-swatches span {
+    border-color: rgba(238, 218, 174, .36);
+    box-shadow: 0 5px 14px rgba(0, 0, 0, .36);
+}
+body[data-member-theme="noir"] .point-ledger div,
+body[data-member-theme="noir"] .af-row { border-color: rgba(233, 213, 174, .10); }
+body[data-member-theme="noir"] .point-ledger b.plus { color: #D4BB78; }
+
+/* 黑金按鍵：金色浮雕 + 內光暈。上緣打亮、下緣壓暗做出雕刻的金屬厚度，
+   內側一圈暖金光暈，外加低調金色外暈——Chanel 那種方正、克制、貴氣的按鍵。 */
+body[data-member-theme="noir"] .btn-gold,
+body[data-member-theme="noir"] .add-bag,
+body[data-member-theme="noir"] .look-photo-switch button.active {
+    border: 1px solid rgba(255, 233, 180, .55);
+    border-radius: 2px;
+    background: var(--btn-grad);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 249, 228, .72),
+        inset 0 -2px 5px rgba(120, 80, 24, .55),
+        inset 0 0 20px rgba(255, 226, 162, .22),
+        0 14px 34px rgba(88, 58, 14, .32),
+        0 0 22px rgba(217, 182, 111, .14);
+    letter-spacing: .14em;
+    text-shadow: 0 1px 0 rgba(255, 250, 232, .38);
+}
+body[data-member-theme="noir"] .btn-gold::before,
+body[data-member-theme="noir"] .add-bag::before {
+    /* 頂部那道玻璃高光改成細金反光帶，強化浮雕的立體感 */
+    background: linear-gradient(180deg, rgba(255, 246, 214, .40), rgba(255, 246, 214, 0));
+}
+body[data-member-theme="noir"] .btn-gold:hover,
+body[data-member-theme="noir"] .add-bag:hover,
+body[data-member-theme="noir"] .look-photo-switch button.active:hover {
+    transform: translateY(-2px);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 251, 236, .82),
+        inset 0 -2px 6px rgba(120, 80, 24, .58),
+        inset 0 0 26px rgba(255, 229, 168, .30),
+        0 20px 44px rgba(88, 58, 14, .40),
+        0 0 32px rgba(224, 190, 120, .24);
+}
+body[data-member-theme="noir"] .btn-gold:active,
+body[data-member-theme="noir"] .add-bag:active {
+    /* 按下時光暈內收、浮雕壓進去，像真的金屬鍵 */
+    box-shadow:
+        inset 0 2px 6px rgba(90, 58, 16, .55),
+        inset 0 0 16px rgba(255, 226, 162, .18);
+}
+body[data-member-theme="noir"] .btn-outline,
+body[data-member-theme="noir"] .look-photo-switch button {
+    border: 1px solid rgba(211, 177, 103, .52);
+    border-radius: 2px;
+    background: linear-gradient(135deg, rgba(28, 24, 26, .96), rgba(9, 8, 10, .96));
+    color: #F1E4CC;
+    /* 細金線內雕：上緣一道金、內側一圈微光 */
+    box-shadow: inset 0 1px 0 rgba(255, 237, 198, .10), inset 0 0 14px rgba(217, 182, 111, .05);
+    letter-spacing: .14em;
+}
+body[data-member-theme="noir"] .btn-outline:hover,
+body[data-member-theme="noir"] .look-photo-switch button:hover {
+    border-color: #D8B76E;
+    color: #F7ECD5;
+    background: linear-gradient(135deg, rgba(54, 41, 36, .98), rgba(18, 14, 16, .98));
+    box-shadow: inset 0 1px 0 rgba(255, 240, 205, .16), inset 0 0 18px rgba(217, 182, 111, .10), 0 0 20px rgba(184, 147, 78, .10);
+}
+
+/* 黑金：Ollama 建議文字卡片重做——方正金框、暗金襯底、左上金菱標記、金線標題、內側微光暈。
+   涵蓋妝容建議頁的 .advice-grid 與各部位建議彈窗的 part-advice 區塊。 */
+body[data-member-theme="noir"] .advice-grid > div {
+    position: relative;
+    border-radius: 2px;
+    border: 1px solid rgba(211, 177, 103, .30);
+    background: linear-gradient(160deg, rgba(38, 31, 24, .62), rgba(13, 11, 11, .62));
+    box-shadow: inset 0 1px 0 rgba(255, 240, 205, .05), inset 0 0 26px rgba(217, 182, 111, .045), 0 18px 44px rgba(0, 0, 0, .42);
+}
+body[data-member-theme="noir"] .advice-grid > div::after {
+    content: '';
+    position: absolute; top: 13px; right: 15px;
+    width: 6px; height: 6px;
+    background: var(--gold);
+    transform: rotate(45deg);
+    box-shadow: 0 0 10px rgba(217, 182, 111, .55);
+    opacity: .85;
+}
+body[data-member-theme="noir"] .advice-grid b {
+    color: var(--gold-lt);
+    letter-spacing: .14em;
+    text-shadow: 0 0 14px rgba(217, 182, 111, .18);
+}
+body[data-member-theme="noir"] .part-advice-analysis span,
+body[data-member-theme="noir"] .part-advice-avoid b {
+    color: var(--gold-lt);
+    text-shadow: 0 0 12px rgba(217, 182, 111, .16);
+}
+body[data-member-theme="noir"] .part-advice-avoid {
+    border: 1px solid rgba(211, 177, 103, .34);
+    background: linear-gradient(160deg, rgba(38, 31, 24, .48), rgba(13, 11, 11, .48));
+    box-shadow: inset 0 0 20px rgba(217, 182, 111, .04);
+}
+
+body[data-member-theme="noir"] .makeup-style-modal { background: rgba(3, 3, 4, .82); backdrop-filter: blur(18px); }
+body[data-member-theme="noir"] .makeup-style-dialog { border-radius: 3px; box-shadow: 0 38px 120px rgba(0, 0, 0, .72), 0 0 0 1px rgba(201, 163, 83, .08); }
+body[data-member-theme="noir"] .makeup-style-close,
+body[data-member-theme="noir"] .journey-dialog-close {
+    border-color: rgba(213, 177, 99, .55);
+    border-radius: 50%;
+    background: #0B0A0B;
+    color: #E6CE98;
+}
+body[data-member-theme="noir"] .makeup-style-option {
+    border-color: rgba(225, 196, 135, .15);
+    border-radius: 2px;
+    background: #0E0D0F;
+    box-shadow: 0 16px 42px rgba(0, 0, 0, .28);
+    overflow: hidden;
+}
+body[data-member-theme="noir"] .makeup-style-option:hover {
+    border-color: rgba(225, 191, 116, .66);
+    box-shadow: 0 22px 52px rgba(0, 0, 0, .48), 0 0 24px rgba(195, 151, 62, .08);
+}
+body[data-member-theme="noir"] .makeup-style-option.selected {
+    border-color: #D6B369;
+    box-shadow: 0 0 0 1px rgba(230, 202, 142, .38), 0 26px 58px rgba(0, 0, 0, .52);
+}
+
+body[data-member-theme="noir"] .beauty-progress-list li:not(:last-child)::after { background: linear-gradient(#B68A39, rgba(182, 138, 57, .14)); }
+body[data-member-theme="noir"] .beauty-progress-dot {
+    border-color: rgba(211, 177, 103, .42);
+    background: #0C0B0D;
+    box-shadow: inset 0 0 0 4px #111012;
+}
+body[data-member-theme="noir"] .journey-ready-card,
+body[data-member-theme="noir"] .render-estimate {
+    border-color: rgba(211, 177, 103, .30);
+    background: linear-gradient(130deg, rgba(33, 27, 29, .92), rgba(10, 9, 11, .94));
+}
+body[data-member-theme="noir"] .journey-ready-check,
+body[data-member-theme="noir"] .journey-comic-mark {
+    border: 1px solid rgba(247, 222, 165, .52);
+    background: var(--btn-grad);
+    color: #171006;
+    box-shadow: 0 10px 26px rgba(112, 77, 21, .24);
+}
+body[data-member-theme="noir"] .journey-palette span,
+body[data-member-theme="noir"] .lookbook-palette span { border-color: #111012; box-shadow: 0 0 0 1px rgba(219, 185, 111, .48), 0 7px 18px rgba(0, 0, 0, .38); }
+body[data-member-theme="noir"] .part-advice-avoid {
+    border: 1px solid rgba(183, 91, 115, .44);
+    background: linear-gradient(120deg, rgba(83, 20, 39, .23), rgba(20, 12, 15, .78));
+}
+
+body[data-member-theme="noir"] .lookbook-result {
+    border-color: rgba(222, 188, 112, .48);
+    border-radius: 2px;
+    background:
+        radial-gradient(ellipse at 50% 38%, rgba(196, 155, 70, .10), transparent 31%),
+        radial-gradient(circle at 82% 84%, rgba(113, 36, 58, .13), transparent 26%),
+        linear-gradient(145deg, rgba(24, 21, 23, .98), rgba(7, 7, 8, .99));
+    box-shadow: 0 40px 110px rgba(0, 0, 0, .58), inset 0 1px 0 rgba(247, 223, 167, .07);
+}
+body[data-member-theme="noir"] .lookbook-result::before,
+body[data-member-theme="noir"] .lookbook-result::after {
+    width: 82px;
+    height: 82px;
+    border-radius: 0;
+    background: transparent;
+}
+body[data-member-theme="noir"] .lookbook-result::before {
+    left: 17px;
+    right: auto;
+    top: 17px;
+    bottom: auto;
+    border-right: 0;
+    border-bottom: 0;
+}
+body[data-member-theme="noir"] .lookbook-result::after {
+    left: auto;
+    right: 17px;
+    top: auto;
+    bottom: 17px;
+    border-left: 0;
+    border-top: 0;
+}
+body[data-member-theme="noir"] .look-portrait-frame {
+    border: 1px solid #D4AF62;
+    border-radius: 240px 240px 5px 5px;
+    background: #080708;
+    outline: 1px solid rgba(212, 175, 98, .22);
+    outline-offset: 7px;
+    box-shadow: 0 32px 72px rgba(0, 0, 0, .64), 0 0 48px rgba(188, 144, 57, .08);
+}
+body[data-member-theme="noir"] .look-portrait-frame figcaption {
+    border-color: rgba(225, 192, 121, .46);
+    background: rgba(7, 6, 7, .82);
+    color: #F4E7CD;
+}
+body[data-member-theme="noir"] .look-pin span {
+    border-color: rgba(211, 177, 103, .46);
+    border-radius: 2px;
+    background: linear-gradient(135deg, rgba(25, 22, 24, .97), rgba(9, 8, 10, .97));
+    box-shadow: 0 12px 28px rgba(0, 0, 0, .34);
+}
+body[data-member-theme="noir"] .look-pin i { background: linear-gradient(90deg, rgba(198, 158, 76, .28), #D5B46D); }
+body[data-member-theme="noir"] .look-pin i::after { background: #E3C67F; box-shadow: 0 0 0 3px rgba(202, 165, 87, .15), 0 0 16px rgba(227, 198, 127, .35); }
+body[data-member-theme="noir"] .look-pin:hover span,
+body[data-member-theme="noir"] .look-pin:focus-visible span {
+    border-color: rgba(247, 222, 165, .70);
+    background: linear-gradient(104deg, #8A6424, #D2B36F 58%, #A47A2D);
+    color: #120D05;
+}
+
+body[data-member-theme="noir"] .prod-card .pc-imgwrap { border: 1px solid rgba(220, 186, 113, .20); background: #090809; }
+body[data-member-theme="noir"] .prod-card:hover { border-color: rgba(222, 188, 112, .62); }
+body[data-member-theme="noir"] .af-row { background: rgba(9, 8, 10, .72); }
+body[data-member-theme="noir"] .af-row.changed { border-color: rgba(213, 177, 99, .55); background: rgba(113, 36, 58, .13); }
+body[data-member-theme="noir"] .af-select {
+    border-color: rgba(211, 177, 103, .36);
+    background: #0C0B0D;
+    color: #F0E2C8;
+}
+body[data-member-theme="noir"] .topbar-nav {
+    border-color: rgba(225, 190, 113, .52);
+    background: #090809;
+    box-shadow: 0 30px 90px rgba(0, 0, 0, .68);
+}
+body[data-member-theme="noir"] .topbar-nav a:hover,
+body[data-member-theme="noir"] .topbar-nav a:focus-visible { background: linear-gradient(90deg, rgba(113, 36, 58, .24), rgba(209, 171, 91, .12)); }
+
+@media (max-width: 620px) {
+    body[data-member-theme="noir"] .look-portrait-frame { outline-offset: 4px; border-radius: 180px 180px 4px 4px; }
+    body[data-member-theme="noir"] .lookbook-result::before,
+    body[data-member-theme="noir"] .lookbook-result::after { width: 48px; height: 48px; }
+}
+
+@media (max-width: 900px) {
+    .look-map-shell { grid-template-columns: minmax(0, 1fr); width: min(540px, 100%); }
+    .look-portrait-frame { order: 1; }
+    .look-pin-lane { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; min-height: 0; }
+    .left-lane { order: 2; }
+    .right-lane { order: 3; }
+    .look-pin { position: static; width: auto; min-height: 44px; justify-content: center !important; text-align: center !important; }
+    .look-pin i { display: none; }
+    .look-pin span { width: 100%; }
+}
+
+@media (max-width: 620px) {
+    .journey-dialog .makeup-style-head { padding-right: 42px; }
+    .journey-comic-mark { top: 18px; right: 18px; width: 36px; height: 36px; }
+    .journey-body { min-height: 220px; }
+    .journey-actions { display: grid; grid-template-columns: 1fr; }
+    .journey-actions .btn-gold { order: -1; }
+    .beauty-progress-list li { grid-template-columns: 40px minmax(0, 1fr); gap: 12px; min-height: 70px; }
+    .beauty-progress-dot { width: 38px; height: 38px; }
+    .beauty-progress-list li:not(:last-child)::after { left: 19px; top: 38px; }
+    .journey-ready-card { grid-template-columns: 1fr; padding: 18px; }
+    .render-estimate { grid-template-columns: 36px minmax(0, 1fr); }
+    .render-estimate strong { grid-column: 2; }
+    .lookbook-result { padding: 22px 14px 28px; }
+    .lookbook-heading { align-items: start; flex-direction: column; }
+    .lookbook-summary { text-align: left; }
+    .look-pin-lane { grid-template-columns: 1fr 1fr; }
+    .look-pin span { padding: 12px 10px; font-size: 22px; }
+    .lookbook-actions { display: grid; grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .render-spinner { animation: none; }
+}
+
+/* 商品圖固定白底：商品多半是去背 PNG。.ph 預設底色是 var(--white)，深色主題會把
+   --white 換成深色，去背商品圖背後就變深、還露出裝飾記號 ❧，看起來很突兀。
+   商品類圖框一律用實白底(#fff)，跟一般電商一致；圖片載入後把金框與 ❧ 藏起來，
+   只留乾淨白底襯托商品。 */
+.prod-card .pc-imgwrap .ph,
+.gc-img .ph,
+.pd-img .ph,
+.recommended-grid .prod-card .pc-imgwrap .ph {
+    background: #fff;
+}
+.prod-card .pc-imgwrap .ph:has(img.loaded)::before,
+.prod-card .pc-imgwrap .ph:has(img.loaded)::after,
+.gc-img .ph:has(img.loaded)::before,
+.gc-img .ph:has(img.loaded)::after,
+.pd-img .ph:has(img.loaded)::before,
+.pd-img .ph:has(img.loaded)::after {
+    display: none;
+}
+/* 去背商品圖用 contain 完整置中在白底上，避免 cover 把商品裁掉邊角。 */
+.prod-card .pc-imgwrap .ph img.loaded,
+.gc-img .ph img.loaded,
+.pd-img .ph img.loaded {
+    object-fit: contain;
+}
