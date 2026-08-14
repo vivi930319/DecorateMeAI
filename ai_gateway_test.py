@@ -238,6 +238,19 @@ class AiGatewayTest(unittest.TestCase):
             _authorize_member_path(claims, "api/members/other%40example.com/cart")
         self.assertEqual(raised.exception.status_code, 403)
 
+    def test_proxy_route_accepts_put(self):
+        # 購物車的「整台覆蓋」在會員資料庫端只接受 PUT。這條代理路由原本沒開 PUT，
+        # 於是前端送 POST 被上游擋成 405、改送 PUT 又被 Gateway 自己擋成 405——兩邊
+        # 都不通，而且前端撞到 405 之後會關掉整個購物車同步，畫面上一點異狀都沒有。
+        # 白名單允許路徑（上一個測項）擋不住這種問題：路徑對了，動詞不對照樣是 404/405。
+        proxy_route = next(
+            route for route in gateway.app.routes
+            if getattr(route, "path", "") == "/{service}/{path:path}"
+        )
+        self.assertIn("PUT", proxy_route.methods)
+        # PUT 必須算成寫入，否則 CSRF 與 X-Expected-Actor 兩道防線會整個繞過去。
+        self.assertIn("PUT", gateway.STATE_CHANGING_METHODS)
+
     def test_only_the_stable_media_path_can_retain_a_render(self):
         # Saving a look is what promotes its render out of `temporary/`, and the
         # gateway finds the job to retain by parsing the submitted afterImageUrl.

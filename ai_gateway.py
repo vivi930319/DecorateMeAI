@@ -1197,7 +1197,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=get_cors_origins(),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Accept", "Authorization", "Content-Type", "If-Match", "X-API-Key", "X-Expected-Actor", "X-Job-Token"],
     # 跨來源時瀏覽器預設只讓 JS 讀到少數幾個標頭。不明講的話，前端在非同源情境下
     # 拿不到 Retry-After（顯示不出「請等 N 秒」），也拿不到 X-Request-ID（回報問題時
@@ -1877,6 +1877,42 @@ async def admin_actions(request: Request):
     return JSONResponse(content={"ok": True, "events": recent_admin_actions(limit)})
 
 
+@app.get("/admin-api/face-feedback")
+async def admin_face_feedback(request: Request):
+    """使用者對五官判斷做的修正，給管理端做第二次人工檢查。
+
+    為什麼要有人看：這些修正會**直接變成重訓的標籤**，但寫進去之前沒有任何人檢查過。
+    使用者可能誤點，也可能自己判斷錯——眉型、唇型這種本來就主觀。一筆錯標籤混進
+    訓練集，之後分數變差會很難查回是哪裡來的。
+
+    走 face-basic 的內部路由：BASIC 與 PRO 是兩個部署，但修正存在**同一個 Firestore
+    集合**，所以讀其中一個就夠；固定用 basic 的理由跟刪除那條一樣——PRO 不見得有部署。
+    """
+    enforce_csrf(request)
+    if MULTI_SESSION_ENABLED:
+        _require_admin_claims(select_account(request, for_write=False)["claims"])
+    else:
+        claims = require_admin_access(request)
+        enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+
+    try:
+        limit = max(1, min(int(request.query_params.get("limit", "50")), 200))
+    except ValueError:
+        limit = 50
+
+    face = await _face_internal_request(request, "GET", f"v1/face/feedback?limit={limit}",
+                                        admin=True)
+    if face is None or not face.is_success:
+        # 讀不到就明說，不要回空陣列——空陣列會被看成「使用者都沒有修正過」，
+        # 那是完全相反的結論。
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "FACE_FEEDBACK_UNAVAILABLE",
+                              "message": "暫時讀不到修正紀錄，請稍後再試。"}},
+        )
+    return JSONResponse(content=face.json())
+
+
 async def proxy_public_product_request(request: Request, path: str):
     if not PRODUCT_DATABASE_URL or not any(pattern.fullmatch(path) for pattern in PUBLIC_PRODUCT_PATHS):
         raise HTTPException(status_code=404, detail={"error": {"code": "NOT_FOUND", "message": "Route not found."}})
@@ -1913,7 +1949,11 @@ async def public_product_proxy(path: str, request: Request):
     return await proxy_public_product_request(request, path)
 
 
-@app.api_route("/{service}/{path:path}", methods=["GET", "POST", "PATCH", "DELETE"])
+# PUT 是 2026-08-13 加的：會員資料庫的購物車覆蓋寫入只接受 PUT，而這條路由當時沒開
+# PUT，於是前端送 POST 被上游擋成 405、改送 PUT 又會被 Gateway 自己擋成 405——兩邊
+# 都不通，購物車同步整條是死的。PUT 已在 STATE_CHANGING_METHODS 裡，因此 CSRF 與
+# X-Expected-Actor 那兩道防線自動涵蓋它，不需要另外開後門。
+@app.api_route("/{service}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def proxy(service: str, path: str, request: Request):
     upstream = UPSTREAMS.get(service)
     if upstream is None or not is_path_allowed(upstream, path):
