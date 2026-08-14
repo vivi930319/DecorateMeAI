@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -24,8 +25,11 @@ import numpy as np
 from insightface.app import FaceAnalysis
 from sklearn.cluster import AgglomerativeClustering
 
-ROOT = Path("data/basic_full/grouped")
-OUT_PATH = Path("data/roi_cache/identity_map.json")
+# 跟 prepare_roi_cache.py 讀同一個環境變數。兩支必須指向**同一個資料集目錄**——
+# identity map 的鍵是絕對路徑，指錯目錄的話 ROI 快取會查不到 identity，
+# 於是每一筆都變成 -1（身分不明），切分就退化成「全部不進驗證」而沒有任何錯誤訊息。
+ROOT = Path(os.environ.get("ROI_DATASET_ROOT", "data/basic_full/grouped"))
+OUT_PATH = Path(os.environ.get("IDENTITY_MAP", "data/roi_cache/identity_map.json"))
 EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_IMAGE_SIZE = 1024
 
