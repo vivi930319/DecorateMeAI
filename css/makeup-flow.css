@@ -227,7 +227,7 @@
     z-index: 1;
     display: grid;
     grid-template-columns: minmax(155px, 1fr) minmax(310px, 510px) minmax(155px, 1fr);
-    gap: clamp(18px, 3vw, 50px);
+    gap: clamp(12px, 1.8vw, 28px);
     align-items: stretch;
     width: min(1120px, 100%);
     margin: 0 auto;
@@ -249,26 +249,28 @@
 .look-pin {
     position: absolute;
     width: 100%;
-    min-height: 64px;
+    min-height: 52px;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     border: 0;
     background: transparent;
     color: var(--ink-soft);
     cursor: pointer;
     font-family: var(--cjk);
 }
-.look-pin.left { justify-content: flex-start; text-align: right; }
-.look-pin.right { justify-content: flex-end; text-align: left; }
+.look-pin.left { justify-content: flex-end; text-align: right; }
+.look-pin.right { justify-content: flex-start; text-align: left; }
 .look-pin.top { top: 18%; }
 .look-pin.middle { top: 45%; }
 .look-pin.bottom { top: 70%; }
 .right-lane .look-pin.bottom { top: 62%; }
-.look-pin span { position: relative; z-index: 1; padding: 14px 20px; border: 1px solid var(--line-gold); border-radius: 999px; background: var(--paper); font-size: 28px; line-height: 1.15; transition: .24s var(--ease); white-space: nowrap; }
-.look-pin i { position: relative; display: block; width: clamp(44px, 4vw, 72px); height: 1px; background: var(--gold-deep); flex: 0 0 clamp(44px, 4vw, 72px); }
+.look-pin span { position: relative; z-index: 1; padding: 11px 17px; border: 1px solid var(--line-gold); border-radius: 999px; background: var(--paper); font-size: clamp(19px, 1.4vw, 22px); line-height: 1.1; letter-spacing: .08em; transition: .24s var(--ease); white-space: nowrap; }
+.look-pin i { position: relative; display: block; width: clamp(38px, 3vw, 56px); height: 1px; flex: 0 0 clamp(38px, 3vw, 56px); }
 .look-pin.right i { order: -1; }
-.look-pin i::after { content: ''; position: absolute; top: 50%; width: 7px; height: 7px; border-radius: 50%; background: var(--gold-deep); transform: translateY(-50%); }
+.look-pin.left i { background: linear-gradient(90deg, color-mix(in srgb, var(--gold-deep) 20%, transparent), var(--gold-deep)); }
+.look-pin.right i { background: linear-gradient(90deg, var(--gold-deep), color-mix(in srgb, var(--gold-deep) 20%, transparent)); }
+.look-pin i::after { content: ''; position: absolute; top: 50%; width: 6px; height: 6px; border-radius: 50%; background: var(--gold-deep); transform: translateY(-50%); }
 .look-pin.left i::after { right: -1px; }
 .look-pin.right i::after { left: -1px; }
 .look-pin:hover span,
@@ -1143,11 +1145,13 @@ body[data-member-theme="noir"] .look-portrait-frame figcaption {
 }
 body[data-member-theme="noir"] .look-pin span {
     border-color: rgba(211, 177, 103, .46);
-    border-radius: 2px;
-    background: linear-gradient(135deg, rgba(25, 22, 24, .97), rgba(9, 8, 10, .97));
-    box-shadow: 0 12px 28px rgba(0, 0, 0, .34);
+    border-radius: 999px;
+    background: linear-gradient(135deg, rgba(25, 22, 24, .88), rgba(9, 8, 10, .82));
+    box-shadow: 0 10px 24px rgba(0, 0, 0, .25), inset 0 1px 0 rgba(255, 240, 205, .05);
+    backdrop-filter: blur(10px);
 }
-body[data-member-theme="noir"] .look-pin i { background: linear-gradient(90deg, rgba(198, 158, 76, .28), #D5B46D); }
+body[data-member-theme="noir"] .look-pin.left i { background: linear-gradient(90deg, rgba(198, 158, 76, .16), #D5B46D); }
+body[data-member-theme="noir"] .look-pin.right i { background: linear-gradient(90deg, #D5B46D, rgba(198, 158, 76, .16)); }
 body[data-member-theme="noir"] .look-pin i::after { background: #E3C67F; box-shadow: 0 0 0 3px rgba(202, 165, 87, .15), 0 0 16px rgba(227, 198, 127, .35); }
 body[data-member-theme="noir"] .look-pin:hover span,
 body[data-member-theme="noir"] .look-pin:focus-visible span {
@@ -1206,7 +1210,7 @@ body[data-member-theme="noir"] .topbar-nav a:focus-visible { background: linear-
     .lookbook-heading { align-items: start; flex-direction: column; }
     .lookbook-summary { text-align: left; }
     .look-pin-lane { grid-template-columns: 1fr 1fr; }
-    .look-pin span { padding: 12px 10px; font-size: 22px; }
+    .look-pin span { padding: 11px 10px; font-size: 18px; }
     .lookbook-actions { display: grid; grid-template-columns: 1fr; }
 }
 
