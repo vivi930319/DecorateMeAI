@@ -17,7 +17,7 @@ import uvicorn
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger("ollama-suggestion")
 
-app = FastAPI(title="Ollama 妝容真實個人化修飾服務", version="2026-08-15-Render-Prompt-Restored")
+app = FastAPI(title="Ollama 妝容真實個人化修飾服務", version="2026-08-15-Contour-Key-Fix")
 
 app.add_middleware(
     CORSMiddleware,
@@ -164,7 +164,6 @@ async def limit_payload_size(request: Request, call_next):
         return make_error_response(413, "PAYLOAD_TOO_LARGE", "上傳的資料過大，請縮小檔案後再試。", False)
     return await call_next(request)
 
-# 深度遞迴搜尋字典中的特定 Key
 def _deep_search_keys(data: Any, target_keys: set) -> dict:
     found = {}
     if isinstance(data, dict):
@@ -215,29 +214,31 @@ def build_gemma3_json_prompts(payload_dict: dict, style: str, user_note: Optiona
     l_str = f"唇型：{l_shape}" if l_shape else f"根據唇形飽滿度優化唇妝（搭配{style}）"
     s_str = f"膚色季型：{s_season}" if s_season else f"根據原生膚色調配底妝（搭配{style}）"
 
+    # 🚀【更新：在系統提示詞中嚴格規範 parts 必須包含 6 大部位（含 contour）】
     system_prompt = (
         "你是一位高階明星御用彩妝顧問。請根據傳入的使用者特徵與目標風格，輸出極具個人化、具體可執行的彩妝建議 JSON。\n\n"
         "【輸出規範與鐵律】\n"
         "1. 必須嚴格輸出合法的單一 JSON 物件，不得包含 any 思考過程或 Markdown 標籤。\n"
         "2. 嚴禁使用『寶寶』、『親愛的』等客套用語，語氣保持客觀、專業、技術導向。\n"
         "3. 嚴禁使用『資料不足』、『通用方式建議』這種字眼！請直接依據特徵數據與風格撰寫專業修飾手法。\n"
-        "4. analysis 欄位：必須明確寫出該部位的特徵分析與修飾目標（例：『眼型：圓眼（眼尾微下垂，需提升眼尾拉長效果）』）。\n"
-        "5. steps 欄位：給出極度具體、有技術細節的操作步驟（包含毫米 mm、彩妝色系、質地與暈染方向），每個步驟 25–45 字。\n"
-        "6. 每個部位包含 2 個具體步驟，avoid 陣列包含 1 個明確避免事項。\n"
-        "7. 嚴禁產生任何品牌名稱。\n\n"
+        "4. parts 欄位必須嚴格包含以下六個鍵：base, eyebrow, eyes, contour, cheeks, lips。\n"
+        "5. analysis 欄位：明確寫出該部位的特徵分析與修飾目標。\n"
+        "6. steps 欄位：給出具體、有技術細節的操作步驟（包含毫米 mm、彩妝色系、質地與暈染方向），每個步驟 25–45 字。\n"
+        "7. 每個部位包含 2 個具體步驟，avoid 陣列包含 1 個明確避免事項。\n"
+        "8. 嚴禁產生任何品牌名稱。\n\n"
         "【JSON 輸出結構範例】\n"
         "{\n"
         '  "overall": {\n'
-        '    "summary": "針對原生骨相優化，打造高對比且極具質感的港風復古妝效。"\n'
+        '    "summary": "針對原生骨相優化，打造高對比且極具質感的妝效。"\n'
         '  },\n'
         '  "parts": {\n'
         '    "base": {\n'
         '      "analysis": "臉型：鵝蛋臉（輪廓流暢，加強面中立體度）",\n'
         '      "steps": [\n'
-        '        "選用高遮瑕霧面粉底液，由面中向外均勻拍開，建立無瑕絨光底妝。",\n'
-        '        "使用灰棕色修容餅輕掃顴骨下緣與下巴輪廓線，強化立體骨相收斂感。"\n'
+        '        "選用高遮瑕霧面粉底液，由面中向外均勻拍開，建立無瑕底妝。",\n'
+        '        "利用輕薄蜜粉按壓T字部位，維持全天清爽持妝。"\n'
         '      ],\n'
-        '      "avoid": ["避免使用大面積珠光高光，防止破壞霧面絨光質感。"]\n'
+        '      "avoid": ["避免粉底色號過白產生面具感。"]\n'
         '    },\n'
         '    "eyebrow": {\n'
         '      "analysis": "眉型：彎月眉（弧度柔和，需拉長眉尾線條）",\n'
@@ -251,25 +252,33 @@ def build_gemma3_json_prompts(payload_dict: dict, style: str, user_note: Optiona
         '      "analysis": "眼型：圓眼（眼窩深邃，強化眼尾平拉）",\n'
         '      "steps": [\n'
         '        "用深棕色眼線液填滿上睫毛根部，眼尾順著眼型平拉延伸 3 mm 後微微上揚。",\n'
-        '        "大地色眼影於眼窩重度暈染，眼尾三角區加深，打造深邃復古眼窩。"\n'
+        '        "大地色眼影於眼窩重度暈染，眼尾三角區加深，打造深邃眼窩。"\n'
         '      ],\n'
         '      "avoid": ["避免畫過粗的下眼線，以免眼神顯得死板僵硬。"]\n'
+        '    },\n'
+        '    "contour": {\n'
+        '      "analysis": "修容：針對面中與下顎線進行立體骨相收斂",\n'
+        '      "steps": [\n'
+        '        "使用灰棕色修容粉自山根向鼻尖兩側輕掃，縮窄鼻翼並拔高鼻樑。",\n'
+        '        "由下顎角向內沿著下巴輪廓輕掃陰影，強化臉部俐落線條。"\n'
+        '      ],\n'
+        '      "avoid": ["避免使用偏紅棕色調修容，防止顯髒。"]\n'
         '    },\n'
         '    "cheeks": {\n'
         '      "analysis": "膚色季型：暖色調（需斜向提亮蘋果肌）",\n'
         '      "steps": [\n'
         '        "選擇低飽和陶土橘粉色腮紅，從顴骨最高點向太陽穴方向斜向暈染。",\n'
-        '        "餘粉輕帶過鼻樑中段，增加整體妝容的復古和煦血色感。"\n'
+        '        "餘粉輕帶過鼻樑中段，增加整體妝容的和煦血色感。"\n'
         '      ],\n'
         '      "avoid": ["避免將腮紅打在低於鼻翼的位置，防止臉部視覺下垂。"]\n'
         '    },\n'
         '    "lips": {\n'
         '      "analysis": "唇型：薄唇（需擴畫唇峰增加豐滿度）",\n'
         '      "steps": [\n'
-        '        "使用紅棕色唇線筆稍微擴畫唇峰，打造豐滿飽滿的復古唇形。",\n'
-        '        "填滿濃郁復古紅棕色絨霧唇膏，邊緣用棉花棒微暈染呈現高級質感。"\n'
+        '        "使用唇線筆稍微向外擴畫唇峰，打造豐滿飽滿的唇形。",\n'
+        '        "填滿濃郁絨霧唇膏，邊緣用棉花棒微暈染呈現高級質感。"\n'
         '      ],\n'
-        '      "avoid": ["避免使用過度黏膩高光亮面的水光唇釉。"]\n'
+        '      "avoid": ["避免使用過度黏膩厚重的唇蜜。"]\n'
         '    }\n'
         '  }\n'
         "}"
@@ -286,7 +295,7 @@ def build_gemma3_json_prompts(payload_dict: dict, style: str, user_note: Optiona
         f"- {l_str}\n"
         f"- {s_str}\n\n"
         f"視覺提取細節：{vision_feedback}\n\n"
-        f"請立刻輸出極具個人化技術細節的純繁體中文 JSON 物件。"
+        f"請立刻輸出嚴格包含 base, eyebrow, eyes, contour, cheeks, lips 的純繁體中文 JSON 物件。"
     )
 
     return system_prompt, user_prompt, face_analysis_used, missing_fields
@@ -314,10 +323,38 @@ async def call_gemma3_generate_json(system_instruction: str, user_prompt: str) -
 
         raw_response = get_res.json().get("response", "").strip()
         try:
-            return json.loads(raw_response)
+            parsed = json.loads(raw_response)
         except json.JSONDecodeError:
             clean_str = raw_response.replace("```json", "").replace("```", "").strip()
-            return json.loads(clean_str)
+            parsed = json.loads(clean_str)
+
+        # 🚀【防呆安全保護】：確保 parts 物件下 6 個 key 絕對存在
+        if not isinstance(parsed, dict):
+            parsed = {}
+        if "overall" not in parsed:
+            parsed["overall"] = {"summary": "針對原生特徵與骨相進行客製化修飾。"}
+        if "parts" not in parsed or not isinstance(parsed.get("parts"), dict):
+            parsed["parts"] = {}
+
+        parts = parsed["parts"]
+        required_parts = {
+            "base": ("底妝修飾", "打造服貼薄透底妝，均勻全臉膚色。"),
+            "eyebrow": ("眉型修飾", "順著原生毛流描繪自然眉型。"),
+            "eyes": ("眼妝修飾", "加深眼尾陰影，搭配細緻內眼線放大雙眼。"),
+            "contour": ("輪廓修容", "於山根及下顎線輕掃灰棕色陰影修飾輪廓。"),
+            "cheeks": ("腮紅修飾", "於蘋果肌輕掃提亮腮紅增加自然氣色。"),
+            "lips": ("唇部修飾", "塗抹水潤唇膏並微暈染唇周邊界。")
+        }
+
+        for key, (default_analysis, default_step) in required_parts.items():
+            if key not in parts or not isinstance(parts[key], dict):
+                parts[key] = {
+                    "analysis": default_analysis,
+                    "steps": [default_step],
+                    "avoid": ["避免手法過重導致妝感不均。"]
+                }
+
+        return parsed
 
 @app.get("/health")
 async def health_check():
@@ -389,13 +426,13 @@ async def suggest(request: Request, payload: SuggestRequest, x_api_key: Optional
         normalized_style = "Soft baddie"
 
     try:
-        # 1. 產生個人化中文建議 JSON
+        # 1. 產生包含 contour 在內的完整 6 大部位建議 JSON
         sys_zh, usr_zh, face_analysis_used, missing_fields = build_gemma3_json_prompts(
             raw_body, normalized_style, payload.userNote, vision_feedback
         )
         suggestion_json = await call_gemma3_generate_json(sys_zh, usr_zh)
 
-        # 2. 🚀【完整接回 8 大風格英文 Prompt 控制鏈，重啟精細渲染！】
+        # 2. 匹配專屬風格英文 Prompt 控制鏈
         if "日常自然" in normalized_style:
             flux_prompt_part = (
                 "Apply a clean no-makeup makeup look to this person, as a photorealistic makeup-only retouch of the original photo. "
@@ -427,7 +464,7 @@ async def suggest(request: Request, payload: SuggestRequest, x_api_key: Optional
 
         signature = sign_render_prompt(flux_prompt_part)
 
-        logger.info(f"推理完成！英文 Prompt 長度: {len(flux_prompt_part)}，已簽章。")
+        logger.info(f"推理完成！回傳包含 6 大部位 (含 contour) 之建議與英文簽章 (faceAnalysisUsed={face_analysis_used})。")
 
         return {
             "status": "completed",
