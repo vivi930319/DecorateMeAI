@@ -90,6 +90,27 @@
     }
 </style>
 
+<!-- 個人化推薦區塊 (AI 猜你喜歡) -->
+<div id="personal-recommendation-section" class="mb-5" style="display: none;">
+    <div class="d-flex align-items-center gap-2 mb-3">
+        <h4 class="fw-bold mb-0" style="color: var(--primary-pink);">✨ AI 猜你喜歡</h4>
+        <span class="badge rounded-pill" style="background-color: var(--primary-pink); font-size: 0.7rem;">個人化推薦</span>
+    </div>
+    <p class="text-muted small mb-3">系統根據您的收藏品味，為您推薦以下商品：</p>
+    <div class="row g-3" id="personal-recommendation-cards"></div>
+</div>
+
+<!-- 試妝推薦區塊 (根據試妝色彩推薦) -->
+<div id="tryon-recommendation-section" class="mb-5" style="display: none;">
+    <div class="d-flex align-items-center gap-2 mb-3">
+        <div style="width: 14px; height: 14px; border-radius: 50%; background: var(--primary-pink); box-shadow: 0 2px 6px rgba(230,74,121,0.4);"></div>
+        <h4 class="fw-bold mb-0" style="color: var(--primary-pink);">為您推薦的相近色</h4>
+        <span class="badge rounded-pill" style="background-color: #d6336c; font-size: 0.65rem;">AI 色彩分析</span>
+    </div>
+    <p class="text-muted small mb-3">以下商品和您的試妝色彩最接近：</p>
+    <div class="row g-3" id="tryon-recommendation-cards"></div>
+</div>
+
 <section class="catalog-header">
     <div>
         <h1 class="h3 mb-1">商品瀏覽</h1>
@@ -109,11 +130,67 @@
     {% endfor %}
 </nav>
 
+<!-- 商品詳細資訊彈出視窗 (Modal) -->
+<div class="modal fade" id="productDetailModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content" style="border-radius: 20px; border: none; overflow: hidden; box-shadow: 0 25px 50px rgba(0,0,0,0.15);">
+            <button type="button" class="btn-close position-absolute top-0 end-0 m-3" data-bs-dismiss="modal" aria-label="Close" style="z-index: 10;"></button>
+            <div class="modal-body p-0">
+                <div class="row g-0">
+                    <div class="col-md-5 bg-light d-flex align-items-center justify-content-center p-4">
+                        <img id="modal-img" src="" alt="商品圖片" class="img-fluid" style="max-height: 400px; object-fit: contain;">
+                    </div>
+                    <div class="col-md-7 p-4 p-md-5 position-relative">
+                        <p id="modal-brand" class="text-muted small mb-1 fw-bold" style="letter-spacing: 1px;"></p>
+                        <h4 id="modal-name" class="fw-bold mb-2"></h4>
+                        <p id="modal-desc" class="small mb-3" style="color: #c9889b;"></p>
+                        
+                        <div class="d-flex align-items-center mb-4">
+                            <h3 id="modal-price" class="fw-bold text-pink-custom mb-0 me-3"></h3>
+                            <button id="modal-favorite-btn" class="btn btn-outline-danger btn-sm rounded-pill px-3 shadow-sm" onclick="toggleFavorite()" style="transition: all 0.2s;">
+                                🤍 加入最愛
+                            </button>
+                        </div>
+
+                        <!-- 色彩視覺卡：取代原本四個技術區塊 -->
+                        <div class="d-flex align-items-center gap-3 p-3 mb-3" style="background: #fff5f8; border-radius: 14px;">
+                            <div id="modal-swatch-box" style="width: 56px; height: 56px; border-radius: 12px; flex-shrink: 0;" class="shadow-sm"></div>
+                            <div class="flex-grow-1">
+                                <div class="fw-bold" style="font-size: 0.9rem;">主色 <span id="modal-hex"></span></div>
+                                <div class="text-muted small">RGB <span id="modal-rgb"></span></div>
+                            </div>
+                            <div class="text-end small text-muted" style="line-height: 1.6;">
+                                <div>H <span id="modal-hsv-h">0</span>°</div>
+                                <div>S <span id="modal-hsv-s">0</span>% · V <span id="modal-hsv-v">0</span>%</div>
+                            </div>
+                        </div>
+
+                        <!-- AI 相似色彩推薦 -->
+                        <div class="mt-3 pt-3 border-top">
+                            <div class="d-flex align-items-center gap-2 mb-3">
+                                <span style="font-size: 0.9rem;">✨ 相似色推薦</span>
+                                <span class="badge rounded-pill" style="background-color: var(--primary-pink); font-size: 0.6rem;">AI 比對</span>
+                            </div>
+                            <div id="modal-recommendations-row" class="row g-2"></div>
+                        </div>
+                        <div id="modal-sale-page" class="mt-4 text-muted" style="font-size: 0.65rem;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% if products %}
     <section class="product-grid">
         {% for product in products %}
-            <article class="product-card">
-                {% if product.image_src %}
+            <article class="product-card" style="cursor: pointer;"
+                     onclick='clickProduct("{{ product.id }}","{{ selected_category.type }}")'
+                     onmouseover="this.style.boxShadow='0 10px 28px rgba(230,74,121,0.15)';"
+                     onmouseout="this.style.boxShadow='0 10px 28px rgba(20,18,16,0.06)';">
+                {% if product.image_url %}
+                    <img class="product-image" src="{{ product.image_url }}" alt="{{ product.name }}">
+                {% elif product.image_src %}
                     <img class="product-image" src="{{ product.image_src }}" alt="{{ product.name }}">
                 {% else %}
                     <div class="product-empty-image">無圖片</div>
@@ -123,10 +200,10 @@
                     <div class="product-name">{{ product.name }}</div>
                     <div class="product-meta">
                         <span class="product-price">{{ product.price }}</span>
-                        {% if product.shade_name %}
-                            <span class="badge text-bg-secondary product-tag">{{ product.shade_name }}</span>
-                        {% elif product.category_name %}
-                            <span class="badge text-bg-secondary product-tag">{{ product.category_name }}</span>
+                        {% if product.shades and product.shades | length > 0 %}
+                            <span class="badge text-bg-secondary product-tag">{{ product.shades[0] }}</span>
+                        {% elif product.category %}
+                            <span class="badge text-bg-secondary product-tag">{{ product.category }}</span>
                         {% elif product.sale_page_id %}
                             <span class="badge text-bg-secondary product-tag">{{ product.sale_page_id }}</span>
                         {% endif %}
@@ -154,4 +231,297 @@
 {% else %}
     <div class="alert alert-light border">目前這個分類沒有商品。</div>
 {% endif %}
+
+<script>
+    let currentProductId = null;
+    let currentProductType = null;
+    let nestedRecommendations = [];
+
+    function hexToRgb(hex) {
+        let result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+        return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : null;
+    }
+
+    function rgbToHsv(r, g, b) {
+        r /= 255; g /= 255; b /= 255;
+        let max = Math.max(r,g,b), min = Math.min(r,g,b);
+        let h, s, v = max;
+        let d = max - min;
+        s = max === 0 ? 0 : d / max;
+        if (max === min) h = 0;
+        else {
+            switch (max) {
+                case r: h = (g-b)/d + (g<b?6:0); break;
+                case g: h = (b-r)/d + 2; break;
+                case b: h = (r-g)/d + 4; break;
+            }
+            h /= 6;
+        }
+        return { h: (h*360).toFixed(1), s: (s*100).toFixed(1), v: (v*100).toFixed(1) };
+    }
+
+    function loadProductIntoModal(p) {
+        currentProductId = p.pId;
+        currentProductType = p.pType;
+
+        const favBtn = document.getElementById('modal-favorite-btn');
+        favBtn.innerHTML = '🤍 加入最愛';
+        favBtn.classList.remove('btn-danger');
+        favBtn.classList.add('btn-outline-danger');
+
+        let desc = p.desc;
+        if (!desc || desc === 'None' || desc.trim() === '') desc = '增添好氣色，修飾雙頰輪廓';
+
+        let lab = p.lab || {};
+        let vector = p.vector || [];
+        if (typeof lab === 'string') try { lab = JSON.parse(lab); } catch(e){}
+        if (typeof vector === 'string') try { vector = JSON.parse(vector); } catch(e){}
+
+        const modalImg = document.getElementById('modal-img');
+        modalImg.style.opacity = '0';
+        setTimeout(() => {
+            modalImg.src = p.img;
+            modalImg.onload = () => { modalImg.style.transition = 'opacity 0.4s ease'; modalImg.style.opacity = '1'; };
+        }, 100);
+
+        document.getElementById('modal-brand').textContent = p.brand;
+        document.getElementById('modal-name').textContent = p.name;
+        document.getElementById('modal-desc').textContent = desc;
+        document.getElementById('modal-price').textContent = p.price;
+        document.getElementById('modal-sale-page').textContent = `sale_page_id: ${p.salePage || 'undefined'}`;
+
+        document.getElementById('modal-swatch-box').style.backgroundColor = p.hex;
+        document.getElementById('modal-hex').textContent = p.hex;
+
+        const rgb = hexToRgb(p.hex);
+        if (rgb) {
+            document.getElementById('modal-rgb').textContent = `${rgb.r}, ${rgb.g}, ${rgb.b}`;
+            const hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
+            document.getElementById('modal-hsv-h').textContent = hsv.h;
+            document.getElementById('modal-hsv-s').textContent = hsv.s;
+            document.getElementById('modal-hsv-v').textContent = hsv.v;
+        }
+
+        const recRow = document.getElementById('modal-recommendations-row');
+        recRow.innerHTML = '<div class="text-center w-100 py-2 text-muted small">🤖 AI 比對中...</div>';
+
+        fetch(`/api/recommend/${p.pType}/${p.pId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.recommendations.length > 0) {
+                    recRow.innerHTML = '';
+                    nestedRecommendations = data.recommendations;
+                    data.recommendations.forEach((rec, index) => {
+                        recRow.innerHTML += `
+                            <div class="col-4">
+                                <div class="p-2 border border-light rounded bg-white text-center h-100 position-relative shadow-sm"
+                                     style="cursor: pointer; font-size: 0.75rem; border-radius: 12px !important; transition: transform 0.2s;"
+                                     onclick="clickNestedRecommendation(${index})"
+                                     onmouseover="this.style.transform='scale(1.05)';"
+                                     onmouseout="this.style.transform='scale(1)';">
+                                    <span class="position-absolute top-0 start-50 translate-middle badge rounded-pill" style="font-size: 0.6rem; background-color: var(--primary-pink) !important;">${rec.similarity}% 相似</span>
+                                    <div class="d-flex align-items-center justify-content-center mb-1 bg-light rounded" style="aspect-ratio: 1/1; overflow: hidden; padding: 4px;">
+                                        <img src="${rec.image_url}" style="max-width: 100%; max-height: 100%; object-fit: contain;">
+                                    </div>
+                                    <div class="fw-bold text-truncate text-dark mb-0" style="font-size: 0.8rem;">${rec.name}</div>
+                                    <div class="text-muted" style="font-size: 0.65rem;">${rec.brand}</div>
+                                    <div class="fw-bold mt-1" style="color: #d6336c;">${rec.price}</div>
+                                </div>
+                            </div>`;
+                    });
+                } else {
+                    recRow.innerHTML = '<div class="text-center w-100 py-2 text-muted small">暫無相似色彩商品</div>';
+                }
+            }).catch(err => console.error(err));
+    }
+
+    function clickProduct(pid, ptype) {
+        // 使用專用商品詳細資訊 API，從資料庫撈取完整資料
+        fetch(`/api/product/${ptype}/${pid}`)
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    const p = data.product;
+                    const productData = {
+                        pId: p.id, pType: p.type,
+                        img: p.image_url, brand: p.brand, name: p.name,
+                        desc: p.description, price: p.price,
+                        hex: p.hex, salePage: p.salepage,
+                        lab: p.lab, vector: p.vector
+                    };
+                    loadProductIntoModal(productData);
+                    const myModal = new bootstrap.Modal(document.getElementById('productDetailModal'));
+                    myModal.show();
+                }
+            }).catch(err => console.error(err));
+    }
+
+    function clickNestedRecommendation(index) {
+        const rec = nestedRecommendations[index];
+        const productData = {
+            pId: rec.id, pType: rec.type, img: rec.image_url, brand: rec.brand, name: rec.name,
+            desc: rec.desc, price: rec.price, hex: rec.hex, salePage: rec.salepage,
+            lab: rec.lab, vector: rec.vector
+        };
+        loadProductIntoModal(productData);
+        document.querySelector('.modal-body').parentElement.parentElement.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function clickTopRecommendation(recJsonStr) {
+        const rec = JSON.parse(decodeURIComponent(recJsonStr));
+        const productData = {
+            pId: rec.id, pType: rec.type, img: rec.image_url, brand: rec.brand, name: rec.name,
+            desc: rec.desc, price: rec.price, hex: rec.hex, salePage: rec.salepage,
+            lab: rec.lab, vector: rec.vector
+        };
+        loadProductIntoModal(productData);
+        const modalEl = document.getElementById('productDetailModal');
+        const modal = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
+        modal.show();
+    }
+
+    function toggleFavorite() {
+        if (!currentProductId || !currentProductType) return;
+        fetch('/api/favorites/toggle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ item_id: currentProductId, item_type: currentProductType })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data) {
+                const btn = document.getElementById('modal-favorite-btn');
+                if (data.status === 'added') {
+                    btn.innerHTML = '❤️ 已收藏';
+                    btn.classList.remove('btn-outline-danger');
+                    btn.classList.add('btn-danger');
+                } else if (data.status === 'removed') {
+                    btn.innerHTML = '🤍 加入最愛';
+                    btn.classList.remove('btn-danger');
+                    btn.classList.add('btn-outline-danger');
+                }
+            }
+        }).catch(err => console.error(err));
+    }
+
+    // 載入 AI 個人化推薦
+    document.addEventListener("DOMContentLoaded", function() {
+        fetch('/api/recommend/personal')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.recommendations && data.recommendations.length > 0) {
+                    const section = document.getElementById('personal-recommendation-section');
+                    const cardContainer = document.getElementById('personal-recommendation-cards');
+                    section.style.display = 'block';
+                    data.recommendations.forEach(rec => {
+                        const recJson = encodeURIComponent(JSON.stringify(rec));
+                        cardContainer.innerHTML += `
+                            <div class="col-6 col-md-4 col-lg-3">
+                                <div class="card h-100 p-3 product-card bg-white recommend-card" 
+                                     style="border: 2px solid #ffe1eb !important; position: relative; cursor: pointer; transition: transform 0.2s;"
+                                     onclick="clickTopRecommendation('${recJson}')"
+                                     onmouseover="this.style.transform='scale(1.05)';"
+                                     onmouseout="this.style.transform='scale(1)';">
+                                    <div class="position-absolute top-0 end-0 m-2 badge rounded-pill" style="background-color: var(--primary-pink); z-index: 2; box-shadow: 0 2px 5px rgba(230,74,121,0.3);">
+                                        契合度 ${rec.similarity}%
+                                    </div>
+                                    <div class="product-img-wrapper" style="background-color: #fff;">
+                                        <img src="${rec.image_url}" alt="${rec.name}" style="width:100%; opacity:1; transform:scale(1);">
+                                    </div>
+                                    <div class="card-body p-0 d-flex flex-column text-center">
+                                        <h6 class="mb-1 fw-bold" style="font-size: 0.95rem;">${rec.name}</h6>
+                                        <p class="text-muted small mb-2" style="font-size: 0.75rem;">${rec.brand}</p>
+                                        <span class="fw-bold fs-6 text-pink-custom mt-auto">${rec.price}</span>
+                                     </div>
+                                </div>
+                            </div>`;
+                    });
+                }
+            })
+            .catch(err => console.log('無推薦資料或尚未登入'));
+    });
+
+    // 載入試妝推薦（從 localStorage 讀取試妝數據）
+    function loadTryonRecommendations() {
+        const tryonData = localStorage.getItem('lastTryonData');
+        if (!tryonData) return;
+        
+        try {
+            const data = JSON.parse(tryonData);
+            const section = document.getElementById('tryon-recommendation-section');
+            const cardContainer = document.getElementById('tryon-recommendation-cards');
+            
+            if (!data.hex) return;
+            
+            // 準備請求數據
+            const requestData = {
+                hex: data.hex,
+                hsv: data.hsv || [],
+                lab: data.lab || [],
+                vector_12d: data.vector_12d || [],
+                top_n: 6
+            };
+            
+            // 顯示載入中
+            section.style.display = 'block';
+            cardContainer.innerHTML = '<div class="text-center w-100 py-3"><div class="spinner-border text-pink-custom" role="status"></div><span class="ms-2 text-muted small">AI 正在分析您的試妝色彩...</span></div>';
+            
+            fetch('/api/recommend/tryon', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestData)
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.success && result.recommendations && result.recommendations.length > 0) {
+                    cardContainer.innerHTML = '';
+                    result.recommendations.forEach(rec => {
+                        const recJson = encodeURIComponent(JSON.stringify(rec));
+                        const match = rec.match || {};
+                        cardContainer.innerHTML += `
+                            <div class="col-6 col-md-4 col-lg-2">
+                                <div class="card h-100 p-2 product-card bg-white recommend-card" 
+                                     style="border: 2px solid #ffe1eb !important; position: relative; cursor: pointer; transition: transform 0.2s;"
+                                     onclick="clickTopRecommendation('${recJson}')"
+                                     onmouseover="this.style.transform='scale(1.05)';"
+                                     onmouseout="this.style.transform='scale(1)';">
+                                    <div class="position-absolute top-0 end-0 m-1 badge rounded-pill" style="background-color: #d6336c; z-index: 2; font-size: 0.65rem; box-shadow: 0 2px 5px rgba(214,51,108,0.3);">
+                                        ${rec.similarity}%
+                                    </div>
+                                    <div class="product-img-wrapper" style="background-color: #fff;">
+                                        <img src="${rec.image_url}" alt="${rec.name}" style="width:100%; opacity:1; transform:scale(1);">
+                                    </div>
+                                    <div class="card-body p-0 d-flex flex-column text-center">
+                                        <h6 class="mb-1 fw-bold" style="font-size: 0.85rem;">${rec.name}</h6>
+                                        <p class="text-muted small mb-1" style="font-size: 0.7rem;">${rec.brand}</p>
+                                         <span class="fw-bold text-pink-custom mt-auto" style="font-size: 0.85rem;">${rec.price}</span>
+                                         <div class="text-muted mt-1" style="font-size: 0.65rem;">ΔE ${rec.delta_e ?? '-'}</div>
+                                         <div class="d-flex flex-wrap justify-content-center gap-1 mt-1" style="font-size: 0.58rem;">
+                                             ${match.lab !== null && match.lab !== undefined ? `<span class="badge bg-light text-dark">Lab ${match.lab}%</span>` : ''}
+                                             ${match.hsv !== null && match.hsv !== undefined ? `<span class="badge bg-light text-dark">HSV ${match.hsv}%</span>` : ''}
+                                             ${match.vector !== null && match.vector !== undefined ? `<span class="badge bg-light text-dark">12D ${match.vector}%</span>` : ''}
+                                         </div>
+                                     </div>
+                                 </div>
+                             </div>`;
+                    });
+                } else {
+                    cardContainer.innerHTML = '<div class="text-center w-100 py-2 text-muted small">暫無匹配的色彩推薦</div>';
+                }
+            })
+            .catch(err => {
+                console.error('試妝推薦載入失敗:', err);
+                cardContainer.innerHTML = '<div class="text-center w-100 py-2 text-muted small">推薦載入失敗，請稍後再試</div>';
+            });
+        } catch (e) {
+            console.error('解析試妝數據失敗:', e);
+        }
+    }
+
+    // 頁面載入時執行
+    document.addEventListener("DOMContentLoaded", function() {
+        // 延遲載入試妝推薦，確保個人化推薦先載入
+        setTimeout(loadTryonRecommendations, 500);
+    });
+</script>
 {% endblock %}

@@ -15,7 +15,8 @@
             <div class="card-body">
                 <div class="auth-title">歡迎回來</div>
                 <div class="auth-subtitle">請登入您的會員帳號</div>
-                <form method="POST">
+                <div id="login-alert" class="alert d-none" role="alert"></div>
+                <form id="login-form" method="POST">
                     {{ form.hidden_tag() }}
                     <div class="mb-3">
                         {{ form.email.label(class="form-label") }}
@@ -28,7 +29,7 @@
                     <div class="d-flex justify-content-end mb-4">
                         <a style="font-size:0.9rem;" href="{{ url_for('forgot_password') }}">忘記密碼？</a>
                     </div>
-                    <button type="submit" class="btn btn-primary w-100">登入</button>
+                    <button id="login-submit" type="submit" class="btn btn-primary w-100">登入</button>
                 </form>
                 <div style="margin-top:2rem; font-size:0.95rem; color:var(--text-muted); text-align: center;">
                     還沒有帳號？ <a href="{{ url_for('register') }}">立即註冊</a>
@@ -37,4 +38,75 @@
         </div>
     </div>
 </div>
+{% endblock %}
+{% block extra_js %}
+<script>
+(function () {
+    const form = document.getElementById('login-form');
+    const submitButton = document.getElementById('login-submit');
+    const alertBox = document.getElementById('login-alert');
+    const emailInput = document.querySelector('[name="email"]');
+    const passwordInput = document.querySelector('[name="password"]');
+
+    function showAlert(type, message) {
+        alertBox.className = `alert alert-${type}`;
+        alertBox.textContent = message;
+        alertBox.classList.remove('d-none');
+    }
+
+    form.addEventListener('submit', async function (event) {
+        event.preventDefault();
+        const email = emailInput.value.trim().toLowerCase();
+        const password = passwordInput.value;
+        if (!email || !password) {
+            showAlert('warning', '請輸入 Email 與密碼');
+            return;
+        }
+
+        submitButton.disabled = true;
+        try {
+            const loginResponse = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ email, password })
+            });
+            const loginData = await loginResponse.json();
+            const errorCode = loginData.error?.code;
+
+            if (loginResponse.ok && loginData.success) {
+                window.location.href = new URLSearchParams(window.location.search).get('next') || '/';
+                return;
+            }
+
+            if (errorCode === 'EMAIL_NOT_VERIFIED') {
+                sessionStorage.setItem(`pendingLoginPassword:${email}`, password);
+                await fetch('/api/send-otp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ email })
+                }).catch(() => {});
+                const next = new URLSearchParams(window.location.search).get('next') || '/';
+                window.location.href = `/verify-email?email=${encodeURIComponent(email)}&next=${encodeURIComponent(next)}`;
+                return;
+            }
+
+            if (errorCode === 'USER_NOT_FOUND') {
+                showAlert('danger', '此帳號尚未註冊');
+            } else if (errorCode === 'WRONG_PASSWORD') {
+                showAlert('danger', '密碼錯誤');
+            } else if (errorCode === 'ACCOUNT_SUSPENDED') {
+                showAlert('danger', '帳號已停權');
+            } else {
+                showAlert('danger', loginData.error?.message || '登入失敗');
+            }
+        } catch (error) {
+            showAlert('danger', '登入服務暫時無法使用');
+        } finally {
+            submitButton.disabled = false;
+        }
+    });
+})();
+</script>
 {% endblock %}

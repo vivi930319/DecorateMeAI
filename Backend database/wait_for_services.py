@@ -18,5 +18,5 @@ def wait_for_port(host: str, port: int, service_name: str, timeout: int = 60) ->
 
 
 if __name__ == "__main__":
-    wait_for_port(os.getenv("DB_HOST", "db"), int(os.getenv("DB_PORT", "3306")), "MySQL")
+    wait_for_port(os.getenv("DB_HOST", "db"), int(os.getenv("DB_PORT", "5432")), "PostgreSQL")
     wait_for_port(os.getenv("REDIS_HOST", "redis"), int(os.getenv("REDIS_PORT", "6379")), "Redis")

@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Email 驗證{% endblock %}
+{% block extra_css %}
+<style>
+.auth-wrap { min-height: 60vh; display: flex; align-items: center; justify-content: center; }
+.auth-card { width: 100%; max-width: 420px; }
+.auth-title { font-size: 2rem; font-weight: 600; color: var(--text-dark); margin-bottom: 0.5rem; text-align: center; }
+.auth-subtitle { font-size: 0.95rem; color: var(--text-muted); margin-bottom: 1.5rem; text-align: center; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="auth-wrap">
+    <div class="auth-card">
+        <div class="card">
+            <div class="card-body">
+                <div class="auth-title">驗證 Email</div>
+                <div class="auth-subtitle">請輸入寄到信箱的六位數驗證碼</div>
+                <div id="verify-alert" class="alert d-none" role="alert"></div>
+                <form id="verify-email-form">
+                    <div class="mb-3">
+                        <label class="form-label" for="verify-email">Email</label>
+                        <input id="verify-email" class="form-control" type="email" value="{{ email }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="verify-otp">驗證碼</label>
+                        <input id="verify-otp" class="form-control" inputmode="numeric" maxlength="6" placeholder="請輸入六位驗證碼" required>
+                    </div>
+                    <button id="verify-submit" type="submit" class="btn btn-primary w-100">完成驗證並登入</button>
+                </form>
+                <button id="resend-otp" type="button" class="btn btn-link w-100 mt-3">重新寄送驗證碼</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+(function () {
+    const emailInput = document.getElementById('verify-email');
+    const otpInput = document.getElementById('verify-otp');
+    const form = document.getElementById('verify-email-form');
+    const resendButton = document.getElementById('resend-otp');
+    const submitButton = document.getElementById('verify-submit');
+    const alertBox = document.getElementById('verify-alert');
+    const nextUrl = {{ next_url|tojson }} || '/';
+
+    function showAlert(type, message) {
+        alertBox.className = `alert alert-${type}`;
+        alertBox.textContent = message;
+        alertBox.classList.remove('d-none');
+    }
+
+    async function sendOtp() {
+        const email = emailInput.value.trim().toLowerCase();
+        if (!email) {
+            showAlert('warning', '請先輸入 Email');
+            return;
+        }
+        resendButton.disabled = true;
+        try {
+            const response = await fetch('/api/send-otp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ email })
+            });
+            const data = await response.json();
+            showAlert(response.ok ? 'info' : 'danger', data.message || (response.ok ? '驗證碼已寄出' : '寄送失敗'));
+        } catch (error) {
+            showAlert('danger', '無法寄送驗證碼，請稍後再試');
+        } finally {
+            setTimeout(() => { resendButton.disabled = false; }, 3000);
+        }
+    }
+
+    form.addEventListener('submit', async function (event) {
+        event.preventDefault();
+        const email = emailInput.value.trim().toLowerCase();
+        const otp = otpInput.value.trim();
+        const password = sessionStorage.getItem(`pendingLoginPassword:${email}`);
+        submitButton.disabled = true;
+        try {
+            const verifyResponse = await fetch('/api/verify-otp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ email, otp })
+            });
+            const verifyData = await verifyResponse.json();
+            if (!verifyResponse.ok || !verifyData.success) {
+                showAlert('danger', verifyData.message || verifyData.error?.message || '驗證失敗');
+                return;
+            }
+            if (!password) {
+                showAlert('success', 'Email 驗證完成，請重新登入');
+                setTimeout(() => { window.location.href = '/login'; }, 900);
+                return;
+            }
+            const loginResponse = await fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ email, password })
+            });
+            const loginData = await loginResponse.json();
+            if (!loginResponse.ok || !loginData.success) {
+                showAlert('success', 'Email 驗證完成，請重新登入');
+                sessionStorage.removeItem(`pendingLoginPassword:${email}`);
+                setTimeout(() => { window.location.href = '/login'; }, 900);
+                return;
+            }
+            sessionStorage.removeItem(`pendingLoginPassword:${email}`);
+            window.location.href = nextUrl || '/';
+        } catch (error) {
+            showAlert('danger', '驗證流程失敗，請稍後再試');
+        } finally {
+            submitButton.disabled = false;
+        }
+    });
+
+    resendButton.addEventListener('click', sendOtp);
+})();
+</script>
+{% endblock %}

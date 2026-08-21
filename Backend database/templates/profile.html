@@ -3,49 +3,495 @@
 {% block title %}會員中心 | Empower Beauty{% endblock %}
 
 {% block content %}
-<div class="container py-5">
-    <div class="row justify-content-center">
-        <div class="col-md-8 col-lg-6">
-            <div class="card shadow-sm border-0" style="border-radius: 15px;">
-                <div class="card-body p-5 text-center">
+<style>
+    .stat-card { border-radius: 12px; padding: 1.25rem; background: #fff; border: 1px solid var(--border); height: 100%; }
+    .stat-card h6 { color: var(--text-muted); font-size: 0.8rem; letter-spacing: 0.5px; }
+    .stat-card .value { font-size: 1.5rem; font-weight: 700; color: var(--primary-pink); }
+    .section-title { font-weight: 600; color: var(--text-dark); font-size: 1.1rem; margin-bottom: 1rem; }
+    .theme-badge { display: inline-block; padding: 0.35rem 0.8rem; border-radius: 999px; font-size: 0.8rem; margin: 0.2rem; background: #fff5f8; border: 1px solid #ffe1eb; }
+    .theme-badge.unlocked { background: var(--primary-pink); color: white; border-color: var(--primary-pink); }
+    .task-item { padding: 0.75rem; border-radius: 8px; background: #fafafa; margin-bottom: 0.5rem; display: flex; justify-content: space-between; align-items: center; }
+    .task-item.claimed { opacity: 0.6; }
+    .btn-sm-pink { background: var(--primary-pink); color: white; border: none; border-radius: 999px; padding: 0.3rem 1rem; font-size: 0.8rem; }
+    .btn-sm-pink:hover { background: var(--primary-pink-hover); color: white; }
+    .btn-sm-pink:disabled { opacity: 0.5; }
+    #toast-msg { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #333; color: white; padding: 0.75rem 1.5rem; border-radius: 999px; font-size: 0.9rem; z-index: 9999; display: none; }
+</style>
 
-                    <h2 class="mb-4" style="color: var(--primary-pink); font-family: 'Cormorant Garamond', serif; font-weight: 600;">
-                        會員中心
-                    </h2>
+<div id="toast-msg"></div>
 
-                    <p class="fs-5 mb-4">
-                        歡迎回來，<strong style="color: var(--text-dark);">{{ current_user.name }}</strong>！
-                    </p>
-
-                    <ul class="list-group list-group-flush text-start my-4 mb-5" style="border-radius: 8px; border: 1px solid var(--border);">
-                        <li class="list-group-item py-3">
-                            <span class="text-muted d-inline-block" style="width: 100px;">電話號碼</span>
-                            <strong>{{ current_user.phone_number }}</strong>
-                        </li>
-                        <li class="list-group-item py-3">
-                            <span class="text-muted d-inline-block" style="width: 100px;">電子郵件</span>
-                            <strong>{{ current_user.email }}</strong>
-                        </li>
-                        <li class="list-group-item py-3">
-                            <span class="text-muted d-inline-block" style="width: 100px;">會員等級</span>
-                            <span class="badge px-3 py-2" style="background-color: var(--text-dark); color: white; border-radius: 999px;">
-                                {{ current_user.level | upper }}
-                            </span>
-                        </li>
-                    </ul>
-
-                    <div class="d-grid gap-3 d-sm-flex justify-content-sm-center">
-                        <a href="{{ url_for('tryon_history') }}" class="btn btn-outline-primary px-4 rounded-pill" style="border-color: var(--primary-pink); color: var(--primary-pink);">
-                            我的試妝紀錄
-                        </a>
-                        <a href="{{ url_for('logout') }}" class="btn btn-primary px-4 rounded-pill">
-                            登出帳號
-                        </a>
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card shadow-sm border-0" style="border-radius: 15px; background: linear-gradient(135deg, #fff5f8, #fef9fb);">
+            <div class="card-body p-4">
+                <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+                    <div>
+                        <h3 style="color: var(--primary-pink); font-family: 'Cormorant Garamond', serif; font-weight: 600; margin: 0;">
+                            歡迎回來，{{ current_user.name }}
+                        </h3>
+                        <p class="text-muted small mb-0 mt-1">{{ current_user.email }}</p>
                     </div>
-
+                    <div class="text-end">
+                        <span class="badge px-3 py-2" style="background: var(--text-dark); color: white; border-radius: 999px; font-size: 0.8rem;">
+                            {{ current_user.level_label() }}
+                        </span>
+                        {% if current_user.member_role() == 'admin' %}
+                        <span class="badge px-3 py-2 ms-1" style="background: var(--primary-pink); color: white; border-radius: 999px; font-size: 0.8rem;">
+                            ADMIN
+                        </span>
+                        {% endif %}
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 </div>
+
+<!-- 📊 統計數字 -->
+<div class="row g-3 mb-4" id="stats-row">
+    <div class="col-6 col-md-3">
+        <div class="stat-card text-center">
+            <h6>點數餘額</h6>
+            <div class="value" id="points-balance">{{ current_user.points or 0 }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-card text-center">
+            <h6>累計獲得</h6>
+            <div class="value" id="points-lifetime">{{ current_user.total_earned_points or 0 }}</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-card text-center">
+            <h6>已收藏</h6>
+            <div class="value" id="stats-favorites">-</div>
+        </div>
+    </div>
+    <div class="col-6 col-md-3">
+        <div class="stat-card text-center">
+            <h6>已簽到</h6>
+            <div class="value" id="stats-checkins">-</div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4">
+    <!-- ✅ 每日簽到 -->
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="section-title">✅ 每日簽到</h5>
+                <div id="checkin-panel" class="text-center py-3">
+                    <div class="spinner-border spinner-border-sm text-pink-custom" role="status"></div>
+                    <span class="ms-2 text-muted small">載入簽到狀態...</span>
+                </div>
+                <div class="mt-2 text-center">
+                    <small class="text-muted">連續第 <strong id="streak-count">0</strong> 天</small>
+                    <div class="mt-2">
+                        <button id="checkin-btn" class="btn btn-sm btn-pink rounded-pill px-4" onclick="doCheckin()" style="display:none; background: var(--primary-pink); color: white; border: none; padding: 0.5rem 2rem;">
+                            ✅ 今日簽到
+                        </button>
+                        <span id="checkin-done" class="badge bg-success px-3 py-2" style="display:none;">今日已簽到</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🎯 任務進度 -->
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="section-title">🎯 任務進度</h5>
+                <div id="tasks-list">
+                    <div class="text-center py-3 text-muted small">載入任務...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🛍️ 點數商店 -->
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="section-title">🛍️ 點數商店</h5>
+                <p class="text-muted small mb-3">使用點數兌換會員中心主題：</p>
+                <div class="row g-2" id="theme-shop">
+                    <div class="col-6">
+                        <div class="theme-badge unlocked">classic (免費)</div>
+                    </div>
+                    <div class="col-6 text-end">
+                        <button class="btn btn-sm-pink" onclick="redeemTheme('rose')">🌹 rose 80pt</button>
+                    </div>
+                    <div class="col-6">
+                        <div class="theme-badge unlocked">jade</div>
+                    </div>
+                    <div class="col-6 text-end">
+                        <button class="btn btn-sm-pink" onclick="redeemTheme('jade')">💚 jade 120pt</button>
+                    </div>
+                    <div class="col-6">
+                        <div class="theme-badge unlocked">noir</div>
+                    </div>
+                    <div class="col-6 text-end">
+                        <button class="btn btn-sm-pink" onclick="redeemTheme('noir')">🖤 noir 180pt</button>
+                    </div>
+                </div>
+                <div id="user-themes" class="mt-3"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🔗 推薦碼 -->
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="section-title">🔗 我的推薦碼</h5>
+                <div id="referral-panel">
+                    <div class="text-center py-3 text-muted small">載入推薦碼...</div>
+                </div>
+                <p class="text-muted small mt-2 mb-0">每推薦一位新會員可獲得 20 點獎勵！</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 📝 分析歷史 -->
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="section-title">📝 分析歷史</h5>
+                <div id="history-list">
+                    <div class="text-center py-3 text-muted small">載入分析紀錄...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🛒 購物車 -->
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="section-title">🛒 購物車</h5>
+                <div id="cart-list">
+                    <div class="text-center py-3 text-muted small">載入購物車...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 🌟 試妝推薦區塊 (根據試妝色彩推薦) -->
+<div id="tryon-recommendation-section" class="mt-4" style="display: none;">
+    <div class="card shadow-sm border-0" style="border-radius: 15px; background: linear-gradient(135deg, #fff5f8, #fef9fb);">
+        <div class="card-body p-4">
+            <div class="d-flex align-items-center gap-2 mb-3">
+                <h4 class="fw-bold mb-0" style="color: var(--primary-pink);">💄 根據您的試妝推薦</h4>
+                <span class="badge rounded-pill" style="background-color: #d6336c; font-size: 0.7rem;">色彩匹配</span>
+            </div>
+            <p class="text-muted small mb-3">系統分析您的試妝色彩（Hex / HSV / CIELAB / 12D向量），找出最匹配的商品：</p>
+            <div class="row g-3" id="tryon-recommendation-cards">
+                <div class="text-center w-100 py-3 text-muted small">載入中...</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="d-flex gap-2 mt-4 justify-content-center flex-wrap">
+    <a href="{{ url_for('favorites_page') }}" class="btn btn-outline-primary rounded-pill px-4" style="border-color: var(--primary-pink); color: var(--primary-pink);">❤️ 我的最愛</a>
+    <a href="{{ url_for('tryon_history') }}" class="btn btn-outline-primary rounded-pill px-4" style="border-color: var(--primary-pink); color: var(--primary-pink);">📷 試妝紀錄</a>
+    <a href="{{ url_for('products_page') }}" class="btn btn-outline-primary rounded-pill px-4" style="border-color: var(--primary-pink); color: var(--primary-pink);">🛍️ 逛逛商品</a>
+    <a href="{{ url_for('change_password') }}" class="btn btn-outline-primary rounded-pill px-4" style="border-color: var(--primary-pink); color: var(--primary-pink);">🔑 更改密碼</a>
+    {% if current_user.member_role() == 'admin' %}
+    <a href="{{ url_for('admin_dashboard') }}" class="btn btn-danger rounded-pill px-4" style="background: #dc3545; color: white; font-weight: 600;">⚙️ 進入管理後台</a>
+    {% endif %}
+    <a href="{{ url_for('logout') }}" class="btn btn-primary rounded-pill px-4">登出</a>
+</div>
+
+<script>
+const EMAIL = '{{ current_user.email }}';
+const EMAIL_ENCODED = encodeURIComponent(EMAIL);
+
+function showToast(msg) {
+    const t = document.getElementById('toast-msg');
+    t.textContent = msg; t.style.display = 'block';
+    setTimeout(() => t.style.display = 'none', 3000);
+}
+
+// ========== 載入簽到 ==========
+function loadCheckin() {
+    fetch(`/api/members/${EMAIL_ENCODED}/check-in`, { credentials: 'include' })
+    .then(r => r.json())
+    .then(d => {
+        document.getElementById('streak-count').textContent = d.streak || 0;
+        if (d.checkedToday) {
+            document.getElementById('checkin-done').style.display = 'inline';
+            document.getElementById('checkin-btn').style.display = 'none';
+        } else {
+            document.getElementById('checkin-btn').style.display = 'inline-block';
+            document.getElementById('checkin-done').style.display = 'none';
+        }
+        document.getElementById('checkin-panel').innerHTML = `
+            <div style="font-size: 2.5rem;">${d.checkedToday ? '✅' : '📅'}</div>
+            <div class="fw-bold mt-1">${d.checkedToday ? '今日已簽到！' : '今天還沒簽到喔'}</div>
+            ${d.checkedToday ? `<div class="text-muted small">獲得 ${d.awarded} 點</div>` : ''}
+        `;
+    }).catch(() => {
+        document.getElementById('checkin-panel').innerHTML = '<div class="text-muted small">無法載入簽到狀態</div>';
+    });
+}
+
+function doCheckin() {
+    const btn = document.getElementById('checkin-btn');
+    btn.disabled = true; btn.textContent = '簽到中...';
+    fetch(`/api/members/${EMAIL_ENCODED}/check-in`, { method: 'POST', credentials: 'include' })
+    .then(r => r.json())
+    .then(d => {
+        if (d.checkedToday) {
+            showToast(`🎉 簽到成功！獲得 ${d.awarded} 點${d.streakBonus > 0 ? `（含連續獎勵 ${d.streakBonus} 點）` : ''}`);
+            loadCheckin();
+            loadPoints();
+        } else {
+            showToast('今天已簽到過了');
+            loadCheckin();
+        }
+    }).catch(() => {
+        btn.disabled = false; btn.textContent = '✅ 今日簽到';
+        showToast('簽到失敗，請稍後再試');
+    });
+}
+
+// ========== 載入任務 ==========
+function loadTasks() {
+    fetch(`/api/members/${EMAIL_ENCODED}/tasks`, { credentials: 'include' })
+    .then(r => r.json())
+    .then(d => {
+        const names = { first_analysis: '首次臉部分析', first_favorite: '首次收藏商品', first_referral: '首次推薦好友', daily_checkin: '每日簽到' };
+        const html = (d.tasks || []).map(t => `
+            <div class="task-item ${t.claimed ? 'claimed' : ''}">
+                <div>
+                    <strong style="font-size:0.9rem;">${names[t.taskId] || t.taskId}</strong>
+                    <span class="text-muted" style="font-size:0.75rem;">+${t.reward} 點</span>
+                </div>
+                ${t.claimed ? '<span class="badge bg-secondary">已領取</span>' : `<button class="btn btn-sm-pink" onclick="claimTask('${t.taskId}')">領取</button>`}
+            </div>
+        `).join('');
+        document.getElementById('tasks-list').innerHTML = html || '<div class="text-muted small">暫無任務</div>';
+    }).catch(() => {
+        document.getElementById('tasks-list').innerHTML = '<div class="text-muted small">無法載入任務</div>';
+    });
+}
+
+function claimTask(taskId) {
+    fetch(`/api/members/${EMAIL_ENCODED}/tasks/${taskId}/claim`, { method: 'POST', credentials: 'include' })
+    .then(r => r.json())
+    .then(d => {
+        if (d.claimed) { showToast(`🎉 領取成功！獲得 ${d.reward} 點`); loadTasks(); loadPoints(); }
+        else showToast('無法領取此任務');
+    }).catch(() => showToast('領取失敗'));
+}
+
+// ========== 載入點數 ==========
+function loadPoints() {
+    fetch(`/api/members/${EMAIL_ENCODED}/points`, { credentials: 'include' })
+    .then(r => r.json())
+    .then(d => {
+        document.getElementById('points-balance').textContent = d.balance || 0;
+    }).catch(() => {});
+}
+
+// ========== 載入主題 ==========
+function loadThemes() {
+    fetch(`/api/members/${EMAIL_ENCODED}/themes`, { credentials: 'include' })
+    .then(r => r.json())
+    .then(d => {
+        const themes = d.themes || ['classic'];
+        document.getElementById('user-themes').innerHTML = `<div class="text-muted small">已擁有：${themes.map(t => `<span class="theme-badge">${t}</span>`).join(' ')}</div>`;
+        // 標記商店已購買
+        themes.forEach(t => {
+            const btn = document.querySelector(`button[onclick*="'${t}'"]`);
+            if (btn) { btn.textContent = '✅ 已擁有'; btn.disabled = true; }
+        });
+    }).catch(() => {});
+}
+
+function redeemTheme(themeId) {
+    fetch(`/api/members/${EMAIL_ENCODED}/theme-shop/${themeId}/redeem`, { method: 'POST', credentials: 'include' })
+    .then(r => r.json())
+    .then(d => {
+        if (d.unlocked) { showToast(`🎉 成功解鎖 ${themeId} 主題！`); loadThemes(); loadPoints(); }
+        else showToast(d.error?.message || '兌換失敗');
+    }).catch(() => showToast('兌換失敗'));
+}
+
+// ========== 載入推薦碼 ==========
+function loadReferral() {
+    fetch(`/api/members/${EMAIL_ENCODED}/referral-code`, { credentials: 'include' })
+    .then(r => r.json())
+    .then(d => {
+        document.getElementById('referral-panel').innerHTML = `
+            <div class="input-group">
+                <input type="text" class="form-control" value="${d.code}" id="ref-code" readonly style="font-family: monospace; font-size: 1.2rem; text-align: center; font-weight: bold;">
+                <button class="btn btn-outline-secondary" onclick="copyRefCode()">複製</button>
+            </div>
+            <div class="text-muted small mt-1">已推薦 <strong>${d.totalReferrals}</strong> 人</div>
+        `;
+    }).catch(() => {
+        document.getElementById('referral-panel').innerHTML = '<div class="text-muted small">無法載入推薦碼</div>';
+    });
+}
+
+function copyRefCode() {
+    const input = document.getElementById('ref-code');
+    input.select(); navigator.clipboard?.writeText(input.value);
+    showToast('✅ 已複製推薦碼');
+}
+
+// ========== 載入分析歷史 ==========
+function loadHistory() {
+    fetch(`/api/members/${EMAIL_ENCODED}/history`, { credentials: 'include' })
+    .then(r => r.json())
+    .then(d => {
+        const list = d.results || [];
+        if (list.length === 0) {
+            document.getElementById('history-list').innerHTML = '<div class="text-muted small py-2">尚無分析紀錄</div>';
+            return;
+        }
+        document.getElementById('history-list').innerHTML = list.slice(0, 5).map(r => `
+            <div class="task-item" style="font-size:0.85rem;">
+                <span>${r.mode === 'pro' ? '⭐' : '📄'} ${r.mode.toUpperCase()}</span>
+                <span class="text-muted small">${r.createdAt ? new Date(r.createdAt).toLocaleDateString() : ''}</span>
+            </div>
+        `).join('') + (list.length > 5 ? '<div class="text-muted small text-center mt-1">還有更多...</div>' : '');
+    }).catch(() => {
+        document.getElementById('history-list').innerHTML = '<div class="text-muted small">無法載入</div>';
+    });
+}
+
+// ========== 載入購物車 ==========
+function loadCart() {
+    fetch(`/api/members/${EMAIL_ENCODED}/cart`, { credentials: 'include' })
+    .then(r => r.json())
+    .then(d => {
+        const items = d.cart || [];
+        if (items.length === 0) {
+            document.getElementById('cart-list').innerHTML = '<div class="text-muted small py-2">購物車是空的</div>';
+            return;
+        }
+        document.getElementById('cart-list').innerHTML = items.map(i => `
+            <div class="task-item" style="font-size:0.85rem;">
+                <span>商品 #${i.item_id}</span>
+                <span class="fw-bold">x${i.qty}</span>
+            </div>
+        `).join('');
+    }).catch(() => {
+        document.getElementById('cart-list').innerHTML = '<div class="text-muted small">無法載入購物車</div>';
+    });
+}
+
+// ========== 載入統計 ==========
+function loadStats() {
+    fetch(`/api/members/{{ current_user.phone_number }}/stats`, { credentials: 'include' })
+    .then(r => r.json())
+    .then(d => {
+        document.getElementById('stats-favorites').textContent = d.stats?.total_favorites || 0;
+        document.getElementById('stats-checkins').textContent = d.stats?.total_checkins || 0;
+    }).catch(() => {});
+}
+
+// ========== 載入試妝推薦 ==========
+function loadTryonRecommendations() {
+    const tryonData = localStorage.getItem('lastTryonData');
+    if (!tryonData) return;
+    
+    try {
+        const data = JSON.parse(tryonData);
+        const section = document.getElementById('tryon-recommendation-section');
+        const cardContainer = document.getElementById('tryon-recommendation-cards');
+        
+        if (!data.hex) return;
+        
+        // 準備請求數據
+        const requestData = {
+            hex: data.hex,
+            hsv: data.hsv || [],
+            lab: data.lab || [],
+            vector_12d: data.vector_12d || [],
+            top_n: 6
+        };
+        
+        // 顯示載入中
+        section.style.display = 'block';
+        cardContainer.innerHTML = '<div class="text-center w-100 py-3"><div class="spinner-border text-pink-custom" role="status"></div><span class="ms-2 text-muted small">AI 正在分析您的試妝色彩...</span></div>';
+        
+        fetch('/api/recommend/tryon', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestData)
+        })
+        .then(response => response.json())
+        .then(result => {
+            if (result.success && result.recommendations && result.recommendations.length > 0) {
+                cardContainer.innerHTML = '';
+                result.recommendations.forEach(rec => {
+                    const recJson = encodeURIComponent(JSON.stringify(rec));
+                    const match = rec.match || {};
+                    cardContainer.innerHTML += `
+                        <div class="col-6 col-md-4 col-lg-2">
+                            <div class="card h-100 p-2 product-card bg-white recommend-card" 
+                                 style="border: 2px solid #ffe1eb !important; position: relative; cursor: pointer; transition: transform 0.2s;"
+                                 onclick="clickTopRecommendation('${recJson}')"
+                                 onmouseover="this.style.transform='scale(1.05)';"
+                                 onmouseout="this.style.transform='scale(1)';">
+                                <div class="position-absolute top-0 end-0 m-1 badge rounded-pill" style="background-color: #d6336c; z-index: 2; font-size: 0.65rem; box-shadow: 0 2px 5px rgba(214,51,108,0.3);">
+                                    ${rec.similarity}%
+                                </div>
+                                <div class="product-img-wrapper" style="background-color: #fff;">
+                                    <img src="${rec.image_url}" alt="${rec.name}" style="width:100%; opacity:1; transform:scale(1);">
+                                </div>
+                                <div class="card-body p-0 d-flex flex-column text-center">
+                                    <h6 class="mb-1 fw-bold" style="font-size: 0.85rem;">${rec.name}</h6>
+                                    <p class="text-muted small mb-1" style="font-size: 0.7rem;">${rec.brand}</p>
+                                     <span class="fw-bold text-pink-custom mt-auto" style="font-size: 0.85rem;">${rec.price}</span>
+                                     <div class="text-muted mt-1" style="font-size: 0.65rem;">ΔE ${rec.delta_e ?? '-'}</div>
+                                     <div class="d-flex flex-wrap justify-content-center gap-1 mt-1" style="font-size: 0.58rem;">
+                                         ${match.lab !== null && match.lab !== undefined ? `<span class="badge bg-light text-dark">Lab ${match.lab}%</span>` : ''}
+                                         ${match.hsv !== null && match.hsv !== undefined ? `<span class="badge bg-light text-dark">HSV ${match.hsv}%</span>` : ''}
+                                         ${match.vector !== null && match.vector !== undefined ? `<span class="badge bg-light text-dark">12D ${match.vector}%</span>` : ''}
+                                     </div>
+                                 </div>
+                             </div>
+                         </div>`;
+                });
+            } else {
+                cardContainer.innerHTML = '<div class="text-center w-100 py-2 text-muted small">暫無匹配的色彩推薦</div>';
+            }
+        })
+        .catch(err => {
+            console.error('試妝推薦載入失敗:', err);
+            cardContainer.innerHTML = '<div class="text-center w-100 py-2 text-muted small">推薦載入失敗，請稍後再試</div>';
+        });
+    } catch (e) {
+        console.error('解析試妝數據失敗:', e);
+    }
+}
+
+function clickTopRecommendation(recJsonStr) {
+    const rec = JSON.parse(decodeURIComponent(recJsonStr));
+    // 導向商品頁面並打開 modal
+    window.open(`/products-page/${rec.type}#product-${rec.id}`, '_blank');
+}
+
+// ========== 初始化 ==========
+document.addEventListener('DOMContentLoaded', function() {
+    loadCheckin();
+    loadTasks();
+    loadThemes();
+    loadReferral();
+    loadHistory();
+    loadCart();
+    loadStats();
+    
+    // 延遲載入試妝推薦
+    setTimeout(loadTryonRecommendations, 800);
+});
+</script>
 {% endblock %}

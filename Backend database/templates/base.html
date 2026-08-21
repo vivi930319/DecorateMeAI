@@ -153,13 +153,17 @@
 <nav class="navbar-beauty">
     <div class="container d-flex align-items-center justify-content-between">
         <a class="navbar-brand-beauty" href="{{ url_for('index') }}">Empower Beauty</a>
-        <div class="d-flex align-items-center gap-3">
-    <a class="nav-pill nav-pill-outline" href="{{ url_for('products_page') }}">商品</a>
-    {% if current_user.is_authenticated %}
-        <a class="nav-pill nav-pill-outline" href="{{ url_for('tryon_history') }}">試妝紀錄</a>
-
-        <a class="nav-pill nav-pill-outline" href="{{ url_for('profile') }}">會員中心</a>
-        <a class="nav-pill nav-pill-filled" href="{{ url_for('logout') }}">登出</a>
+        <div class="d-flex align-items-center gap-2 gap-md-3 flex-wrap justify-content-end">
+            <a class="nav-pill nav-pill-outline" href="{{ url_for('products_page') }}">商品</a>
+            <a class="nav-pill nav-pill-outline" href="{{ url_for('tryon_recommendations_page') }}">試妝推薦</a>
+            {% if current_user.is_authenticated %}
+                    <a class="nav-pill nav-pill-outline" href="{{ url_for('favorites_page') }}">我的最愛</a>
+                <a class="nav-pill nav-pill-outline" href="{{ url_for('tryon_history') }}">試妝紀錄</a>
+                {% if current_user.member_role() == 'admin' %}
+                <a class="nav-pill nav-pill-outline" href="{{ url_for('admin_dashboard') }}" style="color: var(--primary-pink); font-weight: 600;">⚙️ 管理後台</a>
+                {% endif %}
+                <a class="nav-pill nav-pill-outline" href="{{ url_for('profile') }}">會員中心</a>
+                <a class="nav-pill nav-pill-filled" href="{{ url_for('logout') }}">登出</a>
             {% else %}
                 <a class="nav-pill nav-pill-outline" href="{{ url_for('login') }}">登入</a>
                 <a class="nav-pill nav-pill-filled" href="{{ url_for('register') }}">註冊</a>

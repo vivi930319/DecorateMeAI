@@ -1,6 +1,7 @@
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, SubmitField, IntegerField
 from wtforms.validators import DataRequired, Email, EqualTo, Length, ValidationError
+import re
 from models import Members
 
 #forms.py 的內容是用來定義Flask 應用程式中所有使用者介面表單的結構、欄位類型和驗證規則，並且使用了 Flask-WTF 庫，該庫是基於 WTForms 的 Flask 整合套件
@@ -8,7 +9,7 @@ from models import Members
 class RegistrationForm(FlaskForm):
     phone_number = StringField('電話號碼 (會員ID)', validators=[DataRequired(), Length(min=8, max=20)])
     name = StringField('姓名', validators=[DataRequired(), Length(min=2, max=50)])
-    email = StringField('電子郵件', validators=[DataRequired(), Email()])
+    email = StringField('電子郵件', validators=[DataRequired(), Length(max=100)])
     password = PasswordField('密碼', validators=[DataRequired(), Length(min=6)])
     confirm_password = PasswordField('確認密碼', validators=[
         DataRequired(),
@@ -19,7 +20,10 @@ class RegistrationForm(FlaskForm):
 
     # 檢查 Email 是否已存在
     def validate_email(self, email):
-        member = Members.query.filter_by(email=email.data).first()
+        value = (email.data or '').strip().lower()
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
+            raise ValidationError('Email 格式無效')
+        member = Members.query.filter_by(email=value).first()
         if member:
             raise ValidationError('該電子郵件已被註冊。')
 
@@ -33,7 +37,7 @@ class RegistrationForm(FlaskForm):
 # 登入表單
 class LoginForm(FlaskForm):
     # 這裡使用 phone_number 或 email 登入都可以，
-    email = StringField('電子郵件', validators=[DataRequired(), Email()])
+    email = StringField('電子郵件', validators=[DataRequired(), Length(max=100)])
     password = PasswordField('密碼', validators=[DataRequired()])
     submit = SubmitField('登入')
 

@@ -1,0 +1,297 @@
+{% extends "base.html" %}
+{% block title %}試妝色彩推薦{% endblock %}
+{% block extra_css %}
+<style>
+.recommend-shell { display: grid; grid-template-columns: minmax(300px, 420px) 1fr; gap: 1.5rem; align-items: start; }
+.tool-panel { position: sticky; top: 120px; }
+.section-title { font-size: 1.6rem; font-weight: 600; margin-bottom: 0.5rem; }
+.section-subtitle { color: var(--text-muted); margin-bottom: 1.25rem; }
+.metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+.metric { border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; background: #fff; }
+.metric-label { color: var(--text-muted); font-size: 0.75rem; }
+.metric-value { font-size: 0.95rem; font-weight: 600; overflow-wrap: anywhere; }
+.swatch { width: 100%; aspect-ratio: 5 / 2; border-radius: 8px; border: 1px solid var(--border); background: #e8a0b4; }
+.result-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
+.result-card { height: 100%; overflow: hidden; }
+.result-image { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: #fafafa; border-radius: 8px; }
+.score-badge { background: var(--primary-pink); color: white; border-radius: 999px; padding: 0.25rem 0.6rem; font-weight: 600; font-size: 0.8rem; }
+.score-row { display: grid; grid-template-columns: 60px 1fr 46px; align-items: center; gap: 0.5rem; font-size: 0.75rem; margin-top: 0.35rem; }
+.score-bar { height: 6px; background: #f1f1f1; border-radius: 999px; overflow: hidden; }
+.score-fill { height: 100%; background: var(--primary-pink); }
+.json-box { min-height: 140px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.82rem; }
+@media (max-width: 992px) {
+  .recommend-shell { grid-template-columns: 1fr; }
+  .tool-panel { position: static; }
+}
+</style>
+{% endblock %}
+{% block content %}
+<div class="mb-4">
+    <div class="section-title">試妝色彩推薦</div>
+    <div class="section-subtitle">用 Hex、HSV、CIELAB 與 12 維向量計算最接近的彩妝商品，並顯示每項匹配分數。</div>
+</div>
+
+<div class="recommend-shell">
+    <div class="card tool-panel">
+        <div class="card-body">
+            <form id="recommend-form">
+                <div class="mb-3">
+                    <label class="form-label" for="hex-input">Hex</label>
+                    <input id="hex-input" class="form-control" value="#D9827A" placeholder="#D9827A">
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-4">
+                        <label class="form-label" for="h-input">H</label>
+                        <input id="h-input" class="form-control" type="number" step="0.01" value="6">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label" for="s-input">S</label>
+                        <input id="s-input" class="form-control" type="number" step="0.01" value="0.43">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label" for="v-input">V</label>
+                        <input id="v-input" class="form-control" type="number" step="0.01" value="0.85">
+                    </div>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-4">
+                        <label class="form-label" for="l-input">L</label>
+                        <input id="l-input" class="form-control" type="number" step="0.01" value="62.4">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label" for="a-input">a</label>
+                        <input id="a-input" class="form-control" type="number" step="0.01" value="31.2">
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label" for="b-input">b</label>
+                        <input id="b-input" class="form-control" type="number" step="0.01" value="18.7">
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label" for="vector-input">12 維向量</label>
+                    <textarea id="vector-input" class="form-control json-box" placeholder="[0.1, 0.2, ...]">[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.2, 0.3, 0.4]</textarea>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-7">
+                        <label class="form-label" for="style-input">風格</label>
+                        <select id="style-input" class="form-control">
+                            <option value="">不指定</option>
+                            <option value="港風">港風</option>
+                            <option value="韓系乾淨">韓系乾淨</option>
+                            <option value="glam">Glam</option>
+                            <option value="party">Party</option>
+                        </select>
+                    </div>
+                    <div class="col-5">
+                        <label class="form-label" for="category-input">分類</label>
+                        <select id="category-input" class="form-control">
+                            <option value="">全部</option>
+                            <option value="lipsticks">唇彩</option>
+                            <option value="blushes">腮紅</option>
+                            <option value="eyeshadows">眼影</option>
+                            <option value="foundations">底妝</option>
+                            <option value="highlighters">打亮</option>
+                            <option value="contouring">修容</option>
+                            <option value="eyebrows">眉彩</option>
+                            <option value="eyeliner_mascara">眼線/睫毛</option>
+                        </select>
+                    </div>
+                </div>
+                <button id="submit-button" class="btn btn-primary w-100" type="submit">計算推薦</button>
+                <button id="load-local-button" class="btn btn-link w-100 mt-2" type="button">載入 lastTryonData</button>
+            </form>
+        </div>
+    </div>
+
+    <div>
+        <div class="card mb-3">
+            <div class="card-body">
+                <div class="d-flex align-items-center justify-content-between gap-3 flex-wrap">
+                    <div>
+                        <h5 class="mb-1">目標色彩</h5>
+                        <div class="text-muted small" id="target-summary">尚未計算</div>
+                    </div>
+                    <div style="width: 180px; max-width: 100%;">
+                        <div id="target-swatch" class="swatch"></div>
+                    </div>
+                </div>
+                <div class="metric-grid mt-3" id="target-metrics"></div>
+            </div>
+        </div>
+        <div id="status-message" class="alert d-none"></div>
+        <div id="results" class="result-grid"></div>
+    </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+(function () {
+    const form = document.getElementById('recommend-form');
+    const results = document.getElementById('results');
+    const statusMessage = document.getElementById('status-message');
+    const submitButton = document.getElementById('submit-button');
+    const targetSwatch = document.getElementById('target-swatch');
+    const targetSummary = document.getElementById('target-summary');
+    const targetMetrics = document.getElementById('target-metrics');
+
+    function parseVector() {
+        const raw = document.getElementById('vector-input').value.trim();
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) throw new Error('12 維向量必須是陣列');
+        return parsed.map(Number);
+    }
+
+    function getPayload() {
+        const hex = document.getElementById('hex-input').value.trim();
+        return {
+            hex,
+            hsv: [
+                Number(document.getElementById('h-input').value),
+                Number(document.getElementById('s-input').value),
+                Number(document.getElementById('v-input').value)
+            ],
+            lab: {
+                L: Number(document.getElementById('l-input').value),
+                a: Number(document.getElementById('a-input').value),
+                b: Number(document.getElementById('b-input').value)
+            },
+            vector_12d: parseVector(),
+            style: document.getElementById('style-input').value,
+            category: document.getElementById('category-input').value,
+            top_n: 12
+        };
+    }
+
+    function showStatus(type, message) {
+        statusMessage.className = `alert alert-${type}`;
+        statusMessage.textContent = message;
+        statusMessage.classList.remove('d-none');
+    }
+
+    function metric(label, value) {
+        return `<div class="metric"><div class="metric-label">${label}</div><div class="metric-value">${value}</div></div>`;
+    }
+
+    function scoreRow(label, value) {
+        if (value === null || value === undefined) return '';
+        const safeValue = Math.max(0, Math.min(100, Number(value)));
+        return `
+            <div class="score-row">
+                <span>${label}</span>
+                <div class="score-bar"><div class="score-fill" style="width:${safeValue}%"></div></div>
+                <strong>${safeValue.toFixed(1)}%</strong>
+            </div>`;
+    }
+
+    function renderTarget(target) {
+        targetSwatch.style.background = target.hex || '#E8A0B4';
+        targetSummary.textContent = `${target.hex || '-'} · ${target.vectorDimensions || 0}D vector`;
+        targetMetrics.innerHTML = [
+            metric('Hex', target.hex || '-'),
+            metric('HSV', target.hsv ? `H ${target.hsv.h.toFixed(1)} / S ${target.hsv.s.toFixed(2)} / V ${target.hsv.v.toFixed(2)}` : '-'),
+            metric('CIELAB', target.lab ? `L ${target.lab.L.toFixed(1)} / a ${target.lab.a.toFixed(1)} / b ${target.lab.b.toFixed(1)}` : '-'),
+            metric('12 維向量', `${target.vectorDimensions || 0} 維`)
+        ].join('');
+    }
+
+    function renderResults(recommendations) {
+        if (!recommendations.length) {
+            results.innerHTML = '<div class="text-muted">目前沒有符合條件的商品。</div>';
+            return;
+        }
+        results.innerHTML = recommendations.map(rec => {
+            const match = rec.match || {};
+            return `
+                <div class="card result-card">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start mb-2 gap-2">
+                            <div>
+                                <div class="fw-bold">${rec.name}</div>
+                                <div class="text-muted small">${rec.brand || rec.type}</div>
+                            </div>
+                            <span class="score-badge">${rec.similarity}%</span>
+                        </div>
+                        <img class="result-image mb-3" src="${rec.image_url || 'https://via.placeholder.com/300x300.png?text=No+Image'}" alt="${rec.name}">
+                        <div class="d-flex align-items-center gap-2 mb-2">
+                            <span style="display:inline-block;width:28px;height:28px;border-radius:50%;border:1px solid #ddd;background:${rec.hex || '#E8A0B4'}"></span>
+                            <span class="small">${rec.hex || '-'}</span>
+                            <span class="ms-auto fw-bold">${rec.price || ''}</span>
+                        </div>
+                        <div class="text-muted small mb-2">${rec.match_reason || ''}</div>
+                        <div class="small mb-2">ΔE ${rec.delta_e ?? '-'}</div>
+                        ${scoreRow('Lab', match.lab)}
+                        ${scoreRow('HSV', match.hsv)}
+                        ${scoreRow('12D', match.vector)}
+                        ${scoreRow('Hue', match.hue)}
+                    </div>
+                </div>`;
+        }).join('');
+    }
+
+    async function runRecommendation(payload) {
+        submitButton.disabled = true;
+        showStatus('info', '正在計算最接近的商品...');
+        results.innerHTML = '';
+        try {
+            const response = await fetch('/recommend-products', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+            if (!response.ok || !data.success) {
+                showStatus('danger', data.message || '推薦計算失敗');
+                return;
+            }
+            renderTarget(data.target || payload);
+            renderResults(data.recommendations || []);
+            showStatus('success', `已找到 ${data.count || 0} 個推薦商品`);
+        } catch (error) {
+            showStatus('danger', error.message || '推薦服務暫時無法使用');
+        } finally {
+            submitButton.disabled = false;
+        }
+    }
+
+    form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        try {
+            runRecommendation(getPayload());
+        } catch (error) {
+            showStatus('danger', error.message);
+        }
+    });
+
+    document.getElementById('load-local-button').addEventListener('click', function () {
+        const raw = localStorage.getItem('lastTryonData');
+        if (!raw) {
+            showStatus('warning', '找不到 localStorage.lastTryonData');
+            return;
+        }
+        const data = JSON.parse(raw);
+        if (data.hex) document.getElementById('hex-input').value = data.hex;
+        const hsv = data.hsv || [];
+        if (hsv.length >= 3) {
+            document.getElementById('h-input').value = hsv[0];
+            document.getElementById('s-input').value = hsv[1];
+            document.getElementById('v-input').value = hsv[2];
+        }
+        const lab = data.lab || {};
+        if (Array.isArray(lab)) {
+            document.getElementById('l-input').value = lab[0] ?? '';
+            document.getElementById('a-input').value = lab[1] ?? '';
+            document.getElementById('b-input').value = lab[2] ?? '';
+        } else {
+            document.getElementById('l-input').value = lab.L ?? lab.l ?? '';
+            document.getElementById('a-input').value = lab.a ?? lab.A ?? '';
+            document.getElementById('b-input').value = lab.b ?? lab.B ?? '';
+        }
+        document.getElementById('vector-input').value = JSON.stringify(data.vector_12d || data.qdrant_vector_12d || data.vector || [], null, 2);
+        runRecommendation(getPayload());
+    });
+
+    renderTarget({ hex: document.getElementById('hex-input').value, vectorDimensions: 12 });
+})();
+</script>
+{% endblock %}
