@@ -410,6 +410,192 @@ function fillRecommendedImages(list) {
 
 // 商品頁與推薦彈窗共用相同的顯示上限。
 const RECOMMENDED_DISPLAY_LIMIT = 8;
+// 商品頁一次只掛這麼多張卡。整份目錄有一千多筆，全部塞進 innerHTML 會產生約 1.1MB
+// 的字串、上萬個節點與同樣數量的進場動畫；iOS Safari 的單分頁記憶體上限比桌機瀏覽器
+// 嚴格得多，撐爆時會靜默重載分頁（使用者看到的是「整頁閃白後回到主頁」）。
+const SHOP_PAGE_SIZE = 60;
+// 只有第一批的前幾張套 reveal-in。動畫會讓每張卡各自成為合成層，數量一多就是純粹的
+// 記憶體與 GPU 開銷，而使用者一次也只看得到最上面幾張。
+const SHOP_ANIMATE_LIMIT = 12;
+
+// ── 推薦結果的降級與錯誤提示 ──────────────────────────────────────────────
+//
+// 先前三個呼叫端都只取 rec.products，fallbackReasons 與 error 整包被丟掉，於是
+// 後端明確標記的降級（「沒有可靠眉色，眉彩改依風格排序」「膚色取樣不可信，底妝
+// 改依季型排序」）在畫面上完全看不到——使用者拿到的是一個沒有任何但書的推薦結果，
+// 而契約 §4 正是要求這些情況必須說清楚。錯誤碼同理：502／504 是可重試的暫時故障，
+// 422 是要請使用者重做臉部分析，兩者混成一句「載入失敗」就等於沒有分流。
+const RecommendationNotice = {
+    reasons: [],
+    error: null,        // { code, message, requestId, retryable }
+    isEmpty: false,
+    _retry: null,       // 重試時要重跑的函式
+
+    // 契約 §4 的四個降級碼。措辭的重點是「不要宣稱做了沒做的事」——
+    // 尤其 BROW_COLOR_UNAVAILABLE，那條就是為了防止畫面說「眉彩已依膚色精準比對」。
+    _REASON_TEXT: {
+        BROW_COLOR_UNAVAILABLE: '眉彩依風格排序（不以膚色比對眉彩色號）',
+        SKIN_TONE_LAB_UNRELIABLE: '底妝以季型與膚色分級排序，未使用色差比對',
+        STYLE_KEYWORD_NO_MATCH: '未命中風格關鍵字，已改用合格商品綜合排序',
+    },
+
+    // 契約 §5 的錯誤碼。使用者看得懂的話，且只有真的可以重試的才給重試。
+    _ERROR_TEXT: {
+        INVALID_REQUEST: '推薦條件有誤，請重新選擇風格後再試。',
+        INVALID_ANALYSIS_PACKAGE: '臉部分析資料不完整，請重新完成臉部分析。',
+        UNKNOWN_MAKEUP_STYLE: '這個妝容風格目前無法推薦，請換一個風格。',
+        PRODUCT_DB_UNAVAILABLE: '商品服務暫時無法使用。',
+        PRODUCT_DB_TIMEOUT: '商品查詢逾時。',
+        NETWORK_ERROR: '連線不穩，沒能取得推薦商品。',
+    },
+
+    // 每次呼叫 recommendProducts 之後都要記一次，包含成功的情況——
+    // 成功時要把上一輪的錯誤清掉，否則提示會一直留在畫面上。
+    record(rec, retryFn) {
+        this._retry = typeof retryFn === 'function' ? retryFn : null;
+        if (!rec || rec.ok === false) {
+            this.reasons = [];
+            this.isEmpty = false;
+            this.error = {
+                code: rec?.code || 'NETWORK_ERROR',
+                requestId: rec?.requestId || '',
+                // 502／504 是上游暫時不可用，重試有意義；422 重試幾次都一樣。
+                retryable: rec?.retryable === true,
+            };
+            return;
+        }
+        this.error = null;
+        // 契約 §3：personalization 要讓使用者知道有沒有套用個人化、依據多少互動。
+        // 後端一直有回這包，先前前端完全沒用——於是「這是依你的使用紀錄推的」還是
+        // 「這只是依這次的臉部分析推的」，畫面上分不出來。
+        this.personalization = (rec.personalization && typeof rec.personalization === 'object')
+            ? rec.personalization : null;
+        const list = Array.isArray(rec.fallbackReasons) ? rec.fallbackReasons : [];
+        this.reasons = list.filter(r => r && r.code !== 'RECOMMENDATION_EMPTY');
+        this.isEmpty = !rec.products?.length
+            || list.some(r => r?.code === 'RECOMMENDATION_EMPTY');
+    },
+
+    clear() { this.reasons = []; this.error = null; this.isEmpty = false; this.personalization = null; },
+
+    // 這批推薦是依什麼推的。措辭要能區分「只用了這次的臉部分析」與
+    // 「已納入你過去的使用紀錄」——兩者對使用者的意義完全不同，
+    // 不能都寫成「為您推薦」。
+    personalizationHtml() {
+        const p = this.personalization;
+        if (!p) return '';
+        const n = Number(p.interactionCount) || 0;
+        if (p.applied === true && n > 0) {
+            return `<div class="rec-personal">已納入您先前的 ${n} 筆收藏與試妝紀錄</div>`;
+        }
+        // 未登入或互動不足時，後端只用這次的臉部分析與風格。說清楚比含糊好：
+        // 使用者才知道登入之後結果會更貼近自己。
+        return '<div class="rec-personal">依這次的臉部分析與妝容風格推薦（尚未納入使用紀錄）</div>';
+    },
+
+    // 畫面上方的一條提示。沒有東西要說時回空字串，不佔版面。
+    html() {
+        if (this.error) {
+            const msg = this._ERROR_TEXT[this.error.code] || '推薦商品暫時無法載入。';
+            const rid = this.error.requestId
+                ? `<span class="rec-note-id">代碼 ${escapeHtml(this.error.requestId.slice(0, 12))}</span>` : '';
+            const retry = this.error.retryable
+                ? '<button type="button" data-rec-retry="1">重試</button>' : '';
+            return `<div class="rec-note is-error">${escapeHtml(msg)}${retry}${rid}</div>`;
+        }
+        if (!this.reasons.length) return '';
+        // 同一個 code 只說一次；後端會針對不同品類各給一筆。
+        const seen = new Set();
+        const texts = [];
+        for (const r of this.reasons) {
+            if (!r?.code || seen.has(r.code)) continue;
+            seen.add(r.code);
+            texts.push(this._REASON_TEXT[r.code] || r.message || '');
+        }
+        const shown = texts.filter(Boolean);
+        if (!shown.length) return '';
+        return `<div class="rec-note">${shown.map(t => escapeHtml(t)).join('　·　')}</div>`;
+    },
+
+    // 空結果的畫面。契約 §4 說得很直接：不可以製造假商品填版面。
+    emptyHtml() {
+        return `<div class="empty-state">
+            目前沒有符合的商品
+            <div class="rec-empty-actions">
+                <button type="button" class="btn-outline btn-sm" data-rec-reanalyze="1">重新分析</button>
+                <button type="button" class="btn-outline btn-sm" data-rec-browse="1">瀏覽所有商品</button>
+            </div>
+        </div>`;
+    },
+
+    // 提示裡的按鈕。呼叫端在插入 HTML 之後呼叫一次。
+    bind(root) {
+        if (!root) return;
+        const retry = root.querySelector('[data-rec-retry]');
+        if (retry) retry.onclick = () => {
+            const fn = this._retry;
+            this.clear();
+            if (fn) fn();
+        };
+        const again = root.querySelector('[data-rec-reanalyze]');
+        if (again) again.onclick = () => Router.go('analysis');
+        const browse = root.querySelector('[data-rec-browse]');
+        if (browse) browse.onclick = () => {
+            // 已經在商品頁時，改成把篩選切回「全部」，而不是原地重新導覽。
+            if (Router.currentPage === 'products') renderShop('all');
+            else Router.go('products');
+        };
+    },
+};
+
+// ── 推薦依據（設計文件 §19.10 的「查看推薦依據」）─────────────────────────
+//
+// 後端一直都有回 scoreBreakdown 的八項分數與 matchedKeywords，但前端在
+// _normalizeProduct 就把它們丟掉了，畫面上只剩一行 matchReason。使用者因此
+// 只看得到「推薦這個」，看不到「為什麼」。
+//
+// 分數標籤刻意避開「準確率」「符合度」這類字眼：matchScore 是排序分數，
+// 不是模型準確率，契約 §3 明文禁止那樣稱呼。
+const SCORE_LABELS = Object.freeze({
+    colorScore: '色彩適配',
+    styleScore: '風格適配',
+    featureScore: '臉部特徵',
+    priceFit: '價格符合',
+    brandAffinity: '品牌偏好',
+    behaviorScore: '個人行為',
+    availabilityScore: '供貨狀態',
+    contentScore: '綜合內容',
+});
+// 顯示順序＝對使用者的意義，不是後端回傳的順序。
+const SCORE_ORDER = ['colorScore', 'styleScore', 'featureScore', 'priceFit',
+                     'brandAffinity', 'behaviorScore', 'availabilityScore', 'contentScore'];
+
+function recommendationEvidenceHtml(p) {
+    const sb = p?.scoreBreakdown;
+    const kws = Array.isArray(p?.matchedKeywords) ? p.matchedKeywords.filter(Boolean) : [];
+    if (!sb && !kws.length) return '';
+
+    const rows = [];
+    if (sb) {
+        for (const key of SCORE_ORDER) {
+            const v = sb[key];
+            if (!Number.isFinite(Number(v))) continue;
+            // 0 分的構面照樣顯示——「這一項沒有加到分」本身就是有用的資訊，
+            // 藏起來會讓使用者以為系統沒有考慮它。
+            rows.push(`<span class="ev-item"><span class="ev-k">${SCORE_LABELS[key]}</span>`
+                + `<span class="ev-v">${Number(v).toFixed(2)}</span></span>`);
+        }
+    }
+    const kwHtml = kws.length
+        ? `<div class="ev-kw">命中關鍵字：${kws.map(k => `<em>${escapeHtml(String(k))}</em>`).join('、')}</div>`
+        : '';
+    if (!rows.length && !kwHtml) return '';
+
+    return `<details class="rec-ev">
+        <summary>查看推薦依據</summary>
+        <div class="ev-body">${kwHtml}${rows.length ? `<div class="ev-grid">${rows.join('')}</div>` : ''}</div>
+    </details>`;
+}
 
 // 每個分類先放入最高分商品，再依分數補上其餘推薦。
 function orderRecommendedProducts(list) {
@@ -426,27 +612,6 @@ function orderRecommendedProducts(list) {
 }
 
 // 將 NT$380、380 元或 1,650 等價格輸入轉成正數；無效輸入回傳 null。
-// 將英文渲染指令收在可展開區塊，方便專題記錄與複製。
-function renderPromptDisclosure(pkg) {
-    const gen = pkg?.generativeText || {};
-    const ollama = String(gen.ollamaRenderPromptEn || '').trim();
-    // 同時顯示模型產生的內容與後端送出的完整指令。
-    const full = String(gen.renderPromptEn || '').trim();
-    if (!ollama && !full) return '';
-    const block = (title, note, text) => text ? `
-        <div class="prompt-block">
-            <div class="prompt-block-head"><b>${escapeHtml(title)}</b><button class="btn-outline btn-sm" type="button" data-copy-prompt>複製</button></div>
-            <p class="prompt-block-note">${escapeHtml(note)}</p>
-            <pre class="prompt-text">${escapeHtml(text)}</pre>
-        </div>` : '';
-    return `
-        <details class="prompt-disclosure">
-            <summary>查看送給圖像模型的英文指令（供紀錄用）</summary>
-            ${block('Ollama 產出的妝容指令', '文字建議服務針對這張臉與這個風格產生的部分。只描述「要上什麼妝」。', ollama)}
-            ${block('實際送出的完整 prompt', '上面那段再加上我方固定疊加的 identity lock（要求模型不得改變長相、姿勢、背景）。這才是圖像模型真正收到的內容。', full)}
-        </details>`;
-}
-
 function parsePriceInput(raw) {
     if (raw == null) return null;
     if (typeof raw === 'number') return Number.isFinite(raw) && raw >= 0 ? raw : null;
@@ -463,6 +628,33 @@ function getRecommendedProductCatalog() {
     const draft = typeof AnalysisDraft !== 'undefined' ? AnalysisDraft.load() : null;
     const fromDraft = draft?.recommendations?.products;
     return Array.isArray(fromDraft) ? fillRecommendedImages(fromDraft) : [];
+}
+
+// 把本機收藏清單解析成「真的畫得出來的商品」。收藏可能來自 demo 資料、真實商品 API、
+// 或分析後的個人化推薦，三邊都要查，不然收藏了也看不到。
+//
+// 為什麼要獨立成一支：會員中心的「收藏商品」數字原本直接數 Fav.list()（本機存了幾個 id），
+// 收藏頁卻只畫得出查得到的那幾件，於是兩邊對不上——會員中心說 12 件，點進去只有 9 件，
+// 沒有任何說明。差額的來源是商品下架，或資料庫重匯後 id 被重編號（見 S68：id 只是匯入時的
+// 列號，不是商品的永久身分）。兩個地方共用同一份解析，數字就不可能再分岔。
+function resolveFavoriteProducts() {
+    const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
+    const combined = [...ALL_PRODUCTS, ...apiCatalog, ...getRecommendedProductCatalog()];
+    const seenIds = new Set();
+    const catalog = combined.filter(p => {
+        if (seenIds.has(String(p.id))) return false;
+        seenIds.add(String(p.id));
+        return true;
+    });
+    const items = catalog.filter(p => Fav.has(p.id));
+    return {
+        items,
+        // 收藏了、但三個來源都查不到的商品。它們仍留在收藏裡，商品重新上架就會回來，
+        // 所以不能從 Fav 清單裡刪掉——只是不計入「看得到的數量」，也不對使用者顯示
+        // （2026-08-13 決定，見 PageInit.favorites 的說明）。保留這個數字是為了排查用：
+        // 需要知道差額時不必再重算一次。
+        missingCount: Math.max(0, Fav.list().length - items.length),
+    };
 }
 
 // 跟 getProductCatalog 不同：不套用 demoProductImage 預設圖，後台編輯表單要看到的是「真正存的值」
@@ -592,20 +784,72 @@ function applyAnalysisCorrections(corrections, predicted) {
     }
     // 分析頁上那排結果格是一次性寫死的文字，重畫它們，否則使用者剛改完
     // 往上一看還是舊答案，會以為沒有生效。
-    const cells = { 'r-face': '臉型', 'r-brow': '眉型', 'r-eye': '眼型', 'r-nose': '鼻型', 'r-lip': '嘴型' };
+    // r-nose 不在這張表裡：它可能顯示的是 PRO 側臉鼻型，直接寫 analysisResult['鼻型']
+    // 會把它打回 BASIC 的答案。交給 paintNoseCell 統一決定。
+    const cells = { 'r-face': '臉型', 'r-brow': '眉型', 'r-eye': '眼型', 'r-lip': '嘴型' };
     Object.entries(cells).forEach(([id, field]) => {
         const el = document.getElementById(id);
         if (el && Router.analysisResult[field]) el.textContent = Router.analysisResult[field];
     });
+    paintNoseCell(Router.analysisResult);
     // 已經排隊等收藏的那筆快照是修正前建的，丟掉讓它重建。
     Router.pendingLook = null;
+}
+
+// 一律用同一條規則決定「鼻型要顯示什麼」：有 PRO 側臉結果就用它，沒有才退回 BASIC 正面。
+// 妝容建議頁與對比頁的摘要也吃這支，否則分析頁顯示駝峰鼻、下一頁又變回標準鼻。
+function noseDisplayText(source) {
+    if (!source) return '';
+    const rawSide = source['側臉鼻型'] || source['鼻型_側面'] || source.noseSide || null;
+    const label = (rawSide && typeof rawSide === 'object') ? rawSide.label : rawSide;
+    return String(label || source['鼻型'] || source.noseFront || '').trim();
+}
+
+// 鼻型這一格要顯示哪一個答案。
+//
+// PRO 的側臉鼻型有五類（塌鼻／直挺鼻／翹鼻／蒜頭鼻／駝峰鼻，ConvNeXt-Tiny，見
+// models/pro_nose_side/），BASIC 的正面鼻型只有兩類（寬鼻／標準鼻）。這格先前一律顯示
+// data['鼻型']，於是使用者跑了 PRO、傳了側面照，畫面上看到的仍然是 BASIC 那兩類
+// ——側臉模型的答案被正面的蓋掉，PRO 等於白跑。有側臉結果就以它為準。
+//
+// 只動「顯示」，不改 data['鼻型'] 本身：底下的回饋面板會把修正送去 face_feedback，
+// 而那支只認 PART_TO_FIELD 的五個 BASIC 部位、類別還必須出自 BASIC 的分類表
+// （face_feedback.py 的 validate()）。把 PRO 的五類寫進 '鼻型' 會被整包退回。
+// 正面的答案與模型自帶的 caveat 收進 title，資訊不會消失。
+function paintNoseCell(data) {
+    const el = document.getElementById('r-nose');
+    if (!el || !data) return;
+    const rawSide = data['側臉鼻型'] || data['鼻型_側面'] || null;
+    const side = (rawSide && typeof rawSide === 'object')
+        ? rawSide
+        : (rawSide ? { label: rawSide } : null);
+    const label = side && side.label ? String(side.label) : '';
+    el.textContent = label || data['鼻型'] || '—';
+
+    const labelEl = el.closest('.result-cell')?.querySelector('.rlabel');
+    if (labelEl) labelEl.textContent = label ? '鼻型 · 側臉' : '鼻型';
+
+    if (!label) { el.removeAttribute('title'); return; }
+    const notes = [];
+    if (side.confidence != null) notes.push(`信心 ${Math.round(Number(side.confidence) * 100)}%`);
+    if (data['鼻型']) notes.push(`正面判斷：${data['鼻型']}`);
+    if (side.caveat) notes.push(side.caveat);
+    el.title = notes.join('｜');
 }
 
 function renderAnalysisFeedback(result, packageId) {
   const box = document.getElementById('analysisFeedback');
   if (!box || typeof AnalysisFeedback === 'undefined') return;
+  // 側臉鼻型（PRO）在分析結果裡是物件 {label, confidence, classes, caveat}，
+  // 其餘五個部位是字串。不統一取值的話，這一格會顯示成 [object Object]，
+  // 而且送出去的修正也會是那個字串——後端 validate() 只收類別字串，整包會被退回。
+  const valueOf = (source, field) => {
+    const value = source ? source[field] : null;
+    if (value && typeof value === 'object') return value.label || '';
+    return value || '';
+  };
   const fields = Object.keys(AnalysisFeedback.OPTIONS)
-    .filter(field => result && result[field] && !String(result[field]).startsWith('無法判斷'));
+    .filter(field => valueOf(result, field) && !valueOf(result, field).startsWith('無法判斷'));
   if (!fields.length) { box.style.display = 'none'; return; }
 
   const saved = AnalysisFeedback.forPackage(packageId);
@@ -613,11 +857,12 @@ function renderAnalysisFeedback(result, packageId) {
   // predicted 優先使用模型原始輸出，沒有 _modelRaw 時才使用目前結果。
   const raw = (result && typeof result._modelRaw === 'object' && result._modelRaw) || {};
   const predicted = {};
-  fields.forEach(field => { predicted[field] = raw[field] || result[field]; });
+  fields.forEach(field => { predicted[field] = valueOf(raw, field) || valueOf(result, field); });
   // 若後端已套用修正，從目前值與原始值的差異還原回饋面板。
   fields.forEach(field => {
-    if (!corrections[field] && predicted[field] && result[field] && result[field] !== predicted[field]) {
-      corrections[field] = result[field];
+    const current = valueOf(result, field);
+    if (!corrections[field] && predicted[field] && current && current !== predicted[field]) {
+      corrections[field] = current;
     }
   });
 
@@ -649,10 +894,15 @@ function renderAnalysisFeedback(result, packageId) {
       <div class="af-consent">
         <label>
           <input type="checkbox" id="afAllowTraining"${allowTraining ? ' checked' : ''}>
-          <span>同意提供這次修正部位的<strong>局部裁切</strong>協助改善模型</span>
+          <span>同意提供這次修正的影像協助改善模型</span>
         </label>
-        <p class="af-consent-note">只會上傳你改過的那幾個部位的小圖（例如眼睛、鼻子那一小塊），
-           <strong>不是完整照片</strong>；僅用於模型訓練，刪除帳號時一併移除。不勾選也能送出修正。</p>
+        <p class="af-consent-note">眉型、眼型、鼻型、嘴型：只會上傳你改過的那幾個部位的小圖
+           （例如眼睛、鼻子那一小塊），<strong>不是完整照片</strong>。${corrections['臉型'] ? `
+           <br><strong>臉型會上傳你那張完整的正面照。</strong>臉型要看整張臉的長寬比例與下顎輪廓，
+           小塊裁切判斷不了。` : ''}${corrections['側臉鼻型'] ? `
+           <br><strong>側臉鼻型會上傳你那張完整的側臉照。</strong>判斷側臉鼻型的模型讀的是整張側臉，
+           不是裁切，所以只送小圖對它沒有用處。` : ''}
+           僅用於模型訓練，刪除帳號時一併移除。不勾選也能送出修正。</p>
       </div>` : ''}
       <div class="af-foot">
         <button class="btn-gold btn-sm" id="afSubmit">送出回饋</button>
@@ -689,6 +939,11 @@ function renderAnalysisFeedback(result, packageId) {
               imageDataUrl: allowTraining
                   ? (Router.analysisPackage?.images?.front?.compressedDataUrl
                      || Router.analysisPackage?.images?.front?.dataUrl || '')
+                  : '',
+              // PRO 才會有側面照。側臉鼻型模型吃整張側臉圖，正面照對它沒有訓練價值。
+              sideImageDataUrl: allowTraining
+                  ? (Router.analysisPackage?.images?.side?.compressedDataUrl
+                     || Router.analysisPackage?.images?.side?.dataUrl || '')
                   : ''
           }).catch(() => {});
       }
@@ -1116,7 +1371,7 @@ dashboard: `
     <div class="greet-r"><div class="greet-date" id="dashDate">—</div><div class="greet-meta">Your Beauty Atelier</div></div>
 </div>
 <section id="dashPersonalSection" style="display:none;">
-    <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">AI</span><h2>猜你喜歡</h2></div></div>
+    <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">❧</span><h2>猜你喜歡</h2></div></div>
     <div class="glow-row" id="dashPersonal"></div>
 </section>
 <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">01</span><h2>風格靈感</h2></div><span class="sh-link" data-nav="style">瀏覽全部風格</span></div>
@@ -1163,7 +1418,7 @@ analysis: `
                 <div class="pro-slot" data-pro-slot="side"><div class="slot-title">側面照</div><div class="slot-file" id="sideFileName">必填</div><img class="pro-shot-preview" id="sidePreview" alt="側面照預覽"><button class="pro-retake-btn" data-pro-retake="side" type="button">重拍側面</button><input type="file" id="sideInput" accept="image/*" style="display:none;"></div>
             </div>
             <div class="pro-scan-panel">
-                <div class="pro-scan-copy"><b>自動掃描拍攝</b><span>看著鏡頭取得正面照，再慢慢轉向側面；系統會依臉部 yaw 角度自動擷取。</span></div>
+                <div class="pro-scan-copy"><b>角度輔助拍攝</b><span>系統即時顯示臉部 yaw／pitch 並提示對準與否，<b>由你自己按下擷取</b>；也可以直接用上面兩格上傳現成照片。</span></div>
                 <div class="camera-actions"><button class="btn-outline btn-sm" id="startProScanBtn">開始掃描</button><button class="btn-outline btn-sm" id="stopProScanBtn">停止掃描</button></div>
                 <div class="camera-actions"><button class="btn-outline btn-sm" id="manualFrontCaptureBtn">手動存正面</button><button class="btn-outline btn-sm" id="manualSideCaptureBtn">手動存側面</button></div>
                 <div class="camera-box" id="proCameraBox">
@@ -1196,7 +1451,7 @@ analysis: `
         </div>
         <div class="loading-bar" id="loadingBar"><div class="fill" id="loadingFill"></div></div>
         <div class="loading-status" id="loadingStatus">等待圖片</div>
-        <div class="package-status" id="packageStatus"><b>資料包狀態</b><span>尚未建立</span></div>
+        <div class="package-status" id="packageStatus"><b>分析進度</b><span>尚未開始</span></div>
         <button class="btn-gold btn-full" id="analyzeBtn" style="margin-top:14px;">開 始 分 析</button>
     </div>
     <div>
@@ -1209,8 +1464,8 @@ analysis: `
             <div class="result-cell"><div class="rlabel">嘴型</div><div class="rvalue" id="r-lip">—</div></div>
             <div class="result-cell"><div class="rlabel">色彩季型</div><div class="rvalue" id="r-season">—</div></div>
         </div>
-        <div class="skin-box"><div class="skin-title">膚 色 基 準 · M A C</div><div class="skin-row"><div class="skin-swatch" id="skinSwatch"></div><div><div class="skin-name" id="skinName">—</div><div class="skin-lab" id="skinLab"></div></div></div><div class="skin-warn" id="skinReliabilityWarn" style="display:none;"></div></div>
-        <div class="skin-box"><div class="skin-title">唇 色 原 始 值</div><div class="skin-row"><div class="skin-swatch" id="lipSwatch"></div><div><div class="skin-lab" id="lipLab"></div></div></div></div>
+        <div class="skin-box"><div class="skin-title">膚 色 基 準 · M A C</div><div class="skin-row"><div class="skin-swatch" id="skinSwatch"></div><div><div class="skin-name" id="skinName">—</div></div></div><div class="skin-warn" id="skinReliabilityWarn" style="display:none;"></div></div>
+        <div class="skin-box"><div class="skin-title">唇 色</div><div class="skin-row"><div class="skin-swatch" id="lipSwatch"></div></div></div>
         <div id="analysisFeedback" class="analysis-feedback" style="display:none;"></div>
         <div style="text-align:center;margin-top:20px;"><button class="btn-gold" id="goStyleBtn" style="display:none;">選擇風格 →</button></div>
     </div>
@@ -1432,7 +1687,6 @@ function openSaveLookModal() {
     const before = pkg.images?.front?.compressedDataUrl || rd.beforeImageUrl || rd.beforeImageDataUrl || '';
     const after = rd.afterImageUrl || rd.afterImageDataUrl || mo.imageUrl || mo.imageDataUrl || '';
     const style = STYLES.find(s => s.id === Router.selectedStyleId) || STYLES[0];
-    const prompt = rd.renderPrompt || pkg.generativeText?.renderPromptEn || '';
     const isTemp = String(after).includes('replicate.delivery');
 
     const modal = document.createElement('div');
@@ -1457,7 +1711,6 @@ function openSaveLookModal() {
         <div class="save-look-meta">
             <div class="detail-pill">${escapeHtml(style.name)}</div>
             ${isTemp ? `<p class="save-look-warn">妝後圖目前是臨時網址，收藏後可能日後失效。渲染端改用永久網址後就不會有這個問題。</p>` : ''}
-            ${prompt ? `<details class="save-look-prompt"><summary>這次實際下給模型的指令</summary><pre>${escapeHtml(prompt)}</pre></details>` : ''}
         </div>
         <div class="makeup-style-actions">
             <button class="btn-outline" type="button" data-cancel>取消</button>
@@ -1511,7 +1764,18 @@ function closeProductRecommendationModal(){document.getElementById('productRecom
 function openProductRecommendationModal(){
     const modal=document.createElement('div');
     modal.id='productRecommendationModal';modal.className='makeup-style-modal open';modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');
-    modal.innerHTML=`<div class="makeup-style-dialog product-recommendation-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Products</span><h2>個人化商品推薦</h2><p>依照臉部分析與選擇的妝容風格，從現有商品中整理推薦。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="prod-grid recommendation-modal-grid"></div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-close>稍後再看</button><button class="btn-gold" type="button" data-all>查看所有商品</button></div></div>`;
+    // 膚色色塊放在推薦視窗的標題區：粉底液是最需要對照膚色的品項，而商品端目前
+    // 沒有色碼（見《給資料庫端_商品顏色資料遺失回報》），系統無法自動比對。
+    // 把使用者自己量到的膚色擺在推薦旁邊，至少讓他用眼睛比。
+    // 值來自 analysisPackage.faceAnalysis.skinTone，沒有分析結果就整塊不出現。
+    const skinTone = Router.analysisPackage?.faceAnalysis?.skinTone;
+    const skinLab = Array.isArray(skinTone?.lab) && skinTone.lab.length === 3 ? skinTone.lab.map(Number) : null;
+    const skinRow = skinLab ? `<div class="reco-skin-row">
+        <span class="reco-skin-swatch" style="background:${escapeHtml(Api.labToRgb(skinLab[0], skinLab[1], skinLab[2]))}" aria-label="你的膚色"></span>
+        <span class="reco-skin-text">你的膚色${[skinTone.season, skinTone.level].filter(Boolean).length ? ' · ' + escapeHtml([skinTone.season, skinTone.level].filter(Boolean).join(' / ')) : ''}</span>
+        ${skinTone.labReliable === false ? '<span class="reco-skin-warn">取樣可信度不足，僅供參考</span>' : ''}
+    </div>` : '';
+    modal.innerHTML=`<div class="makeup-style-dialog product-recommendation-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Products</span><h2>個人化商品推薦</h2><p>依照臉部分析與選擇的妝容風格，從現有商品中整理推薦。</p>${skinRow}</div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="prod-grid recommendation-modal-grid"></div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-close>稍後再看</button><button class="btn-gold" type="button" data-all>查看所有商品</button></div></div>`;
     document.body.appendChild(modal);
     const grid=modal.querySelector('.recommendation-modal-grid');
 
@@ -1521,10 +1785,32 @@ function openProductRecommendationModal(){
         const products=orderRecommendedProducts(getRecommendedProductCatalog());
         if(!products.length){
             grid.classList.remove('prod-grid');
-            grid.innerHTML=`<div class="empty-state">${Router.generalProductLoading?'推薦商品載入中...':'推薦商品正在整理中，也可以先查看所有商品。'}</div>`;
+            // 載入中／後端回報空結果／單純還沒整理好，是三種不同的狀況，
+            // 用同一句話帶過會讓使用者不知道要等、要重試、還是這裡本來就沒有東西。
+            grid.innerHTML = Router.generalProductLoading
+                ? '<div class="empty-state">推薦商品載入中...</div>'
+                : (RecommendationNotice.error || RecommendationNotice.isEmpty
+                    ? RecommendationNotice.html() + RecommendationNotice.emptyHtml()
+                    : '<div class="empty-state">推薦商品正在整理中，也可以先查看所有商品。</div>');
+            RecommendationNotice.bind(grid);
             return;
         }
         grid.classList.add('prod-grid');
+        // 有商品時，降級提示放在列表上方——契約 §4 要求這些但書要跟商品一起看得到，
+        // 而不是只在完全沒有商品時才出現。
+        //
+        // 提示要插在 grid 的**外面**：grid 本身是 display:grid 的容器，
+        // 把提示塞進去它會變成其中一個格子，跟商品卡排在一起。
+        const holder = grid.parentNode;
+        holder.querySelectorAll('[data-rec-holder]').forEach(n => n.remove());
+        const noticeHtml = RecommendationNotice.html();
+        if (noticeHtml && holder) {
+            const box = document.createElement('div');
+            box.setAttribute('data-rec-holder', '1');
+            box.innerHTML = noticeHtml;
+            holder.insertBefore(box, grid);
+            RecommendationNotice.bind(box);
+        }
         grid.innerHTML=products.slice(0,RECOMMENDED_DISPLAY_LIMIT).map((p,i)=>`
             <div class="prod-card reveal-in" data-pid="${escapeHtml(p.id)}" style="animation-delay:${Math.min(i*0.035,0.2)}s">
                 <div class="pc-imgwrap">
@@ -1534,6 +1820,7 @@ function openProductRecommendationModal(){
                 <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}${p.brand?` · ${escapeHtml(p.brand)}`:''}</div>
                 <div class="pc-name">${escapeHtml(p.name)}</div>
                 ${p.matchReason?`<div class="pc-reason">${escapeHtml(p.matchReason)}</div>`:''}
+                ${recommendationEvidenceHtml(p)}
                 <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
             </div>`).join('');
         grid.querySelectorAll('.prod-card').forEach(card=>{
@@ -1574,6 +1861,11 @@ async function runMakeupSuggestion(onProgress) {
     const pkg = Router.analysisPackage;
     // 沒有臉部分析就沒有東西可以建議：回報給呼叫端決定怎麼帶路，不在這裡跳頁。
     if (!pkg || !Router.analysisResult) return { ok: false, missingAnalysis: true };
+    // 建議與渲染的額度分開算：訪客各 2 次、會員各 4 次（見 UsageQuota）。
+    if (typeof UsageQuota !== 'undefined' && !UsageQuota.canUse(UsageQuota.KINDS.SUGGESTION)) {
+        return { ok: false, quotaExceeded: true, kind: 'suggestion',
+                 limit: UsageQuota.limit(UsageQuota.KINDS.SUGGESTION) };
+    }
     try {
         const latestAnalysis = getLatestAnalysisResult() || {};
         notify(45, '等待完整建議中...');
@@ -1613,15 +1905,19 @@ async function runMakeupSuggestion(onProgress) {
         AnalysisDraft.save(Router.analysisPackage);
 
         Api.recommendProducts(Router.analysisPackage, Router.selectedStyleId).then(rec => {
+            // 成功與失敗都要記：成功時要把上一輪殘留的錯誤提示清掉。
+            RecommendationNotice.record(rec);
             if (!rec?.products?.length) return;
             Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
                 recommendations: { ...Router.analysisPackage.recommendations, products: rec.products }
             });
             AnalysisDraft.save(Router.analysisPackage);
-        }).catch(() => {});
+        }).catch(() => RecommendationNotice.record(null));
 
         Router.pendingLook = buildCurrentLookRecord();
         Router.pendingLookSaved = false;
+        // 成功之後才記一次額度。服務掛掉或逾時不該吃掉使用者的次數。
+        if (typeof UsageQuota !== 'undefined') UsageQuota.record(UsageQuota.KINDS.SUGGESTION);
         return { ok: true, response };
     } catch (err) {
         if (pkg) {
@@ -1641,9 +1937,17 @@ async function runMakeupSuggestion(onProgress) {
 // 將渲染條件與結果寫回邏輯集中處理，避免和畫面程式混在一起。
 async function runMakeupRender(onProgress) {
     const notify = typeof onProgress === 'function' ? onProgress : () => {};
-    if (typeof isGuest === 'function' && isGuest()) return { ok: false, reason: 'guest' };
     const profile = Auth.getProfile();
-    if (typeof AdminStore !== 'undefined' && !AdminStore.canRender(profile)) return { ok: false, reason: 'plan' };
+    // 2026-08-14：訪客從「完全不能渲染」改成每天 2 次，會員 4 次，
+    // 而且與妝容建議分開計算（見 UsageQuota 的說明）。
+    if (typeof UsageQuota !== 'undefined' && !UsageQuota.canUse(UsageQuota.KINDS.RENDER)) {
+        return { ok: false, reason: 'quota', kind: 'render', limit: UsageQuota.limit(UsageQuota.KINDS.RENDER) };
+    }
+    // 訪客現在有額度了，所以不再直接擋；但被停權或方案不允許的會員仍然擋。
+    if (!(typeof isGuest === 'function' && isGuest())
+        && typeof AdminStore !== 'undefined' && !AdminStore.canRender(profile)) {
+        return { ok: false, reason: 'plan' };
+    }
 
     const pkg = Router.analysisPackage;
     const imageDataUrl = pkg?.images?.front?.compressedDataUrl || pkg?.images?.front?.dataUrl || '';
@@ -1690,6 +1994,8 @@ async function runMakeupRender(onProgress) {
             }
         });
         AnalysisDraft.save(Router.analysisPackage);
+        // 成功才記額度：渲染要 60~150 秒，失敗或逾時卻扣次數會讓人很火大。
+        if (typeof UsageQuota !== 'undefined') UsageQuota.record(UsageQuota.KINDS.RENDER);
         return { ok: true, result };
     } catch (err) {
         return { ok: false, error: err };
@@ -1722,6 +2028,13 @@ function handleSuggestionFailure(result) {
         Router.go('analysis');
         return 'navigated';
     }
+    if (result.quotaExceeded) {
+        const limit = result.limit;
+        showAlert(`今天的妝容建議次數已用完（每天 ${limit} 次）。`
+            + (isGuest() ? '註冊成為會員可以有更多次數，明天也會重置。' : '明天會重置。'),
+            { type: 'error' });
+        return 'failed';
+    }
     if (!result.ok) {
         showAlert('妝容建議失敗：' + result.error.message, { type: 'error' });
         return 'failed';
@@ -1740,6 +2053,13 @@ function paletteRowHtml(style) {
 // 被 runMakeupRender 擋下來時要對使用者說什麼、帶他去哪。回傳「我處理掉了嗎」，
 // 讓呼叫端用一個 if 就能分開「被擋下」與「真的失敗」兩種結果。
 function handleRenderBlocked(reason) {
+    if (reason === 'quota') {
+        const limit = (typeof UsageQuota !== 'undefined') ? UsageQuota.limit(UsageQuota.KINDS.RENDER) : 0;
+        showAlert(`今天的妝容渲染次數已用完（每天 ${limit} 次）。`
+            + (isGuest() ? '註冊成為會員可以有更多次數，明天也會重置。' : '明天會重置。'),
+            { type: 'error' });
+        return true;
+    }
     if (reason === 'guest') { promptGuestAuth('AI 渲染妝容'); return true; }
     if (reason === 'plan') { showAlert('你目前的方案無法使用 AI 妝容渲染。', { type: 'error' }); return true; }
     if (reason === 'no-photo') { showAlert('尚未上傳照片，請先完成臉部分析。', { type: 'error' }); return true; }
@@ -2054,9 +2374,12 @@ const PageInit = {
             if (!packageStatus) return;
             const pkg = Router.analysisPackage;
             packageStatus.classList.toggle('ready', !!pkg);
+            // 這一行是給使用者看的，不是給我們除錯的：`status` 是內部代碼
+            // （draft／completed／failed），照原樣印出來對使用者沒有意義。
+            const statusText = { draft: '進行中', completed: '已完成', failed: '失敗' }[pkg?.status] || '進行中';
             packageStatus.querySelector('span').textContent = pkg
-                ? `${pkg.mode.toUpperCase()} · ${pkg.status} · ${Object.keys(pkg.images || {}).length} 張`
-                : '尚未建立';
+                ? `${pkg.mode.toUpperCase()} · ${statusText} · ${Object.keys(pkg.images || {}).length} 張照片`
+                : '尚未開始';
         };
 
         const fileMeta = (file, role) => ({
@@ -2493,10 +2816,8 @@ const PageInit = {
             await bpRegisterFile(role, file);
         };
 
-        const SCAN_HOLD_FRAMES = 2;
-        let proScanValidCount = 0;
-        let proScanCurrentTarget = '';
-
+        // SCAN_HOLD_FRAMES／proScanValidCount／proScanCurrentTarget 是自動擷取用的
+        // 連續幀計數，2026-08-14 拿掉自動擷取後一併移除，不留無人使用的狀態。
         const SIDE_YAW_MIN = 35;
 
         const setYawDisplay = (text) => {
@@ -2533,46 +2854,31 @@ const PageInit = {
                     setYawDisplay(`yaw ${Math.round(yaw)}°  pitch ${Math.round(pitch)}°  ${sideGuide}`);
                 }
 
-                const wantFront = !Router.proFiles.front && (absY <= 8 && Math.abs(pitch) <= 12);
-                const wantSide  = Router.proFiles.front && !Router.proFiles.side && absY >= SIDE_YAW_MIN;
-                const target = wantFront ? 'front' : wantSide ? 'side' : '';
-
-                if (target !== proScanCurrentTarget) {
-                    proScanValidCount = 0;
-                    proScanCurrentTarget = target;
-                }
-
-                if (target) {
-                    proScanValidCount++;
-                    const label = target === 'front' ? '正面' : faceSide + '側面';
-                    if (proScanValidCount < SCAN_HOLD_FRAMES) {
-                        setProScanHint(`${label}角度正確，請保持不動… ${proScanValidCount}/${SCAN_HOLD_FRAMES}`);
-                    } else {
-                        proScanValidCount = 0;
-                        proScanCurrentTarget = '';
-                        storeProScanPhoto(target, blob, pose);
-                        if (target === 'front') {
-                            setProScanHint('正面完成。請轉向任一側面，轉好後保持不動，系統會自動擷取，不用再看螢幕');
-                        } else {
-                            setProScanHint(`${faceSide}側面已完成，可開始 PRO 分析`);
-                            stopProScan();
-                        }
-                    }
+                // 自動擷取已移除（2026-08-14）。這個迴圈現在只負責**顯示角度與提示**，
+                // 不再自己按快門。
+                //
+                // 為什麼拿掉：自動擷取的判定是「yaw/pitch 落在範圍內且連續 N 幀」，
+                // 但那只保證「角度數字在範圍內」，不保證那一幀拍得好——眨眼、動到、
+                // 對焦沒跟上都照樣觸發，而且使用者當下不在看螢幕（提示語自己都寫著
+                // 「不用再看螢幕」），拍壞了也不知道。實測結果是擷取到的照片品質不穩。
+                //
+                // 現在改成：系統只告訴你角度對不對，**由你自己按「手動存正面／側面」**。
+                // 那兩顆按鈕本來就存在，過去只是被自動流程搶先。
+                const frontReady = absY <= 8 && Math.abs(pitch) <= 12;
+                const sideReady = absY >= SIDE_YAW_MIN;
+                if (!Router.proFiles.front) {
+                    setProScanHint(frontReady
+                        ? '✓ 正面角度正確，按「手動存正面」擷取'
+                        : '請直視鏡頭，讓臉部置中於橢圓框內');
+                } else if (!Router.proFiles.side) {
+                    const need = SIDE_YAW_MIN - absY;
+                    setProScanHint(sideReady
+                        ? `✓ ${faceSide}側面角度正確，按「手動存側面」擷取`
+                        : `再轉約 ${Math.max(1, Math.round(need))}° 就到側面`);
                 } else {
-                    proScanValidCount = 0;
-                    proScanCurrentTarget = '';
-                    if (!Router.proFiles.front) {
-                        setProScanHint('請直視鏡頭，讓臉部置中於橢圓框內');
-                    } else {
-                        const need = SIDE_YAW_MIN - absY;
-                        setProScanHint(need > 0
-                            ? `偵測中，再轉約 ${Math.round(need)}° 就到側面，轉好後保持不動即可`
-                            : '偵測中，請稍候');
-                    }
+                    setProScanHint('正面與側面都已擷取，可開始 PRO 分析');
                 }
             } catch (err) {
-                proScanValidCount = 0;
-                proScanCurrentTarget = '';
                 const msg = String(err.message || err);
                 setProScanHint(msg.includes('404')
                     ? '角度偵測暫時無法使用，請改用手動擷取。'
@@ -2667,7 +2973,7 @@ const PageInit = {
                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, { status: 'analyzing' });
                 AnalysisDraft.save(Router.analysisPackage);
                 updatePackageStatus();
-                setLoadingStatus('正在建立臉部分析 job', true);
+                setLoadingStatus('正在準備分析', true);
                 fill.style.width = '45%';
                 const job = Router.analyzeMode === 'basic'
                     ? await Api.createFaceJob(Router.selectedFile)
@@ -2709,7 +3015,7 @@ const PageInit = {
                     });
                     AnalysisDraft.save(Router.analysisPackage);
                     updatePackageStatus();
-                    setLoadingStatus(`分析中：${latestJob.stage || latestJob.status} ${progress}%`, true);
+                    setLoadingStatus(`分析中 ${progress}%`, true);
                 });
                 const data = response.result || response.data || response;
                 Router.analysisResult = data;
@@ -2720,7 +3026,7 @@ const PageInit = {
                 // 畫面又顯示「分析失敗」。紀錄是這次分析的成果，畫面只是呈現，
                 // 呈現壞掉不該讓成果跟著消失。
                 History.add({ ...data, analysisPackageId: Router.analysisPackage.id, mode: Router.analyzeMode });
-                setLoadingStatus('分析完成，正在壓縮圖片並封裝資料包', true);
+                setLoadingStatus('分析完成，正在整理結果', true);
                 const packagedImages = await compressImagesForPackage();
                 const completedAt = Date.now();
                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
@@ -2755,19 +3061,20 @@ const PageInit = {
                 AnalysisDraft.save(Router.analysisPackage);
                 updatePackageStatus();
                 fill.style.width = '100%';
-                setLoadingStatus('資料包已完成：壓縮照片 + 分析 JSON，等待文字建議', false);
+                setLoadingStatus('分析完成', false);
                 setTimeout(() => { bar.style.display = 'none'; fill.style.width = '0'; }, 400);
 
                 document.getElementById('r-face').textContent = data['臉型'] || '—';
                 document.getElementById('r-brow').textContent = data['眉型'] || '—';
                 document.getElementById('r-eye').textContent = data['眼型'] || '—';
-                document.getElementById('r-nose').textContent = data['鼻型'] || '—';
+                paintNoseCell(data);
                 document.getElementById('r-lip').textContent = data['嘴型'] || '—';
                 document.getElementById('r-season').textContent = data['膚色']?.['四季型'] || '—';
 
                 const skin = data['膚色'] || {}, lab = skin['LAB'] || {};
                 document.getElementById('skinName').textContent = skin['膚色分級'] || '—';
-                document.getElementById('skinLab').textContent = `L ${lab.L||0} a ${lab.a||0} b ${lab.b||0}`;
+                // LAB 數值不對使用者顯示：那是色彩科學的座標，色塊本身已經表達了顏色。
+                //（值仍在 analysisPackage 裡，推薦端與渲染端照常使用。）
                 document.getElementById('skinSwatch').style.background = Api.labToRgb(lab.L||50, lab.a||0, lab.b||0);
 
                 // 膚色不可靠時顯示重拍提示；舊版後端沒有旗標時視為可靠。
@@ -2782,7 +3089,7 @@ const PageInit = {
                 }
 
                 const lipLab = data['嘴唇_LAB'] || {};
-                document.getElementById('lipLab').textContent = `L ${lipLab.L||0} a ${lipLab.a||0} b ${lipLab.b||0}`;
+                // 同上：唇色 LAB 不顯示，只留色塊。
                 document.getElementById('lipSwatch').style.background = Api.labToRgb(lipLab.L||40, lipLab.a||0, lipLab.b||0);
 
                 document.getElementById('goStyleBtn').style.display = 'inline-block';
@@ -2795,7 +3102,7 @@ const PageInit = {
                 });
                 AnalysisDraft.save(Router.analysisPackage);
                 updatePackageStatus();
-                setLoadingStatus('分析失敗，已保留草稿狀態', false);
+                setLoadingStatus('分析失敗，你的照片與進度已保留', false);
                 const offline = /Failed to fetch|NetworkError|Load failed/i.test(String(err.message || err));
                 // 照片問題的 message 本身就是可行動的重拍指引（「請把頭轉向你的右邊」）。
                 // 冠上「分析失敗：」會把它講成系統壞掉，使用者反而不知道該做什麼。
@@ -2914,7 +3221,7 @@ const PageInit = {
                     <div class="analysis-item"><span class="ai-label">臉型</span><span class="ai-value">${r['臉型']||'—'}</span></div>
                     <div class="analysis-item"><span class="ai-label">眉型</span><span class="ai-value">${r['眉型']||'—'}</span></div>
                     <div class="analysis-item"><span class="ai-label">眼型</span><span class="ai-value">${r['眼型']||'—'}</span></div>
-                    <div class="analysis-item"><span class="ai-label">鼻型</span><span class="ai-value">${r['鼻型']||'—'}</span></div>
+                    <div class="analysis-item"><span class="ai-label">鼻型</span><span class="ai-value">${noseDisplayText(r)||'—'}</span></div>
                     <div class="analysis-item"><span class="ai-label">嘴型</span><span class="ai-value">${r['嘴型']||'—'}</span></div>
                     <div class="analysis-item"><span class="ai-label">膚色</span><span class="ai-value">${skin['膚色分級']||'—'} / ${skin['四季型']||'—'}</span></div>
                 </div>
@@ -2962,48 +3269,71 @@ const PageInit = {
             }
             const catalog = apiCatalog;
             const list = filter === 'all' ? catalog : catalog.filter(p => p.cat === filter);
+            // 切換分類等於換一份清單，已展開的筆數要跟著歸零。
+            if (Router.shopVisibleFilter !== filter || !Router.shopVisible) {
+                Router.shopVisibleFilter = filter;
+                Router.shopVisible = SHOP_PAGE_SIZE;
+            }
+            const visible = Math.min(Router.shopVisible, list.length);
             const isLoadingProducts = Router.generalProductLoading && !apiCatalog.length;
             const header = `
                 <div class="page-header"><span class="eyebrow">Boutique · 選物</span><h1>商品推薦</h1><div class="divider"></div></div>
                 ${recommended.length ? `<section class="recommended-strip">
-                    <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">AI</span><h2>本次個人化推薦</h2></div></div>
+                    <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">❧</span><h2>本次個人化推薦</h2></div></div>
+                    ${RecommendationNotice.personalizationHtml()}
                     <div class="prod-grid recommended-grid">${recommendedByCat.slice(0, RECOMMENDED_DISPLAY_LIMIT).map((p, i) => `
                         <div class="prod-card reveal-in" data-rec-pid="${escapeHtml(p.id)}" style="animation-delay:${Math.min(i*0.035,0.2)}s">
                             <div class="pc-imgwrap">${phBox('', p.name, p.img)}</div>
                             <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}${p.brand ? ` · ${escapeHtml(p.brand)}` : ''}</div>
                             <div class="pc-name">${escapeHtml(p.name)}</div>
+                            ${p.matchReason ? `<div class="pc-reason">${escapeHtml(p.matchReason)}</div>` : ''}
+                            ${recommendationEvidenceHtml(p)}
                             <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
                         </div>`).join('')}
                     </div>
                 </section>` : ''}
-                ${Router.productRecommendationError && !recommended.length ? '<div class="empty-state compact">個人化推薦暫時無法載入（推薦服務維護中），先為你顯示全部商品。</div>' : ''}
+                ${RecommendationNotice.html()}
+                ${RecommendationNotice.isEmpty && !recommended.length && !Router.productRecommendationLoading
+                    ? RecommendationNotice.emptyHtml() : ''}
                 <div class="filter-bar">${chips}</div>
                 <div class="prod-count">${isLoadingProducts ? '商品載入中' : (Router.generalProductError && !list.length ? '商品服務暫時無法載入，請稍後再試' : `${list.length} 件商品`)}</div>`;
             const bindChips = () => {
                 area.querySelectorAll('.chip').forEach(ch => ch.onclick = () => renderShop(ch.dataset.filter));
+                // 提示列的「重試」與空狀態的兩顆按鈕。跟 chip 一起綁，因為
+                // 每次 renderShop 都會重畫 area，事件必須跟著重新掛上。
+                RecommendationNotice.bind(area);
             };
             if (!recommended.length && !Router.productRecommendationLoading && Router.analysisPackage?.faceAnalysis) {
                 Router.productRecommendationLoading = true;
-                Api.recommendProducts(Router.analysisPackage, Router.selectedStyleId)
-                    .then(rec => {
-                        if (rec?.products?.length) {
-                            Router.productRecommendationError = false;
-                            Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
-                                recommendations: {
-                                    ...(Router.analysisPackage.recommendations || {}),
-                                    products: rec.products
-                                }
-                            });
-                            AnalysisDraft.save(Router.analysisPackage);
+                // 重試就是把同一段再跑一次；把它包成具名函式交給提示列的「重試」按鈕。
+                const runRecommend = () => {
+                    Router.productRecommendationLoading = true;
+                    Api.recommendProducts(Router.analysisPackage, Router.selectedStyleId)
+                        .then(rec => {
+                            RecommendationNotice.record(rec, runRecommend);
+                            if (rec?.products?.length) {
+                                Router.productRecommendationError = false;
+                                Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
+                                    recommendations: {
+                                        ...(Router.analysisPackage.recommendations || {}),
+                                        products: rec.products
+                                    }
+                                });
+                                AnalysisDraft.save(Router.analysisPackage);
+                            } else if (rec && rec.ok === false) {
+                                // 推薦服務打不到（例如 /recommend-products 404）——記錄下來讓畫面顯示提示，不再靜默
+                                Router.productRecommendationError = true;
+                            }
                             if (Router.currentPage === 'products') renderShop(filter);
-                        } else if (rec && rec.ok === false) {
-                            // 推薦服務打不到（例如 /recommend-products 404）——記錄下來讓畫面顯示提示，不再靜默
+                        })
+                        .catch(() => {
                             Router.productRecommendationError = true;
+                            RecommendationNotice.record(null, runRecommend);
                             if (Router.currentPage === 'products') renderShop(filter);
-                        }
-                    })
-                    .catch(() => { Router.productRecommendationError = true; })
-                    .finally(() => { Router.productRecommendationLoading = false; });
+                        })
+                        .finally(() => { Router.productRecommendationLoading = false; });
+                };
+                runRecommend();
             }
             // 1) API 載入中只顯示骨架，不再用前端假商品補畫面
             area.innerHTML = header + (isLoadingProducts
@@ -3015,40 +3345,75 @@ const PageInit = {
                 : '');
             bindChips();
             // 2) 淡入商品卡
-            setTimeout(() => {
-                if (Router.currentPage !== 'products' || Router.shopFilter !== filter) return;
-                const content = list.length
-                    ? `<div class="prod-grid">` + list.map((p, i) => `
-                    <div class="prod-card reveal-in" data-pid="${p.id}" style="animation-delay:${Math.min(i*0.035,0.4)}s">
+            const cardHtml = (p, i) => {
+                // 進場動畫只給最前面幾張，其餘直接以最終狀態掛上去。
+                const animated = i < SHOP_ANIMATE_LIMIT;
+                return `
+                    <div class="prod-card${animated ? ' reveal-in' : ''}" data-pid="${escapeHtml(p.id)}"${animated ? ` style="animation-delay:${Math.min(i*0.035,0.4)}s"` : ''}>
                         <div class="pc-imgwrap">
                             ${phBox('', p.name, p.img)}
-                            <button class="heart-btn pc-heart ${Fav.has(p.id)?'fav':''}" data-fav="${p.id}" aria-label="收藏">${HEART_SVG}</button>
+                            <button class="heart-btn pc-heart ${Fav.has(p.id)?'fav':''}" data-fav="${escapeHtml(p.id)}" aria-label="收藏">${HEART_SVG}</button>
                         </div>
                         <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}</div>
                         <div class="pc-name">${escapeHtml(p.name)}</div>
                         ${p.brand ? `<div class="pc-cat">${escapeHtml(p.brand)}</div>` : ''}
                         <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
-                    </div>`).join('') + `</div>`
-                    : `<div class="empty-state compact">${isLoadingProducts ? '商品載入中' : '目前沒有商品資料'}</div>`;
-                area.innerHTML = header + content;
-                bindChips();
-                area.querySelectorAll('.prod-card').forEach(card => {
+                    </div>`;
+            };
+            // 卡片事件逐批綁定：載入更多時只綁新加進來的那批，已經在畫面上的不重綁。
+            const bindCards = (nodes) => {
+                nodes.forEach(card => {
+                    if (!card.classList || !card.classList.contains('prod-card')) return;
                     card.onclick = (e) => {
                         if (e.target.closest('.heart-btn')) return;
                         renderProductDetail(card.dataset.pid || card.dataset.recPid);
                     };
-                });
-                area.querySelectorAll('.pc-heart').forEach(btn => {
-                    btn.onclick = (e) => {
+                    const heart = card.querySelector('.pc-heart');
+                    if (!heart) return;
+                    heart.onclick = (e) => {
                         e.stopPropagation();
-                        const id = btn.dataset.fav;
+                        const id = heart.dataset.fav;
                         const wasFav = Fav.has(id);
                         Fav.toggle(id, list.find(x => String(x.id) === String(id)));
-                        btn.classList.toggle('fav', !wasFav);
-                        btn.classList.remove('swap'); void btn.offsetWidth; btn.classList.add('swap');
+                        heart.classList.toggle('fav', !wasFav);
+                        heart.classList.remove('swap'); void heart.offsetWidth; heart.classList.add('swap');
                         if (!wasFav) showToast('已加入收藏');
                     };
                 });
+            };
+            const moreBarHtml = (shown) => shown >= list.length
+                ? ''
+                : `<div class="shop-more"><button class="btn-outline" id="shopMoreBtn" type="button">載入更多商品（已顯示 ${shown} / ${list.length}）</button></div>`;
+            const bindMore = () => {
+                const btn = document.getElementById('shopMoreBtn');
+                if (!btn) return;
+                btn.onclick = () => {
+                    const grid = document.getElementById('shopGrid');
+                    if (!grid) return;
+                    const from = Router.shopVisible;
+                    const to = Math.min(from + SHOP_PAGE_SIZE, list.length);
+                    Router.shopVisible = to;
+                    // 只把新增的這批接到現有 grid 後面，不重建整個清單：重建會丟掉捲動位置，
+                    // 也會把已經解碼好的圖片全部作廢重來。
+                    const holder = document.createElement('div');
+                    holder.innerHTML = list.slice(from, to).map((p, i) => cardHtml(p, from + i)).join('');
+                    const added = Array.from(holder.children);
+                    added.forEach(node => grid.appendChild(node));
+                    bindCards(added);
+                    const bar = btn.parentElement;
+                    if (to >= list.length) { bar.remove(); return; }
+                    btn.textContent = `載入更多商品（已顯示 ${to} / ${list.length}）`;
+                };
+            };
+            setTimeout(() => {
+                if (Router.currentPage !== 'products' || Router.shopFilter !== filter) return;
+                const content = list.length
+                    ? `<div class="prod-grid" id="shopGrid">` + list.slice(0, visible).map(cardHtml).join('') + `</div>` + moreBarHtml(visible)
+                    : `<div class="empty-state compact">${isLoadingProducts ? '商品載入中' : '目前沒有商品資料'}</div>`;
+                area.innerHTML = header + content;
+                bindChips();
+                bindCards(Array.from(area.querySelectorAll('.prod-card')));
+                bindMore();
             }, 360);
         }
 
@@ -3069,9 +3434,72 @@ const PageInit = {
             // 每筆商品代表一個色號，直接使用清單提供的 hex_primary 與 Lab。
             let related = catalog.filter(x => x.cat === p.cat && String(x.id) !== String(p.id)).slice(0,3);
             if (related.length < 3) related = related.concat(catalog.filter(x => x.cat !== p.cat && String(x.id) !== String(p.id)).slice(0, 3 - related.length));
-            const renderColorBox = (hex) => hex
-                ? `<div class="pd-color"><div class="pd-color-label">色號 <span>Shade</span></div><div class="pd-shades"><span class="shade active" style="background:${escapeHtml(hex)}" aria-label="商品色號"></span><code style="margin-left:8px;font-size:12px;color:var(--mid);">${escapeHtml(hex)}</code></div></div>`
+            // 色號圈圈：優先用商品 hex；沒有 hex 就用 CIELAB 換算(推薦端以色找色一定帶 lab)。
+            // 這樣即使資料庫商品沒填 hex，只要有 lab 就畫得出色號圈圈。
+            //
+            // 色碼文字（2026-08-13）：商品 API 目前兩邊都不回 hex_primary，只有推薦端帶 lab，
+            // 所以「只在有真 hex 時才附上」等於永遠不附。改成沒有原始 hex 時印出由 lab 換算的
+            // 近似值，並用 `≈` 與 title 標明它是換算來的——沒有色碼可看，比看到一個標好
+            // 「近似」的色碼更沒用。資料庫把 hex_primary 補回來後，這裡會自動改用原始值。
+            // 顏色只認**商品端給的原始色碼**（`hex`／`hex_primary`／…，六種寫法在
+            // Api._normalizeProduct 都吃）。2026-08-14 決定：不再用 CIELAB 換算的近似值。
+            //
+            // 為什麼拿掉：換算出來的顏色是我們算的，不是商品的正式色號。使用者看到色塊
+            // 會當成「這就是這支的顏色」，但那是從色度值推回螢幕 RGB 的估計，跟包裝上的
+            // 色號不保證一致——在美妝情境下，一個看起來很篤定卻不保證正確的顏色，
+            // 比沒有顏色更糟。
+            //
+            // 欄位與轉換函式都留著（`Api.labToRgb` / `Api.labToHex` 仍在）：
+            // 等資料庫端把 `hex_primary` 補回來（見《給資料庫端_商品顏色資料遺失回報》），
+            // `p.hex` 一有值，色塊與色碼就會自動出現，這裡不必再改。
+            const swatchColor = p.hex || null;
+            // 色名：資料庫的 shade_name 從頭到尾都是空的（`給資料庫端_商品資料現況與需求_2026-07-20.md`
+            // §2.4 已經問過），但**色名一直都在商品名稱裡**——實測 100/100 筆都是
+            // 「商品名 - 色名」的格式（例：「Za 午後花園柔霧唇膏 - 櫻桃陷阱」）。
+            // 所以名稱尾巴就是目前唯一拿得到色號的地方；等資料庫回填 shade_name 後
+            // 會自動改用正式欄位。分隔符認「空白 + 破折號 + 空白」，不能只認 '-'，
+            // 否則像「Twenty-Fun」這種色名本身含連字號的會被從中間切斷。
+            const shadeFromName = (() => {
+                const parts = String(p.name || '').split(/\s[-－—]\s/);
+                return parts.length > 1 ? parts[parts.length - 1].trim() : '';
+            })();
+            const shadeName = String(p.shadeName || p.shade_name || '').trim() || shadeFromName;
+            // color 與 hexLabel 只會在商品端真的給了色碼時有值；沒有就只顯示色名。
+            const renderColorBox = (color, hexLabel, shade) => (color || shade)
+                ? `<div class="pd-color"><div class="pd-color-label">色號 <span>Shade</span></div><div class="pd-shades">`
+                  + (color ? `<span class="shade active" style="background:${escapeHtml(color)}" aria-label="商品色號"></span>` : '')
+                  + (shade ? `<span style="margin-left:${color ? '10px' : '0'};font-family:var(--cjk);font-size:13.5px;color:var(--ink-2);">${escapeHtml(shade)}</span>` : '')
+                  + (hexLabel ? `<code style="margin-left:8px;font-size:12px;color:var(--mid);">${escapeHtml(hexLabel)}</code>` : '')
+                  + `</div></div>`
                 : '';
+            // 「你的膚色」對照：把使用者自己量到的膚色放在商品旁邊，讓他自己比。
+            //
+            // 為什麼值得做：商品端目前沒有色碼（見《給資料庫端_商品顏色資料遺失回報》），
+            // 系統沒辦法幫使用者算「這支適不適合你」。但**使用者自己的膚色是有的**，
+            // 把它擺在商品照片旁邊，至少讓人用眼睛比——這比什麼都不給有用得多。
+            //
+            // 兩件事一定要誠實標示，否則這個區塊會變成誤導：
+            //   1. 這是**你的膚色**，不是商品顏色，也不是系統的推薦結論
+            //   2. 取樣被判定不可信時（頭髮或陰影蓋住臉頰）要講出來，
+            //      不可信的膚色拿去比色，比不比還糟
+            const renderSkinCompare = () => {
+                const skin = Router.analysisPackage?.faceAnalysis?.skinTone;
+                const lab = skin?.lab;
+                if (!Array.isArray(lab) || lab.length !== 3) return '';
+                const color = Api.labToRgb(Number(lab[0]), Number(lab[1]), Number(lab[2]));
+                const meta = [skin.season, skin.level].filter(Boolean).join(' · ');
+                const unreliable = skin.labReliable === false;
+                return `<div class="pd-color" style="margin-top:10px;">`
+                    + `<div class="pd-color-label">你的膚色 <span>Your Skin</span></div>`
+                    + `<div class="pd-shades">`
+                    + `<span class="shade active" style="background:${escapeHtml(color)}" aria-label="你的膚色"></span>`
+                    + (meta ? `<span style="margin-left:10px;font-family:var(--cjk);font-size:13.5px;color:var(--ink-2);">${escapeHtml(meta)}</span>` : '')
+                    + `</div>`
+                    + (unreliable
+                        ? `<p style="margin:6px 0 0;font-size:12px;color:var(--mid);">這次的膚色取樣被判定不可信（臉頰可能被頭髮或陰影蓋住），僅供參考。</p>`
+                        : '')
+                    + `</div>`;
+            };
             const renderRelatedGrid = (items, heading) => `
                 <div class="pd-related">
                     <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">❧</span><h2>${escapeHtml(heading)}</h2></div><span class="sh-link" onclick="PageInit.products();">查看全部</span></div>
@@ -3099,7 +3527,7 @@ const PageInit = {
                         <div class="pd-name">${escapeHtml(p.name)}</div>
                         ${p.brand ? `<div class="pd-en">${escapeHtml(p.brand)}</div>` : ''}
                         <div class="pd-price-lg">${escapeHtml(p.price)}</div>
-                        <div id="pdColorBox">${renderColorBox(p.hex)}</div>
+                        <div id="pdColorBox">${renderColorBox(swatchColor, p.hex || '', shadeName)}${renderSkinCompare()}</div>
                         <div class="pd-actions">
                             <button class="add-bag" data-bag="${p.id}">加入購物袋</button>
                             <button class="heart-btn pd-heart ${Fav.has(p.id)?'fav':''}" data-fav-detail="${p.id}" aria-label="收藏">${HEART_SVG}</button>
@@ -3144,21 +3572,10 @@ const PageInit = {
     },
 
     favorites() {
-        // 收藏可能來自 ALL_PRODUCTS demo 資料、真實商品 API、或分析後的個人化推薦，三邊都要查，不然收藏了也看不到。
+        // 三個來源的解析與「查不到的件數」跟會員中心共用 resolveFavoriteProducts()，
+        // 否則兩邊各算各的就會再次分岔。
         const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
-        const recommended = getRecommendedProductCatalog();
-        const combined = [...ALL_PRODUCTS, ...apiCatalog, ...recommended];
-        const seenIds = new Set();
-        const catalog = combined.filter(p => {
-            if (seenIds.has(String(p.id))) return false;
-            seenIds.add(String(p.id));
-            return true;
-        });
-        const items = catalog.filter(p => Fav.has(p.id));
-        // 收藏了、但在三個來源都查不到的商品。會員中心數的是 Fav.list()（全部），
-        // 這一頁只畫得出查得到的，兩邊因此對不上——而且差額是靜默消失的：
-        // 使用者收藏過，回來卻不見了，也沒有任何說明。
-        const missingCount = Math.max(0, Fav.list().length - items.length);
+        const { items } = resolveFavoriteProducts();
         const area = document.getElementById('favArea');
         if (!area) return;
         const syncState = Router.favoriteSyncState || 'idle';
@@ -3174,18 +3591,17 @@ const PageInit = {
         if (!apiCatalog.length && !Router.generalProductLoading) {
             loadGeneralProductCatalog(() => { if (Router.currentPage === 'favorites') PageInit.favorites(); });
         }
-        // 目錄還在載的時候先不要說「找不到」——那時候差額只是還沒載完。
-        const missingNote = (missingCount && !Router.generalProductLoading && syncState !== 'loading')
-            ? `<div class="fav-sync-note">另有 ${missingCount} 件收藏的商品目前查不到資料，可能已經下架。`
-              + `它們仍留在你的收藏裡，商品重新上架就會出現。</div>`
-            : '';
+        // 「另有 N 件查不到資料」那行說明**刻意不顯示**（2026-08-13 決定）：對使用者來說，
+        // 一件他從沒察覺自己失去的收藏，講出來只會製造疑慮，而他也無法做任何處理。
+        // 查不到的收藏仍留在 Fav 清單裡（resolveFavoriteProducts 不會刪它們），商品重新
+        // 上架就會自己回來；會員中心的數字也一律只數畫得出來的件數，兩邊因此一致。
         if (!items.length) {
             const emptyText = syncState === 'loading' ? '正在讀取收藏商品' : '目前尚無收藏商品';
-            area.innerHTML = syncNote + missingNote + `<div class="empty-state">${emptyText}</div>`;
+            area.innerHTML = syncNote + `<div class="empty-state">${emptyText}</div>`;
             bindRetry();
             return;
         }
-        area.innerHTML = syncNote + missingNote + `<div class="prod-count">${items.length} 件收藏</div><div class="prod-grid">` + items.map((p, i) => `
+        area.innerHTML = syncNote + `<div class="prod-count">${items.length} 件收藏</div><div class="prod-grid">` + items.map((p, i) => `
             <div class="prod-card reveal-in" data-pid="${p.id}" style="animation-delay:${Math.min(i*0.035,0.4)}s">
                 <div class="pc-imgwrap">
                     ${phBox('', p.name, p.img)}
@@ -3340,7 +3756,7 @@ const PageInit = {
                 <div class="analysis-item"><span class="ai-label">臉型</span><span class="ai-value">${r['臉型']||'—'}</span></div>
                 <div class="analysis-item"><span class="ai-label">眉型</span><span class="ai-value">${r['眉型']||'—'}</span></div>
                 <div class="analysis-item"><span class="ai-label">眼型</span><span class="ai-value">${r['眼型']||'—'}</span></div>
-                <div class="analysis-item"><span class="ai-label">鼻型</span><span class="ai-value">${r['鼻型']||'—'}</span></div>
+                <div class="analysis-item"><span class="ai-label">鼻型</span><span class="ai-value">${noseDisplayText(r)||'—'}</span></div>
                 <div class="analysis-item"><span class="ai-label">嘴型</span><span class="ai-value">${r['嘴型']||'—'}</span></div>
                 <div class="analysis-item"><span class="ai-label">膚色</span><span class="ai-value">${skin['膚色分級']||'—'} / ${skin['四季型']||'—'}</span></div>
             </div>
@@ -3352,7 +3768,6 @@ const PageInit = {
                     ? `<p class="step-stale">你在產生這份建議之後修改過臉部分析。下面這份是用修改前的五官跑出來的，按「重新生成建議」就會換成你的答案。</p>`
                     : ''}
                 ${aiSuggestion ? `<div class="advice-grid">${renderMakeupAdviceGrid(aiSuggestion)}</div>` : ''}
-                ${renderPromptDisclosure(pkg)}
                 <div class="step-actions">
                     <button class="btn-gold" id="genSuggestionBtn">${aiSuggestion ? '重新生成建議' : '生成 Ollama 建議'}</button>
                 </div>
@@ -3378,28 +3793,6 @@ const PageInit = {
         // 收藏鍵只有在建議已經產生時才存在（Step 1 還沒跑就沒有東西可收藏）。
         const saveBtn = document.getElementById('saveSuggestionBtn');
         if (saveBtn) saveBtn.onclick = openSaveLookModal;
-
-        // 英文指令的「複製」：抄到報告裡用。navigator.clipboard 在非 https 或
-        // 使用者拒絕權限時會失敗，所以留一條 textarea + execCommand 的退路——
-        // 這個功能存在的意義就是讓人複製得到，靜靜失敗等於沒做。
-        document.querySelectorAll('[data-copy-prompt]').forEach(btn => {
-            btn.onclick = async () => {
-                const text = btn.closest('.prompt-block')?.querySelector('.prompt-text')?.textContent || '';
-                if (!text) return;
-                try {
-                    await navigator.clipboard.writeText(text);
-                } catch (_) {
-                    const ta = document.createElement('textarea');
-                    ta.value = text;
-                    ta.style.cssText = 'position:fixed;opacity:0';
-                    document.body.appendChild(ta);
-                    ta.select();
-                    try { document.execCommand('copy'); } catch (_) {}
-                    ta.remove();
-                }
-                showToast('已複製英文指令');
-            };
-        });
 
         // Step 1：就地產生 Ollama 建議，不換頁——換走的話使用者就看不到自己在哪一步了。
         const genBtn = document.getElementById('genSuggestionBtn');
@@ -3628,8 +4021,25 @@ const PageInit = {
         const suggestions = (() => {
             try { return JSON.parse(localStorage.getItem(looksKey()) || '[]'); } catch (_) { return []; }
         })();
-        // 收藏數直接讀取 Fav 清單，確保 API 商品也會被計入。
-        if (favEl) { favEl.textContent = Fav.list().length; favEl.classList.add('num-pop'); }
+        // 收藏數要跟收藏頁「實際畫得出來的件數」一致，所以數的是 resolveFavoriteProducts()
+        // 解析後的結果，不是 Fav.list()（本機存了幾個 id）。差額是已下架或 id 被重編號的
+        // 商品，收藏頁把它們另外用一行說明交代，這裡就不該再把它們算進主要數字。
+        const paintFavCount = () => {
+            if (favEl) favEl.textContent = resolveFavoriteProducts().items.length;
+        };
+        if (favEl) { paintFavCount(); favEl.classList.add('num-pop'); }
+        // 商品目錄還沒載進來時，能對上的件數會偏少，載完要重畫一次。
+        const apiCatalogReady = Array.isArray(Router.generalProductCatalog) && Router.generalProductCatalog.length > 0;
+        if (favEl && !apiCatalogReady && !Router.generalProductLoading) {
+            loadGeneralProductCatalog(() => { if (Router.currentPage === 'profile') paintFavCount(); });
+        }
+        // 只讀本機 Fav 清單，換裝置或本次 session 還沒同步時會顯示 0 或過時數字，
+        // 跟收藏頁對不上。主動同步一次遠端收藏，回來後把數字更新成跟收藏頁一致。
+        if (favEl && !isGuest()) {
+            syncRemoteFavorites().then(() => {
+                if (Router.currentPage === 'profile') paintFavCount();
+            });
+        }
         if (anEl) { anEl.textContent = History.list().length; anEl.classList.add('num-pop'); anEl.style.animationDelay='.1s'; }
         if (suggestionEl) { suggestionEl.textContent = suggestions.length; suggestionEl.classList.add('num-pop'); suggestionEl.style.animationDelay='.16s'; }
         if (pointEl) { pointEl.textContent = MemberRewards.getPoints(profile.email); pointEl.classList.add('num-pop'); pointEl.style.animationDelay='.2s'; }
@@ -5240,8 +5650,8 @@ function watchPasswordFields() {
                     detail: { sub: session.sub }
                 }));
             } else if (session.ok && Api._pinSession(session)) {
-                showApp();
-                routeFromHash();
+                // 把重新載入前停留的頁面交給 showApp 還原；它會自己驗證與正規化 hash。
+                showApp(location.hash.replace(/^#/, ''));
             } else if (session.ok) {
                 handleSessionExpired({ message: '無法安全保存這個分頁的登入身分，請重新登入後再繼續。' });
             } else if (session.status === 401) {
@@ -5308,7 +5718,11 @@ function syncRemoteCart() {
     }).catch(() => {});
 }
 
-function showApp() {
+// preferredPage：重新載入時要回到的頁面（由呼叫端從 location.hash 取得）。
+// 舊版一律把 hash 蓋成 #dashboard，於是任何一次重新載入——包含 iOS Safari 在記憶體
+// 不足時自動重載分頁——都會把人丟回主頁，而緊接在呼叫端後面的 routeFromHash() 讀到
+// 的已經是被蓋掉的值，等於沒有作用。登入流程不帶參數，照樣落在 landing。
+function showApp(preferredPage) {
     document.getElementById('auth-layer').innerHTML = '';
     document.getElementById('app').style.display = 'block';
     const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
@@ -5318,10 +5732,20 @@ function showApp() {
     syncRemoteFavorites();
     syncRemoteCart();
     const landing = (typeof AdminStore !== 'undefined' && AdminStore.isAdmin()) ? 'admin' : 'dashboard';
-    updateAdminNav(landing);
-    const homeUrl = `${location.pathname}${location.search}#${landing}`;
-    if (location.hash !== `#${landing}`) history.replaceState(null, '', homeUrl);
-    Router.go(landing);
+    // 管理員一律進後台（Router.go 內另有一道相同的守衛）；其餘情況才還原原本那一頁。
+    const wanted = String(preferredPage || '').replace(/^#/, '');
+    const target = (landing === 'admin' || !ROUTE_PAGES.has(wanted)) ? landing : wanted;
+    updateAdminNav(target);
+    const targetUrl = `${location.pathname}${location.search}#${target}`;
+    if (location.hash !== `#${target}`) history.replaceState(null, '', targetUrl);
+    // Router.go 有自己的守衛（訪客的收藏／分析紀錄、權限不足）會直接 return 不換頁。
+    // 還原 hash 時撞上守衛就會停在空白畫面，所以沒有渲染成任何一頁就退回 landing。
+    Promise.resolve(Router.go(target)).then(() => {
+        if (Router.currentPage) return;
+        const homeUrl = `${location.pathname}${location.search}#${landing}`;
+        if (location.hash !== `#${landing}`) history.replaceState(null, '', homeUrl);
+        Router.go(landing);
+    });
 }
 
 // 帳號切換時採用已通過 Gateway 驗證的 session，並先清除上一個帳號的本機資料。

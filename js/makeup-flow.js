@@ -123,6 +123,9 @@
             });
 
             const recommended = await Api.recommendProducts(Router.analysisPackage, Router.selectedStyleId).catch(() => null);
+            // 降級原因與錯誤碼要記下來，商品頁與推薦彈窗才顯示得出提示。
+            // 先前這裡只取 products，其餘整包丟掉。
+            if (typeof RecommendationNotice !== 'undefined') RecommendationNotice.record(recommended);
             if (recommended?.products?.length) {
                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
                     recommendations: {

@@ -40,6 +40,8 @@ const USER_ERROR_ZH = Object.freeze({
     WRONG_PASSWORD: '密碼錯誤，請重新輸入。',
     USER_NOT_FOUND: '找不到這個會員帳號。',
     EMAIL_EXISTS: '這個信箱已經註冊過了。',
+    GUEST_TRIAL_EXHAUSTED: '免費體驗次數已用完，註冊會員後可以繼續使用，也才能保存分析結果與妝容圖。',
+    GUEST_TICKET_RATE_LIMITED: '免費體驗次數已用完，註冊會員後可以繼續使用。',
     MEMBER_AUTH_REQUIRED: '請先登入會員後再繼續。',
     MEMBER_SESSION_REQUIRED: '請先登入會員後再繼續。',
     MEMBER_AUTH_INVALID: '登入狀態已失效，請重新登入後再繼續。',
@@ -244,6 +246,73 @@ const Api = {
     _expectedSubjectKey: 'gatewayExpectedSubject',
     // 管理員角色只能採信後端驗證過的 session，不能使用可修改的本機資料。
     _verifiedRoleKey: 'gatewayVerifiedRole',
+    // 訪客票券。用 localStorage 而不是 sessionStorage——關掉分頁就重新拿一張的話，
+    // 三次額度等於沒有上限。
+    _guestTicketKey: 'gatewayGuestTicket',
+    _guestQuotaKey: 'gatewayGuestQuota',
+
+    // ── 訪客試用 ────────────────────────────────────────────────────────────
+    // 未登入的人可以跑完整的「臉部分析 → 妝容渲染」，次數由 Gateway 記帳。
+    // 訪客只能體驗，不能存圖：收藏走 member-database，那條路對訪客一律 401。
+
+    guestTicket() {
+        try { return String(localStorage.getItem(this._guestTicketKey) || '').trim(); }
+        catch (_) { return ''; }
+    },
+
+    guestQuota() {
+        try { return JSON.parse(localStorage.getItem(this._guestQuotaKey) || 'null') || null; }
+        catch (_) { return null; }
+    },
+
+    _rememberGuestQuota(remaining, max) {
+        const parsedRemaining = Number(remaining);
+        const parsedMax = Number(max);
+        if (!Number.isFinite(parsedRemaining) || !Number.isFinite(parsedMax)) return;
+        try {
+            localStorage.setItem(this._guestQuotaKey,
+                JSON.stringify({ remaining: parsedRemaining, max: parsedMax }));
+        } catch (_) { /* 隱私模式寫不進去；只影響顯示，不影響流程 */ }
+    },
+
+    // 取一張票券，已經有就沿用。額度是按票券算的，所以不能每次都換新的。
+    async ensureGuestTicket() {
+        const existing = this.guestTicket();
+        if (existing) return existing;
+        if (this._guestTrialUnavailable) return '';
+        const base = this.config.services.aiGateway.baseUrl || '';
+        try {
+            const res = await fetch(`${base}/guest/session`, {
+                method: 'POST',
+                headers: { 'Accept': 'application/json' },
+            });
+            if (!res.ok) {
+                // 功能沒開就別再問第二次，否則每次分析都多打一個 404。
+                if (res.status === 404) this._guestTrialUnavailable = true;
+                return '';
+            }
+            const data = await res.json().catch(() => null);
+            const ticket = String(data?.ticket || '').trim();
+            if (!ticket) return '';
+            try { localStorage.setItem(this._guestTicketKey, ticket); } catch (_) { return ''; }
+            this._rememberGuestQuota(data?.remaining, data?.maxRuns);
+            return ticket;
+        } catch (_) {
+            return '';
+        }
+    },
+
+    // 訪客可以走的路徑。與 Gateway 的 GUEST_ALLOWED_SERVICES 對應——這裡放行了但
+    // 後端沒放行只會多一次 401，反過來則會讓使用者看到不必要的「請重新登入」。
+    _guestTrialPath(input) {
+        try {
+            const url = new URL(String(input), window.location.origin);
+            if (url.origin !== window.location.origin) return false;
+            return ['/face-basic/', '/render-service/'].some(prefix => url.pathname.startsWith(prefix));
+        } catch (_) {
+            return false;
+        }
+    },
 
     _pinnedActor() {
         try { return String(sessionStorage.getItem(this._expectedActorKey) || '').trim(); }
@@ -383,14 +452,24 @@ const Api = {
         const method = String(init.method || 'GET').toUpperCase();
         const isWrite = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
         const isProtected = this._isProtectedGatewayUrl(input);
+        const actorId = isProtected ? this._pinnedActor() : '';
+        const isGuestRequest = isProtected && !actorId && this._guestTrialPath(input);
         const nextInit = {
             ...init,
             credentials: isProtected ? 'include' : init.credentials,
             headers: this._copyHeaders(init.headers),
-            signal: isProtected ? this._sessionSignal(init.signal) : init.signal
+            // 訪客的請求不掛會員 session 的 abort controller。那個 controller 是給
+            // 「會員 session 失效時，把還在飛的請求全部收掉」用的，而訪客根本沒有會員
+            // session——掛上去的後果是：頁面上任何一個會員 API 的 401 都會把訪客
+            // 正在跑的臉部分析一起砍掉，畫面顯示「signal is aborted without reason」。
+            signal: (isProtected && !isGuestRequest) ? this._sessionSignal(init.signal) : init.signal
         };
-        if (isWrite && isProtected) {
-            const actorId = this._pinnedActor();
+        if (isGuestRequest) {
+            // 訪客試用：沒有登入身分，但有票券就能跑分析與渲染。讀取也要帶——
+            // 輪詢工作狀態、取結果都是 GET，後端一樣要認得這是同一個訪客。
+            const ticket = this.guestTicket() || await this.ensureGuestTicket();
+            if (ticket) nextInit.headers['X-Guest-Ticket'] = ticket;
+        } else if (isWrite && isProtected) {
             if (!actorId) {
                 // 分頁缺少綁定身分時只擋下寫入，不直接清除資料或登出。
                 const error = new Error(WRITE_BLOCKED_ZH.NO_SESSION_PIN);
@@ -403,7 +482,17 @@ const Api = {
             if (csrfToken) nextInit.headers['X-CSRF-Token'] = csrfToken;
         }
         const res = await fetch(input, nextInit);
-        if (isProtected && res.status === 401 && this._speaksForMemberSession(input)) {
+        if (nextInit.headers['X-Guest-Ticket']) {
+            this._rememberGuestQuota(
+                res.headers.get('X-Guest-Trial-Remaining'),
+                res.headers.get('X-Guest-Trial-Max'),
+            );
+        }
+        // 從未登入的分頁收到會員 API 的 401 是**預期結果**，不是「登入失效」。
+        // 少了 actorId 這個條件，訪客一進站就會因為背景載入會員資料拿到 401 而觸發
+        // 登出流程：abort controller 被 abort、頁面上所有受保護請求連同訪客的臉部分析
+        // 一起被砍，而且沒有任何地方會重設那個 controller——之後每一次請求都直接失敗。
+        if (isProtected && actorId && res.status === 401 && this._speaksForMemberSession(input)) {
             // 只用會員驗證專用錯誤碼判定登出，避免把上游 401 誤認成 session 失效。
             const sessionCodes = [
                 'MEMBER_AUTH_REQUIRED', 'MEMBER_SESSION_REQUIRED', 'MEMBER_AUTH_INVALID',
@@ -454,10 +543,17 @@ const Api = {
 
     async _warmService(baseUrl) {
         if (!baseUrl) return;
+        const headers = this._gatewayHeaders();
+        // 訪客的暖機也要帶票券，否則 Gateway 回 401、冷啟動沒被喚醒，
+        // 第一次渲染要多等三十秒以上。這裡不主動領票券——暖機不該是領票的時機。
+        if (!this._pinnedActor()) {
+            const ticket = this.guestTicket();
+            if (ticket) headers['X-Guest-Ticket'] = ticket;
+        }
         try {
             await fetch(`${baseUrl}/health`, {
                 method: 'GET',
-                headers: this._gatewayHeaders(),
+                headers,
                 cache: 'no-store',
             });
         } catch (_) {
@@ -488,8 +584,18 @@ const Api = {
         const data = await res.json().catch(() => null);
         const error = data?.detail?.error || data?.error || null;
         const code = error?.code || '';
+        // 訪客把免費次數用完了。這不是錯誤狀態，訊息要引導註冊而不是叫他重新登入。
+        if (code === 'GUEST_TRIAL_EXHAUSTED' || code === 'GUEST_TICKET_RATE_LIMITED') {
+            const exhausted = new Error(error?.message || USER_ERROR_ZH[code]);
+            exhausted.code = code;
+            return exhausted;
+        }
         // session 過期是最常見且可自行解決的情況，直接給出可行動的指示
         if (res.status === 401 || code === 'MEMBER_AUTH_REQUIRED' || code === 'MEMBER_AUTH_INVALID') {
+            // 訪客沒有登入狀態可以「重新登入」，對他們要說的是先登入。
+            if (!this._pinnedActor() && this.guestTicket()) {
+                return new Error('免費體驗已結束，請登入或註冊會員後再繼續使用。');
+            }
             return new Error('登入狀態已失效，請重新登入後再試一次。');
         }
         const message = error?.message
@@ -539,7 +645,7 @@ const Api = {
     // allowTrainingUse 為 true 時才會帶 imageDataUrl。預設不帶——「沒同意就不上傳照片」
     // 是靠這裡結構性保證的，不是靠後端自律：沒勾選，照片根本不會離開瀏覽器。
     async sendAnalysisFeedback({ mode, jobId, resultToken, packageId, predicted, corrections,
-                                 allowTrainingUse = false, imageDataUrl = '' }) {
+                                 allowTrainingUse = false, imageDataUrl = '', sideImageDataUrl = '' }) {
         if (!jobId) return { ok: false, reason: 'no-job' };
         const service = mode === 'pro' ? 'facePro' : 'faceBasic';
         const fixes = corrections || {};
@@ -557,6 +663,13 @@ const Api = {
                     // 保存的樣本，送了也只是白白多傳一次臉部資料。
                     ...(allowTrainingUse && imageDataUrl && Object.keys(fixes).length
                         ? { allowTrainingUse: true, imageDataUrl }
+                        : {}),
+                    // 側臉鼻型那顆模型吃的是**整張側臉圖**（線上推論也是），所以正面照
+                    // 對它沒有訓練價值。只有在「同意」＋「真的改了側臉鼻型」＋「手上有
+                    // 側面照」三者同時成立時才送——同意文案也必須分開講明這一張是整張
+                    // 側臉照，不是局部裁切，兩者可辨識性差很多。
+                    ...(allowTrainingUse && sideImageDataUrl && fixes['側臉鼻型']
+                        ? { allowTrainingUse: true, sideImageDataUrl }
                         : {})
                 })
             });
@@ -626,8 +739,23 @@ const Api = {
             if (code === 'EXTERNAL_TEXT_UPSTREAM_DISABLED') {
                 throw new Error('妝容建議服務目前停用中（尚未接上受信任的文字服務），其他功能不受影響。');
             }
-            // 上游 401 不代表會員登出，只顯示服務拒絕請求的通用說明。
+            // 401 有兩種完全不同的來源，先前一律當成「上游授權問題」——
+            // 於是 session 過期時畫面會寫「與你的登入狀態無關」，那句話正好是反的，
+            // 使用者照著它去找服務問題，永遠不會想到只要重新登入。
+            //
+            //   MEMBER_AUTH_*／MEMBER_SESSION_*  → Gateway 擋的，會員 session 沒了或過期
+            //   其他 401                          → 上游（Ollama）拒絕，通常是金鑰設定
             if (res.status === 401) {
+                const sessionCodes = [
+                    'MEMBER_AUTH_REQUIRED', 'MEMBER_AUTH_INVALID',
+                    'MEMBER_SESSION_REQUIRED', 'MEMBER_SESSION_INVALID', 'MEMBER_SESSION_MISSING'
+                ];
+                if (sessionCodes.includes(code)) {
+                    // 不要在訊息裡寫死有效期。它是伺服器端的環境變數
+                    // （GATEWAY_SESSION_TTL_SECONDS），2026-08-14 就從 2 小時改成 8 小時——
+                    // 訊息裡的數字當天就過期了。寫死的數字沒有人會記得回來改。
+                    throw new Error('登入狀態已失效，請重新登入後再產生建議。');
+                }
                 throw new Error('文字建議服務拒絕了這次請求（HTTP 401）。這是服務端的授權設定問題，與你的登入狀態無關，其他功能可以照常使用。');
             }
             const msg = err.detail?.error?.message
@@ -710,12 +838,26 @@ const Api = {
             throw new Error('無法連線到渲染服務：' + err.message);
         }
 
-        const submitted = await submitRes.json().catch(() => ({}));
+        let submitted = await submitRes.json().catch(() => ({}));
         if (!submitRes.ok) {
             if (submitRes.status === 401) {
                 throw new Error('登入狀態已失效，請重新登入後再試一次。');
             }
-            throw new Error(submitted?.error?.message || submitted?.error || `Render API HTTP ${submitRes.status}`);
+            // 409 DUPLICATE_IN_PROGRESS：多半是上面那次「冷啟動重試」撞到自己——
+            // 第一次 fetch 逾時，但伺服器其實已經把 job 建起來了，重送就撞上後端的
+            // 去重保護。這不是失敗，使用者的渲染正在跑，所以接上那個 job 的進度即可。
+            // 後端會在 error.details 帶回 jobId 與 resultToken（同一位使用者才撞得到，
+            // dedup key 本身含 ownerId），補進 submitted 後，底下的輪詢邏輯原封不動就能用。
+            const dup = submitRes.status === 409
+                && submitted?.error?.code === 'DUPLICATE_IN_PROGRESS'
+                && submitted?.error?.details?.jobId
+                ? submitted.error.details
+                : null;
+            if (dup) {
+                submitted = { jobId: dup.jobId, resultToken: dup.resultToken, status: 'running', progress: 1 };
+            } else {
+                throw new Error(submitted?.error?.message || submitted?.error || `Render API HTTP ${submitRes.status}`);
+            }
         }
 
         const jobId = submitted.jobId;
@@ -786,6 +928,29 @@ const Api = {
         const B = lab.B ?? lab.b;
         if (L == null && A == null && B == null) return null;
         return { L, A, B };
+    },
+
+    // 眉彩的推薦理由不可以宣稱「與您的膚色匹配」。
+    //
+    // 契約 §1：眉彩僅使用 browLab／hairLab 比色，絕不以膚色推薦眉彩色號。
+    // 2026-08-23 實測：膚色從 L*85 換到 L*38，眉彩 colorScore 都是 0.8520 完全不變——
+    // 證明後端**確實是用眉色比的、行為正確**，只是文案寫成「色調與您的膚色幾乎完美匹配」。
+    // 做對了事、說錯了話。這句話原樣顯示出去，就是系統對使用者說了一句不實的話。
+    //
+    // 後端修好之前，前端在這裡把它導正。已回報：
+    // 補充文件md檔案/給演算法端_個人化推薦實作差異與改善需求_2026-08-23.md A3
+    _safeMatchReason(product) {
+        const raw = String(product?.matchReason || '').trim();
+        if (!raw) return '';
+        const kind = String(product.type || product.coverageCategory || product.category || '');
+        const isBrow = /brow/i.test(kind) || kind === '眉毛';
+        // colorMethod === 'brow_color_unavailable' 時後端的降級文案本身是正確的
+        // （「未以膚色比較眉彩色號」），那句話裡的「膚色」不能動，動了會變成反話。
+        const method = product.colorMethod || product.color_method || '';
+        if (isBrow && method !== 'brow_color_unavailable' && raw.includes('您的膚色')) {
+            return raw.replace(/您的膚色/g, '您的眉色');
+        }
+        return raw;
     },
 
     _normalizeProduct(product) {
@@ -862,8 +1027,8 @@ const Api = {
             brand: product.brand || '',
             price,
             img: product.imageUrl || product.image_url || product.image_src || product.img || product.image || '',
-            desc: product.matchReason || product.description || product.desc || '',
-            matchReason: product.matchReason || '',
+            desc: this._safeMatchReason(product) || product.description || product.desc || '',
+            matchReason: this._safeMatchReason(product),
             score: product.score ?? null,
             popularity: product.popularity ?? product.sales ?? product.views ?? product.reviews ?? product.favorite_count ?? product.score ?? 0,
             // 推薦端點的 productUrl 實際上是 sale_page_id slug（不是 http 網址），留下來讓前端能跟商品清單比對補圖
@@ -872,10 +1037,19 @@ const Api = {
             // sourceUrl 只接受 http(s) 網址，商品識別字串不能當成連結。
             sourceUrl: [product.sourceUrl, product.source_url, product.productUrl]
                 .find(v => typeof v === 'string' && /^https?:\/\//i.test(v)) || '',
-            // 商品主色欄位可能是 hex_primary 或舊版 hex。
+            // 商品主色欄位可能是 hex_primary 或舊版 hex，欄位名也可能是駝峰式。
+            // 容忍沒有 '#' 前綴的裸 hex（如 "d4a373"）——資料庫實際回傳常是這種，
+            // 少了這層寬鬆，詳情頁的色號色塊永遠拿到 null 而不顯示。
             hex: (() => {
-                const raw = product.hex || product.hex_primary || '';
-                return /^#[0-9a-fA-F]{3,8}$/.test(raw) ? raw : null;
+                const raw = String(
+                    product.hex ?? product.hex_primary ?? product.hexPrimary
+                    ?? product.primary_hex ?? product.color_hex ?? product.colorHex ?? ''
+                ).trim();
+                if (!raw) return null;
+                const withHash = raw.startsWith('#') ? raw : `#${raw}`;
+                return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(withHash)
+                    ? withHash.toLowerCase()
+                    : null;
             })(),
             // CIE L*a*b*，以色找色要用的就是它：ΔE 在這個空間才有感知意義。
             // color_vector / qdrant_vector_12d 是給向量資料庫檢索用的，前 3 維其實就是
@@ -907,6 +1081,21 @@ const Api = {
             coverage: product.coverage || null,
             undertone: product.undertone || null,
             texture: product.texture || null,
+
+            // ── 推薦依據 ────────────────────────────────────────────────
+            // 2026-08-23 補。這些欄位後端一直都有回，但先前在這裡就被丟掉了，
+            // 於是畫面上只剩一行 matchReason，使用者看不到「為什麼推薦給我」。
+            // 契約與設計文件 §19.10 要求的「查看推薦依據」需要的就是這些。
+            matchScore: Number.isFinite(Number(product.matchScore ?? product.score))
+                ? Number(product.matchScore ?? product.score) : null,
+            scoreBreakdown: (product.scoreBreakdown && typeof product.scoreBreakdown === 'object')
+                ? product.scoreBreakdown : null,
+            matchedKeywords: Array.isArray(product.matchedKeywords) ? product.matchedKeywords
+                : (Array.isArray(product.keywordMatches) ? product.keywordMatches : []),
+            // 哪一種色差算法算出來的。眉彩在缺色資料時會是 brow_color_unavailable，
+            // 那是判斷「這件商品的色彩分數能不能拿來說嘴」的依據。
+            colorMethod: product.colorMethod || product.color_method || null,
+
             source: 'product-api'
         };
     },
@@ -951,9 +1140,12 @@ const Api = {
         return scored.slice(0, Math.max(0, limit));
     },
 
-    // 個人化推薦：依賴組員資料庫的登入 session，登入狀態不確定時優雅地回傳空陣列，不影響其他功能
+    // 個人化推薦：依賴組員資料庫的登入 session，登入狀態不確定時優雅地回傳空陣列，不影響其他功能。
+    // 這條路由(api/recommend/personal)在 Gateway 是掛在 member-database 上游、需要會員 session；
+    // 先前誤用 product.baseUrl 會打到 /product-api/，那邊只放行 api/products 與 recommend-products，
+    // 於是永遠回 404、「猜你喜歡」整塊空白。改回 member-database 才打得到。
     async getPersonalRecommendations() {
-        const baseUrl = this.config.services.product.baseUrl;
+        const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl) return [];
         try {
             const res = await this._fetchWithRelogin(`${baseUrl}/api/recommend/personal`, { credentials: 'include', cache: 'no-store' });
@@ -1331,8 +1523,12 @@ const Api = {
         }
     },
 
-    // 把整台購物車覆蓋寫回伺服器（POST，last-write-wins）。走 _protectedWrite 沿用
+    // 把整台購物車覆蓋寫回伺服器（PUT，last-write-wins）。走 _protectedWrite 沿用
     // 換帳號防線：分頁身分對不上就擋下，不會把 A 的車寫到 B 帳號。背景同步，呼叫端不看回傳。
+    //
+    // 動詞是 PUT 不是 POST：資料庫端這條路由只接受 PUT，送 POST 會回 405
+    // METHOD_NOT_ALLOWED（2026-08-13 實測：PUT 回 401 需登入＝路由存在，POST 回 405）。
+    // 整台車覆蓋本來就是冪等的，PUT 也是比較正確的語意。
     async saveRemoteCart(items) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         const email = this._writeActorEmail();
@@ -1347,7 +1543,7 @@ const Api = {
         const result = await this._protectedWrite(email, async () => {
             try {
                 const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/cart`, {
-                    method: 'POST',
+                    method: 'PUT',
                     credentials: 'include',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ items: payload })
@@ -1751,6 +1947,24 @@ const Api = {
         });
     },
 
+    // 使用者對五官判斷做的修正，給管理端第二次人工檢查用。
+    // 只有管理員讀得到（Gateway 端驗 admin claims + CSRF + actor 綁定）。
+    // 讀不到時 Gateway 回 503 而不是空陣列——空陣列會被誤讀成「沒有人修正過」。
+    async fetchFaceFeedback(limit = 50) {
+        const baseUrl = gatewayService('admin-api');
+        if (!baseUrl) return { ok: false, error: 'admin-api 未設定' };
+        try {
+            const res = await this._protectedFetch(
+                `${baseUrl}/face-feedback?limit=${encodeURIComponent(limit)}`,
+                { credentials: 'include', cache: 'no-store', headers: this._adminProductHeaders() });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
+            return { ok: true, items: Array.isArray(data.items) ? data.items : [] };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
     async patchRemoteProduct(rawId, payload, version) {
         const baseUrl = gatewayService('admin-api');
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };
@@ -1849,9 +2063,95 @@ const Api = {
         return [obj.L ?? 0, obj.A ?? 0, obj.B ?? 0];
     },
 
+    // 嚴格版：缺任何一軸就回 null，不用 0 補。
+    //
+    // _labToArray 的 `?? 0` 是給「顯示用」的容錯，但拿去比色號時它很危險：
+    // 缺了 L 會變成 L=0（純黑），那不是「沒資料」，是一個看起來完全合法、
+    // 卻指向錯誤顏色的座標。推薦端收到後會照算 ΔE00，算出來的色差是假的。
+    _labToArrayStrict(lab) {
+        const obj = this._labToUpperKeys(lab);
+        if (!obj) return null;
+        const arr = [obj.L, obj.A, obj.B];
+        return arr.every(v => typeof v === 'number' && Number.isFinite(v)) ? arr : null;
+    },
+
+    // 這組 LAB 能不能拿去做 CIEDE2000 比色。
+    //
+    // 為什麼前端要自己驗一次：推薦端只在前端**主動宣告** labReliable:false 時才降級。
+    // 當 lab 本身是壞資料（型別錯、缺一軸、超出色彩空間），它照樣回
+    // skinToneLabReliable:true 與空的 fallbackReasons —— 於是畫面會顯示
+    // 「已依膚色精準比對」，但那個色差在數學上根本算不出來。
+    // （2026-08-23 實測，見 補充文件md檔案/商品推薦API_正反向測試報告_2026-08-23.md 的 P1）
+    //
+    // 推薦端對 labReliable:false 的降級路徑是**正確的**（實測會回
+    // SKIN_TONE_LAB_UNRELIABLE 並改用季型排序），所以這裡把壞資料一律當成不可信，
+    // 就能用它自己已經做對的機制，補上它驗證層的缺口。
+    _isUsableLab(arr) {
+        if (!Array.isArray(arr) || arr.length !== 3) return false;
+        const [L, a, b] = arr;
+        if (![L, a, b].every(v => typeof v === 'number' && Number.isFinite(v))) return false;
+        // CIE L*a*b* 的有效範圍：L* 是 0–100 的亮度；a*/b* 在 8-bit 影像轉換後
+        // 實務上落在 ±128 內。超出的值不可能來自一張真實照片。
+        return L >= 0 && L <= 100 && Math.abs(a) <= 128 && Math.abs(b) <= 128;
+    },
+
     // 2026-07-15 起商品推薦端改吃規格書格式：整包 analysisPackage（faceAnalysis 巢狀、lab 用陣列），
     // 回應也改在 analysisPackage.recommendations.products 底下。詳見「演算法端接口規格書_analysis_package商品推薦_2026-07-13.md」。
-    async recommendProducts(analysisPackage, styleId) {
+    // 推薦端公告的合法 style ID（《商品推薦 API 串接與校對清單》§2）。
+    // 先在前端擋一次是為了省掉一次註定 422 的往返；後端仍會自己驗（實測七個全部可用）。
+    RECOMMEND_STYLE_IDS: Object.freeze([
+        'softBaddie', 'richGirl', 'hongKong', 'koreanClean',
+        'yandere', 'japaneseClear', 'mensPlain'
+    ]),
+
+    // 把使用者的偏好整理成契約允許的形狀。
+    //
+    // 這些上限是文件寫的，但推薦端**沒有驗**（2026-08-23 實測：品牌送 50 筆、
+    // mode 送 123 都照樣回 200）。既然後端不擋，前端就得自己守——不是為了保護後端，
+    // 是為了讓「送出去的東西」與「文件說好的東西」一致，哪天後端補上驗證時
+    // 前端不會突然開始收 400。
+    _sanitizeRecommendationOptions(raw) {
+        if (!raw || typeof raw !== 'object') return null;
+        const out = {};
+
+        const brands = (key) => {
+            const list = raw[key];
+            if (!Array.isArray(list)) return;
+            const cleaned = list
+                .map(v => String(v ?? '').trim())
+                .filter(Boolean)
+                .slice(0, 20);   // §2「品牌陣列各最多 20 筆」
+            if (cleaned.length) out[key] = cleaned;
+        };
+        brands('preferredBrands');
+        brands('avoidedBrands');
+
+        const pref = raw.pricePreference;
+        if (pref && typeof pref === 'object') {
+            const price = {};
+            const min = Number(pref.min);
+            const max = Number(pref.max);
+            const hasMin = Number.isFinite(min) && min >= 0;
+            const hasMax = Number.isFinite(max) && max >= 0;
+            // 區間反轉是不可能滿足的條件，後端會靜默忽略。與其送出去讓使用者
+            // 看到「已套用預算」卻拿到超出預算的商品，不如在這裡就把它擺正。
+            if (hasMin && hasMax && min > max) {
+                price.min = max; price.max = min;
+            } else {
+                if (hasMin) price.min = min;
+                if (hasMax) price.max = max;
+            }
+            const mode = String(pref.mode ?? '').trim();
+            if (['value', 'low', 'high'].includes(mode)) price.mode = mode;  // §2 白名單
+            if (Object.keys(price).length) out.pricePreference = price;
+        }
+
+        return Object.keys(out).length ? out : null;
+    },
+
+    // options：{ limit?: number, recommendationOptions?: {...} }
+    // 第三個參數是 2026-08-23 新增的，舊呼叫（兩個參數）行為完全不變。
+    async recommendProducts(analysisPackage, styleId, options = null) {
         const url = this.config.url('product', 'recommendPath');
         if (!url) return { ok: false, products: [] };
         try {
@@ -1862,12 +2162,46 @@ const Api = {
             // 統一走受保護 fetch wrapper。recommend-products 在 Gateway 屬公開商品路徑，
             // wrapper 不會加 actor header，但會把這條請求綁進分頁的 session 批次，
             // 換帳號或登出時一併取消，不留背景請求打到舊身分。
+            // 送出前先自己驗一次膚色 LAB。壞資料（型別錯、缺一軸、超出色彩空間）
+            // 一律當成不可信——理由見 _isUsableLab 的說明。
+            const skinLab      = this._labToArrayStrict(fa?.skinTone?.lab);
+            const skinLabOk    = this._isUsableLab(skinLab);
+            const lipLab       = this._labToArrayStrict(fa?.lipLab);
+            // 眉彩色號只能用眉色或髮色比對，絕不能用膚色（契約 §1）。
+            // ⚠️ 目前臉部分析端還沒有產出眉色：Face_analyzer_BASIC 只回「膚色」與
+            // 「嘴唇_LAB」，沒有眉毛或頭髮的 LAB，所以這裡取到的一定是 null，
+            // 推薦端必然回 BROW_COLOR_UNAVAILABLE。先接上是為了讓上游一補就生效，
+            // 不必再改前端一次。
+            const browLab      = this._labToArrayStrict(fa?.browLab ?? fa?.hairLab);
+
+            const gen = analysisPackage?.generativeText || {};
+            const generativeText = {};
+            if (suggestion) generativeText.suggestion = suggestion;
+            // 這三個欄位會實際影響推薦端的排序（styleTags 命中與否決定
+            // STYLE_KEYWORD_NO_MATCH），先前完全沒送出去。
+            const strList = (v) => Array.isArray(v)
+                ? v.map(x => String(x ?? '').trim()).filter(Boolean) : [];
+            if (strList(gen.styleTags).length)       generativeText.styleTags = strList(gen.styleTags);
+            if (strList(gen.preferredColors).length) generativeText.preferredColors = strList(gen.preferredColors);
+            if (strList(gen.avoidTags).length)       generativeText.avoidTags = strList(gen.avoidTags);
+
+            // §2「limit 必須是 1–50 的整數」。不給就沿用原本的 12。
+            const rawLimit = options?.limit;
+            const limit = Number.isFinite(rawLimit)
+                ? Math.min(50, Math.max(1, Math.trunc(rawLimit)))
+                : 12;
+
+            const recOptions = this._sanitizeRecommendationOptions(options?.recommendationOptions);
+
             const res = await this._fetchWithRelogin(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     analysisPackage: {
                         id:    analysisPackage?.id || null,
+                        // 版本協商用。推薦端目前不強制，但少了它，哪天契約再改版
+                        // 雙方就沒有任何依據判斷對方是哪一版。
+                        schemaVersion: analysisPackage?.schemaVersion || '2026-08-v2',
                         style: styleId || null,
                         faceAnalysis: {
                             faceShape: fa?.faceShape || null,
@@ -1877,36 +2211,78 @@ const Api = {
                             skinTone: {
                                 season: fa?.skinTone?.season || null,
                                 level:  fa?.skinTone?.level  || null,
-                                lab:    this._labToArray(fa?.skinTone?.lab),
+                                // 不可用的 LAB 直接送 null，而不是送一組算不出色差的座標。
+                                lab:    skinLabOk ? skinLab : null,
                                 // 這支請求是白名單重組，不是把 faceAnalysis 整個送出去。
                                 // 先前只在 fromRawFaceAnalysis 補了 labReliable，卻沒補這裡——
                                 // 旗標在**下一層**被丟掉，送出去的 body 跟修之前一模一樣，
                                 // 推薦端從來沒收到過。缺欄位視為可信，維持既有行為。
-                                labReliable: fa?.skinTone?.labReliable !== false,
+                                //
+                                // 2026-08-23 追加：LAB 本身不可用時也一律送 false。
+                                // 推薦端只認這個旗標，不會自己檢查 lab 是壞的。
+                                labReliable: skinLabOk && fa?.skinTone?.labReliable !== false,
                             },
-                            lipLab: this._labToArray(fa?.lipLab),
+                            lipLab: lipLab,
+                            ...(browLab ? { browLab } : {}),
                         },
-                        ...(suggestion ? { generativeText: { suggestion } } : {}),
+                        ...(Object.keys(generativeText).length ? { generativeText } : {}),
                     },
-                    limit: 12,
+                    limit,
+                    ...(recOptions ? { recommendationOptions: recOptions } : {}),
                 })
             });
-            if (!res.ok) return { ok: false, status: res.status, products: [] };
+            if (!res.ok) {
+                // 錯誤碼與 requestId 先前整包被丟掉，於是 §5 的分流處置
+                // （400 檢查參數／422 請使用者重做分析／502、504 可重試）
+                // 在前端完全無法實作，而且回報後端問題時拿不出 requestId。
+                let payload = null;
+                try { payload = await res.json(); } catch (_) {}
+                const err = payload?.error || null;
+                return {
+                    ok: false,
+                    status: res.status,
+                    code: err?.code || '',
+                    message: err?.message || '',
+                    requestId: err?.requestId || '',
+                    // 502／504 是上游暫時不可用，畫面應該給重試按鈕而不是叫使用者重做分析。
+                    retryable: err?.retryable === true || res.status === 502 || res.status === 504,
+                    products: []
+                };
+            }
             const data = await res.json();
+            const rec = data.analysisPackage?.recommendations || data.recommendations || {};
             const list = data.analysisPackage?.recommendations?.products
                 || data.recommendations?.products
                 || data.recommendations
                 || data.products
                 || [];  // 新格式在 analysisPackage.recommendations.products；相容舊格式
+
+            // 回應說「膚色可信」不代表真的可信：我們自己送出去的就是不可用的 LAB 時，
+            // 推薦端仍會回 skinToneLabReliable:true。畫面若照著它顯示「已依膚色精準比對」
+            // 就是對使用者說了一句假話（契約 §4 明令不得如此）。
+            // 兩邊取交集，並補一筆降級原因讓 UI 走同一條顯示邏輯。
+            const fallbackReasons = Array.isArray(rec.fallbackReasons) ? [...rec.fallbackReasons] : [];
+            const skinToneLabReliable = skinLabOk && rec.skinToneLabReliable !== false;
+            if (!skinLabOk && !fallbackReasons.some(r => r?.code === 'SKIN_TONE_LAB_UNRELIABLE')) {
+                fallbackReasons.push({
+                    code: 'SKIN_TONE_LAB_UNRELIABLE',
+                    affected: ['foundations'],
+                    message: '膚色取樣可信度不足，未使用 ΔE 比色，改以季型與膚色分級排序',
+                    source: 'frontend'   // 標明是前端補的，方便對帳時分辨
+                });
+            }
+
             return {
                 ok: true,
                 ...data,
+                skinToneLabReliable,
+                fallbackReasons,
                 products: Array.isArray(list)
                     ? list.map(item => this._normalizeProduct(item)).filter(Boolean)
                     : []
             };
         } catch (_) {
-            return { ok: false, products: [] };
+            return { ok: false, products: [], code: 'NETWORK_ERROR', retryable: true };
         }
     },
 
@@ -2021,6 +2397,19 @@ const Api = {
         let bl = x*0.0557 + y*-0.2040 + z*1.0570;
         [r, g, bl] = [r, g, bl].map(v => { v = v > 0.0031308 ? 1.055*Math.pow(v,1/2.4)-0.055 : 12.92*v; return Math.max(0,Math.min(255,Math.round(v*255))); });
         return `rgb(${r},${g},${bl})`;
+    },
+
+    // LAB → #RRGGBB。給「資料庫沒回 hex_primary、只有 lab」的商品用。
+    // 目前商品 API 兩邊都不回 hex（清單連 lab 都沒有，推薦端只有 lab），色塊畫得出來
+    // 但色碼文字一直是空的。這裡換算出來的是**近似值**，不是資料庫存的原始色碼，
+    // 呼叫端必須標示清楚，不要讓它被當成商品的正式色號抄走。
+    labToHex(L, a, b) {
+        const matched = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(this.labToRgb(L, a, b) || '');
+        if (!matched) return '';
+        return '#' + matched.slice(1, 4)
+            .map(v => Number(v).toString(16).padStart(2, '0'))
+            .join('')
+            .toUpperCase();
     }
 };
 
@@ -2603,6 +2992,9 @@ const AdminStore = {
         const permission = this.permissionSnapshot(p);
         if (permission.status === 'suspended') return false;
         const allowed = permission.allowedPages;
+        // 商品推薦是公開瀏覽頁：未登入訪客都看得到，登入會員不該因為後台沒勾「商品」
+        // 這一項就被擋在門外（會員反而比訪客受限）。逛商品不需要特別權限。
+        if (page === 'products') return true;
         if (page === 'analysis') return allowed.includes('analysisBasic') || allowed.includes('analysisPro') || this.isVip(p);
         return allowed.includes(page);
     },
@@ -2685,9 +3077,10 @@ const MemberRewards = {
     themes: [
         { id: 'classic', name: '經典奶茶', cost: 0, swatches: ['#F7F0E6', '#C49A62', '#4A3438'], desc: '預設會員中心主題' },
         // id 維持 'rose'：資料庫用它記錄已購買，改了會員就失去已兌換的主題。
-        { id: 'rose', name: '銀霧', cost: 80, swatches: ['#232629', '#C6CCD3', '#EDF0F3'], desc: '深色鉑金銀灰會員介面' },
-        { id: 'jade', name: '青玉光澤', cost: 120, swatches: ['#E6F0EA', '#6A9A7C', '#30483A'], desc: '清透綠色會員介面' },
-        { id: 'noir', name: '黑金 PRO', cost: 180, swatches: ['#2F2629', '#D9B66F', '#F7EAD2'], desc: '深色高級會員介面' }
+        { id: 'rose', name: '銀霧', cost: 80, swatches: ['#0A0D12', '#C6CCD5', '#9AA1AA'], desc: '高級冷銀與精密介面動態' },
+        // id 維持 'jade'：只更換顯示名稱，避免既有會員主題資料失效。
+        { id: 'jade', name: '動漫風', cost: 120, swatches: ['#DDEEE3', '#FFD873', '#F5B3B7'], desc: '綠色點陣與漫畫描邊介面' },
+        { id: 'noir', name: '黑金 PRO', cost: 180, swatches: ['#060607', '#C8A65E', '#71243A'], desc: '黑曜石與香檳金的貴族介面' }
     ],
     getPoints(email) {
         const points = this._load(this._pointsKey, {});
@@ -2987,6 +3380,78 @@ const Tasks = {
     }
 };
 
+// ═══ 每日使用額度（妝容建議 / 妝容渲染，兩者分開計算）═══
+//
+// 額度規則（2026-08-14 定案）：
+//     訪客        建議 2 次、渲染 2 次
+//     一般會員    建議 4 次、渲染 4 次
+//     VIP / 管理員  不限
+//
+// **建議與渲染分開算**：兩者的成本與體感完全不同——建議是本地 Ollama 幾秒鐘，
+// 渲染要 60~150 秒且會花 Replicate 的錢。共用一個計數器會讓「多看兩次建議」
+// 排擠掉「生成一張妝後圖」，那不是使用者預期的取捨。
+//
+// ⚠ 這是**前端的額度**，存在 localStorage：使用者清掉就重置。
+// 它的用途是體驗上的節流與展示，**不是安全邊界**。真正的防濫用仍然在
+// 會員資料庫的 renderQuota 與 Gateway 的速率限制——伺服器回 QUOTA_EXCEEDED 時
+// 那個永遠優先，見 _friendlyError 的 429 處理。
+const UsageQuota = {
+    _key: 'beautyUsageQuota',
+    LIMITS: Object.freeze({ guest: 2, member: 4 }),
+    KINDS: Object.freeze({ SUGGESTION: 'suggestion', RENDER: 'render' }),
+
+    _today() { return new Date().toISOString().slice(0, 10); },
+
+    // 用 email 當身分；訪客共用一個 'guest' 桶。同一台裝置換帳號時各自計數。
+    _identity() {
+        const profile = (typeof Auth !== 'undefined' && Auth.getProfile) ? (Auth.getProfile() || {}) : {};
+        const email = String(profile.email || '').trim().toLowerCase();
+        return email || 'guest';
+    },
+
+    _load() {
+        try { return JSON.parse(localStorage.getItem(this._key) || '{}'); }
+        catch (_) { return {}; }
+    },
+
+    limit(kind) {
+        if (typeof AdminStore !== 'undefined') {
+            const profile = Auth.getProfile();
+            // 管理員與 VIP 不受限：他們本來就是拿來展示與驗收的身分。
+            if (AdminStore.isAdminProfile?.(profile) || AdminStore.isVip?.(profile)) return Infinity;
+        }
+        const guest = (typeof isGuest === 'function') ? isGuest() : this._identity() === 'guest';
+        return guest ? this.LIMITS.guest : this.LIMITS.member;
+    },
+
+    used(kind) {
+        const all = this._load();
+        const bucket = all[`${this._identity()}|${this._today()}`] || {};
+        return Number(bucket[kind] || 0);
+    },
+
+    remaining(kind) {
+        const limit = this.limit(kind);
+        return limit === Infinity ? Infinity : Math.max(0, limit - this.used(kind));
+    },
+
+    canUse(kind) { return this.remaining(kind) > 0; },
+
+    // 成功之後才記一次。失敗（服務掛掉、逾時）不該吃掉使用者的額度。
+    record(kind) {
+        if (this.limit(kind) === Infinity) return;
+        const all = this._load();
+        const key = `${this._identity()}|${this._today()}`;
+        const bucket = all[key] || {};
+        bucket[kind] = Number(bucket[kind] || 0) + 1;
+        // 只留今天的：這個鍵每天一組，不清掉會無限長大。
+        const today = this._today();
+        const kept = { [key]: bucket };
+        Object.keys(all).forEach(k => { if (k.endsWith(`|${today}`) && k !== key) kept[k] = all[k]; });
+        try { localStorage.setItem(this._key, JSON.stringify(kept)); } catch (_) {}
+    },
+};
+
 // ═══ 收藏模組 ═══
 const Fav = {
     _key: 'beautyFav',
@@ -3047,6 +3512,11 @@ const AnalysisFeedback = {
         '鼻型': ['寬鼻', '標準鼻'],
         // M 型唇已合併到花瓣唇。
         '嘴型': ['厚唇', '微笑唇', '花瓣唇', '薄唇'],
+        // PRO 側臉鼻型：**另一顆模型、另一套分類法**，跟上面的「鼻型」（正面，兩類）
+        // 完全不重疊，兩邊的類別不能互換。只有 PRO 且拿得到側臉結果時才會出現在面板上
+        // （renderAnalysisFeedback 依 result 有沒有值來決定顯示哪幾列）。
+        // 對照 models/pro_nose_side/nose_shape_side_classes.json；朝天鼻已併入翹鼻。
+        '側臉鼻型': ['塌鼻', '直挺鼻', '翹鼻', '蒜頭鼻', '駝峰鼻'],
     }),
     list() {
         try { return JSON.parse(localStorage.getItem(this._key) || '[]'); }
