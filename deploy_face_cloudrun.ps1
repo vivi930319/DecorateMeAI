@@ -2,7 +2,15 @@
     [string]$ProjectId = "decorate-me",
     [string]$Region = "asia-east1",
     [string]$Repository = "beauty-backend",
-    [string]$Tag = (Get-Date -Format "yyyyMMdd-HHmmss")
+    [string]$Tag = (Get-Date -Format "yyyyMMdd-HHmmss"),
+    # 常駐執行個體數。預設 0＝沒有人用的時候整個縮回去，不計費。
+    # 這裡刻意讓「省錢」當預設值：之前這個值寫死 1，兩支服務就以每天約 NT$492 的
+    # 速度空轉，而實測 168 小時裡只有 21 小時真的有請求進來——其餘 87% 付的是
+    # 「沒有人在等的那 15 秒冷啟動」。
+    # Demo／口試要完全沒有冷啟動時用 -MinInstances 1 部署；結束後照平常方式部署就會
+    # 回到 0。不必記得改回來——那正是把預設值設成 0 的用意，靠註解提醒是沒有用的。
+    [ValidateRange(0, 10)]
+    [int]$MinInstances = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,7 +21,10 @@ Write-Host "Verifying versioned face models..."
 python tools/download_face_models.py
 
 Write-Host "Building $image..."
-& gcloud.cmd builds submit --project $ProjectId --tag $image .
+# 2026-08-23：原始碼分成 face/ gateway/ render/ shared/ 之後，根目錄不再有 Dockerfile。
+# `builds submit --tag` 只會去找根目錄那一個，所以改成跟 gateway／render 一樣用
+# cloudbuild 設定明確指定 -f face/Dockerfile。三個服務現在是同一套做法。
+& gcloud.cmd builds submit --project $ProjectId --config cloudbuild.face.yaml --substitutions "_IMAGE=$image" .
 if ($LASTEXITCODE -ne 0) { throw "Cloud Build failed" }
 
 $common = @(
@@ -25,12 +36,22 @@ $common = @(
     "--memory", "8Gi",
     "--concurrency", "6",
     "--timeout", "300s",
-    "--min-instances", "1",
+    # 這個值寫進的是 revision，不是 service。Cloud Console 的服務頂層會顯示
+    # 「Autoscaling minimum = 0」——它讀的是 service 層另一個欄位，那個 0 是假的，
+    # 真正生效的是這裡。要確認線上實際值，看 revision 的 autoscaling.knative.dev/minScale，
+    # 或直接看計費：常駐一個 instance 的服務，billable_instance_time 會是每天 86400 秒。
+    "--min-instances", "$MinInstances",
     "--max-instances", "10",
     "--no-cpu-throttling",
     "--cpu-boost",
     "--quiet"
 )
+
+# 常駐是要付錢的，所以它必須在部署當下被看見，而不是等到月底看帳單才發現。
+# 這一則只在有人明確要求常駐時出現，平常（預設 0）安靜。
+if ($MinInstances -gt 0) {
+    Write-Host "注意：--min-instances=$MinInstances，face-basic 與 face-pro 會 24/7 常駐計費（每支每天約 NT`$246）。Demo 結束後用預設值重新部署即可回到 0。" -ForegroundColor Yellow
+}
 
 # FACE_CONTRIB_ENABLED=1：開啟「使用者同意提供的五官裁切」保存（見 face_contributions）。
 # 這條路徑會保存臉部資料，所以刻意做成部署時明確開啟，程式碼上線不等於功能生效。
@@ -67,15 +88,18 @@ foreach ($service in @("face-basic", "face-pro")) {
         throw "$service 的修訂版 $revision 未進入 Ready 狀態（Ready=$ready）"
     }
 
-    # 再打一次 /health 拿模型清單。這兩個服務只允許 Gateway／專案成員呼叫，所以要帶 ID token，
-    # 而 Cloud Run 驗的是 token 的 audience —— 先前這裡用不帶 --audiences 的
-    # `gcloud auth print-identity-token`，簽出來的 token audience 對不上服務網址，**必定** 401。
-    # 於是這支腳本每次都以失敗收場，即使兩個服務都部署成功；久了就會有人把真正的失敗
-    # 也當成「又是那個健康檢查」而略過，這比沒有檢查更危險。
+    # 再打一次 /health 拿模型清單。這兩個服務只允許 Gateway／專案成員呼叫，所以要帶 ID token。
     #
-    # 帶了 --audiences 也不一定簽得出來：使用者帳號憑證產不出指定 audience 的 ID token，
-    # 那需要服務帳號。所以這一項改成「拿得到就驗，拿不到就明講跳過」，不再讓它決定成敗——
-    # 部署成不成功由上面的 Ready 判定，這裡只是加碼資訊。
+    # 2026-08-17 實測修正：這裡原本只用 `--audiences=$url` 簽 token，而使用者帳號憑證產不出
+    # 指定 audience 的 ID token（gcloud 直接回 "Requires valid service account."）。結果每次
+    # 部署都掉進下面的「略過」分支——健康檢查形同不存在，模型清單從來沒有真的被驗過。
+    # 這比沒有檢查更危險：它每次都印一行看起來有在做事的黃字。
+    #
+    # 改成先試**不帶** --audiences。舊註解斷言那種 token「必定 401」，但實測不成立：
+    # 2026-08-17 用使用者帳號對 face-basic /health 實測回 200（同一個做法也修好了 warmup.ps1，
+    # 那支之前不帶 token，三個網址全部 403，等於從來沒暖到機）。
+    # 服務帳號憑證兩種都簽得出來，所以保留 --audiences 當後備，CI 換成服務帳號時仍然可用。
+    #
     # 取 token 這一步**必須**擋住 $ErrorActionPreference = "Stop"。
     # PowerShell 5.1 對原生命令做 stderr 重導（`2>$null`）時，會把每一行 stderr 包成
     # NativeCommandError；在 Stop 模式下那是終止性錯誤，腳本會死在這一行，**根本跑不到
@@ -85,16 +109,17 @@ foreach ($service in @("face-basic", "face-pro")) {
     $previousEap = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        $token = & gcloud.cmd auth print-identity-token --audiences=$url
+        $token = & gcloud.cmd auth print-identity-token
+        if (-not $token) { $token = & gcloud.cmd auth print-identity-token --audiences=$url }
     } catch {
         $token = $null
     } finally {
         $ErrorActionPreference = $previousEap
     }
     if (-not $token) {
-        # 使用者帳號憑證產不出指定 audience 的 ID token（gcloud 直接回 "Requires valid
-        # service account."）。這是憑證類型的限制，不是部署有問題，所以只提示不失敗。
-        Write-Host "$service Ready（修訂版 $revision）；/health 略過：目前憑證簽不出對應 audience 的 ID token" -ForegroundColor Yellow
+        # 兩種簽法都拿不到（多半是沒有 gcloud 登入）。這是憑證問題，不是部署有問題，
+        # 所以只提示不失敗——部署成不成功由上面的 Ready 判定，這裡只是加碼資訊。
+        Write-Host "$service Ready（修訂版 $revision）；/health 略過：簽不出 ID token（先確認 gcloud auth login）" -ForegroundColor Yellow
         continue
     }
     try {

@@ -1,4 +1,14 @@
 # gcloud builds submit 上傳建置來源時用這個檔決定要傳什麼。
+!face
+face/*
+!gateway
+gateway/*
+!render
+render/*
+!shared
+shared/*
+!suggestion
+suggestion/*
 #
 # 這個檔必須存在：沒有它，gcloud 會 fallback 去套用 .gitignore，而 .gitignore 是「* 全擋」的
 # 白名單、且沒放行 models/，於是模型檔不會被上傳，Docker build 會在 COPY models/ 直接失敗。
@@ -8,47 +18,47 @@
 *
 
 !.dockerignore
-!Dockerfile
-!Dockerfile.render
-!Dockerfile.gateway
-!requirements.txt
-!requirements.render.txt
-!requirements.gateway.txt
-!Face_analyzer_BASIC.py
-!Face_analyzer_PRO.py
-!Ollama_suggestion.py
-!replicate_render.py
-!replicate_render_api.py
-!ai_gateway.py
-!dev_server_utils.py
-!cloud_start.py
-!job_store.py
-!api_errors.py
+!face/Dockerfile
+!render/Dockerfile
+!gateway/Dockerfile
+!face/requirements.txt
+!render/requirements.txt
+!gateway/requirements.txt
+!face/Face_analyzer_BASIC.py
+!face/Face_analyzer_PRO.py
+!suggestion/Ollama_suggestion.py
+!render/replicate_render.py
+!render/replicate_render_api.py
+!gateway/ai_gateway.py
+!shared/dev_server_utils.py
+!face/cloud_start.py
+!shared/job_store.py
+!shared/api_errors.py
 # Dockerfile.gateway 會 COPY 這支。漏放行的話 build 會停在
 # 「COPY failed: file not found in build context」，而檔案其實好端端躺在本機——
 # 是 `*` 全擋把它濾掉了，不是檔案不見（2026-07-26 部署時踩到）。
-!admin_audit.py
+!gateway/admin_audit.py
 !gcs-lifecycle.json
-!analysis_package.py
-!face_roi.py
-!basic_roi_shadow.py
-!eye_features.py
+!face/analysis_package.py
+!face/face_roi.py
+!face/basic_roi_shadow.py
+!face/eye_features.py
 # 五官判斷回饋（BASIC 與 PRO 都 import）。同上：漏放行的話 build 會停在
 # 「COPY failed: file not found in build context」。
-!face_feedback.py
+!face/face_feedback.py
 # 使用者同意提供的訓練樣本（只存部位 ROI，不存原圖）。face_feedback 會 import。
-!face_contributions.py
-!face_corrections.py
+!face/face_contributions.py
+!face/face_corrections.py
 
 # 以下四支 Dockerfile 一直都有 COPY，但從來沒放行過——臉部映像因此建不起來
 # （2026-07-28 部署時停在 image_safety.py）。gateway 與 render 沒踩到，是因為它們
 # 的 Dockerfile 不需要這幾支。
 # 對照方式：把三個 Dockerfile 的 COPY 清單跟這份白名單比一次，差集就是會炸的檔案。
-!image_safety.py
-!mediapipe_ascii.py
-!basic_rule_trees.py
-!pro_nose_side_model.py
-!rule_features.py
+!shared/image_safety.py
+!face/mediapipe_ascii.py
+!face/basic_rule_trees.py
+!face/pro_nose_side_model.py
+!face/rule_features.py
 !tools
 tools/*
 !tools/download_face_models.py
@@ -61,6 +71,13 @@ models/*
 models/basic_features_roi/*
 !models/basic_features_roi/*.onnx
 !models/basic_features_roi/*_classes.json
+# PRO 側臉鼻型模型：放行推論用的 .onnx 與類別表，讓 Cloud Build 上傳得到這個 111MB
+# 權重。少了這幾行，models/* 會排除整個 pro_nose_side，source 上傳不含模型，
+# Dockerfile COPY models/pro_nose_side/ 直接 build 失敗——側臉鼻型形同沒部署。
+!models/pro_nose_side
+models/pro_nose_side/*
+!models/pro_nose_side/*.onnx
+!models/pro_nose_side/*_classes.json
 # DINOv2 線性分類器的權重（npz）。分類頭只存 coef／intercept，很小。
 # ⚠️ 2026-07-31 起 backbone（88MB）不再上傳：DINOv2 已退場，那是死重量。
 # 要開回 shadow 對照就把下面那行刪掉（.dockerignore 也要一起改）。

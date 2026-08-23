@@ -1,6 +1,8 @@
 services:
   face_analysis_basic:
-    build: .
+    build:
+      context: .
+      dockerfile: face/Dockerfile
     container_name: face_analysis_basic
     ports:
       - "8001:8001"
@@ -14,11 +16,17 @@ services:
       - FACE_JOB_TIMEOUT_SECONDS=180
       - FACE_JOB_RETENTION_SECONDS=3600
       - FACE_JOB_MAX_COUNT=200
+      # 本機沒有 GCP 憑證，job_store 預設會在建 Firestore client 時直接拋
+      # DefaultCredentialsError——而 /health 會呼叫 _cleanup_jobs()，所以容器起得來
+      # 但健康檢查永遠 500。這個旗標讓它退回記憶體模式（正式環境不設，維持原本行為）。
+      - JOB_STORE_ALLOW_MEMORY_FALLBACK=1
     command: ["uvicorn", "Face_analyzer_BASIC:app", "--host", "0.0.0.0", "--port", "8001"]
     restart: always
 
   face_analysis_pro:
-    build: .
+    build:
+      context: .
+      dockerfile: face/Dockerfile
     container_name: face_analysis_pro
     ports:
       - "8002:8002"
@@ -32,11 +40,17 @@ services:
       - FACE_JOB_TIMEOUT_SECONDS=180
       - FACE_JOB_RETENTION_SECONDS=3600
       - FACE_JOB_MAX_COUNT=200
+      # 本機沒有 GCP 憑證，job_store 預設會在建 Firestore client 時直接拋
+      # DefaultCredentialsError——而 /health 會呼叫 _cleanup_jobs()，所以容器起得來
+      # 但健康檢查永遠 500。這個旗標讓它退回記憶體模式（正式環境不設，維持原本行為）。
+      - JOB_STORE_ALLOW_MEMORY_FALLBACK=1
     command: ["uvicorn", "Face_analyzer_PRO:app", "--host", "0.0.0.0", "--port", "8002"]
     restart: always
 
   ollama_suggestion:
-    build: .
+    build:
+      context: .
+      dockerfile: face/Dockerfile
     container_name: ollama_suggestion
     ports:
       - "8010:8010"
@@ -53,7 +67,7 @@ services:
     profiles: ["optional"]
     build:
       context: .
-      dockerfile: Dockerfile.render
+      dockerfile: render/Dockerfile
     container_name: replicate_render
     ports:
       - "8020:8020"
@@ -64,3 +78,51 @@ services:
     command: ["uvicorn", "replicate_render_api:app", "--host", "0.0.0.0", "--port", "8020"]
     restart: always
     # 組員尚未交付 replicate_render.py 前，不會隨預設 docker compose up 啟動
+
+  # 瀏覽器只跟 Gateway 說話，其餘服務都在它後面。少了這個服務，本機 compose 起得來
+  # 卻沒有任何一條前端走得通的路徑——前端的 baseUrl 全部是 gatewayService('face-basic')
+  # 這種同源路徑，不是直接打 8001/8002。
+  ai_gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    container_name: ai_gateway
+    # 對外 8015 是刻意的：前端 js/api.js:26 在 localhost 下的預設 gateway 埠就是 8015，
+    # 換成別的埠前端得改設定才連得到。
+    ports:
+      - "8015:8080"
+    environment:
+      # 非 production 時 _validate_configuration() 直接 return，所以本機不必湊齊
+      # 所有正式金鑰。這個值也讓 ALLOW_INSECURE_LOCAL_DEV 之類的旗標維持有效。
+      - APP_ENV=${APP_ENV:-local}
+      # gateway 也 import job_store（訪客票券與額度）。理由同臉部分析那兩個服務。
+      - JOB_STORE_ALLOW_MEMORY_FALLBACK=1
+      # 同一個 compose network 內用服務名互連，不經過主機的 port mapping。
+      - FACE_BASIC_URL=http://face_analysis_basic:8001
+      - FACE_PRO_URL=http://face_analysis_pro:8002
+      - TEXT_SUGGESTION_URL=http://ollama_suggestion:8010
+      # render 掛在 optional profile，預設不啟動；沒帶就讓 gateway 認定該上游未設定。
+      - RENDER_URL=${RENDER_URL:-}
+      # 會員／商品資料庫是組員那台，走他們的 Cloudflare Tunnel。網址每次重開都會變，
+      # 所以只從 .env 讀，不寫死在這裡。
+      - MEMBER_DATABASE_URL=${MEMBER_DATABASE_URL:-}
+      - PRODUCT_DATABASE_URL=${PRODUCT_DATABASE_URL:-}
+      # session 簽章用。長度必須 >= 32，否則 production 啟動檢查會擋（本機不擋，但
+      # 太短會讓簽出來的 session 形同虛設）。這個預設值只在本機成立，正式站由 Secret 注入。
+      - GATEWAY_SESSION_SECRET=${GATEWAY_SESSION_SECRET:-local-dev-secret-do-not-use-in-production}
+      # 本機沒有各服務的 client_api_key，開 session-only 模式才不會每支上游都要求金鑰。
+      - GATEWAY_SESSION_ONLY=${GATEWAY_SESSION_ONLY:-1}
+      # 文字建議走組員 Mac 上的 Ollama Quick Tunnel，屬外部上游，需明確放行。
+      - GATEWAY_ALLOW_EXTERNAL_TEXT_UPSTREAM=${GATEWAY_ALLOW_EXTERNAL_TEXT_UPSTREAM:-1}
+      - UPSTREAM_FACE_API_KEY=${UPSTREAM_FACE_API_KEY:-}
+      - GATEWAY_FACE_API_KEY=${GATEWAY_FACE_API_KEY:-}
+      - UPSTREAM_MEMBER_API_KEY=${UPSTREAM_MEMBER_API_KEY:-}
+      - PRODUCT_ADMIN_API_KEY=${PRODUCT_ADMIN_API_KEY:-}
+    # depends_on 只保證啟動順序，不等對方就緒。臉部分析要載入 InsightFace／ONNX，
+    # 起來得比 gateway 慢得多；gateway 在上游還沒好時回的是 502，不是崩潰，
+    # 所以這裡不需要 healthcheck 門檻。
+    depends_on:
+      - face_analysis_basic
+      - face_analysis_pro
+      - ollama_suggestion
+    restart: always

@@ -1,43 +1,53 @@
 *
-!Face_analyzer_BASIC.py
-!Face_analyzer_PRO.py
-!Ollama_suggestion.py
-!dev_server_utils.py
-!api_errors.py
+!face
+face/*
+!gateway
+gateway/*
+!render
+render/*
+!shared
+shared/*
+!suggestion
+suggestion/*
+!face/Face_analyzer_BASIC.py
+!face/Face_analyzer_PRO.py
+!suggestion/Ollama_suggestion.py
+!shared/dev_server_utils.py
+!shared/api_errors.py
 # 上傳圖片共用安全處理（Render／BASIC 都 import）與高風險 Admin 稽核（Gateway import）。
-!image_safety.py
-!admin_audit.py
+!shared/image_safety.py
+!gateway/admin_audit.py
 # BASIC Dockerfile 會 COPY 這三支；先前漏在 .dockerignore 外，只有 docker build 會踩到
 # （正式部署走 .gcloudignore 不受影響）。
-!mediapipe_ascii.py
-!basic_rule_trees.py
-!pro_nose_side_model.py
-!rule_features.py
-!eye_features.py
+!face/mediapipe_ascii.py
+!face/basic_rule_trees.py
+!face/pro_nose_side_model.py
+!face/rule_features.py
+!face/eye_features.py
 !tools
 tools/*
 !tools/download_face_models.py
 !tools/face_models_manifest.json
-!cloud_start.py
-!Dockerfile
-!requirements.txt
-!analysis_package.py
-!job_store.py
-!replicate_render.py
-!replicate_render_api.py
-!requirements.render.txt
-!Dockerfile.render
-!ai_gateway.py
-!requirements.gateway.txt
-!Dockerfile.gateway
-!face_roi.py
-!basic_roi_shadow.py
+!face/cloud_start.py
+!face/Dockerfile
+!face/requirements.txt
+!face/analysis_package.py
+!shared/job_store.py
+!render/replicate_render.py
+!render/replicate_render_api.py
+!render/requirements.txt
+!render/Dockerfile
+!gateway/ai_gateway.py
+!gateway/requirements.txt
+!gateway/Dockerfile
+!face/face_roi.py
+!face/basic_roi_shadow.py
 # 五官判斷回饋（BASIC 與 PRO 都 import）。新增會被 COPY 的檔案時，
 # .dockerignore 與 .gcloudignore 兩份都要放行，少一邊就會在該邊的建置炸掉。
-!face_feedback.py
+!face/face_feedback.py
 # 使用者同意提供的訓練樣本（只存部位 ROI，不存原圖）。face_feedback 會 import。
-!face_contributions.py
-!face_corrections.py
+!face/face_contributions.py
+!face/face_corrections.py
 
 # ROI CNN shadow 模型。只放推論要用的 .onnx 與類別表；
 # .pt（torch state dict，訓練用）不進映像，那是 30MB 的死重量。
@@ -47,6 +57,13 @@ models/*
 models/basic_features_roi/*
 !models/basic_features_roi/*.onnx
 !models/basic_features_roi/*_classes.json
+# PRO 側臉鼻型模型：只放行推論用的 .onnx 與類別表（cv_results/label_conflicts 是訓練
+# 產物，不進映像）。少了這幾行，models/* 會把整個 pro_nose_side 排除，Dockerfile 的
+# COPY models/pro_nose_side/ 在 build 時就會失敗——側臉鼻型形同沒部署。
+!models/pro_nose_side
+models/pro_nose_side/*
+!models/pro_nose_side/*.onnx
+!models/pro_nose_side/*_classes.json
 # DINOv2 線性分類器的權重（npz）。分類頭只存 coef／intercept，很小，留著不佔空間。
 #
 # ⚠️ 2026-07-31 起 backbone（dinov2_vits14.onnx，88MB）**不再放行**：

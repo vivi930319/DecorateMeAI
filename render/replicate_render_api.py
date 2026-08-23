@@ -76,7 +76,12 @@ _quota_hits: dict[str, deque[float]] = {}
 RENDER_DEDUP_TTL_SECONDS = max(0, int(os.getenv("RENDER_DEDUP_TTL_SECONDS", "600")))
 _dedup_lock = Lock()
 _dedup_cache: dict[str, tuple[float, dict]] = {}
-_dedup_inflight: set[str] = set()
+# key → {"jobId", "resultToken"}。不是單純的 set：撞到重複時要能告訴前端
+# 「原本那個 job 是哪一個」，否則 409 的訊息叫它「continue polling the original job」
+# 卻沒有 id 可以 poll，前端只能報錯。
+# 這個組合特別容易在冷啟動時發生：前端對送出渲染有自動重試一次（js/api.js:831），
+# 第一次 fetch 逾時但伺服器其實已建立 job，重試就撞上這裡。
+_dedup_inflight: dict[str, dict] = {}
 
 # 渲染改用非同步工作，避免 50～150 秒的處理時間造成 Cloud Run 逾時。
 # 工作狀態存入 Firestore，讓不同服務實例都能讀取。
@@ -166,17 +171,28 @@ def _dedup_set(key: str, result: dict):
         _dedup_cache[key] = (now, result)
 
 
-def _dedup_claim(key: str) -> bool:
+def _dedup_claim(key: str, job_id: str = "", result_token: str = "") -> bool:
+    """搶下這個 dedup key。搶到的人要一併登記自己的 job，重複者才接得上。"""
     with _dedup_lock:
         if key in _dedup_inflight:
             return False
-        _dedup_inflight.add(key)
+        _dedup_inflight[key] = {"jobId": job_id, "resultToken": result_token}
         return True
+
+
+def _dedup_inflight_job(key: str) -> dict:
+    """取出正在進行中的那個 job 的識別資料，給 409 回應帶回前端。
+
+    帶 resultToken 是安全的：dedup key 由 `_dedup_key()` 算出，本來就含 owner_id，
+    所以只有同一位使用者的重複請求會走到這裡，拿回去的是自己的憑證。
+    """
+    with _dedup_lock:
+        return {k: v for k, v in (_dedup_inflight.get(key) or {}).items() if v}
 
 
 def _dedup_release(key: str) -> None:
     with _dedup_lock:
-        _dedup_inflight.discard(key)
+        _dedup_inflight.pop(key, None)
 
 
 def _prune_limit_buckets(buckets: dict[str, deque[float]], now: float, window_seconds: int) -> None:
@@ -434,12 +450,20 @@ def _durable_dedup_job(key: str) -> dict | None:
         return None
     for job in matches:
         if job.get("status") in {"queued", "running"}:
+            # 同上：帶著原 job 的識別資料回去。這一條是跨執行個體的重複
+            # （另一台已經在跑），前端一樣要能接上它的進度。
             raise HTTPException(
                 status_code=409,
                 detail=error_payload(
                     "DUPLICATE_IN_PROGRESS",
                     "An identical render is already in progress. Continue polling the original job.",
                     retryable=True,
+                    details={
+                        k: v for k, v in (
+                            ("jobId", job.get("jobId")),
+                            ("resultToken", job.get("resultToken")),
+                        ) if v
+                    },
                 ),
             )
         if job.get("status") == "completed" and job.get("afterImageUrl"):
@@ -897,13 +921,15 @@ async def create_render_job(
         job_store.create(RENDER_JOBS_COLLECTION, job_id, job)
         return {**_job_view(job, include_token=True), "estimatedSeconds": RENDER_ESTIMATED_SECONDS}
 
-    if not _dedup_claim(key):
+    if not _dedup_claim(key, job_id, result_token):
+        # 把正在跑的那個 job 帶回去，前端才接得上它的進度，而不是報一個看起來像故障的錯。
         raise HTTPException(
             status_code=409,
             detail=error_payload(
                 "DUPLICATE_IN_PROGRESS",
                 "An identical render is already in progress. Continue polling the original job.",
                 retryable=True,
+                details=_dedup_inflight_job(key),
             ),
         )
     try:

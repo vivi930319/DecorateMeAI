@@ -163,6 +163,19 @@ def sanitize_image_bytes(
         except OSError as exc:
             raise ImageRejected(400, "INVALID_IMAGE", f"{label}不是有效的圖片。") from exc
 
+        # MPO 是 iPhone 人像模式／HDR／連拍的標準輸出：一個 JPEG 容器裡包了多張影像，
+        # 檔頭與 JPEG 一模一樣（ff d8 ff），只有 Pillow 會把它認成 `MPO`。
+        # 它不是偽裝，擋掉它等於擋掉大部分 iPhone 使用者手上未經轉檔的原始照片——
+        # 2026-08-18 實測，使用者收到的正是下面那句「檔頭與實際圖片格式不符」，
+        # 而且看不出該怎麼補救（照片在他們眼裡就是一張普通的 JPG）。
+        #
+        # 正規化成 JPEG，並且**強制**走下面重新編碼那條路：只保留主影像。
+        # 附加影像（深度圖、另一個視角）對分析毫無用處，卻是一塊不會被後續檢查
+        # 碰到的夾帶空間——放行 MPO 的同時把它丟掉，比單純放行安全。
+        if sniffed == "JPEG" and declared_format == "MPO":
+            declared_format = "JPEG"
+            has_metadata = True
+
         # 偽 MIME：檔頭說是 A、實際解出來是 B。兩者不一致就是刻意包裝過的檔案。
         if declared_format != sniffed:
             raise ImageRejected(

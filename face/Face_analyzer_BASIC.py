@@ -1,4 +1,5 @@
 import cv2
+import math
 import numpy as np
 import mediapipe_ascii  # noqa: F401  # 必須早於 mediapipe，見該模組說明
 import mediapipe as mp
@@ -603,6 +604,89 @@ async def get_basic_job_result(
 face_feedback.register_route(app, mode="basic", jobs_collection=_COL, verify_job_token=_verify_job_token)
 
 
+def delta_e_ciede2000(lab1, lab2):
+    """CIEDE2000 色差（kL = kC = kH = 1）。lab 為 (L*, a*, b*)。
+
+    2026-08-23 取代原本的 CIE76（三軸平方和開根號）。換掉的理由不是「新的比較好」
+    這種泛論，而是兩件具體的事：
+
+    1. **系統內要一致。** 商品推薦端比色號用的就是 CIEDE2000，膚色分級卻用 CIE76，
+       同一個「這兩個顏色有多接近」的問題在系統裡有兩個答案。
+    2. **CIE76 的三軸等權重會讓色度蓋過明暗。** 實測 51 張照片，a* 與 b* 合計佔了
+       分級距離的 80%，L* 只有 20%——但分級名稱（白皙／中等／古銅）講的是明暗。
+       CIEDE2000 的 S_C 會隨彩度放大分母、壓低彩度差的權重，比較貼近分級的原意。
+
+    自己實作而不是用 skimage.color.deltaE_ciede2000：skimage 目前在映像裡，
+    但 requirements.txt 沒有宣告它（是別的套件帶進來的傳遞相依），哪天上游改了
+    就會在部署時才發現。這段沒有任何第三方相依。
+
+    正確性有測試守著（見 face_analyzer_basic_test.py）：Sharma et al. (2005) 的
+    官方測試向量 16 組，以及與 skimage 的 3000 組隨機比對。
+    """
+    L1, a1, b1 = (float(v) for v in lab1)
+    L2, a2, b2 = (float(v) for v in lab2)
+
+    C1 = math.hypot(a1, b1)
+    C2 = math.hypot(a2, b2)
+    C_bar = (C1 + C2) / 2.0
+
+    # G 把低彩度區的 a* 拉開。這是 CIE76 沒有、而接近灰階時最需要的修正。
+    C_bar7 = C_bar ** 7
+    G = 0.5 * (1.0 - math.sqrt(C_bar7 / (C_bar7 + 25.0 ** 7))) if C_bar > 0 else 0.5
+    a1p = (1.0 + G) * a1
+    a2p = (1.0 + G) * a2
+
+    C1p = math.hypot(a1p, b1)
+    C2p = math.hypot(a2p, b2)
+
+    h1p = math.degrees(math.atan2(b1, a1p)) % 360.0 if (b1 or a1p) else 0.0
+    h2p = math.degrees(math.atan2(b2, a2p)) % 360.0 if (b2 or a2p) else 0.0
+
+    dLp = L2 - L1
+    dCp = C2p - C1p
+
+    # 色相差要處理 0/360 度的接縫；直接相減會在跨越時得到 ~360 的假差值。
+    if C1p * C2p == 0:
+        dhp = 0.0
+    elif abs(h2p - h1p) <= 180:
+        dhp = h2p - h1p
+    elif h2p - h1p > 180:
+        dhp = h2p - h1p - 360.0
+    else:
+        dhp = h2p - h1p + 360.0
+    dHp = 2.0 * math.sqrt(C1p * C2p) * math.sin(math.radians(dhp) / 2.0)
+
+    Lp_bar = (L1 + L2) / 2.0
+    Cp_bar = (C1p + C2p) / 2.0
+
+    if C1p * C2p == 0:
+        hp_bar = h1p + h2p
+    elif abs(h1p - h2p) <= 180:
+        hp_bar = (h1p + h2p) / 2.0
+    elif h1p + h2p < 360:
+        hp_bar = (h1p + h2p + 360.0) / 2.0
+    else:
+        hp_bar = (h1p + h2p - 360.0) / 2.0
+
+    T = (1.0
+         - 0.17 * math.cos(math.radians(hp_bar - 30.0))
+         + 0.24 * math.cos(math.radians(2.0 * hp_bar))
+         + 0.32 * math.cos(math.radians(3.0 * hp_bar + 6.0))
+         - 0.20 * math.cos(math.radians(4.0 * hp_bar - 63.0)))
+
+    d_theta = 30.0 * math.exp(-(((hp_bar - 275.0) / 25.0) ** 2))
+    Cp_bar7 = Cp_bar ** 7
+    R_C = 2.0 * math.sqrt(Cp_bar7 / (Cp_bar7 + 25.0 ** 7)) if Cp_bar > 0 else 0.0
+
+    S_L = 1.0 + (0.015 * (Lp_bar - 50.0) ** 2) / math.sqrt(20.0 + (Lp_bar - 50.0) ** 2)
+    S_C = 1.0 + 0.045 * Cp_bar
+    S_H = 1.0 + 0.015 * Cp_bar * T
+    R_T = -math.sin(math.radians(2.0 * d_theta)) * R_C
+
+    dl, dc, dh = dLp / S_L, dCp / S_C, dHp / S_H
+    return math.sqrt(dl * dl + dc * dc + dh * dh + R_T * dc * dh)
+
+
 class FaceAnalyzer:
     # 角度門檻。用環境變數覆寫，因為這些數字還在被量測——同學在跑系統性測試，
     # 有更好的數字時改設定就好，不必動程式重新建置。
@@ -1182,12 +1266,22 @@ class FaceAnalyzer:
             if (r["L_MIN"] <= l_mean <= r["L_MAX"] and r["A_MIN"] <= a_axis <= r["A_MAX"] and r["B_MIN"] <= b_axis <= r["B_MAX"]):
                 matched = name; break
         if matched is None:
+            # 沒有任何範圍框涵蓋這個膚色時，退而求其次挑「中心最接近」的分級。
+            #
+            # ⚠️ 這條路徑不是罕見的例外：實測 51 張照片有 50 張走這裡（98%）。
+            # 框是照著色號表訂的，與實際照片的膚色分布對不上——樣本的 a* 到 24.0，
+            # 而所有框的 a* 上界只到 13.5。要真正修好得重畫框，換色差公式只是
+            # 讓「挑最近的」這個動作用對的尺去量。詳見
+            # 補充文件md檔案/四季型判定對照表_2026-08-23.md 與膚色分級落點診斷。
+            #
+            # 2026-08-23：距離從 CIE76（三軸平方和）換成 CIEDE2000，與商品推薦端
+            # 比色號的算法一致。理由見 delta_e_ciede2000 的說明。
             best_dist = float("inf")
             for name, r in self._MAC_SHADE_RANGES.items():
-                lc   = (r["L_MIN"] + r["L_MAX"]) / 2
-                ac   = (r["A_MIN"] + r["A_MAX"]) / 2
-                bc   = (r["B_MIN"] + r["B_MAX"]) / 2
-                dist = ((l_mean-lc)**2 + (a_axis-ac)**2 + (b_axis-bc)**2) ** 0.5
+                centre = ((r["L_MIN"] + r["L_MAX"]) / 2,
+                          (r["A_MIN"] + r["A_MAX"]) / 2,
+                          (r["B_MIN"] + r["B_MAX"]) / 2)
+                dist = delta_e_ciede2000((l_mean, a_axis, b_axis), centre)
                 if dist < best_dist: best_dist = dist; matched = name
         return matched, l_mean, a_axis, b_axis
 

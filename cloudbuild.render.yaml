@@ -3,7 +3,7 @@ steps:
     args:
       - 'build'
       - '-f'
-      - 'Dockerfile.render'
+      - 'render/Dockerfile'
       - '-t'
       - '${_IMAGE}'
       - '.'

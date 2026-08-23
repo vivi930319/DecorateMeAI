@@ -7,15 +7,15 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-COPY requirements.render.txt .
-RUN pip install --no-cache-dir -r requirements.render.txt
+COPY render/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY dev_server_utils.py .
-COPY api_errors.py .
-COPY image_safety.py .
-COPY job_store.py .
-COPY replicate_render.py .
-COPY replicate_render_api.py .
+COPY shared/dev_server_utils.py .
+COPY shared/api_errors.py .
+COPY shared/image_safety.py .
+COPY shared/job_store.py .
+COPY render/replicate_render.py .
+COPY render/replicate_render_api.py .
 
 # 非 root 執行（見 Dockerfile.gateway 的說明）。
 RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin appuser

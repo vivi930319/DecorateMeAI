@@ -23,7 +23,7 @@ if (-not $SkipTests) {
     $env:GATEWAY_SESSION_SECRET = "local-deploy-check-secret-at-least-32-bytes"
     $env:GATEWAY_FACE_API_KEY = "local-deploy-check"
     $env:GATEWAY_RENDER_API_KEY = "local-deploy-check"
-    & $python -m unittest ai_gateway_test.py render_api_test.py image_safety_test.py
+    & $python -m pytest tests/ai_gateway_test.py tests/render_api_test.py tests/image_safety_test.py
     if ($LASTEXITCODE -ne 0) {
         throw "部署中止：後端測試沒有通過。修好再部署，或在確認過的緊急情況下加 -SkipTests。"
     }

@@ -2,6 +2,7 @@
 Firestore-backed job store shared by BASIC and PRO analyzers.
 Replaces in-memory _jobs dict so all Cloud Run instances share state.
 """
+import logging
 import os
 import hashlib
 import time
@@ -16,15 +17,44 @@ _client = None
 _memory_jobs: dict[str, dict[str, dict]] = {}
 DEFAULT_SCAN_LIMIT = int(os.getenv("JOB_STORE_SCAN_LIMIT", "500"))
 
+# 拿不到 GCP 憑證時要不要退回記憶體模式。
+#
+# 預設關閉，這點很重要：正式環境是多個 Cloud Run 實例共用 Firestore，
+# 靜默退回「每個實例各存各的」會讓 job 狀態在實例之間對不上——送出分析的那個
+# 請求落在 A 實例，輪詢結果的請求落在 B 實例，就查無此 job。那種錯誤是間歇性的，
+# 而且畫面看起來完全正常，極難追。所以正式環境寧可讓它明確地爆炸。
+#
+# 本機 docker compose 沒有 GCP 憑證，這個旗標讓它跑得起來（見 docker-compose.yml）。
+_ALLOW_MEMORY_FALLBACK = os.getenv(
+    "JOB_STORE_ALLOW_MEMORY_FALLBACK", ""
+).strip().lower() in {"1", "true", "yes", "on"}
+
+_client_unavailable = False
+
 
 def _col(collection: str):
     if firestore is None:
         return None
-    global _client
+    global _client, _client_unavailable
+    # 建過一次失敗就不再重試：每個請求都去撞一次憑證查找會拖慢所有回應，
+    # 而缺憑證這件事不會在同一個 process 的生命週期內自己好起來。
+    if _client_unavailable:
+        return None
     if _client is None:
-        _client = firestore.Client(
-            project=os.getenv("GOOGLE_CLOUD_PROJECT", "decorate-me")
-        )
+        try:
+            _client = firestore.Client(
+                project=os.getenv("GOOGLE_CLOUD_PROJECT", "decorate-me")
+            )
+        except Exception as exc:
+            if not _ALLOW_MEMORY_FALLBACK:
+                raise
+            _client_unavailable = True
+            logging.warning(
+                "job_store: Firestore 不可用（%s），改用記憶體模式。"
+                "job 狀態不會跨實例共享，僅適用於本機開發。",
+                exc.__class__.__name__,
+            )
+            return None
     return _client.collection(collection)
 
 

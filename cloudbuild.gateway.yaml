@@ -3,7 +3,7 @@ steps:
     args:
       - 'build'
       - '-f'
-      - 'Dockerfile.gateway'
+      - 'gateway/Dockerfile'
       - '-t'
       - '${_IMAGE}'
       - '.'

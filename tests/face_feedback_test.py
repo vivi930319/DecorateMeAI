@@ -11,7 +11,7 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import face_feedback as ff
 
@@ -333,20 +333,24 @@ class ImageOnlyDependsOnModulesInTheFaceImageTest(unittest.TestCase):
     """
 
     def _copied_modules(self):
-        text = Path(__file__).resolve().parent.joinpath("Dockerfile").read_text(encoding="utf-8")
+        text = Path(__file__).resolve().parents[1].joinpath("face/Dockerfile").read_text(encoding="utf-8")
         names = set()
         for line in text.splitlines():
             line = line.strip()
             if line.startswith("COPY ") and line.endswith(" ."):
                 target = line[5:-2].strip()
                 if target.endswith(".py"):
-                    names.add(target[:-3])
+                    # 2026-08-23 起原始碼分在 face/ gateway/ render/ shared/ 等資料夾，
+                    # 但 Dockerfile 是 `COPY face/x.py .`——**扁平**複製到容器的 /app。
+                    # 所以容器裡的模組名是不含資料夾的檔名，比對要用 basename。
+                    # 這也是 import 寫法不必跟著改的原因。
+                    names.add(target.rsplit("/", 1)[-1][:-3])
         return names
 
     def test_face_contributions_imports_are_available_in_the_image(self):
         import ast
 
-        source = Path(__file__).resolve().parent.joinpath("face_contributions.py").read_text(encoding="utf-8")
+        source = Path(__file__).resolve().parents[1].joinpath("face/face_contributions.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
         imported = set()
         for node in ast.walk(tree):
@@ -375,9 +379,9 @@ class ImageOnlyDependsOnModulesInTheFaceImageTest(unittest.TestCase):
         """
         import re
 
-        source = Path(__file__).resolve().parent.joinpath("face_contributions.py").read_text(encoding="utf-8")
+        source = Path(__file__).resolve().parents[1].joinpath("face/face_contributions.py").read_text(encoding="utf-8")
         used = set(re.findall(r"from google\.cloud import (\w+)", source))
-        reqs = Path(__file__).resolve().parent.joinpath("requirements.txt").read_text(encoding="utf-8").lower()
+        reqs = Path(__file__).resolve().parents[1].joinpath("face/requirements.txt").read_text(encoding="utf-8").lower()
         missing = {name for name in used if f"google-cloud-{name}" not in reqs}
         self.assertEqual(missing, set(),
                          f"requirements.txt 缺 google-cloud-{{{'、'.join(sorted(missing))}}}，"
@@ -385,7 +389,7 @@ class ImageOnlyDependsOnModulesInTheFaceImageTest(unittest.TestCase):
 
     def test_data_url_parser_lives_here_not_in_the_render_service(self):
         """明確擋掉退回去 import replicate_render 的改法。"""
-        source = Path(__file__).resolve().parent.joinpath("face_feedback.py").read_text(encoding="utf-8")
+        source = Path(__file__).resolve().parents[1].joinpath("face/face_feedback.py").read_text(encoding="utf-8")
         self.assertNotIn("from replicate_render import", source,
                          "replicate_render 不在 face 映像裡，改用 face_contributions 那支")
 

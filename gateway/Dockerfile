@@ -8,14 +8,14 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-COPY requirements.gateway.txt .
-RUN pip install --no-cache-dir -r requirements.gateway.txt
+COPY gateway/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-COPY dev_server_utils.py .
-COPY api_errors.py .
-COPY admin_audit.py .
-COPY job_store.py .
-COPY ai_gateway.py .
+COPY shared/dev_server_utils.py .
+COPY shared/api_errors.py .
+COPY gateway/admin_audit.py .
+COPY shared/job_store.py .
+COPY gateway/ai_gateway.py .
 
 # 非 root 執行。容器被打進來時，root 讓攻擊者可以裝套件、改系統檔、寫任意路徑；
 # 這個帳號連 /app 都只有讀取權（檔案是 root 擁有、複製進來就不再需要被寫）。

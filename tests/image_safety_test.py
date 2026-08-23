@@ -100,6 +100,30 @@ class SanitizeTest(unittest.TestCase):
             sanitize_image_bytes(forged)
         self.assertIn(caught.exception.code, {"IMAGE_TYPE_MISMATCH", "INVALID_IMAGE"})
 
+    def test_accepts_an_mpo_and_keeps_only_the_main_image(self):
+        """MPO：iPhone 人像模式／HDR／連拍存出來的格式，JPEG 容器裡包多張影像。
+
+        它跟上面那個偽 MIME 測試是一體兩面——檔頭同樣是 FFD8FF、Pillow 同樣報出
+        與檔頭不符的格式（`MPO`），差別在這一個是合法的。分不開這兩者的話，
+        擋掉偽裝的同時也擋掉了大多數 iPhone 使用者未轉檔的原始照片，
+        而他們看到的只有一句「檔頭與實際圖片格式不符」，完全不知道該怎麼補救。
+        2026-08-18 之前就是這樣。
+
+        附加影像（深度圖、另一個視角）必須被丟掉：對分析沒有用處，
+        卻是一塊不會被後續檢查碰到的夾帶空間。
+        """
+        buffer = io.BytesIO()
+        main = Image.new("RGB", (64, 64), (180, 140, 120))
+        extra = Image.new("RGB", (64, 64), (120, 140, 180))
+        main.save(buffer, format="MPO", append_images=[extra])
+
+        cleaned, mime = sanitize_image_bytes(buffer.getvalue())
+
+        self.assertEqual(mime, "image/jpeg")
+        with Image.open(io.BytesIO(cleaned)) as image:
+            self.assertEqual(image.format, "JPEG")
+            self.assertEqual(getattr(image, "n_frames", 1), 1)
+
     def test_rejects_a_decompression_bomb_before_decoding_it(self):
         """一張小小的 PNG 可以宣告成天文數字的尺寸，解開就是好幾 GB 的點陣圖。
 

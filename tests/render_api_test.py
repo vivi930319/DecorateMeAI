@@ -261,6 +261,25 @@ class RenderApiTest(unittest.TestCase):
         render_api._dedup_release(key)
         self.assertTrue(render_api._dedup_claim(key))
 
+    def test_inflight_dedup_reports_the_original_job(self):
+        """撞到重複時，要能說出「原本那個 job 是哪一個」。
+
+        409 的訊息叫前端 "continue polling the original job"，但先前沒有把 id 帶回去，
+        前端無從接續，只能把它當成失敗顯示。實際觸發途徑是前端對送出渲染的自動重試
+        （js/api.js 的冷啟動重試）：第一次逾時但伺服器已建立 job，重送就撞上這裡——
+        使用者的渲染其實正在跑，畫面卻報錯。
+        """
+        key = render_api._dedup_key(TINY_PNG, "dup prompt", 0.35, "actor_dup")
+        self.assertTrue(render_api._dedup_claim(key, "JOB-abc", "token-xyz"))
+
+        self.assertFalse(render_api._dedup_claim(key, "JOB-second", "token-second"))
+        inflight = render_api._dedup_inflight_job(key)
+        self.assertEqual(inflight.get("jobId"), "JOB-abc")
+        self.assertEqual(inflight.get("resultToken"), "token-xyz")
+
+        render_api._dedup_release(key)
+        self.assertEqual(render_api._dedup_inflight_job(key), {})
+
     def test_render_dedup_is_scoped_to_member(self):
         first = render_api._dedup_key(TINY_PNG, "same prompt", 0.35, "actor_a")
         second = render_api._dedup_key(TINY_PNG, "same prompt", 0.35, "actor_b")

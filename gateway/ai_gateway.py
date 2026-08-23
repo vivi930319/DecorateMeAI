@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -235,6 +236,45 @@ MULTI_SESSION_PREFIX = "v2."
 # cookie；這個上限決定同時能存在幾個槽位，超過就從最舊的開始淘汰。
 MAX_SESSION_COOKIE_BYTES = max(1024, min(int(os.getenv("GATEWAY_MAX_SESSION_COOKIE_BYTES", "3800")), 4000))
 LOGIN_LIMIT_COLLECTION = os.getenv("GATEWAY_LOGIN_LIMIT_COLLECTION", "gateway_login_limits")
+
+# ── 訪客試用 ────────────────────────────────────────────────────────────────
+# 未登入的人可以跑完整的「臉部分析 → 妝容渲染」，但只有固定次數，而且不能存圖：
+# 收藏走 member-database，那條路對訪客一律維持 401，不在這裡開任何缺口。
+#
+# 訪客身分不能放 cookie。Firebase Hosting 只把 `__session` 轉發給 Cloud Run，
+# 其他 cookie 在 CDN 就被丟掉了（見上方 SESSION_COOKIE 的註解），所以新開一個
+# `dm_guest` cookie 根本到不了這裡。改成：Gateway 簽一個帶 HMAC 的訪客票券，
+# 前端自己保管並用 `X-Guest-Ticket` 標頭送回來。
+#
+# 這樣擋得住「偽造一個票券」（HMAC 驗不過），擋不住「把票券刪掉再要一張新的」。
+# 後者用簽發端的 IP 限流補：換票券要成本，一般使用者不會去做，而額度本身是按
+# 票券算的，所以不會像純 IP 方案那樣讓整間學校共用同一份三次。
+GUEST_TRIAL_ENABLED = os.getenv("GATEWAY_GUEST_TRIAL", "").strip().lower() in {"1", "true", "yes", "on"}
+GUEST_TRIAL_MAX_RUNS = max(1, min(int(os.getenv("GATEWAY_GUEST_TRIAL_MAX_RUNS", "3")), 50))
+# 額度窗預設 30 天。這是「一個訪客票券總共能跑幾次」，不是每日配額。
+GUEST_TRIAL_WINDOW_SECONDS = max(3600, int(os.getenv("GATEWAY_GUEST_TRIAL_WINDOW_SECONDS", str(30 * 24 * 3600))))
+GUEST_TRIAL_COLLECTION = os.getenv("GATEWAY_GUEST_TRIAL_COLLECTION", "gateway_guest_trials")
+# 同一個 IP 一天能領幾張票券。調低會誤傷共用出口 IP 的場合（教室、公司）。
+GUEST_TICKET_ISSUE_WINDOW_SECONDS = max(600, int(os.getenv("GATEWAY_GUEST_TICKET_WINDOW_SECONDS", "86400")))
+GUEST_TICKET_ISSUE_MAX = max(1, min(int(os.getenv("GATEWAY_GUEST_TICKET_MAX_PER_IP", "12")), 200))
+GUEST_TICKET_LIMIT_COLLECTION = os.getenv("GATEWAY_GUEST_TICKET_COLLECTION", "gateway_guest_tickets")
+GUEST_TICKET_HEADER = "x-guest-ticket"
+# 配額後端連不上時翻成 True，並在 /health 回報。見 _note_quota_backend_down。
+_GUEST_QUOTA_DEGRADED = False
+GUEST_TICKET_TTL_SECONDS = GUEST_TRIAL_WINDOW_SECONDS
+# 訪客只能碰這兩個服務。member-database／admin-api／face-pro 不在內，
+# 少一個名字就少一條要驗的路徑，這份清單刻意寫死而不是用設定檔開關。
+GUEST_ALLOWED_SERVICES = frozenset({"face-basic", "render-service"})
+# 訪客在這些路徑上可以做寫入（POST）。其餘寫入一律回到會員驗證。
+GUEST_WRITE_PATHS = {
+    "face-basic": _patterns(r"v1/face/pose", r"v1/face/jobs/basic"),
+    # 前端走的是非同步的 render/jobs；同步的 render 一併放行，兩條都是「開始一次渲染」。
+    "render-service": _patterns(r"render", r"render/jobs"),
+}
+# 只有「開始一次臉部分析」會扣額度。渲染、輪詢狀態、讀結果都不扣——
+# 一次流程扣一次，中途重試不該把使用者的三次吃光。
+GUEST_QUOTA_SPEND_PATHS = {"face-basic": _patterns(r"v1/face/jobs/basic")}
+
 PUBLIC_PRODUCT_PATHS = _patterns(r"api/products", r"recommend-products")
 SAVED_LOOK_PATH_RE = re.compile(r"^api/members/([^/]+)/saved-looks(?:/([^/]+))?$")
 MEMBER_PATH_RE = re.compile(r"^api/members/([^/]+)$")
@@ -949,6 +989,146 @@ def require_member_access(request: Request) -> dict:
         raise HTTPException(status_code=401, detail={"error": {"code": "MEMBER_AUTH_INVALID", "message": "Member session is invalid or expired."}})
 
 
+# ── 訪客票券 ────────────────────────────────────────────────────────────────
+
+
+def _guest_ticket_mac(guest_id: str, expires_at: int) -> str:
+    return hmac.new(
+        SESSION_SECRET.encode("utf-8"),
+        f"guest:{guest_id}:{expires_at}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:32]
+
+
+def guest_actor_id(guest_id: str) -> str:
+    """訪客版的 opaque actor。前綴刻意與會員的 `actor_` 不同——
+    渲染服務用它判定圖片擁有者，兩種身分的命名空間絕不能重疊。"""
+    digest = hashlib.sha256(f"{SESSION_SECRET}:guest:{guest_id}".encode("utf-8")).hexdigest()
+    return f"guest_{digest[:24]}"
+
+
+def issue_guest_ticket(request: Request) -> dict:
+    """簽一張訪客票券。同一個 IP 的簽發次數有上限，避免刪掉票券就能無限重來。"""
+    ip = client_ip(request)
+    if ip and ip != "unknown":
+        spent = job_store.consume_window_quota(
+            GUEST_TICKET_LIMIT_COLLECTION,
+            f"guest_ticket:ip:{ip}",
+            GUEST_TICKET_ISSUE_WINDOW_SECONDS,
+            GUEST_TICKET_ISSUE_MAX,
+        )
+        # Firestore 不可用時回 None。本機開發沒有 Firestore，這裡放行而不是擋死；
+        # 正式環境有 Firestore，限流才是實際生效的那一份。
+        if spent is not None and not spent[0]:
+            raise rate_limited_error(
+                "GUEST_TICKET_RATE_LIMITED",
+                "體驗次數已達上限，請登入會員後繼續使用。",
+                spent[2],
+            )
+    guest_id = secrets.token_urlsafe(18)
+    expires_at = int(time.time()) + GUEST_TICKET_TTL_SECONDS
+    ticket = f"{guest_id}.{expires_at}.{_guest_ticket_mac(guest_id, expires_at)}"
+    return {"ticket": ticket, "expiresAt": expires_at, "maxRuns": GUEST_TRIAL_MAX_RUNS}
+
+
+def read_guest_id(request: Request, *, allow_query: bool = False) -> str:
+    """從 `X-Guest-Ticket` 取出訪客身分。簽章不符或過期一律當作沒有票券。
+
+    `allow_query` 只給圖片端點用。`<img src>` 送不出自訂標頭，會員那邊靠 cookie
+    自動帶（Firebase 只轉發 `__session`），訪客沒有 cookie，所以圖片網址得自己
+    帶票券。票券換得到的只有「自己這幾張圖」，換不到會員資料。
+    """
+    raw = str(request.headers.get(GUEST_TICKET_HEADER) or "").strip()
+    if not raw and allow_query:
+        raw = str(request.query_params.get("gt") or "").strip()
+    if not raw:
+        return ""
+    guest_id, _, rest = raw.partition(".")
+    expires_raw, _, mac = rest.partition(".")
+    if not guest_id or not expires_raw or not mac:
+        return ""
+    try:
+        expires_at = int(expires_raw)
+    except ValueError:
+        return ""
+    if expires_at <= int(time.time()):
+        return ""
+    if not secret_equals(mac, _guest_ticket_mac(guest_id, expires_at)):
+        return ""
+    return guest_id
+
+
+def _note_quota_backend_down(where: str) -> None:
+    """配額後端不可用時吼一聲，而且只吼一次。
+
+    `job_store` 的配額函式在 Firestore 失敗時回 None 而不是拋例外——那是為了讓本機
+    開發不必架 Firestore。代價是正式環境一旦連不上，次數限制會**安靜地**失效：
+    端點照常回 200，剩餘次數永遠顯示滿額，看起來一切正常，實際上訪客可以無限使用。
+    2026-08-17 上線時就是這樣，原因是服務帳號少了 roles/datastore.user，
+    而且同一個問題早就讓登入限流的持久化配額失效很久了，沒有任何地方看得出來。
+    """
+    global _GUEST_QUOTA_DEGRADED
+    if _GUEST_QUOTA_DEGRADED:
+        return
+    _GUEST_QUOTA_DEGRADED = True
+    print(f"[guest-trial] 配額後端不可用（{where}）：訪客次數限制目前沒有生效。"
+          f"請確認服務帳號有 roles/datastore.user。", flush=True)
+
+
+def guest_trial_remaining(guest_id: str) -> int:
+    """還剩幾次。Firestore 不可用時回滿額，讓本機開發不會整個卡住。"""
+    peeked = job_store.peek_window_quota(
+        GUEST_TRIAL_COLLECTION, f"guest_trial:{guest_id}",
+        GUEST_TRIAL_WINDOW_SECONDS, GUEST_TRIAL_MAX_RUNS,
+    )
+    if peeked is None:
+        _note_quota_backend_down("peek")
+        return GUEST_TRIAL_MAX_RUNS
+    return max(0, GUEST_TRIAL_MAX_RUNS - peeked[1])
+
+
+def guest_trial_guard(guest_id: str) -> None:
+    """額度用完就擋在送出之前。只讀不扣——扣款在上游確實受理之後才發生。"""
+    if guest_trial_remaining(guest_id) > 0:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": {
+            "code": "GUEST_TRIAL_EXHAUSTED",
+            "message": f"免費體驗已用完 {GUEST_TRIAL_MAX_RUNS} 次，註冊會員後可以繼續使用並保存成果。",
+        }},
+    )
+
+
+def guest_trial_record(guest_id: str) -> None:
+    """分析確實被受理之後才扣這一次。
+
+    順序是刻意的：先扣再送，上游一掛掉使用者就白白少一次，而總共只有三次。
+    代價是併發送出多筆時可能多放行一兩次——那比讓故障吃掉別人的額度好。
+    """
+    spent = job_store.consume_window_quota(
+        GUEST_TRIAL_COLLECTION, f"guest_trial:{guest_id}",
+        GUEST_TRIAL_WINDOW_SECONDS, GUEST_TRIAL_MAX_RUNS,
+    )
+    if spent is None:
+        _note_quota_backend_down("consume")
+
+
+def _guest_path_allowed(service: str, path: str, method: str) -> bool:
+    """訪客能不能走這條路。讀取放行，寫入只放行明確列出的那幾條。"""
+    if service not in GUEST_ALLOWED_SERVICES:
+        return False
+    if str(method or "").upper() not in STATE_CHANGING_METHODS:
+        return True
+    return any(pattern.fullmatch(path) for pattern in GUEST_WRITE_PATHS.get(service, ()))
+
+
+def _guest_spends_quota(service: str, path: str, method: str) -> bool:
+    if str(method or "").upper() != "POST":
+        return False
+    return any(pattern.fullmatch(path) for pattern in GUEST_QUOTA_SPEND_PATHS.get(service, ()))
+
+
 def _require_admin_claims(claims: dict) -> dict:
     if str(claims.get("status") or "active").lower() != "active":
         raise HTTPException(status_code=403, detail={"error": {"code": "ADMIN_SUSPENDED", "message": "Administrator account is suspended."}})
@@ -1052,6 +1232,12 @@ def _safe_render_gateway_url(request: Request, job_id: str, variant: str = "") -
     #
     # variant 只有 "" 與 "/before" 兩種；妝前圖是使用者的原始照片，走同一條
     # 需驗證的路徑，權限與妝後圖完全相同。
+    #
+    # 訪客要多帶票券：這個網址會被放進 `<img src>`，而 img 送不出自訂標頭，
+    # 訪客又沒有 cookie 可以自動帶。會員維持乾淨的相對網址，靠 `__session`。
+    ticket = str(request.headers.get(GUEST_TICKET_HEADER) or "").strip()
+    if ticket and GUEST_TRIAL_ENABLED and not request_access_token(request):
+        return f"/media/render/{job_id}{variant}?gt={quote(ticket, safe='')}"
     return f"/media/render/{job_id}{variant}"
 
 
@@ -1198,11 +1384,11 @@ app.add_middleware(
     allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Accept", "Authorization", "Content-Type", "If-Match", "X-API-Key", "X-Expected-Actor", "X-Job-Token"],
+    allow_headers=["Accept", "Authorization", "Content-Type", "If-Match", "X-API-Key", "X-Expected-Actor", "X-Guest-Ticket", "X-Job-Token"],
     # 跨來源時瀏覽器預設只讓 JS 讀到少數幾個標頭。不明講的話，前端在非同源情境下
     # 拿不到 Retry-After（顯示不出「請等 N 秒」），也拿不到 X-Request-ID（回報問題時
     # 對不上 log）。正式站走同源 rewrite 用不到這行，本機與 App 開發會用到。
-    expose_headers=["Retry-After", "X-Request-ID"],
+    expose_headers=["Retry-After", "X-Request-ID", "X-Guest-Trial-Remaining", "X-Guest-Trial-Max"],
     max_age=3600,
 )
 install_api_error_handling(app, "ai-gateway")
@@ -1218,6 +1404,13 @@ async def health():
         "memberAuth": "short-lived-access-token",
         "browserAuth": "member-session-only" if SESSION_ONLY_MODE else "client-key-and-member-session",
         "externalTextUpstream": "enabled-for-demo" if ALLOW_EXTERNAL_TEXT_UPSTREAM else "disabled",
+        # "quota-backend-down" 代表訪客次數限制沒有生效——功能還在跑，但已經不限次數。
+        # 這一欄存在的理由見 _note_quota_backend_down：不寫出來就沒有人會發現。
+        "guestTrial": (
+            "disabled" if not GUEST_TRIAL_ENABLED
+            else "quota-backend-down" if _GUEST_QUOTA_DEGRADED
+            else f"enabled-{GUEST_TRIAL_MAX_RUNS}-runs"
+        ),
     }
 
 
@@ -1229,6 +1422,51 @@ async def public_config():
         "memberDatabaseUrl": "/member-database",
         "productUrl": "/product-api",
         "crawlerUrl": "/admin-api",
+        # 前端據此決定要不要顯示「免費體驗」入口。關掉時前端就照舊要求登入。
+        "guestTrialEnabled": GUEST_TRIAL_ENABLED,
+        "guestTrialMaxRuns": GUEST_TRIAL_MAX_RUNS if GUEST_TRIAL_ENABLED else 0,
+    }
+
+
+@app.post("/guest/session")
+async def guest_session(request: Request):
+    """發一張訪客票券，讓未登入的人跑完整的分析與渲染。
+
+    票券只是「這是同一個訪客」的證明，不含任何個資，也換不到會員資料——
+    proxy 只認 GUEST_ALLOWED_SERVICES 那兩個服務。
+    """
+    if not GUEST_TRIAL_ENABLED:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "GUEST_TRIAL_DISABLED", "message": "Guest trial is not enabled."}},
+        )
+    if not SESSION_SECRET:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "NOT_CONFIGURED", "message": "Gateway session secret is not configured."}},
+        )
+    issued = issue_guest_ticket(request)
+    return {
+        "ticket": issued["ticket"],
+        "expiresAt": issued["expiresAt"],
+        "maxRuns": issued["maxRuns"],
+        "remaining": issued["maxRuns"],
+    }
+
+
+@app.get("/guest/quota")
+async def guest_quota(request: Request):
+    """訪客還剩幾次。票券無效時回 0，前端據此把入口收起來。"""
+    if not GUEST_TRIAL_ENABLED:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "GUEST_TRIAL_DISABLED", "message": "Guest trial is not enabled."}},
+        )
+    guest_id = read_guest_id(request)
+    return {
+        "maxRuns": GUEST_TRIAL_MAX_RUNS,
+        "remaining": guest_trial_remaining(guest_id) if guest_id else 0,
+        "ticketValid": bool(guest_id),
     }
 
 
@@ -1260,9 +1498,17 @@ async def _serve_render_media(job_id: str, request: Request, variant: str = "aft
         raise HTTPException(status_code=404, detail={"error": {"code": "MEDIA_NOT_FOUND", "message": "Render image was not found."}})
     # variant 只會是這兩個字面值，直接拼進 query 沒有注入空間
     query = "?variant=before" if variant == "before" else ""
-    claims = require_member_access(request)
-    is_admin = str(claims.get("role") or "").strip().lower() == "admin"
-    owner_id = opaque_actor_id(str(claims.get("sub") or ""))
+    # 訪客也要看得到自己剛跑出來的妝前妝後圖。這裡只換出 owner id，實際「這張圖是不是
+    # 你的」仍由渲染服務比對 job 的 ownerId——訪客與會員的 id 命名空間不重疊，
+    # 所以拿訪客身分換不到任何會員的圖。
+    guest_id = read_guest_id(request, allow_query=True) if (GUEST_TRIAL_ENABLED and not request_access_token(request)) else ""
+    if guest_id:
+        is_admin = False
+        owner_id = guest_actor_id(guest_id)
+    else:
+        claims = require_member_access(request)
+        is_admin = str(claims.get("role") or "").strip().lower() == "admin"
+        owner_id = opaque_actor_id(str(claims.get("sub") or ""))
     # 妝前圖不套用管理員豁免：本人以外誰都不能看。
     admin_bypass = is_admin and variant != "before"
 
@@ -1967,7 +2213,23 @@ async def proxy(service: str, path: str, request: Request):
     # X-Expected-Actor 用來隔離分頁，並在多帳號模式中選擇正確的登入槽位。
     # 單帳號模式仍會驗證此標頭，避免寫入其他帳號。
     selected_sealed = ""
-    if MULTI_SESSION_ENABLED:
+    guest_id = ""
+    # 未登入而且帶著有效訪客票券時走試用路徑。有 session 的人一律照會員流程走，
+    # 免得登入中的瀏覽器因為多帶了一個標頭就掉進次數受限的分支。
+    if GUEST_TRIAL_ENABLED and not request_access_token(request):
+        guest_id = read_guest_id(request)
+        if not guest_id or not _guest_path_allowed(service, path, request.method):
+            # 訪客碰到不開放的服務（會員資料、後台、收藏）時維持原本的 401 契約，
+            # 前端才會照舊提示登入，而不是收到一個它不認得的新錯誤碼。
+            raise HTTPException(
+                status_code=401,
+                detail={"error": {"code": "MEMBER_AUTH_REQUIRED", "message": "Member sign-in is required."}},
+            )
+        if _guest_spends_quota(service, path, request.method):
+            guest_trial_guard(guest_id)
+        claims = {"sub": "", "role": "guest"}
+        acting_owner_id = guest_actor_id(guest_id)
+    elif MULTI_SESSION_ENABLED:
         is_write = str(request.method or "").upper() in STATE_CHANGING_METHODS
         account = select_account(request, for_write=is_write)
         claims = account["claims"]
@@ -2162,6 +2424,13 @@ async def proxy(service: str, path: str, request: Request):
             # record_admin_action 內部已把 request_id 截到 128，這裡不必再切一次。
             request_id=request.headers.get("x-request-id", ""),
         )
+
+    # 分析確實被受理了才扣訪客的一次，並把剩餘次數回報給前端顯示。
+    if guest_id and _guest_spends_quota(service, path, request.method) and response.is_success:
+        guest_trial_record(guest_id)
+    if guest_id:
+        response_headers["X-Guest-Trial-Remaining"] = str(guest_trial_remaining(guest_id))
+        response_headers["X-Guest-Trial-Max"] = str(GUEST_TRIAL_MAX_RUNS)
 
     result = Response(content=response_content, status_code=response.status_code, headers=response_headers)
     if service == "member-database":

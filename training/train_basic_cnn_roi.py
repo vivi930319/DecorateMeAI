@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import random
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -37,7 +38,12 @@ from torchvision.models import (
 
 from face_roi import IMAGENET_MEAN, IMAGENET_STD, PARTS, ROI_SPECS
 
-CACHE_DIR = Path("data/roi_cache")
+# 跟 prepare_roi_cache.py 讀同一個環境變數。先前這裡是寫死的 `data/roi_cache`，
+# 而產生快取的那支吃 ROI_CACHE_DIR——兩邊指到不同目錄時，訓練會安靜地拿舊快取跑完，
+# 指標看起來完全正常。2026-08-17 就是這樣：使用者校對過的眼型標註放在另一個資料夾，
+# 重建的快取沒有被訓練讀到，跑出來的數字與校對無關。
+# 這與 §3.1 記載的 build_identity_map／prepare_roi_cache 指向不同目錄是同一種坑。
+CACHE_DIR = Path(os.environ.get("ROI_CACHE_DIR", "data/roi_cache"))
 # 正式模型的預設輸出位置。**這是線上服務讀的目錄**——不加 --out-dir 就會直接覆蓋它。
 # 2026-08-06 因此發生過兩次誤覆蓋：一次把線上的 ConvNeXt 換成 MobileNetV3（架構預設值），
 # 一次差點把對照實驗的產物寫進來。做對照實驗一律要指定 --out-dir。

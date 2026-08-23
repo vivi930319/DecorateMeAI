@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY face/requirements.txt .
 # 編譯工具只在安裝期間存在：insightface 之類的套件需要它們才裝得起來，但裝完就
 # 該消失。留一套 gcc 在正式映像裡，等於替任何進得了容器的人準備好編譯環境。
 # 裝與清必須在同一個 RUN，否則檔案還是留在下層 layer 裡。
@@ -37,37 +37,37 @@ ENV MAX_IMAGE_SIZE=1024
 ENV INSIGHT_DET_SIZE=384
 ENV INSIGHT_ALLOWED_MODULES=detection,landmark_3d_68
 
-COPY Face_analyzer_BASIC.py .
-COPY Face_analyzer_PRO.py .
-COPY Ollama_suggestion.py .
-COPY dev_server_utils.py .
-COPY api_errors.py .
-COPY image_safety.py .
-COPY cloud_start.py .
-COPY job_store.py .
-COPY face_roi.py .
+COPY face/Face_analyzer_BASIC.py .
+COPY face/Face_analyzer_PRO.py .
+COPY suggestion/Ollama_suggestion.py .
+COPY shared/dev_server_utils.py .
+COPY shared/api_errors.py .
+COPY shared/image_safety.py .
+COPY face/cloud_start.py .
+COPY shared/job_store.py .
+COPY face/face_roi.py .
 # 在 Linux 上是 no-op（路徑本來就是 ASCII），但 Face_analyzer_BASIC 會 import 它，
 # 少了這行 image 會在 import 階段就掛掉。
-COPY mediapipe_ascii.py .
-COPY basic_roi_shadow.py .
+COPY face/mediapipe_ascii.py .
+COPY face/basic_roi_shadow.py .
 # 五官判斷回饋的驗證與儲存。BASIC 與 PRO 都 import 它，少了一樣是 import 階段就掛。
 # 它會讀 models/basic_features_roi/*_classes.json 當合法類別表——那批檔案在下面一起複製。
-COPY face_feedback.py .
-COPY face_contributions.py .
-COPY face_corrections.py .
+COPY face/face_feedback.py .
+COPY face/face_contributions.py .
+COPY face/face_corrections.py .
 # face_corrections 需要 canonical_label（把已淘汰的類別名換成合併後的現行名稱）。
 # 少了這支，容器會在 import 階段就 ModuleNotFoundError 起不來 —— 2026-07-31 踩過。
 # 白名單放行（.dockerignore／.gcloudignore）只決定檔案上不上得來，
 # **要進映像還是得在這裡 COPY**，兩件事都要做。
-COPY analysis_package.py .
+COPY face/analysis_package.py .
 # PRO 的側臉鼻型推論（ConvNeXt-Tiny ONNX）。BASIC 不用它，但兩支共用同一個映像。
-COPY pro_nose_side_model.py .
+COPY face/pro_nose_side_model.py .
 # 幾何決策樹的推論路徑與特徵定義。2026-07-30 起 RULE_TREE_PARTS 是空的，
 # 它不再提供任何正式答案；保留是為了讓回滾路徑可用（把部位加回去就能生效）。
-COPY basic_rule_trees.py .
-COPY rule_features.py .
+COPY face/basic_rule_trees.py .
+COPY face/rule_features.py .
 # 眼型精密幾何融合(shadow)的特徵定義；缺它 basic_roi_shadow import 會失敗。
-COPY eye_features.py .
+COPY face/eye_features.py .
 # 五個 BASIC ConvNeXt-Tiny ONNX（每個約 106MB）是正式答案。
 COPY models/basic_features_roi/ ./models/basic_features_roi/
 # PRO 側臉鼻型的 ConvNeXt-Tiny。程式與模型必須一起進映像，否則 PRO 會靜默降級。

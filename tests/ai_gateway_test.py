@@ -1,4 +1,5 @@
 import os
+import dataclasses
 import json
 from pathlib import Path
 import unittest
@@ -1114,7 +1115,7 @@ class MemberDeleteClearsMediaFirstTest(unittest.TestCase):
         self.assertEqual(self.face_called, [])
         # 直接驗那段流程的意圖，不必跑完整代理鏈：兩個服務都要被呼叫，
         # 而且用的是同一個 target_owner_id。
-        source = Path(__file__).resolve().parent.joinpath("ai_gateway.py").read_text(encoding="utf-8")
+        source = Path(__file__).resolve().parents[1].joinpath("gateway/ai_gateway.py").read_text(encoding="utf-8")
         self.assertIn("v1/face/users/{target_owner_id}", source,
                       "刪會員時沒有清臉部裁切")
         self.assertIn("render/users/{target_owner_id}", source,
@@ -1122,7 +1123,7 @@ class MemberDeleteClearsMediaFirstTest(unittest.TestCase):
 
     def test_face_failure_stops_the_delete(self):
         """臉部清除失敗要擋下刪除，而且錯誤碼要跟渲染失敗一致。"""
-        source = Path(__file__).resolve().parent.joinpath("ai_gateway.py").read_text(encoding="utf-8")
+        source = Path(__file__).resolve().parents[1].joinpath("gateway/ai_gateway.py").read_text(encoding="utf-8")
         face_block = source.split("face_cleanup = await")[1].split("response = await")[0]
         self.assertIn("MEMBER_MEDIA_DELETE_INCOMPLETE", face_block,
                       "臉部清除失敗沒有擋下刪除")
@@ -1130,7 +1131,7 @@ class MemberDeleteClearsMediaFirstTest(unittest.TestCase):
 
     def test_cleanup_runs_before_forwarding(self):
         """清除必須在轉發之前。順序反了就等於沒有保證。"""
-        source = Path(__file__).resolve().parent.joinpath("ai_gateway.py").read_text(encoding="utf-8")
+        source = Path(__file__).resolve().parents[1].joinpath("gateway/ai_gateway.py").read_text(encoding="utf-8")
         block = source.split("Privacy-first deletion")[1]
         face_at = block.index("v1/face/users/")
         forward_at = block.index("response = await request.app.state.http_client.request")
@@ -1139,10 +1140,157 @@ class MemberDeleteClearsMediaFirstTest(unittest.TestCase):
 
     def test_zero_contributions_is_not_a_failure(self):
         """沒開啟貢獻功能時會回 0 筆——那是成功，不能讓所有會員都刪不掉。"""
-        source = Path(__file__).resolve().parent.joinpath("ai_gateway.py").read_text(encoding="utf-8")
+        source = Path(__file__).resolve().parents[1].joinpath("gateway/ai_gateway.py").read_text(encoding="utf-8")
         block = source.split("face_cleanup = await")[1].split("response = await")[0]
         self.assertNotIn("contributions", block,
                          "用刪除筆數判斷成敗，會讓沒有貢獻樣本的會員刪不掉")
+
+
+class GuestTrialTest(unittest.TestCase):
+    """訪客試用：流程要通，但不能變成繞過會員驗證的後門。"""
+
+    def setUp(self):
+        self._was_enabled = gateway.GUEST_TRIAL_ENABLED
+        gateway.GUEST_TRIAL_ENABLED = True
+
+    def tearDown(self):
+        gateway.GUEST_TRIAL_ENABLED = self._was_enabled
+
+    @staticmethod
+    def _ticket(guest_id: str = "guest-abc", ttl: int = 3600) -> str:
+        expires_at = int(gateway.time.time()) + ttl
+        return f"{guest_id}.{expires_at}.{gateway._guest_ticket_mac(guest_id, expires_at)}"
+
+    def _guest_request(self, method: str = "POST", ticket: str = "", api_key: str = "face-client-key") -> Mock:
+        request = Mock()
+        request.method = method
+        request.headers = {
+            gateway.GUEST_TICKET_HEADER: ticket or self._ticket(),
+            # 訪客不繞過用戶端金鑰。這道關卡在訪客判定之前，前端本來就會帶。
+            "x-api-key": api_key,
+        }
+        request.cookies = {}
+        request.body = AsyncMock(return_value=b"")
+        # proxy 會 list(query_params.multi_items())。留成 Mock 的話會丟 TypeError，
+        # 而那個例外被 proxy 的 except Exception 吞成 503——測試就永遠走不到轉發之後，
+        # 看起來卻像通過。
+        request.query_params.multi_items = Mock(return_value=[])
+        request.app.state.http_client.request = AsyncMock()
+        return request
+
+    def test_forged_ticket_is_rejected(self):
+        """自己編一張票券要驗不過，否則額度形同虛設。"""
+        self.assertEqual(gateway.read_guest_id(self._guest_request(ticket="guest-abc.9999999999.deadbeef")), "")
+
+    def test_expired_ticket_is_rejected(self):
+        self.assertEqual(gateway.read_guest_id(self._guest_request(ticket=self._ticket(ttl=-1))), "")
+
+    def test_valid_ticket_round_trips(self):
+        self.assertEqual(gateway.read_guest_id(self._guest_request(ticket=self._ticket("guest-xyz"))), "guest-xyz")
+
+    def test_guest_actor_never_collides_with_a_member(self):
+        """兩種身分共用渲染服務的 ownerId 欄位，命名空間重疊就等於可以看別人的圖。"""
+        self.assertTrue(gateway.guest_actor_id("guest-abc").startswith("guest_"))
+        self.assertTrue(opaque_actor_id("member@example.com").startswith("actor_"))
+        self.assertNotEqual(gateway.guest_actor_id("guest-abc"), opaque_actor_id("guest-abc"))
+
+    def test_guest_cannot_reach_member_database(self):
+        """收藏與會員資料一律關著——訪客只有體驗，不能存圖。"""
+        request = self._guest_request()
+        with self.assertRaises(Exception) as raised:
+            asyncio.run(proxy("member-database", "api/members/someone@example.com/saved-looks", request))
+        self.assertEqual(raised.exception.status_code, 401)
+        self.assertEqual(raised.exception.detail["error"]["code"], "MEMBER_AUTH_REQUIRED")
+        request.app.state.http_client.request.assert_not_awaited()
+
+    def test_guest_cannot_reach_face_pro(self):
+        """PRO 不在訪客的開放清單裡，免費體驗只給 BASIC。"""
+        request = self._guest_request()
+        with self.assertRaises(Exception) as raised:
+            asyncio.run(proxy("face-pro", "v1/face/jobs/pro", request))
+        self.assertEqual(raised.exception.status_code, 401)
+        self.assertEqual(raised.exception.detail["error"]["code"], "MEMBER_AUTH_REQUIRED")
+        request.app.state.http_client.request.assert_not_awaited()
+
+    def test_guest_write_is_limited_to_the_listed_paths(self):
+        """開放清單以外的寫入要回到會員驗證，例如五官修正回饋。"""
+        self.assertTrue(gateway._guest_path_allowed("face-basic", "v1/face/jobs/basic", "POST"))
+        self.assertTrue(gateway._guest_path_allowed("face-basic", "v1/face/pose", "POST"))
+        self.assertTrue(gateway._guest_path_allowed("render-service", "render", "POST"))
+        self.assertFalse(gateway._guest_path_allowed("face-basic", "v1/face/jobs/JOB-012345abcdef/feedback", "POST"))
+        self.assertFalse(gateway._guest_path_allowed("member-database", "api/members", "GET"))
+        # 讀取放行：輪詢工作狀態、取結果都是 GET。
+        self.assertTrue(gateway._guest_path_allowed("face-basic", "v1/face/jobs/JOB-012345abcdef/result", "GET"))
+
+    def test_only_starting_an_analysis_spends_quota(self):
+        """一次流程扣一次。渲染與輪詢不扣，否則重試會把三次吃光。"""
+        self.assertTrue(gateway._guest_spends_quota("face-basic", "v1/face/jobs/basic", "POST"))
+        self.assertFalse(gateway._guest_spends_quota("render-service", "render", "POST"))
+        self.assertFalse(gateway._guest_spends_quota("face-basic", "v1/face/pose", "POST"))
+        self.assertFalse(gateway._guest_spends_quota("face-basic", "v1/face/jobs/basic", "GET"))
+
+    def test_exhausted_quota_is_refused_before_the_upstream(self):
+        request = self._guest_request()
+        with unittest.mock.patch.object(gateway, "guest_trial_remaining", return_value=0):
+            with self.assertRaises(Exception) as raised:
+                asyncio.run(proxy("face-basic", "v1/face/jobs/basic", request))
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertEqual(raised.exception.detail["error"]["code"], "GUEST_TRIAL_EXHAUSTED")
+        request.app.state.http_client.request.assert_not_awaited()
+
+    @staticmethod
+    def _reachable(service: str):
+        """把 upstream 換成一個「設定完整、不需要 Cloud Run IAM」的版本，
+        好讓測試走到實際轉發那一步。"""
+        return dataclasses.replace(
+            gateway.UPSTREAMS[service],
+            base_url="https://upstream.example",
+            api_key="upstream-key",
+            requires_cloud_run_iam=False,
+        )
+
+    def test_quota_is_spent_only_after_the_upstream_accepts(self):
+        """上游掛掉不能吃掉使用者的額度——總共只有三次。"""
+        request = self._guest_request()
+        failed = Mock(status_code=503, content=b"{}", headers={}, is_success=False)
+        request.app.state.http_client.request = AsyncMock(return_value=failed)
+        with unittest.mock.patch.dict(gateway.UPSTREAMS, {"face-basic": self._reachable("face-basic")}), \
+                unittest.mock.patch.object(gateway, "guest_trial_record") as record, \
+                unittest.mock.patch.object(gateway, "guest_trial_remaining", return_value=3):
+            asyncio.run(proxy("face-basic", "v1/face/jobs/basic", request))
+        record.assert_not_called()
+
+    def test_quota_is_spent_when_the_analysis_is_accepted(self):
+        request = self._guest_request()
+        accepted = Mock(status_code=202, content=b"{}", headers={}, is_success=True)
+        request.app.state.http_client.request = AsyncMock(return_value=accepted)
+        with unittest.mock.patch.dict(gateway.UPSTREAMS, {"face-basic": self._reachable("face-basic")}), \
+                unittest.mock.patch.object(gateway, "guest_trial_record") as record, \
+                unittest.mock.patch.object(gateway, "guest_trial_remaining", return_value=3):
+            result = asyncio.run(proxy("face-basic", "v1/face/jobs/basic", request))
+        record.assert_called_once()
+        self.assertEqual(result.headers["x-guest-trial-remaining"], "3")
+
+    def test_a_signed_in_member_never_falls_into_the_guest_branch(self):
+        """帶著 session 又多帶一個訪客標頭時，仍然照會員流程走。"""
+        token, _ = issue_access_token("member@example.com", "member", "active")
+        request = self._guest_request(method="GET")
+        request.headers["authorization"] = f"Bearer {token}"
+        request.cookies = session_cookies(token, seal_member_cookie("session=x"))
+        ok = Mock(status_code=200, content=b"{}", headers={}, is_success=True)
+        request.app.state.http_client.request = AsyncMock(return_value=ok)
+        with unittest.mock.patch.dict(gateway.UPSTREAMS, {"face-basic": self._reachable("face-basic")}):
+            result = asyncio.run(proxy("face-basic", "v1/face/jobs/JOB-012345abcdef", request))
+        # 走會員路徑就不會帶上訪客的剩餘次數標頭。
+        self.assertNotIn("x-guest-trial-remaining", result.headers)
+
+    def test_disabled_flag_keeps_the_old_401(self):
+        gateway.GUEST_TRIAL_ENABLED = False
+        request = self._guest_request()
+        with self.assertRaises(Exception) as raised:
+            asyncio.run(proxy("face-basic", "v1/face/jobs/basic", request))
+        self.assertEqual(raised.exception.status_code, 401)
+        self.assertEqual(raised.exception.detail["error"]["code"], "MEMBER_AUTH_REQUIRED")
 
 
 if __name__ == "__main__":
