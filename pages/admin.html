@@ -21,6 +21,9 @@
             <button type="button" data-admin-section="crawler">
                 <span class="admin-nav-index">05</span><span>暫存商品審核</span>
             </button>
+            <button type="button" data-admin-section="feedback">
+                <span class="admin-nav-index">06</span><span>模型修正複核</span>
+            </button>
         </nav>
 
         <div class="admin-account">
@@ -286,6 +289,34 @@
                     <button class="admin-secondary-button" id="adminStagingPrev" type="button">上一頁</button>
                     <span id="adminStagingPageInfo"></span>
                     <button class="admin-secondary-button" id="adminStagingNext" type="button">下一頁</button>
+                </div>
+            </section>
+
+            <!-- 模型修正複核：使用者按「這判斷不準」改過的每一筆，攤開讓管理員第二次檢查。
+                 這些修正會直接變成重訓的標籤，而在這一頁出現之前沒有任何人看過它們。 -->
+            <section class="admin-view" data-admin-view="feedback" hidden>
+                <div class="admin-view-heading">
+                    <div><span>Model Feedback</span><h2>模型修正複核</h2></div>
+                    <span class="admin-crawler-state idle" id="adminFeedbackState">尚未載入</span>
+                </div>
+
+                <div class="admin-staging-toolbar">
+                    <p class="admin-crawler-message" id="adminFeedbackSummary" aria-live="polite">
+                        使用者修正過的五官判斷。每一筆都會成為重訓的標籤，請逐筆確認合理再採用。
+                    </p>
+                    <button class="admin-primary-button" id="adminFeedbackRefresh" type="button">重新載入</button>
+                </div>
+
+                <div class="admin-table-wrap">
+                    <table class="admin-table">
+                        <thead>
+                            <tr>
+                                <th>時間</th><th>模式</th><th>部位</th>
+                                <th>模型判斷</th><th>使用者改成</th><th>Job</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminFeedbackBody"></tbody>
+                    </table>
                 </div>
             </section>
         </main>

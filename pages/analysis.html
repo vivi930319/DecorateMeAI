@@ -44,8 +44,9 @@
             </div>
             <div class="pro-scan-panel">
                 <div class="pro-scan-copy">
-                    <b>自動掃描拍攝</b>
-                    <span>看著鏡頭取得正面照，再慢慢轉向側面；系統會依臉部 yaw 角度自動擷取。</span>
+                    <b>角度輔助拍攝</b>
+                    <span>系統即時顯示臉部 yaw／pitch 角度並提示對準與否，<b>由你自己按下擷取</b>——
+                        角度正確時按「手動存正面」或「手動存側面」。也可以直接用上面兩格上傳現成照片。</span>
                 </div>
                 <div class="camera-actions">
                     <button class="btn-outline btn-sm" id="startProScanBtn">開始掃描</button>
@@ -90,8 +91,8 @@
         <div class="loading-bar" id="loadingBar"><div class="fill" id="loadingFill"></div></div>
         <div class="loading-status" id="loadingStatus">等待圖片</div>
         <div class="package-status" id="packageStatus">
-            <b>資料包狀態</b>
-            <span>尚未建立</span>
+            <b>分析進度</b>
+            <span>尚未開始</span>
         </div>
         <button class="btn-gold btn-full" id="analyzeBtn" style="margin-top:14px;">開 始 分 析</button>
     </div>
@@ -107,16 +108,16 @@
         </div>
         <div class="skin-box">
             <div class="skin-title">膚 色 基 準 · M A C</div>
-            <div class="skin-row"><div class="skin-swatch" id="skinSwatch"></div><div><div class="skin-name" id="skinName">—</div><div class="skin-lab" id="skinLab"></div></div></div>
+            <div class="skin-row"><div class="skin-swatch" id="skinSwatch"></div><div><div class="skin-name" id="skinName">—</div></div></div>
             <div class="skin-warn" id="skinReliabilityWarn" style="display:none;"></div>
         </div>
         <div class="skin-box">
-            <div class="skin-title">唇 色 原 始 值</div>
-            <div class="skin-row"><div class="skin-swatch" id="lipSwatch"></div><div><div class="skin-lab" id="lipLab"></div></div></div>
+            <div class="skin-title">唇 色</div>
+            <div class="skin-row"><div class="skin-swatch" id="lipSwatch"></div></div>
         </div>
         <div style="text-align:center;margin-top:20px;">
             <button class="btn-gold" id="goStyleBtn" style="display:none;">選擇風格 →</button>
         </div>
     </div>
 </div>
-<section class="analysis-info-strip" aria-label="分析說明"><article><h3>角度引導</h3><p>PRO 模式顯示 yaw／pitch 與穩定保持時間，自動擷取正面、左右 45° 與側面。</p></article><article><h3>隱私保護</h3><p>照片僅依系統政策保存；私人媒體不公開，並支援由使用者刪除。</p></article><article><h3>模型回饋</h3><p>分析完成後可修正預測，回饋會與 Analysis Package 關聯。</p></article></section>
+<section class="analysis-info-strip" aria-label="分析說明"><article><h3>角度引導</h3><p>PRO 模式會即時提示你的臉有沒有轉正，角度對了再由你自己按下擷取。</p></article><article><h3>隱私保護</h3><p>分析用的照片不會被保存，你也可以隨時刪除自己的資料。</p></article><article><h3>模型回饋</h3><p>分析完成後可以修正判斷結果，你的修正會立刻套用到後續建議。</p></article></section>

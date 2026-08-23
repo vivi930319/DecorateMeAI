@@ -8,8 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Serif+TC:wght@300;400;500;700&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/main.css?v=20260807-203557">
-<link rel="stylesheet" href="css/makeup-flow.css?v=20260815-113801">
+<link rel="stylesheet" href="css/main.css?v=20260823-124329">
+<link rel="stylesheet" href="css/makeup-flow.css?v=20260823-124329">
 <script>
 (function(){
     try {
@@ -149,13 +149,34 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     }, { passive: true });
 })();
 </script>
-<script defer src="js/config.js?v=20260807-203557"></script>
-<script defer src="config.local.js?v=20260807-203557" onerror="void 0"></script>
-<script defer src="js/service-endpoints.js?v=20260807-203557"></script>
-<script defer src="js/data.js?v=20260807-203557"></script>
-<script defer src="js/api.js?v=20260807-203557"></script>
-<script defer src="js/makeup-contract.js?v=20260815-113801"></script>
-<script defer src="js/router.js?v=20260807-203557"></script>
-<script defer src="js/makeup-flow.js?v=20260815-113801"></script>
+<script defer src="js/config.js?v=20260823-124329"></script>
+<script>
+// config.local.js 只存在於開發機：firebase.json 明確把它排除在部署之外（它是本機覆寫用的，
+// 而且 deploy.ps1 會斷言這件事，因為那個檔案可能含有不該公開的設定）。
+//
+// 但先前是用靜態 <script src="config.local.js"> 載它，於是**正式站每一位訪客**都會拿到：
+//     GET /config.local.js  404
+//     Refused to execute script ... MIME type ('text/html') is not executable
+// 第二則是因為 Firebase Hosting 對未知路徑回的是 index.html（HTML，不是 JS）。
+// 那個 onerror="void 0" 擋不住這兩則——它們是網路層與 MIME 檢查印的，不是 script 的
+// error 事件。結果是 console 永遠有兩行紅字，真正的錯誤會被埋在裡面。
+//
+// 改成只在本機注入。async=false 讓它維持插入順序，在開發機上會早於 api.js 讀設定；
+// 正式站則完全不會發出這個請求。
+(function () {
+    var host = location.hostname;
+    if (host !== 'localhost' && host !== '127.0.0.1' && location.protocol !== 'file:') return;
+    var local = document.createElement('script');
+    local.src = 'config.local.js';
+    local.async = false;
+    document.currentScript.parentNode.insertBefore(local, document.currentScript.nextSibling);
+})();
+</script>
+<script defer src="js/service-endpoints.js?v=20260823-124329"></script>
+<script defer src="js/data.js?v=20260823-124329"></script>
+<script defer src="js/api.js?v=20260823-124329"></script>
+<script defer src="js/makeup-contract.js?v=20260823-124329"></script>
+<script defer src="js/router.js?v=20260823-124329"></script>
+<script defer src="js/makeup-flow.js?v=20260823-124329"></script>
 </body>
 </html>
