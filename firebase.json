@@ -22,7 +22,11 @@
       "img.png",
       "img_1.png",
       "img_2.png",
-      "img_3.png"
+      "img_3.png",
+      "config.local.js",
+      "demo_makeup_flow/**",
+      "tests/**",
+      "pytest.ini"
     ],
     "redirects": [
       { "source": "/softbaddie.jpg", "destination": "/softbaddie.webp", "type": 301 },
@@ -40,6 +44,10 @@
       },
       {
         "source": "/auth/**",
+        "run": { "serviceId": "ai-gateway", "region": "asia-east1" }
+      },
+      {
+        "source": "/guest/**",
         "run": { "serviceId": "ai-gateway", "region": "asia-east1" }
       },
       {

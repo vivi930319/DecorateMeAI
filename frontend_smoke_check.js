@@ -5,6 +5,8 @@ const vm = require('vm');
 const rootDir = __dirname;
 const apiSource = fs.readFileSync(path.join(rootDir, 'js', 'api.js'), 'utf8');
 const routerSource = fs.readFileSync(path.join(rootDir, 'js', 'router.js'), 'utf8');
+const makeupContractSource = fs.readFileSync(path.join(rootDir, 'js', 'makeup-contract.js'), 'utf8');
+const makeupFlowSource = fs.readFileSync(path.join(rootDir, 'js', 'makeup-flow.js'), 'utf8');
 const storage = new Map();
 const session = new Map();
 const browserLocation = { origin: 'https://decorate-me.web.app', reload() {} };
@@ -205,13 +207,86 @@ if (!indexSource.includes('decorate-me-round-source.jpg') || !dashboardSource.in
   throw new Error('Homepage brand assets are not wired into the rendered templates');
 }
 
+// ── 正式妝容流程與 Ollama 回傳契約 ──────────────────────────
+// 正式站只載入真實 API 流程，不得把 Demo 的 OTP／假回傳帶上線。
+for (const asset of ['css/makeup-flow.css', 'js/makeup-contract.js', 'js/makeup-flow.js']) {
+  if (!indexSource.includes(asset)) throw new Error(`Production makeup flow asset missing from index.html: ${asset}`);
+}
+for (const forbidden of ['js/demo-mode.js', 'js/demo-flow.js']) {
+  if (indexSource.includes(forbidden)) throw new Error(`Production index must not load ${forbidden}`);
+}
+if (makeupFlowSource.includes('DecorateDemo') || makeupFlowSource.includes('demo.suggestion')) {
+  throw new Error('Production makeup flow must not depend on Demo suggestion data');
+}
+if (makeupFlowSource.includes("'assets/before.png'") || makeupFlowSource.includes("'assets/after.png'")) {
+  throw new Error('Production makeup flow must not fall back to Demo portrait assets');
+}
+if (routerSource.includes('查看送給圖像模型的英文指令') || routerSource.includes('這次實際下給模型的指令')) {
+  throw new Error('English render prompts must not be exposed in the user-facing frontend');
+}
+
+const contractSandbox = { window: {} };
+vm.createContext(contractSandbox);
+vm.runInContext(`${makeupContractSource}; this.Contract = window.MakeupSuggestionContract;`, contractSandbox);
+const contract = contractSandbox.Contract;
+if (!contract || typeof contract.normalize !== 'function') throw new Error('MakeupSuggestionContract.normalize is missing');
+
+{
+  const structured = contract.normalize({
+    structured: {
+      overall: { summary: '結構化整體建議', palette: ['#112233', '#AABBCC'] },
+      parts: {
+        base: { label: '底妝', analysis: '底妝分析', steps: ['底妝步驟'], avoid: ['底妝避免'] },
+        eyebrow: { label: '眉型', analysis: '眉型分析', steps: ['眉型步驟'], avoid: ['眉型避免'] },
+        eyes: { label: '眼妝', analysis: '眼妝分析', steps: ['眼妝步驟'], avoid: ['眼妝避免'] },
+        contour: { label: '腮紅修容', analysis: '修容分析', steps: ['修容步驟'], avoid: ['修容避免'] },
+        lips: { label: '唇妝', analysis: '唇妝分析', steps: ['唇妝步驟'], avoid: ['唇妝避免'] }
+      }
+    }
+  }, { palette: [] });
+  if (structured.source !== 'structured' || structured.parts.brow.steps[0] !== '眉型步驟') {
+    throw new Error('Structured Ollama response must map eyebrow → brow without changing content');
+  }
+}
+
+{
+  const legacyText = [
+    '1. 整體妝容方向',
+    '保留乾淨膚感，腮紅斜掃顴骨並輕修輪廓。',
+    '2. 底妝建議',
+    '薄擦半霧面底妝，鼻翼局部遮瑕。',
+    '3. 眉眼妝建議',
+    '眉色使用灰棕色並順著毛流填補。眼尾眼線微微上揚二至三毫米。',
+    '4. 唇妝建議',
+    '使用低飽和玫瑰色唇彩。',
+    '5. 避免事項',
+    '避免眉色過黑。避免粗黑下眼線。',
+    '6. 總結與建議',
+    '整體維持低飽和與乾淨線條。'
+  ].join('\n');
+  const legacy = contract.normalize({ suggestion: legacyText }, { palette: ['#D8B69E'] });
+  if (legacy.source !== 'legacy') throw new Error('Legacy Ollama response must use compatibility mapping');
+  if (!legacy.parts.base.steps.some(step => step.includes('半霧面底妝'))) throw new Error('Legacy base advice must come from the returned base section');
+  if (!legacy.parts.brow.steps.some(step => step.includes('灰棕色'))) throw new Error('Legacy brow advice must come from returned brow sentences');
+  if (!legacy.parts.eyes.steps.some(step => step.includes('眼線'))) throw new Error('Legacy eye advice must come from returned eye sentences');
+  if (!legacy.parts.contour.steps.some(step => step.includes('腮紅'))) throw new Error('Legacy contour advice must come from returned contour-related sentences');
+  if (!legacy.parts.lips.steps.some(step => step.includes('玫瑰色'))) throw new Error('Legacy lip advice must come from the returned lip section');
+}
+
+{
+  let rejected = false;
+  try { contract.normalize({ suggestion: '' }, { palette: [] }); } catch (error) { rejected = error.code === 'INVALID_SUGGESTION_CONTRACT'; }
+  if (!rejected) throw new Error('Missing Ollama content must be rejected instead of replaced with fake advice');
+}
+
 // ── 管理中台與會員端外框必須完全分離 ─────────────────────────
 // 只有管理員進入 admin 頁面時才隱藏會員介面。
 const cssSource = fs.readFileSync(path.join(rootDir, 'css', 'main.css'), 'utf8');
 for (const invariant of [
   "const adminMode = admin && activePage === 'admin'",
   'updateAdminNav(page);',
-  'updateAdminNav(landing);'
+  // showApp() 會還原重新載入前的頁面，所以切外框的參數是 target（管理員時等於 landing）。
+  'updateAdminNav(target);'
 ]) {
   if (!routerSource.includes(invariant)) throw new Error(`Admin/member shell separation missing: ${invariant}`);
 }
@@ -237,6 +312,12 @@ for (const invariant of [
 // ── Firebase 根頁不可快取舊 index.html ────────────────────────
 // 根網址與 index.html 都要停用快取，避免部署後仍顯示舊版外框。
 const firebaseConfig = JSON.parse(fs.readFileSync(path.join(rootDir, 'firebase.json'), 'utf8'));
+if (!(firebaseConfig?.hosting?.ignore || []).includes('demo_makeup_flow/**')) {
+  throw new Error('Firebase Hosting must exclude the local Demo with its mock authentication');
+}
+if (!(firebaseConfig?.hosting?.ignore || []).includes('config.local.js')) {
+  throw new Error('Firebase Hosting must exclude the local-only config.local.js');
+}
 const hostingHeaders = firebaseConfig?.hosting?.headers || [];
 for (const source of ['/', '/index.html']) {
   const rule = hostingHeaders.find(item => item.source === source);

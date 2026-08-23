@@ -16,9 +16,16 @@ $indexPath = Join-Path $PSScriptRoot "index.html"
 Write-Host "執行部署前語法、流程與秘密掃描..." -ForegroundColor Cyan
 node --check "js/api.js"
 node --check "js/router.js"
+node --check "js/makeup-contract.js"
+node --check "js/makeup-flow.js"
 node "frontend_smoke_check.js"
 
-$secretMatches = & rg -n --glob "*.js" --glob "*.html" --glob "*.json" `
+$firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
+if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {
+    throw "部署中止：firebase.json 必須排除只供本機使用的 config.local.js。"
+}
+
+$secretMatches = & rg -n --glob "*.js" --glob "!config.local.js" --glob "*.html" --glob "*.json" `
     "(faceApiKey\s*:|renderApiKey\s*:|textSuggestionApiKey\s*:|https://[A-Za-z0-9-]+\.trycloudflare\.com)" . 2>$null
 if ($LASTEXITCODE -eq 0 -and $secretMatches) {
     throw "部署中止：公開前端仍包含上游金鑰欄位或臨時 Tunnel 網址。`n$secretMatches"
