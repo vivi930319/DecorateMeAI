@@ -88,11 +88,11 @@
 !專案交接手冊_搬機版_2026-07-17.md
 !給爬蟲端與資料庫端_商品搜尋管理與推薦演算法整合規格書_2026-07-17.md
 !Admin商品管理安全Proxy三方對接規格書_2026-07-18.md
-!firebase-hosting-full/
-!firebase-hosting-full/前端交接手冊_搬機版_2026-07-17.md
-!firebase-hosting-full/public/
-!firebase-hosting-full/public/config.local.example.js
-!firebase-hosting-full/public/pages/
+# firebase-hosting-full/ 是 web_frontend 的另一份副本（63 檔、20MB），兩份會互蓋。
+# 這些放行規則從來沒有生效過——目錄下 0 個檔案進過版控。真正在部署的是
+# OneDrive 底下那份 web_frontend（它有自己的 repo）。留著放行只會讓某天有人
+# `git add .` 就把 20MB 的重複前端推進歷史，而歷史刪不掉。
+# 需要的話請到 web_frontend 那個 repo 取用。
 !firebase-hosting-full/public/pages/checkin.html
 !firebase-hosting-full/public/pages/admin.html
 !firebase-hosting-full/public/js/
@@ -248,6 +248,26 @@ local_only_notes/
 # 推上公開 repo 等於親手完成那份報告要阻止的外洩；去識別化又會讓證據失去說服力。
 # 所以整份留在本機，要對外講這個問題請引用 GitHub issue，不要引用這個檔案。
 /MEMBER_DATABASE_SECURITY_ISSUE.md
+
+# 工作過程的交接、回報與現況文件留在本機，不進 GitHub。
+# 它們是寫給當下那次協作看的（「今日變更」「待重測清單」「現況與剩餘」），
+# 過幾天就對不上實際程式碼，留在 repo 裡只會讓後來的人讀到過期的事實。
+# 需要對外講的內容請開 issue 或寫進正式規格書。
+/交接_2026-08-14_今日變更與組員重測清單.md
+/今日工作與現況_2026-08-14.md
+/全系統審查_2026-07-10.md
+/前端文字總表_2026-08-14.md
+/實驗紀錄_模型訓練.md
+/流程優化建議_2026-07-08.md
+/五官分類交叉驗證報告_2026-08-13.md
+/給Ollama端_五官欄位讀不到_2026-08-14.md
+/給Ollama端_渲染指令的分工與格式_2026-08-15.md
+/給演算法端_每類主推一件與80分門檻_2026-08-14.md
+/給演算法端_膚色可信度降級的回報欄位_2026-08-14.md
+/給資料庫端_商品顏色資料遺失回報_2026-08-13.md
+/隱私說明_渲染圖公開讀_給新手.md
+/ollama_personalized_advice_database_architecture.md
+/recommendation_system_design.md
 
 # ── 2026-08-08：原始檔補進版控 ────────────────────────────────────────
 #
