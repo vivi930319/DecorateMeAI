@@ -1,0 +1,42 @@
+# 前端的本機容器。
+#
+# 這份 compose 只管前端。後端（gateway、臉部分析、文字建議）在
+# PythonProject12/docker-compose.yml，兩份各自獨立啟動——刻意不合併成一份，
+# 因為前後端是兩個不同的 git repo，共用一份 compose 會讓任何一邊的 clone 都不完整。
+#
+# 啟動順序：
+#   1. 後端  cd PythonProject12 && docker compose up -d
+#   2. 前端  cd web_frontend    && docker compose up -d --build
+#   3. 瀏覽器開 http://localhost:8080
+#
+# 前端沒有後端也起得來（靜態頁面正常，API 呼叫會拿到 502），
+# 所以這裡不做跨 compose 的相依宣告。
+
+services:
+  web_frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: decorate_me_frontend
+    ports:
+      # 8080 這個埠是有意義的，不能隨意改：
+      # config.docker.js 把 localGatewayPort 設成 8080，讓前端把 gateway 請求
+      # 打回自己（同源），再由 nginx proxy 出去。改了埠就要同步改那個檔，
+      # 否則前端會去打一個沒有東西在聽的埠。
+      - "8080:8080"
+    extra_hosts:
+      # nginx.conf 用 host.docker.internal 連到後端 compose 的 gateway（8015）。
+      # Docker Desktop（Windows／macOS）本來就有這個名字；Linux 沒有，這行補上。
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      # 只驗 nginx 自己活著。不驗 gateway——後端沒開的時候前端仍應被視為健康，
+      # 把上游狀態綁進前端的健康檢查會讓「前端壞了」與「後端沒開」變得無法區分。
+      # 必須寫 127.0.0.1，不能寫 localhost：nginx 只監聽 0.0.0.0:8080（IPv4），
+      # 而容器內的 localhost 會先解析成 IPv6 的 ::1，wget 直接拿到 Connection refused。
+      # 站台本身完全正常，容器卻會被標成 unhealthy——查起來很容易誤以為是 nginx 掛了。
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/index.html"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

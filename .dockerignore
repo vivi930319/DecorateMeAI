@@ -1,0 +1,48 @@
+# 這份清單刻意與 firebase.json 的 hosting.ignore 對齊。
+#
+# 理由：容器的目的是「在本機重現線上」。線上 Firebase Hosting 的部署內容是
+# 「整個目錄減去 ignore 清單」，所以容器也用同一套邏輯（Dockerfile 是 COPY . .），
+# 兩邊才會一致。先前用「逐項 COPY 需要的目錄」，結果漏了 pages/、recommendation/
+# 與 favicon.svg —— 靜態站漏檔不會 build 失敗，只會在點進某一頁時 404，
+# 而那時候看起來會像路由壞了。
+#
+# 修改這份檔案時，請同步檢查 firebase.json 的 ignore 是否也要跟著改。
+
+# ── 只有這裡與 firebase.json 不同：金鑰 ──────────────────────────────────
+# 開發機的 config.local.js 含真實金鑰（faceApiKey、renderApiKey、
+# textSuggestionApiKey）與當次 Tunnel 網址。映像會被分享、會被推到 registry，
+# 金鑰一旦進了 layer，後面再刪也還留在歷史層裡。
+# 容器用的是 config.docker.js（不含金鑰），由 Dockerfile 複製成 config.local.js。
+config.local.js
+config.local.example.js
+
+# ── 以下對齊 firebase.json hosting.ignore ────────────────────────────────
+firebase.json
+**/.*
+**/node_modules/**
+**/*.md
+**/*.bak*
+**/*.log
+**/*.docx
+**/*.pdf
+**/*.pptx
+**/*.drawio
+**/*.py
+**/*.ps1
+docs/**
+frontend_smoke_check.js
+face_job_error_check.js
+demo_makeup_flow/**
+img.png
+img_1.png
+img_2.png
+img_3.png
+
+# ── 容器專屬 ──────────────────────────────────────────────────────────────
+# 注意：Dockerfile／nginx.conf／config.docker.js **不能**排除在這裡。
+# .dockerignore 決定的是「什麼進得了 build context」，被排除的檔案 COPY 不到，
+# build 會直接失敗（`"/nginx.conf": not found`）。它們不該出現在網站根目錄這件事，
+# 由 Dockerfile 最後那行 rm 處理，不是由這份清單處理。
+tests/
+pytest.ini
+dev_server.py
