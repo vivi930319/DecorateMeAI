@@ -30,3 +30,18 @@ config.local.js
 # 進場動畫的版本比較稿，只在本機看，不進版控也不部署。
 # 先前被 f02d02c 移除過又回來——因為沒有寫進這裡，任何一次 git add -A 都會把它撿回去。
 進場動畫比較.html
+
+# demo_makeup_flow/ 是這個前端的另一份完整副本（54 檔、15MB），只用於展示流程；
+# firebase.json 與 .dockerignore 都已排除它，不會部署。放進版控等於把整個前端
+# 存兩份，而其中一份不會被任何人維護。
+demo_makeup_flow/
+
+# 風格圖的未壓縮原檔（每張約 1.9MB，五張共 8MB）。實際使用的是 .webp 版本，
+# firebase.json 還設了 301 把舊的 .png/.jpg 導過去。這幾張沒有被任何
+# js/html/css 引用過——確認過才加這條。原檔要保存請放設計素材庫，不要放 repo：
+# 二進位檔進了 git 歷史就拿不掉，而它們比整個原始碼還大。
+style-hongkong.png
+style-japanese.png
+style-korean.jpg
+style-rich.png
+style-yandere.png
