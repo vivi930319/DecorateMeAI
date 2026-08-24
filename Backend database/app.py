@@ -40,7 +40,7 @@ from forms import (
 from otp_utils import generate_otp, redis_key, send_otp_email, attempt_key
 from recommendation import (
     recommend_products, health_check, STYLE_FALLBACK_TAGS,
-    hex_to_rgb, rgb_to_lab,
+    hex_to_rgb, rgb_to_lab, delta_e,
 )
 from recommendation import AnalysisContractError
 from crawler_preview import (
@@ -2199,6 +2199,25 @@ def _catalog_item_by_id(product_id):
 
 def _catalog_list_response():
     items = _catalog_rows()
+    raw_category = request.args.get("category") or request.args.get("type")
+    if raw_category:
+        normalized_category = cat_to_product_category(raw_category)
+        normalized_type = category_to_frontend_type(normalized_category)
+        items = [item for item in items if (
+                cat_to_product_category(item.get("category") or item.get("type")) == normalized_category
+                or item.get("type") == raw_category
+                or item.get("type") == normalized_type
+        )]
+    raw_brand = (request.args.get("brand") or "").strip().casefold()
+    if raw_brand:
+        items = [item for item in items if str(item.get("brand") or "").casefold() == raw_brand]
+    raw_stock = request.args.get("inStock")
+    if raw_stock is not None:
+        stock_value = raw_stock.strip().casefold()
+        if stock_value not in {"true", "false", "1", "0"}:
+            return error_response("INVALID_FILTER", "inStock 必須是布林值", 400)
+        expected_stock = stock_value in {"true", "1"}
+        items = [item for item in items if item.get("inStock") is expected_stock]
     query = (request.args.get("query") or request.args.get("q") or "").strip().casefold()
     if query:
         items = [item for item in items if query in " ".join(
@@ -2217,6 +2236,76 @@ def _catalog_list_response():
         item["id"] > page[-1]["id"] for item in items) else None
     return jsonify({"ok": True, "items": page, "products": page, "total": len(items), "nextCursor": next_cursor,
                     "query": query or None})
+
+
+def _catalog_numeric_price(value):
+    match = re.search(r"\d[\d,.]*", str(value or ""))
+    return float(match.group(0).replace(",", "")) if match else None
+
+
+def _catalog_similarity(anchor, candidate):
+    anchor_lab, candidate_lab = anchor.get("lab"), candidate.get("lab")
+    color_distance = delta_e(tuple(anchor_lab), tuple(candidate_lab)) if (
+            isinstance(anchor_lab, (list, tuple)) and len(anchor_lab) == 3
+            and isinstance(candidate_lab, (list, tuple)) and len(candidate_lab) == 3
+    ) else None
+    color_score = max(0.0, 1.0 - color_distance / 30.0) if color_distance is not None else 0.5
+    category_score = 1.0 if cat_to_product_category(
+        anchor.get("category") or anchor.get("type")) == cat_to_product_category(
+        candidate.get("category") or candidate.get("type")) else 0.0
+    brand_score = 1.0 if anchor.get("brand") and str(anchor["brand"]).casefold() == str(
+        candidate.get("brand") or "").casefold() else 0.5
+    anchor_tokens = set(re.findall(r"[\w\u4e00-\u9fff]+", " ".join(
+        str(anchor.get(k) or "") for k in ("name", "description", "undertone")).casefold()))
+    candidate_tokens = set(re.findall(r"[\w\u4e00-\u9fff]+", " ".join(
+        str(candidate.get(k) or "") for k in ("name", "description", "undertone")).casefold()))
+    style_score = len(anchor_tokens & candidate_tokens) / len(
+        anchor_tokens | candidate_tokens) if anchor_tokens | candidate_tokens else 0.5
+    anchor_price, candidate_price = _catalog_numeric_price(anchor.get("price")), _catalog_numeric_price(
+        candidate.get("price"))
+    price_score = (max(0.0, 1.0 - abs(anchor_price - candidate_price) / max(anchor_price, candidate_price, 1.0))
+                   if anchor_price is not None and candidate_price is not None else 0.5)
+    total = 0.40 * color_score + 0.25 * style_score + 0.20 * category_score + 0.15 * price_score
+    if color_distance is not None and candidate_lab[0] > anchor_lab[0] + 1:
+        relation, text = "lighter_variant", "同品類且顏色較明亮"
+    elif color_distance is not None and candidate_lab[0] < anchor_lab[0] - 1:
+        relation, text = "darker_variant", "同品類且顏色較深"
+    elif brand_score == 1.0:
+        relation, text = "same_brand", "同品牌的其他選擇"
+    elif candidate_price is not None and anchor_price is not None and candidate_price < anchor_price:
+        relation, text = "budget_alt", "相近妝感且價格較親民"
+    else:
+        relation, text = "same_style_alt", "同品類的相似風格選擇"
+    return total, {"color": round(color_score, 4), "style": round(style_score, 4),
+                   "category": round(category_score, 4), "brand": round(brand_score, 4),
+                   "price": round(price_score, 4)}, relation, text
+
+
+@app.route('/api/products/<int:product_id>/similar', methods=['GET'])
+def get_similar_products_api(product_id):
+    anchor = _catalog_item_by_id(product_id)
+    if anchor is None:
+        return error_response("NOT_FOUND", "找不到商品", 404)
+    try:
+        limit = int(request.args.get("limit", 6))
+    except (TypeError, ValueError):
+        return error_response("INVALID_LIMIT", "limit 必須是整數", 400)
+    if not 1 <= limit <= 20:
+        return error_response("INVALID_LIMIT", "limit 必須介於 1 至 20", 400)
+    category = cat_to_product_category(anchor.get("category") or anchor.get("type"))
+    candidates = [item for item in _catalog_rows() if item["id"] != product_id
+                  and item.get("inStock") and item.get("status") == "active"
+                  and item.get("reviewStatus") == "approved"
+                  and cat_to_product_category(item.get("category") or item.get("type")) == category]
+    ranked = []
+    for item in candidates:
+        similarity, breakdown, relation, reason = _catalog_similarity(anchor, item)
+        ranked.append({**item, "similarity": round(similarity, 4),
+                       "similarityBreakdown": breakdown, "relation": relation,
+                       "matchReason": reason})
+    ranked.sort(key=lambda item: (-item["similarity"], item["id"]))
+    return jsonify({"anchor": {"id": anchor["id"], "name": anchor["name"], "type": anchor["type"]},
+                    "similar": ranked[:limit]}), 200
 
 
 def _catalog_update_response(product_id, data):
@@ -2299,29 +2388,94 @@ def recommendation_candidates(categories=None):
     return candidates
 
 
+def recommendation_behavior_profile(actor, candidates):
+    """Build a minimal, server-side preference profile for ranking.
+
+    Only the signed-in member's existing favourites, try-on saves and cart are
+    read.  No email, image, token or raw event history is sent into the
+    recommendation engine or returned to the browser.
+    """
+    if actor is None:
+        return {"interactionCount": 0, "categoryAffinities": {}, "brandAffinities": {}}
+
+    by_source = {str(item.get("candidateKey")): item for item in candidates}
+    category_totals, brand_totals = {}, {}
+    signal_count = 0
+
+    def add_signal(item_type, item_id, weight):
+        nonlocal signal_count
+        candidate = by_source.get(f"{item_type}:{item_id}")
+        if candidate is None:
+            return
+        signal_count += 1
+        category = str(candidate.get("category") or "").casefold()
+        brand = str(candidate.get("brand") or "").casefold()
+        if category:
+            category_totals[category] = category_totals.get(category, 0.0) + weight
+        if brand:
+            brand_totals[brand] = brand_totals.get(brand, 0.0) + weight
+
+    for item in Favorites.query.filter_by(member_id=actor.phone_number).order_by(Favorites.created_at.desc()).limit(50):
+        add_signal(item.item_type, item.item_id, 1.0)
+    for item in TryonRecords.query.filter_by(member_id=actor.phone_number).order_by(
+            TryonRecords.created_at.desc()).limit(50):
+        add_signal(item.item_type, item.item_id, 0.8)
+    for item in CartItem.query.filter_by(member_email=actor.email).order_by(CartItem.updated_at.desc()).limit(50):
+        # Cart items historically do not retain item_type.  Match their global
+        # catalog id only when that id maps to exactly one eligible candidate.
+        matches = [candidate for candidate in candidates if candidate.get("id") == item.item_id]
+        if len(matches) == 1:
+            add_signal(matches[0].get("type"), matches[0].get("sourceId"), 0.65)
+
+    def normalize(values):
+        maximum = max(values.values(), default=0.0)
+        return {key: round(value / maximum, 4) for key, value in values.items()} if maximum else {}
+
+    return {
+        "interactionCount": signal_count,
+        "categoryAffinities": normalize(category_totals),
+        "brandAffinities": normalize(brand_totals),
+    }
+
+
 @app.route('/recommend-products', methods=['POST'])
 def recommend_products_api():
     """Recommend only products that currently exist in the shared database."""
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return error_response("INVALID_REQUEST", "請提供格式正確的 JSON 物件", 400)
     analysis_package = payload.get("analysisPackage")
-    if not isinstance(analysis_package, dict):
+    if not isinstance(analysis_package, dict) or not analysis_package or not isinstance(
+            analysis_package.get("faceAnalysis"), dict):
         return error_response("INVALID_ANALYSIS_PACKAGE", "缺少臉部分析資料包", 422)
+    raw_limit = payload.get("limit", 12)
+    if isinstance(raw_limit, bool) or not isinstance(raw_limit, int):
+        return error_response("INVALID_REQUEST", "limit 必須是整數", 400)
     try:
-        limit = int(payload.get("limit", 12))
+        limit = int(raw_limit)
     except (TypeError, ValueError):
         return error_response("INVALID_REQUEST", "limit 必須是整數", 400)
     if not 1 <= limit <= 50:
         return error_response("INVALID_REQUEST", "limit 必須介於 1 至 50", 400)
     try:
-        result = recommend_products(analysis_package, recommendation_candidates(), limit)
+        candidates = recommendation_candidates()
+        actor, _ = authenticated_member()
+        behavior_profile = recommendation_behavior_profile(actor, candidates)
+        result = recommend_products(
+            analysis_package, candidates, limit,
+            recommendation_options=payload.get("recommendationOptions"),
+            behavior_profile=behavior_profile,
+        )
     except AnalysisContractError as exc:
         code = str(exc)
         messages = {
             "UNKNOWN_MAKEUP_STYLE": "找不到妝容風格",
             "INVALID_ANALYSIS_PACKAGE": "臉部分析資料包格式無效",
             "INVALID_FACE_ANALYSIS": "缺少臉部分析資料",
+            "IDENTITY_DATA_NOT_ALLOWED": "分析資料不得包含身分、憑證或原始影像資料",
+            "INVALID_REQUEST": "推薦選項格式或範圍無效",
         }
-        return error_response(code, messages.get(code, "推薦資料格式無效"), 422)
+        return error_response(code, messages.get(code, "推薦資料格式無效"), 400 if code == "INVALID_REQUEST" else 422)
     except OperationalError as exc:
         app.logger.exception("product recommendation database error")
         if "timeout" in str(getattr(exc, "orig", exc)).lower():
@@ -2347,6 +2501,8 @@ def recommend_products_api():
             "fallbackReasons": result["fallbackReasons"],
             "skinToneLabReliable": result["skinToneLabReliable"],
             "primary": result["primary"], "alternates": result["alternates"], "threshold": result["threshold"],
+            "personalization": result["personalization"],
+            "shadeRecommendation": result["shadeRecommendation"],
         },
     }
     return jsonify({
@@ -2356,6 +2512,7 @@ def recommend_products_api():
         "fallbackReasons": result["fallbackReasons"],
         "styleTagFallbackUsed": result["styleTagFallbackUsed"],
         "skinToneLabReliable": result["skinToneLabReliable"],
+        "personalization": result["personalization"],
     }), 200
 
 

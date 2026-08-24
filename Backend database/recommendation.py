@@ -6,7 +6,7 @@
 2. 語意風格層：導入 Jaccard 相似度防作弊
 3. 特徵匹配層：導入 O(1) 查表的特徵評分矩陣 (Scoring Matrix)
 4. 權重分配層：依據 Style 動態調整權重 (Dynamic Weights)
-5. 隨機微擾層：加入 Jittering 增加推薦多樣性
+5. 個人化偏好層：以伺服器端既有互動、預算與品牌偏好進行可解釋重排
 """
 
 import math
@@ -14,7 +14,12 @@ from typing import Dict, List, Tuple, Optional, Any
 from makeup_keywords import MAKEUP_KEYWORD_WHITELIST, normalize_style
 
 SCHEMA_VERSION = "2026-08-v2"
-_FORBIDDEN_INPUT_FIELDS = {"email", "member", "memberemail", "name", "token", "cookie", "authorization", "image", "imagebase64", "photo"}
+_FORBIDDEN_INPUT_FIELDS = {
+    "email", "member", "memberemail", "memberid", "userid", "customerid",
+    "name", "fullname", "phone", "phonenumber", "telephone", "mobile",
+    "token", "accesstoken", "refreshtoken", "cookie", "authorization",
+    "image", "imagebase64", "photo", "photobase64", "rawimage",
+}
 
 class AnalysisContractError(ValueError):
     """Raised when a caller sends identity or non-contract analysis data."""
@@ -23,10 +28,21 @@ def _minimized_analysis_package(value: dict) -> dict:
     """Accept only recommendation features; ignore unknown model/internal fields."""
     if not isinstance(value, dict):
         raise AnalysisContractError("INVALID_ANALYSIS_PACKAGE")
-    normalized_keys = {str(key).replace("_", "").lower() for key in value}
-    if normalized_keys & _FORBIDDEN_INPUT_FIELDS:
+    def contains_forbidden_field(node: Any) -> bool:
+        if isinstance(node, dict):
+            for key, child in node.items():
+                normalized = "".join(ch for ch in str(key).casefold() if ch.isalnum())
+                if normalized in _FORBIDDEN_INPUT_FIELDS or contains_forbidden_field(child):
+                    return True
+        elif isinstance(node, list):
+            return any(contains_forbidden_field(child) for child in node)
+        return False
+
+    if contains_forbidden_field(value):
         raise AnalysisContractError("IDENTITY_DATA_NOT_ALLOWED")
-    face = value.get("faceAnalysis") or {}
+    if "faceAnalysis" not in value or not isinstance(value.get("faceAnalysis"), dict):
+        raise AnalysisContractError("INVALID_ANALYSIS_PACKAGE")
+    face = value["faceAnalysis"]
     if not isinstance(face, dict):
         raise AnalysisContractError("INVALID_FACE_ANALYSIS")
     skin = face.get("skinTone") or {}
@@ -35,6 +51,8 @@ def _minimized_analysis_package(value: dict) -> dict:
     generated = value.get("generativeText") or {}
     if not isinstance(generated, dict):
         generated = {}
+    lab = skin.get("lab")
+    lab_reliable = skin.get("labReliable") is not False and _usable_lab(lab)
     return {
         "style": str(value.get("style") or "")[:120],
         "faceAnalysis": {
@@ -42,11 +60,10 @@ def _minimized_analysis_package(value: dict) -> dict:
             "eyeShape": str(face.get("eyeShape") or "")[:40],
             "lipShape": str(face.get("lipShape") or "")[:40],
             "skinTone": {
-                "lab": skin.get("lab"),
+                "lab": lab,
                 "season": str(skin.get("season") or "unknown")[:40],
                 "level": str(skin.get("level") or "")[:80],
-                # Missing flag means a legacy package: preserve old behaviour.
-                "labReliable": skin.get("labReliable") is not False,
+                "labReliable": lab_reliable,
             },
             "lipLab": face.get("lipLab"),
             # Brow/hair colour is intentionally separate from skin tone.  A
@@ -94,6 +111,139 @@ def get_avoid_tags(analysis_package: dict) -> List[str]:
     generative_text = analysis_package.get("generativeText", {}) or {}
     tags = generative_text.get("avoidTags")
     return [t.lower() for t in tags] if tags and isinstance(tags, list) else []
+
+
+# ============================================================
+# 1.5 個人化偏好（不接受身分資料）
+# ============================================================
+
+def _normalized_label_list(value: Any, limit: int = 20) -> List[str]:
+    """Normalize user-entered non-sensitive labels such as brands.
+
+    The client must never send a member id/email here.  Identity is resolved by
+    the API from the authenticated session, while this function only accepts
+    presentation preferences needed for the ranking calculation.
+    """
+    if not isinstance(value, list):
+        return []
+    values = []
+    for item in value[:limit]:
+        text = str(item or "").strip()
+        if text and len(text) <= 100:
+            values.append(text.casefold())
+    return values
+
+
+def _minimized_recommendation_options(value: Any) -> dict:
+    """Keep only declared, non-identifying recommendation controls."""
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise AnalysisContractError("INVALID_REQUEST")
+    def has_forbidden_key(node: Any) -> bool:
+        if isinstance(node, dict):
+            return any(
+                "".join(ch for ch in str(key).casefold() if ch.isalnum()) in _FORBIDDEN_INPUT_FIELDS
+                or has_forbidden_key(child)
+                for key, child in node.items()
+            )
+        return isinstance(node, list) and any(has_forbidden_key(child) for child in node)
+    if has_forbidden_key(value):
+        raise AnalysisContractError("IDENTITY_DATA_NOT_ALLOWED")
+    if any(isinstance(value.get(key), list) and len(value[key]) > 20
+           for key in ("preferredBrands", "avoidedBrands")):
+        raise AnalysisContractError("INVALID_REQUEST")
+    if "pricePreference" in value and not isinstance(value.get("pricePreference"), dict):
+        raise AnalysisContractError("INVALID_REQUEST")
+    price = value.get("pricePreference") or {}
+
+    def _amount(name: str) -> Optional[float]:
+        try:
+            raw = price.get(name)
+            if raw is None:
+                return None
+            if isinstance(raw, bool):
+                raise ValueError
+            amount = float(raw)
+            if not math.isfinite(amount) or not 0 <= amount <= 1_000_000:
+                raise ValueError
+            return amount
+        except (TypeError, ValueError):
+            raise AnalysisContractError("INVALID_REQUEST")
+
+    minimum, maximum = _amount("min"), _amount("max")
+    if minimum is not None and maximum is not None and minimum > maximum:
+        raise AnalysisContractError("INVALID_REQUEST")
+    raw_mode = price.get("mode")
+    mode = str(raw_mode).casefold() if isinstance(raw_mode, str) else ""
+    if "mode" in price and (raw_mode is None or mode not in {"value", "low", "high"}):
+        raise AnalysisContractError("INVALID_REQUEST")
+    return {
+        "preferredBrands": _normalized_label_list(value.get("preferredBrands")),
+        "avoidedBrands": _normalized_label_list(value.get("avoidedBrands")),
+        "pricePreference": {"min": minimum, "max": maximum,
+                            "mode": mode or None},
+    }
+
+
+def _usable_lab(value: Any) -> bool:
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return False
+    if not all(isinstance(component, (int, float)) and not isinstance(component, bool)
+               and math.isfinite(float(component)) for component in value):
+        return False
+    lightness, axis_a, axis_b = (float(component) for component in value)
+    return 0 <= lightness <= 100 and abs(axis_a) <= 128 and abs(axis_b) <= 128
+
+
+def _price_as_number(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    match = __import__("re").search(r"(?:\d[\d,.]*)", str(value))
+    if not match:
+        return None
+    try:
+        return float(match.group(0).replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _preference_scores(product: dict, options: dict, behavior: dict) -> Tuple[float, float, float]:
+    """Return price-fit, explicit-brand-fit, and server-side behavior scores.
+
+    Missing controls deliberately score neutral (0.5) so new or anonymous users
+    are ranked purely by cosmetic content rather than receiving a penalty.
+    """
+    price = _price_as_number(product.get("price"))
+    pref = options.get("pricePreference") or {}
+    low, high, mode = pref.get("min"), pref.get("max"), pref.get("mode")
+    if price is None or (low is None and high is None):
+        price_fit = 0.5
+    elif low is not None and high is not None and low <= price <= high:
+        price_fit = 1.0
+    elif low is not None and price < low:
+        price_fit = max(0.0, 1.0 - ((low - price) / max(low, 1.0)))
+    elif high is not None and price > high:
+        price_fit = max(0.0, 1.0 - ((price - high) / max(high, 1.0)))
+    else:
+        price_fit = 0.7
+    if mode == "low" and price is not None:
+        price_fit = min(1.0, price_fit + 0.1)
+    elif mode == "high" and price is not None:
+        price_fit = min(1.0, price_fit + 0.03)
+
+    brand = str(product.get("brand") or "").casefold()
+    if brand and brand in set(options.get("avoidedBrands") or []):
+        brand_fit = 0.0
+    elif brand and brand in set(options.get("preferredBrands") or []):
+        brand_fit = 1.0
+    else:
+        brand_fit = 0.5
+
+    category_affinity = (behavior.get("categoryAffinities") or {}).get(str(product.get("category") or "").casefold(), 0.0)
+    brand_affinity = (behavior.get("brandAffinities") or {}).get(brand, 0.0) if brand else 0.0
+    behavior_score = min(1.0, (0.6 * float(category_affinity)) + (0.4 * float(brand_affinity)))
+    return price_fit, brand_fit, behavior_score
 
 # ============================================================
 # 2. 色彩工具 (Delta E 2000 幾何計算)
@@ -278,9 +428,13 @@ def get_dynamic_weights(category: str, style: str) -> Dict[str, float]:
 # ============================================================
 
 def recommend_products(analysis_package: dict, candidates: List[dict],
-                       limit: int = 12, categories: Optional[List[str]] = None) -> dict:
+                       limit: int = 12, categories: Optional[List[str]] = None,
+                       recommendation_options: Optional[dict] = None,
+                       behavior_profile: Optional[dict] = None) -> dict:
 
     analysis_package = _minimized_analysis_package(analysis_package)
+    recommendation_options = _minimized_recommendation_options(recommendation_options)
+    behavior_profile = behavior_profile if isinstance(behavior_profile, dict) else {}
     if not isinstance(candidates, list) or len(candidates) > 5000:
         raise AnalysisContractError("INVALID_CANDIDATE_SET")
     limit = max(1, min(int(limit), 50))
@@ -325,7 +479,7 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         )).casefold()
         hits = [word for word in keywords if word.casefold() in searchable]
         keyword_matches_present = keyword_matches_present or bool(hits)
-        prepared.append((prod, hits))
+        prepared.append((prod, hits, searchable))
 
     # First preference: actual keyword hits.  If a newly imported product does not
     # yet have a matching keyword, retain it through the documented fallback rather
@@ -333,10 +487,12 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
     active_candidates = prepared
     keyword_fallback = not keyword_matches_present
     scored: List[dict] = []
-    for prod, keyword_hits in active_candidates:
+    for prod, keyword_hits, searchable in active_candidates:
         cat = (prod.get("category") or "").lower()
         if (cat not in allowed_categories or not prod.get("inStock", True)
                 or not prod.get("id") or not str(prod.get("name") or "").strip()):
+            continue
+        if str(prod.get("brand") or "").casefold() in set(recommendation_options["avoidedBrands"]):
             continue
 
         prod_lab = _parse_lab(prod.get("lab"))
@@ -356,28 +512,56 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
                        else (0.5 if brow_color_unavailable else lab_similarity_from_delta_e(de)))
 
         # b. Style
-        prod_tags = prod.get("tags") or []
-        style_score = style_tag_similarity(prod_tags, style_tags, preferred_colors, avoid_tags)
+        prod_tags = prod.get("tags") or prod.get("styleTags") or []
+        style_score = style_tag_similarity(prod_tags, style_tags, preferred_colors, [])
         if keyword_hits:
             style_score = max(style_score, min(1.0, 0.65 + len(keyword_hits) * 0.1))
+        avoid_hits = [tag for tag in avoid_tags if tag and tag.casefold() in searchable]
+        preferred_color_hits = [color for color in preferred_colors if color and color.casefold() in searchable]
+        style_score = max(0.0, min(1.0, style_score + 0.12 * len(preferred_color_hits)
+                                   - 0.20 * len(avoid_hits)))
 
         # c. Feature
         face_score = feature_match_score(cat, face_analysis)
         availability_score = 1.0
+        price_fit, explicit_brand_fit, behavior_score = _preference_scores(
+            prod, recommendation_options, behavior_profile
+        )
 
         # 動態加權
         w = get_dynamic_weights(cat, style)
-        base_final_score = (
+        cosmetic_score = (
             w["colorScore"] * color_score +
             w["styleScore"] * style_score +
             w["featureScore"] * face_score +
             w["availabilityScore"] * availability_score
         )
 
+        # Explicit price/brand choices are a modest re-ranking signal.  They
+        # cannot override colour/style compatibility on their own.
+        has_explicit_preference = bool(
+            recommendation_options["preferredBrands"] or recommendation_options["avoidedBrands"]
+            or recommendation_options["pricePreference"]["min"] is not None
+            or recommendation_options["pricePreference"]["max"] is not None
+        )
+        preference_score = (price_fit + explicit_brand_fit) / 2.0
+        content_score = (0.90 * cosmetic_score + 0.10 * preference_score) if has_explicit_preference else cosmetic_score
+
+        # Behaviour is calculated by the server from authenticated member
+        # interactions.  A cold-start user retains the content score exactly.
+        interaction_count = int(behavior_profile.get("interactionCount") or 0)
+        behavior_weight = min(0.15, 0.03 * interaction_count) if interaction_count else 0.0
+        base_final_score = (1.0 - behavior_weight) * content_score + behavior_weight * behavior_score
+
         # Deterministic score: identical input/data must yield identical output
         # so contract tests and Precision@K evaluation are reproducible.
         final_score = base_final_score
 
+        reason_text, reason_evidence = _build_match_reason(
+            cat, style, color_score, style_score, face_score, de, keyword_hits,
+            preferred_colors, preferred_color_hits, brow_color_unavailable,
+            use_base_fallback,
+        )
         scored.append({
             "id": prod["id"],
             "type": prod.get("type") or cat,
@@ -402,15 +586,20 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
                             ("brow_color_unavailable" if brow_color_unavailable else "ciede2000")),
             "keywordMatches": keyword_hits,
             "matchedKeywords": keyword_hits,
+            "avoidTagHits": avoid_hits,
+            "preferredColorHits": preferred_color_hits,
             "scoreBreakdown": {
                 "colorScore": round(color_score, 4),
                 "styleScore": round(style_score, 4),
                 "featureScore": round(face_score, 4),
                 "availabilityScore": round(availability_score, 4),
+                "priceFit": round(price_fit, 4),
+                "brandAffinity": round(explicit_brand_fit, 4),
+                "behaviorScore": round(behavior_score, 4),
+                "contentScore": round(content_score, 4),
             },
-            "matchReason": ("膚色取樣可信度不足，未使用 ΔE 比色，改以季型與膚色分級排序" if use_base_fallback
-                            else ("缺少可靠眉毛／髮色資料，未以膚色比較眉彩色號，改以風格與特徵排序" if brow_color_unavailable
-                            else (_keyword_match_reason(style, dictionary_category, keyword_hits) or _generate_match_reason(cat, color_score, style_score, face_score, de, style_tags, preferred_colors)))),
+            "matchReason": reason_text,
+            "matchReasons": reason_evidence,
         })
 
     # 排序：先比總分，總分一樣比色彩準確度
@@ -418,18 +607,13 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
     final = _diversify_categories(scored, limit)
 
     returned_categories = {item["coverageCategory"] for item in final}
-    requested_categories = sorted({str(prod.get("coverageCategory") or prod.get("type") or prod.get("category") or "") for prod, _ in prepared if prod.get("coverageCategory") or prod.get("type") or prod.get("category")})
+    requested_categories = sorted({str(prod.get("coverageCategory") or prod.get("type") or prod.get("category") or "") for prod, _, _ in prepared if prod.get("coverageCategory") or prod.get("type") or prod.get("category")})
     skipped = {category: "資料庫沒有可用商品" for category in requested_categories if category not in returned_categories}
     skin_tone_fallback = skin_tone.get("labReliable") is False and any(
         item.get("category") == "base" for item in final
     )
-    brow_fallback = any(item.get("colorMethod") == "brow_color_unavailable" for item in final)
     primary_by_type = {}
     for item in final:
-        # Without a measured brow/hair colour there is no defensible "best"
-        # eyebrow colour. Keep diagnostic fallback data but do not hard-push one.
-        if item.get("category") == "brow" and item.get("colorMethod") == "brow_color_unavailable":
-            continue
         primary_by_type.setdefault(item.get("coverageCategory") or item.get("type"), item)
     primary = [
         {"type": product_type, "product": product, "matchScore": product["matchScore"]}
@@ -440,7 +624,6 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
     alternates = [
         {"type": item.get("coverageCategory") or item.get("type"), "product": item, "matchScore": item["matchScore"]}
         for item in final if item.get("candidateKey") not in primary_keys and item["matchScore"] >= threshold
-        and not (item.get("category") == "brow" and item.get("colorMethod") == "brow_color_unavailable")
     ]
     fallback_reasons = []
     if skin_tone_fallback:
@@ -448,12 +631,6 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         "code": "SKIN_TONE_LAB_UNRELIABLE",
         "message": "膚色取樣可信度不足，未使用 ΔE 比色，改以季型與膚色分級排序",
         "affected": ["foundations"],
-        })
-    if brow_fallback:
-        fallback_reasons.append({
-            "code": "BROW_COLOR_UNAVAILABLE",
-            "message": "缺少可靠眉毛或髮色資料，未以膚色比較眉彩色號，改以風格與特徵排序",
-            "affected": ["eyebrows"],
         })
     if keyword_fallback:
         fallback_reasons.append({"code": "STYLE_KEYWORD_NO_MATCH", "message": "沒有商品命中風格關鍵字，已改以合格資料庫商品排序", "affected": []})
@@ -474,6 +651,16 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         "primary": primary,
         "alternates": alternates,
         "threshold": threshold,
+        "shadeRecommendation": _foundation_shade_recommendation(scored),
+        "personalization": {
+            "applied": bool(behavior_profile.get("interactionCount") or recommendation_options["preferredBrands"]
+                            or recommendation_options["avoidedBrands"]
+                            or recommendation_options["pricePreference"]["min"] is not None
+                            or recommendation_options["pricePreference"]["max"] is not None),
+            "interactionCount": int(behavior_profile.get("interactionCount") or 0),
+            "behaviorWeight": round(min(0.15, 0.03 * int(behavior_profile.get("interactionCount") or 0))
+                                    if behavior_profile.get("interactionCount") else 0.0, 4),
+        },
     }
 
 def _keyword_match_reason(style: str, category: Optional[str], hits: List[str]) -> str:
@@ -483,13 +670,74 @@ def _keyword_match_reason(style: str, category: Optional[str], hits: List[str]) 
 
 def _parse_lab(value: Any) -> Optional[Tuple[float, float, float]]:
     if value is None: return None
-    if isinstance(value, (list, tuple)) and len(value) >= 3:
-        try: return (float(value[0]), float(value[1]), float(value[2]))
-        except (TypeError, ValueError): return None
+    if _usable_lab(value):
+        return tuple(float(component) for component in value)
     if isinstance(value, dict):
-        try: return (float(value.get("L", 0)), float(value.get("a", 0)), float(value.get("b", 0)))
-        except (TypeError, ValueError): return None
+        candidate = [value.get("L"), value.get("a"), value.get("b")]
+        return tuple(float(component) for component in candidate) if _usable_lab(candidate) else None
     return None
+
+
+def _build_match_reason(category: str, style: str, color_score: float, style_score: float,
+                        feature_score: float, de: Optional[float], keyword_hits: List[str],
+                        preferred_colors: List[str], preferred_color_hits: List[str],
+                        brow_style_only: bool, base_fallback: bool) -> Tuple[str, List[dict]]:
+    reasons = []
+    if base_fallback:
+        reasons.append({"priority": 1, "reasonCode": "skin_tone_season_match", "personalized": True,
+                        "text": "膚色取樣可信度不足，已依季型與膚色分級排序",
+                        "evidence": {"userField": "skinTone.season/level", "productField": "seasonTags/undertone",
+                                     "colorScore": round(color_score, 4)}})
+    elif category == "brow" and brow_style_only:
+        reasons.append({"priority": 1, "reasonCode": "brow_style_match", "personalized": True,
+                        "text": f"符合{style}妝的眉彩風格",
+                        "evidence": {"userField": "style", "productField": "styleTags/description",
+                                     "styleScore": round(style_score, 4)}})
+    elif de is not None:
+        field = "lipLab" if category == "lip" else "skinTone.lab"
+        subject = "唇色" if category == "lip" else "膚色"
+        reasons.append({"priority": 1, "reasonCode": "lip_color_match" if category == "lip" else "skin_color_match",
+                        "personalized": True, "text": f"此色號與您的{subject}相近（色差 {de:.1f}）",
+                        "evidence": {"userField": field, "productField": "colorLab", "deltaE": round(de, 2),
+                                     "colorScore": round(color_score, 4)}})
+    if keyword_hits:
+        keyword = keyword_hits[0]
+        reasons.append({"priority": len(reasons) + 1, "reasonCode": "style_keyword_match", "personalized": True,
+                        "text": f"您的妝容風格為{style}妝，商品的「{keyword}」特質符合此風格",
+                        "evidence": {"userField": "style", "productField": "name/description/styleTags",
+                                     "matchedKeywords": keyword_hits[:3], "styleScore": round(style_score, 4)}})
+    if preferred_color_hits:
+        reasons.append({"priority": len(reasons) + 1, "reasonCode": "preferred_color_match", "personalized": True,
+                        "text": f"商品符合您偏好的「{'、'.join(preferred_color_hits[:3])}」色系",
+                        "evidence": {"userField": "generativeText.preferredColors", "productField": "product content",
+                                     "matchedColors": preferred_color_hits[:3]}})
+    if not reasons:
+        reasons.append({"priority": 1, "reasonCode": "overall_match", "personalized": True,
+                        "text": f"依{style}妝風格與臉部特徵綜合排序",
+                        "evidence": {"userField": "style/faceAnalysis", "productField": "product features",
+                                     "styleScore": round(style_score, 4), "featureScore": round(feature_score, 4)}})
+    return "、".join(reason["text"] for reason in reasons), reasons
+
+
+def _foundation_shade_recommendation(scored: List[dict]) -> Optional[dict]:
+    foundations = [item for item in scored if item.get("category") == "base" and item.get("lab")]
+    if not foundations:
+        return None
+    anchor = max(foundations, key=lambda item: item["score"])
+    anchor_l = anchor["lab"][0]
+    lighter = min((item for item in foundations if item is not anchor and item["lab"][0] > anchor_l),
+                  key=lambda item: item["lab"][0] - anchor_l, default=None)
+    darker = min((item for item in foundations if item is not anchor and item["lab"][0] < anchor_l),
+                 key=lambda item: anchor_l - item["lab"][0], default=None)
+    def choice(item, relation, text):
+        return None if item is None else {"relation": relation, "label": text, "product": item}
+    return {
+        "method": "lab_lightness_approximation",
+        "anchor": choice(anchor, "anchor", "最接近的主推薦"),
+        "lighter": choice(lighter, "lighter_variant", "較明亮的替代色"),
+        "darker": choice(darker, "darker_variant", "較深的替代色"),
+        "disclaimer": "缺少品牌 depthIndex 時以 L* 明度近似，不代表品牌定義的相鄰一階。",
+    }
 
 def _diversify_categories(scored: List[dict], limit: int) -> List[dict]:
     from collections import defaultdict
