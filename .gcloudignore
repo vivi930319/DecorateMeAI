@@ -1,4 +1,18 @@
 # gcloud builds submit 上傳建置來源時用這個檔決定要傳什麼。
+#
+# 這個檔必須存在：沒有它，gcloud 會 fallback 去套用 .gitignore，而 .gitignore 是「* 全擋」的
+# 白名單、且沒放行 models/，於是模型檔不會被上傳，Docker build 會在 COPY models/ 直接失敗。
+#
+# 內容要跟 Dockerfile 的 COPY 清單對得起來。
+
+*
+
+# 五個原始碼資料夾：先放行目錄本身，再排除目錄內容，後面才逐支放行要進映像的檔案。
+# **這幾行必須排在上面那個 `*` 之後**——gitignore 是後面的規則覆蓋前面的，排在 `*`
+# 之前會被整個蓋掉，上傳的建置來源裡就完全沒有 face/，build 停在
+#   unable to evaluate symlinks in Dockerfile path: lstat /workspace/face: no such file
+# 而檔案其實好端端躺在本機。2026-08-23 的重構把它們加在檔頭，face 服務因此整整
+# 兩天無法部署，直到 08-24 要部署覆核功能才發現。
 !face
 face/*
 !gateway
@@ -9,13 +23,6 @@ render/*
 shared/*
 !suggestion
 suggestion/*
-#
-# 這個檔必須存在：沒有它，gcloud 會 fallback 去套用 .gitignore，而 .gitignore 是「* 全擋」的
-# 白名單、且沒放行 models/，於是模型檔不會被上傳，Docker build 會在 COPY models/ 直接失敗。
-#
-# 內容要跟 Dockerfile 的 COPY 清單對得起來。
-
-*
 
 !.dockerignore
 !face/Dockerfile
