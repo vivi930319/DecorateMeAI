@@ -8,6 +8,7 @@
 不必每個規模都重跑一次 CNN 訓練，幾秒就跑得完整條曲線。
 它在眼型／眉型／鼻型也是今天量到最好的那個。
 """
+import _bootstrap  # noqa: F401  # 讓 face/ shared/ 的模組 import 得到
 import json, sys
 from pathlib import Path
 import numpy as np

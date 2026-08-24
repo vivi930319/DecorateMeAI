@@ -6,6 +6,7 @@ Face_analyzer_BASIC 的 SKIN_TEXTURE_STD_MAX / SKIN_SPREAD_UNRELIABLE 註解裡
 做法：把每張照片自己的頭髮（髮際線上方的真實像素）移植到臉頰，
 再比對膚色 LAB 與未遮擋時的差距。
 """
+import _bootstrap  # noqa: F401  # 讓 face/ shared/ 的模組 import 得到
 import glob
 import sys
 from pathlib import Path

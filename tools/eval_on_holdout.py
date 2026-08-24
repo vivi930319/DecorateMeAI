@@ -17,6 +17,7 @@
 
     # 結果會累積寫進 models/holdout_scores.json，方便並排比較
 """
+import _bootstrap  # noqa: F401  # 讓 face/ shared/ 的模組 import 得到
 import argparse
 import hashlib
 import json

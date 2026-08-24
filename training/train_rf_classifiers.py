@@ -8,6 +8,7 @@
 的流程跑通，不是最終準確率調校。之後補齊照片、再重跑這支腳本即可更新模型。
 """
 
+import _bootstrap  # noqa: F401  # 讓 face/ shared/ 的模組 import 得到
 import os
 import glob
 import numpy as np

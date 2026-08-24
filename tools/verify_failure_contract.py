@@ -9,6 +9,7 @@
 
 需要測試照片資料集；路徑見下方 FRONT_DIR / SIDE_DIR。
 """
+import _bootstrap  # noqa: F401  # 讓 face/ shared/ 的模組 import 得到
 import glob
 import sys
 import warnings

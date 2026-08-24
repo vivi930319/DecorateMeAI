@@ -7,6 +7,7 @@
         [--limit 100]
 """
 
+import _bootstrap  # noqa: F401  # 讓 face/ shared/ 的模組 import 得到
 import argparse
 import csv
 from pathlib import Path

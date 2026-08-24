@@ -7,6 +7,7 @@
       keys: coef, intercept, geom_features, classes
 驗證:重載 head 用「原始輸入」在 holdout 上算 macro F1,並與 sklearn 原預測比對一致。
 """
+import _bootstrap  # noqa: F401  # 讓 face/ shared/ 的模組 import 得到
 import json
 import sys
 from pathlib import Path

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import _bootstrap  # noqa: F401  # 讓 face/ shared/ 的模組 import 得到
 import json
 import sys
 from pathlib import Path

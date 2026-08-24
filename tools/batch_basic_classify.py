@@ -23,6 +23,7 @@
 
 並檢查 `分類來源` 每個部位的 `final` 欄位，確認答案真的來自模型。
 """
+import _bootstrap  # noqa: F401  # 讓 face/ shared/ 的模組 import 得到
 import argparse
 import csv
 from pathlib import Path

@@ -4,6 +4,7 @@ _classify_season 的 clear 判定吃 v_std >= 18.0，而紋理過濾正是在剔
 像素。兩者若共用同一個遮罩，季型會被靜默改掉（實測 12% 的乾淨照片）。
 這支腳本比對真實 get_skin_color 的季型與「未過濾」的參考答案，應為全數一致。
 """
+import _bootstrap  # noqa: F401  # 讓 face/ shared/ 的模組 import 得到
 import glob
 import sys
 from pathlib import Path

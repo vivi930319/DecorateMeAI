@@ -66,7 +66,10 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# 原本這裡是自己插 repo 根目錄，那在 train_basic_cnn_roi.py 還放在根的時候有效。
+# 2026-08-23 的重構把它移進 training/ 之後就失效了，改走跟其他腳本一樣的 _bootstrap，
+# 免得同一件事有兩套做法、而其中一套會過期。
+import _bootstrap  # noqa: F401,E402
 
 from sklearn.metrics import recall_score  # noqa: E402
 from sklearn.tree import DecisionTreeClassifier  # noqa: E402

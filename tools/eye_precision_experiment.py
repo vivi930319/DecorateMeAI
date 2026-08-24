@@ -7,6 +7,7 @@ macro F1 會不會比現在的純 CNN(holdout 0.737)或純幾何(0.51)好?
 - 訓練用 train split、評估用 holdout(與線上量測同一份切分),不洩漏。
 - 錨點:CNN-alone 應重現 ~0.737、現有 3 特徵應重現 ~0.51,兩者對得上才代表新數字可信。
 """
+import _bootstrap  # noqa: F401  # 讓 face/ shared/ 的模組 import 得到
 import json
 import sys
 from pathlib import Path

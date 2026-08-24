@@ -19,6 +19,7 @@ build_part_data / split_by_identity，用同一個 seed 與 val_ratio 重算切�
 
 from __future__ import annotations
 
+import _bootstrap  # noqa: F401  # 讓 face/ shared/ 的模組 import 得到
 import argparse
 import json
 import os

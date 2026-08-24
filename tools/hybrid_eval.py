@@ -8,6 +8,7 @@
 用法:
     .venv\\Scripts\\python.exe tools\\hybrid_eval.py --cache data/roi_cache_gcs
 """
+import _bootstrap  # noqa: F401  # 讓 face/ shared/ 的模組 import 得到
 import argparse
 import json
 import os

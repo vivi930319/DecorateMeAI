@@ -78,6 +78,16 @@
 !tools/
 !tools/*.py
 !tools/face_models_manifest.json
+# training/ 跟 tools/ 一樣是原始碼，不是產物，所以整個資料夾的 .py 都要進版本控制。
+#
+# 先前這裡沒有放行，而這份 .gitignore 是「* 全擋」的白名單，於是 training/ 底下只有
+# 被 `git add -f` 硬塞進去的 9 支在版本控制裡，其餘 10 支都不在——包括 _bootstrap.py
+# 與 _dataset.py，而那兩支正是已追蹤的腳本 import 的東西。clone 下來會 ModuleNotFoundError。
+# 2026-08-23 的 commit「Add one readable training script per model」新增的五支
+# basic_*_shape.py 也一支都沒進去，那個標題因此名不副實（2026-08-24 發現並補上）。
+!training/
+!training/*.py
+!training/README.md
 !deploy_face_cloudrun.ps1
 !deploy_gateway_cloudrun.ps1
 !setup.bat
