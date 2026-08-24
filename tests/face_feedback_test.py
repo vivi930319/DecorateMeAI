@@ -322,6 +322,138 @@ class MemberDeletionRouteTest(unittest.TestCase):
         self.assertEqual(self.deleted, ["actor_someone"])
 
 
+class ReviewRouteTest(unittest.TestCase):
+    """覆核端點：管理員把一筆修正標成採用或退回。
+
+    這條路徑決定**哪些使用者修正會變成訓練標籤**。放行未經查核的資料，
+    後果不是「多一筆沒用的紀錄」，而是分數變差之後查不回原因——所以這裡
+    要守住三件事：只有管理員能寫、decision 只能是那兩個、不存在的 id 要說不存在。
+    """
+
+    def setUp(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        self.store = _FakeStore()
+        # 這個假 store 要多兩個方法：覆核會先 get 再 patch。
+        self.store.get = lambda col, doc_id: self.store.docs.get((col, doc_id))
+        self.patched = {}
+
+        def _patch(col, doc_id, updates):
+            self.patched[(col, doc_id)] = updates
+            self.store.docs.setdefault((col, doc_id), {}).update(updates)
+
+        self.store.patch = _patch
+        self._real = ff.job_store
+        ff.job_store = self.store
+        self.store.docs[(ff.FEEDBACK_COL, "JOB-1")] = {
+            "jobId": "JOB-1", "corrections": {"眉型": "一字眉"},
+        }
+
+        app = FastAPI()
+        ff.register_route(app, mode="basic", jobs_collection="face_jobs_basic",
+                          verify_job_token=lambda *a, **k: None)
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        ff.job_store = self._real
+
+    def _patch_review(self, feedback_id, body, admin=True):
+        headers = {"X-Admin-Request": "1"} if admin else {}
+        return self.client.patch(f"/v1/face/feedback/{feedback_id}/review",
+                                 json=body, headers=headers)
+
+    def test_admin_can_accept(self):
+        r = self._patch_review("FB-JOB-1", {"decision": "accepted"})
+        self.assertEqual(r.status_code, 200)
+        saved = self.store.docs[(ff.FEEDBACK_COL, "JOB-1")]
+        self.assertEqual(saved["reviewStatus"], "accepted")
+        self.assertTrue(saved["reviewedAt"])
+
+    def test_feedback_id_prefix_is_optional(self):
+        # 文件 id 是 jobId，但清單回的是 FB-<jobId>。兩種都要收，
+        # 否則前端得記住這個細節，而它遲早會記錯。
+        self.assertEqual(self._patch_review("JOB-1", {"decision": "rejected"}).status_code, 200)
+        self.assertEqual(self.store.docs[(ff.FEEDBACK_COL, "JOB-1")]["reviewStatus"], "rejected")
+
+    def test_non_admin_is_refused(self):
+        r = self._patch_review("FB-JOB-1", {"decision": "accepted"}, admin=False)
+        self.assertEqual(r.status_code, 403)
+        # 被擋下時什麼都不能寫進去。
+        self.assertNotIn("reviewStatus", self.store.docs[(ff.FEEDBACK_COL, "JOB-1")])
+
+    def test_unknown_decision_is_refused(self):
+        for bad in ("approved", "ACCEPTED", "", "pending", None):
+            with self.subTest(decision=bad):
+                r = self._patch_review("FB-JOB-1", {"decision": bad})
+                self.assertEqual(r.status_code, 422)
+        # pending 也不行：那是「還沒有人看」的意思，不是一個可以主動下的判斷。
+        self.assertNotIn("reviewStatus", self.store.docs[(ff.FEEDBACK_COL, "JOB-1")])
+
+    def test_missing_document_is_not_created(self):
+        r = self._patch_review("FB-JOB-NOPE", {"decision": "accepted"})
+        self.assertEqual(r.status_code, 404)
+        # patch 若沒有先確認存在，這裡會憑空生出一筆只有覆核狀態、
+        # 沒有任何修正內容的文件——之後匯入時就會看到一筆空標籤。
+        self.assertNotIn((ff.FEEDBACK_COL, "JOB-NOPE"), self.store.docs)
+
+    def test_note_is_capped(self):
+        r = self._patch_review("FB-JOB-1", {"decision": "accepted", "note": "字" * 900})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(self.store.docs[(ff.FEEDBACK_COL, "JOB-1")]["reviewNote"]), 500)
+
+
+class ContributedFlagTest(unittest.TestCase):
+    """文件上的 contributed 要如實反映「GCS 上到底有沒有影像」。
+
+    覆核的人靠這個欄位決定要不要點開來看。標成有、實際沒有，等於叫人去找一張
+    不存在的圖；標成沒有、實際有，那張圖就永遠不會被人看到也不會進訓練集。
+    """
+
+    def setUp(self):
+        self.store = _FakeStore()
+        self._real_store = ff.job_store
+        ff.job_store = self.store
+        self._real_get = ff.job_store.get if hasattr(ff.job_store, "get") else None
+        self._real_store_fn = ff.face_contributions.store
+        self.calls = []
+        ff.face_contributions.store = lambda *a, **k: self.calls.append(k)
+
+    def tearDown(self):
+        ff.job_store = self._real_store
+        ff.face_contributions.store = self._real_store_fn
+
+    def _save(self, **payload):
+        ff.save("basic", "JOB-C", {
+            "predicted": PREDICTED,
+            "corrections": {"眉型": "彎月眉"},
+            **payload,
+        })
+        return self.store.docs.get((ff.FEEDBACK_COL, "JOB-C"))
+
+    def test_true_when_an_image_was_stored(self):
+        doc = self._save(allowTrainingUse=True, imageDataUrl=_TINY_PNG_DATA_URL)
+        self.assertTrue(doc["contributed"])
+
+    def test_false_without_consent(self):
+        doc = self._save(allowTrainingUse=False, imageDataUrl=_TINY_PNG_DATA_URL)
+        self.assertFalse(doc["contributed"])
+        self.assertEqual(self.calls, [])
+
+    def test_false_without_an_image(self):
+        doc = self._save(allowTrainingUse=True)
+        self.assertFalse(doc["contributed"])
+
+    def test_false_when_the_upload_failed(self):
+        # 存不進 GCS 時使用者的修正還是要收下（那是刻意的），但這個欄位不能說謊。
+        def _boom(*a, **k):
+            raise RuntimeError("GCS 掛了")
+        ff.face_contributions.store = _boom
+        doc = self._save(allowTrainingUse=True, imageDataUrl=_TINY_PNG_DATA_URL)
+        self.assertIsNotNone(doc, "上傳失敗不該讓整筆回饋消失")
+        self.assertFalse(doc["contributed"])
+
+
 class ImageOnlyDependsOnModulesInTheFaceImageTest(unittest.TestCase):
     """貢獻路徑只能用 face 映像裡有的模組。
 

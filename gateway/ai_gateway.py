@@ -2008,7 +2008,8 @@ async def admin_staging_import(staging_id: str, request: Request):
 
 
 async def _face_internal_request(request: Request, method: str, path: str, *,
-                                 user_id: str = "", admin: bool = False):
+                                 user_id: str = "", admin: bool = False,
+                                 json_body: dict | None = None):
     """打臉部服務的內部呼叫。跟 _render_internal_request 同一套，只是換上游。
 
     BASIC 與 PRO 是兩個部署，但貢獻樣本存在同一個 GCS 前綴，所以刪除打其中一個就夠。
@@ -2030,9 +2031,55 @@ async def _face_internal_request(request: Request, method: str, path: str, *,
             headers["X-Admin-Request"] = "1"
         return await request.app.state.http_client.request(
             method=method, url=f"{upstream.base_url}/{path}", headers=headers, timeout=60,
+            json=json_body,
         )
     except Exception:
         return None
+
+
+@app.patch("/admin-api/face-feedback/{feedback_id}/review")
+async def admin_review_face_feedback(feedback_id: str, request: Request):
+    """管理員把一筆修正標成採用或退回。
+
+    這是「使用者修正 → 人工覆核 → 進訓練集」這條線的中間那一段。少了它，
+    上面 admin_face_feedback 就只是一個看得到、動不了的列表：修正躺在 Firestore 裡，
+    重訓時只能全收或全不收——全收會把使用者的誤點也學進去，全不收等於這批
+    免費標註白拿。
+
+    驗證跟讀取那條完全一樣（同一批管理員、同一份 CSRF），差別只在這條會寫。
+    """
+    enforce_csrf(request)
+    if MULTI_SESSION_ENABLED:
+        _require_admin_claims(select_account(request, for_write=True)["claims"])
+    else:
+        claims = require_admin_access(request)
+        enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    face = await _face_internal_request(
+        request, "PATCH", f"v1/face/feedback/{quote(feedback_id, safe='')}/review",
+        admin=True, json_body={"decision": body.get("decision"), "note": body.get("note")})
+    if face is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "FACE_FEEDBACK_UNAVAILABLE",
+                              "message": "暫時連不上臉部服務，覆核沒有寫進去，請稍後再試。"}},
+        )
+    # 上游的 4xx 要原樣傳回去，不要一律翻成 503——「這筆找不到」跟「服務掛了」
+    # 是完全不同的處理方式，混成同一個訊息會讓管理員一直重試一筆不存在的資料。
+    if not face.is_success:
+        try:
+            detail = face.json().get("detail") or face.json()
+        except Exception:
+            detail = {"error": {"code": "FACE_FEEDBACK_ERROR", "message": "覆核沒有寫進去。"}}
+        raise HTTPException(status_code=face.status_code, detail=detail)
+    return JSONResponse(content=face.json())
 
 
 @app.delete("/admin-api/members/{email}/media")

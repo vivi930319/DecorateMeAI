@@ -1057,6 +1057,118 @@ class MemberMediaPurgeTest(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
 
+class FaceFeedbackReviewProxyTest(unittest.TestCase):
+    """後台的「採用／退回」要真的走到臉部服務，而且失敗要說得出是哪一種失敗。
+
+    這條路徑決定哪些使用者修正會變成訓練標籤，所以兩件事都要守：
+    沒有管理員身分不能寫；上游回 4xx 時要原樣傳回去，不能一律翻成 503——
+    「這筆找不到」跟「服務掛了」的下一步完全不同，混成同一個訊息會讓人
+    對著一筆不存在的資料一直重試。
+    """
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        import ai_gateway
+        import job_store
+
+        self._job_store = job_store
+        self._fs = (job_store.firestore, job_store._client)
+        job_store.firestore, job_store._client = None, None
+
+        self.gw = ai_gateway
+        token, _ = issue_access_token("admin@example.com", "admin", "active")
+        # PATCH 是狀態變更，所以要走完瀏覽器那一層會自動補的兩個東西：
+        # double-submit 的 CSRF token（cookie 與標頭必須一致），以及 X-Expected-Actor。
+        # 前端由 _protectedFetch 統一加，測試得自己模擬——少了它們只會拿到 403，
+        # 那個 403 跟「權限不足」長得一模一樣，很容易誤判成端點寫錯。
+        self.csrf = "csrf-token-for-test"
+        self.cookies = {**session_cookies(token), ai_gateway.CSRF_COOKIE: self.csrf}
+        self.headers = {
+            ai_gateway.CSRF_HEADER: self.csrf,
+            "X-Expected-Actor": ai_gateway.opaque_actor_id("admin@example.com"),
+        }
+        self.calls = []
+
+        async def fake_face(request, method, path, *, user_id="", admin=False, json_body=None):
+            self.calls.append((method, path, admin, json_body))
+            return self._response
+
+        self._orig = ai_gateway._face_internal_request
+        ai_gateway._face_internal_request = fake_face
+        self._response = self._ok({"status": "ok", "reviewStatus": "accepted"})
+        self.client = TestClient(ai_gateway.app)
+
+    def tearDown(self):
+        self._job_store.firestore, self._job_store._client = self._fs
+        self.gw._face_internal_request = self._orig
+
+    def _ok(self, payload):
+        r = Mock()
+        r.is_success = True
+        r.status_code = 200
+        r.json = lambda: payload
+        return r
+
+    def _err(self, status, payload):
+        r = Mock()
+        r.is_success = False
+        r.status_code = status
+        r.json = lambda: payload
+        return r
+
+    def _review(self, feedback_id="FB-JOB-1", body=None, cookies=None, headers=None):
+        return self.client.patch(f"/admin-api/face-feedback/{feedback_id}/review",
+                                 json=body if body is not None else {"decision": "accepted"},
+                                 cookies=self.cookies if cookies is None else cookies,
+                                 headers=self.headers if headers is None else headers)
+
+    def test_decision_reaches_the_face_service_as_admin(self):
+        res = self._review()
+        self.assertEqual(res.status_code, 200, res.text)
+        method, path, admin, body = self.calls[0]
+        self.assertEqual(method, "PATCH")
+        self.assertEqual(path, "v1/face/feedback/FB-JOB-1/review")
+        # admin=True 才會帶上 X-Admin-Request，少了它上游會回 403。
+        self.assertTrue(admin)
+        self.assertEqual(body["decision"], "accepted")
+
+    def test_feedback_id_is_url_encoded(self):
+        # 沒有 quote 的話，帶斜線的 id 會多切出一段路徑，打到完全不同的端點。
+        self._review("FB-JOB/../users")
+        self.assertNotIn("..", self.calls[0][1].split("v1/face/feedback/")[1])
+
+    def test_missing_csrf_token_is_refused(self):
+        # CSRF 防的是「別的網站叫你的瀏覽器去寫」，跟權限不足是不同的攻擊。
+        res = self._review(headers={})
+        self.assertEqual(res.status_code, 403)
+        self.assertEqual(self.calls, [])
+
+    def test_anonymous_is_refused_and_nothing_is_written(self):
+        # 留著 CSRF cookie，只拿掉 session——這樣測到的才是「沒有身分」被擋，
+        # 而不是又一次 CSRF 失敗。
+        res = self._review(cookies={self.gw.CSRF_COOKIE: self.csrf})
+        self.assertIn(res.status_code, (401, 403))
+        self.assertEqual(self.calls, [], "沒有管理員身分時不該打到臉部服務")
+
+    def test_upstream_404_is_passed_through(self):
+        self._response = self._err(404, {"detail": {"error": {"code": "FEEDBACK_NOT_FOUND"}}})
+        res = self._review()
+        self.assertEqual(res.status_code, 404, res.text)
+
+    def test_upstream_422_is_passed_through(self):
+        self._response = self._err(422, {"detail": {"error": {"code": "INVALID_DECISION"}}})
+        self.assertEqual(self._review(body={"decision": "approved"}).status_code, 422)
+
+    def test_unreachable_face_service_is_503(self):
+        async def dead(*a, **k):
+            return None
+        self.gw._face_internal_request = dead
+        res = self._review()
+        self.assertEqual(res.status_code, 503)
+        # 訊息要講清楚「沒有寫進去」，否則管理員會以為已經生效。
+        self.assertIn("沒有寫進去", res.text)
+
+
 class MemberDeleteClearsMediaFirstTest(unittest.TestCase):
     """刪會員之前，Gateway 要先清掉他的影像；清不掉就不准往下刪。
 

@@ -44,6 +44,14 @@ PRO_NOSE_CLASSES_FILE = "nose_shape_side_classes.json"
 
 FEEDBACK_COL = "face_feedback"
 
+# 管理員對一筆修正能下的判斷。
+#
+# 只有 accepted 會被 training/import_feedback_samples.py 收進訓練集。沒有這個欄位的
+# 舊文件視同 pending：欄位是 2026-08-24 才加的，在那之前的 108 筆沒有人覆核過，
+# 把它們當成已採用等於讓「還沒做的事」看起來像做過了。
+REVIEW_DECISIONS = {"accepted", "rejected"}
+REVIEW_PENDING = "pending"
+
 # 線上準確率的量測用集合。跟 FEEDBACK_COL 分開，理由見 save() 的說明：
 # 那一個是**訓練資料**，只收模型答錯的；這一個是**評分紀錄**，答對答錯都收，
 # 但只存結果不存修正內容。混在一起的話，重訓時會被大量「模型答對了」淹沒。
@@ -162,7 +170,7 @@ def _record_eval_event(mode: str, job_id: str, predicted: dict, corrections: dic
 
 
 def _store_contribution(mode: str, job_id: str, payload: dict, corrections: dict,
-                        owner_id: str | None) -> None:
+                        owner_id: str | None) -> bool:
     """使用者同意時，保存被修正部位的 ROI 裁切當訓練樣本。
 
     三個條件缺一不可：明確同意、有修正、有照片。少任何一個就什麼都不存——
@@ -179,11 +187,11 @@ def _store_contribution(mode: str, job_id: str, payload: dict, corrections: dict
     失敗只記 log。使用者的修正已經收下了，不該因為加值功能失敗而讓他重送一次。
     """
     if not payload.get("allowTrainingUse") or not corrections:
-        return
+        return False
     data_url = payload.get("imageDataUrl")
     side_data_url = payload.get("sideImageDataUrl")
     if not data_url and not side_data_url:
-        return
+        return False
 
     def _decode(url: str | None, what: str) -> bytes | None:
         if not url:
@@ -201,7 +209,7 @@ def _store_contribution(mode: str, job_id: str, payload: dict, corrections: dict
     # 沒有側面照時，側臉鼻型的修正就只會留下標籤（進 FEEDBACK_COL），不產生影像樣本。
     side_bytes = _decode(side_data_url, "側面照")
     if image_bytes is None and side_bytes is None:
-        return
+        return False
     try:
         face_contributions.store(
             job_id, image_bytes, corrections,
@@ -219,6 +227,8 @@ def _store_contribution(mode: str, job_id: str, payload: dict, corrections: dict
         )
     except Exception:
         logging.exception("貢獻樣本保存失敗 job_id=%s", job_id)
+        return False
+    return True
 
 
 def save(mode: str, job_id: str, payload: dict, owner_id: str | None = None) -> str | None:
@@ -245,7 +255,7 @@ def save(mode: str, job_id: str, payload: dict, owner_id: str | None = None) -> 
     corrections = payload.get("corrections") or {}
     predicted = payload.get("predicted") or {}
     _record_eval_event(mode, job_id, predicted, corrections)
-    _store_contribution(mode, job_id, payload, corrections, owner_id)
+    contributed = _store_contribution(mode, job_id, payload, corrections, owner_id)
 
     if payload.get("confirmed") or not corrections:
         job_store.delete(FEEDBACK_COL, job_id)
@@ -265,6 +275,9 @@ def save(mode: str, job_id: str, payload: dict, owner_id: str | None = None) -> 
         "predicted": {k: v for k, v in predicted.items() if k in fields},
         "corrections": corrections,
         "createdAt": datetime.now(timezone.utc).isoformat(),
+        # 覆核的人要知道這筆能不能調得出影像來對照——只有勾了同意的才有。
+        # 存在 GCS 的 user_contributed/<版本>/<部位>/<類別>/<job_id>.png。
+        "contributed": contributed,
     }
     job_store.create(FEEDBACK_COL, job_id, doc)
     return doc["feedbackId"]
@@ -367,6 +380,13 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
                 "jobId": row.get("jobId"),
                 "mode": row.get("mode"),
                 "createdAt": row.get("createdAt"),
+                # 沒有這個欄位的是 2026-08-24 之前的舊資料，一律當待覆核。
+                "reviewStatus": row.get("reviewStatus") or REVIEW_PENDING,
+                "reviewedAt": row.get("reviewedAt"),
+                "reviewNote": row.get("reviewNote") or "",
+                # 有沒有影像樣本決定覆核的人能不能真的判斷對錯：只有勾了同意的
+                # 才會存 ROI 到 GCS，沒存的那些只能看標籤字串。
+                "hasSample": bool(row.get("contributed")),
                 # 把「模型答什麼、使用者改成什麼」併成一筆一筆的差異，
                 # 讓前端不必自己對照兩個字典——那種對照最容易在畫面上顯示錯邊。
                 "changes": [
@@ -377,6 +397,52 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
                 ],
             })
         return {"status": "ok", "count": len(items), "items": items}
+
+    @app.patch("/v1/face/feedback/{feedback_id}/review")
+    async def review_feedback(  # noqa: ANN202
+        feedback_id: str,
+        body: dict,
+        x_admin_request: str | None = Header(default=None),
+    ):
+        """管理員對一筆修正下判斷：採用進訓練集，或退回不用。
+
+        為什麼要有這一步：使用者的修正是**免費但未經查核**的標籤。上面 list_feedback
+        的說明講了風險，但光看不做決定的話，那些修正還是會躺在同一個集合裡，
+        誰也不知道哪些被認可過——重訓時只能全收或全不收，兩個都不對。
+
+        決定寫回同一份文件而不是另開集合：一筆修正只會有一個最終狀態，分兩處存
+        就要處理兩邊不同步。`training/import_feedback_samples.py` 讀的就是這個欄位。
+
+        沒有 reviewStatus 的舊資料一律當 pending，不當成已採用——沒人看過的東西
+        不該因為欄位還沒加就自動獲得信任。
+        """
+        if str(x_admin_request or "").strip() != "1":
+            raise HTTPException(
+                status_code=403,
+                detail={"error": {"code": "ADMIN_REQUIRED", "message": "只有管理員可以覆核修正紀錄"}},
+            )
+        decision = str((body or {}).get("decision") or "").strip()
+        if decision not in REVIEW_DECISIONS:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": {"code": "INVALID_DECISION",
+                                  "message": f"decision 只能是 {sorted(REVIEW_DECISIONS)}"}},
+            )
+        # feedbackId 是 FB-<jobId>，但文件 id 用的是 jobId（見 save()）。
+        # 前端兩種都可能送過來，這裡統一剝掉前綴，不要讓呼叫端記這個細節。
+        job_id = feedback_id[3:] if feedback_id.startswith("FB-") else feedback_id
+        if job_store.get(FEEDBACK_COL, job_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": {"code": "FEEDBACK_NOT_FOUND", "message": "找不到這筆修正紀錄"}},
+            )
+        note = str((body or {}).get("note") or "").strip()[:500]
+        job_store.patch(FEEDBACK_COL, job_id, {
+            "reviewStatus": decision,
+            "reviewedAt": datetime.now(timezone.utc).isoformat(),
+            "reviewNote": note,
+        })
+        return {"status": "ok", "feedbackId": f"FB-{job_id}", "reviewStatus": decision}
 
     @app.delete("/v1/face/users/{owner_id}")
     async def delete_member_face_data(  # noqa: ANN202
