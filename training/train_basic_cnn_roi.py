@@ -38,7 +38,9 @@ from torchvision.models import (
 )
 
 from face_roi import IMAGENET_MEAN, IMAGENET_STD, PARTS, ROI_SPECS
-from training.training_run_store import RUNS_COLLECTION, get_document, now_iso, patch_document, read_model_metrics
+from training.training_run_store import (
+    RUNS_COLLECTION, get_document, model_digests, now_iso, patch_document, read_model_metrics,
+)
 
 # 跟 prepare_roi_cache.py 讀同一個環境變數。先前這裡是寫死的 `data/roi_cache`，
 # 而產生快取的那支吃 ROI_CACHE_DIR——兩邊指到不同目錄時，訓練會安靜地拿舊快取跑完，
@@ -753,6 +755,9 @@ def main():
             "finishedAt": now_iso(),
             "modelAfter": read_model_metrics(OUT_DIR),
             "metrics": summary,
+            # 產出權重的 sha256。有了它，「線上跑的那顆模型」才對得回某一次批次；
+            # 少了它，紀錄只能證明訓練發生過，不能證明線上用的就是它的結果。
+            "modelDigests": model_digests(OUT_DIR),
         })
 
 

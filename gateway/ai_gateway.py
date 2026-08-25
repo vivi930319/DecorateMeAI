@@ -65,6 +65,9 @@ ALLOW_EXTERNAL_TEXT_UPSTREAM = os.getenv("GATEWAY_ALLOW_EXTERNAL_TEXT_UPSTREAM",
 # 為了一個常數多一個共用檔不划算，但值得在這裡指出關聯。
 FACE_FEEDBACK_COL = "face_feedback"
 FACE_TRAINING_RUNS_COL = "face_training_runs"
+# 訓練機的心跳。後台需要它才能分辨「批次還在排隊是因為訓練機沒開」與
+# 「訓練失敗了」——兩者在畫面上長得一樣，處理方式卻完全不同。
+FACE_TRAINING_WORKERS_COL = "face_training_workers"
 FACE_MODEL_METRICS_COL = "face_model_metrics"
 
 UPSTREAMS = {
@@ -2370,6 +2373,20 @@ async def admin_create_face_training_run(request: Request):
         "source": "admin-face-feedback",
     }
     job_store.create(FACE_TRAINING_RUNS_COL, run_id, run)
+
+    # 在每一筆回饋上蓋回批次編號。兩個用途：
+    # 一是後台能分辨「採用了但還沒送訓」與「已經在某一批裡」——沒有這個標記，
+    # 已經送過的資料每按一次按鈕就會被重送一次；
+    # 二是證據鏈可以從任何一筆回饋反查到它進了哪一次訓練，不必反過來翻批次清單。
+    for feedback_id in selections:
+        job_id = feedback_id[3:] if feedback_id.startswith("FB-") else feedback_id
+        try:
+            job_store.patch(FACE_FEEDBACK_COL, job_id,
+                            {"trainingRunId": run_id, "trainingQueuedAt": now})
+        except Exception:
+            # 標記失敗不該讓批次消失——批次本身已經寫進去了，那才是要緊的。
+            logging.exception("寫入 trainingRunId 失敗 job_id=%s run=%s", job_id, run_id)
+
     return JSONResponse(status_code=202, content={"status": "queued", **run})
 
 
@@ -2382,8 +2399,13 @@ async def admin_face_training_runs(request: Request):
     else:
         claims = require_admin_access(request)
         enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+    limit = 5
+    try:
+        limit = max(1, min(20, int(request.query_params.get("limit") or 5)))
+    except (TypeError, ValueError):
+        limit = 5
     runs = await asyncio.to_thread(
-        job_store.all_jobs, FACE_TRAINING_RUNS_COL, limit=5,
+        job_store.all_jobs, FACE_TRAINING_RUNS_COL, limit=limit,
         order_by="createdAt", descending=True)
     current = job_store.get(FACE_MODEL_METRICS_COL, "current") or {}
     if not current:
@@ -2391,10 +2413,24 @@ async def admin_face_training_runs(request: Request):
             if run.get("status") == "done" and run.get("modelAfter"):
                 current = {"model": run.get("model", "ConvNeXt-Tiny"), **(run.get("modelAfter") or {})}
                 break
+
+    # 訓練機狀態。挑最近回報的那一台就夠了——實務上只有一台，而「最近一次有人回報
+    # 是什麼時候」正是畫面要回答的問題。讀不到不算錯誤：worker 從來沒跑過的時候
+    # 這個集合根本不存在，那本身就是有意義的答案（沒有訓練機）。
+    worker = None
+    try:
+        workers = await asyncio.to_thread(
+            job_store.all_jobs, FACE_TRAINING_WORKERS_COL, limit=5,
+            order_by="lastSeenAt", descending=True)
+        worker = workers[0] if workers else None
+    except Exception:
+        logging.exception("讀取訓練機心跳失敗")
+
     return JSONResponse(content={
         "status": "ok", "model": "ConvNeXt-Tiny", "runs": runs,
         "recentRuns": runs, "latest": runs[0] if runs else None,
         "currentMetrics": current or None,
+        "worker": worker,
     })
 
 

@@ -1,0 +1,209 @@
+"""訓練機：把後台按下「送去訓練」的批次，在這台裝了 PyTorch 的電腦上跑完。
+
+為什麼需要它
+------------
+後台跑在 Cloud Run 上，一個 request 最長 600 秒、沒有 GPU、記憶體 512 MB，而一次
+ConvNeXt 訓練是好幾分鐘的 CPU 工作。所以那顆按鈕**註定**只能建立待辦，不可能當場
+訓練。少了這支腳本，那個待辦就要人工打一次 `--training-run TR-xxxx` 才會動。
+
+有了它，流程變成：管理員按按鈕 → 批次躺在 Firestore → 這台電腦只要有跑這支腳本
+就會自己撿走、訓練、回寫結果。**電腦不必 24 小時開著**：批次會等，關機期間排隊的
+批次會在下次啟動時依序做完。
+
+它會怎麼被看見
+--------------
+每一輪都寫一次心跳（`face_training_workers/<worker-id>`）。後台靠它分辨兩件很容易
+被混為一談的事：批次還停在 queued，是因為**訓練機沒開**，還是因為**訓練失敗**。
+沒有心跳就只能顯示「已排隊」，而管理員會以為系統壞了。
+
+不會做的事
+----------
+**不會自動把訓練出來的模型換上線。** 每個批次的產出都寫進自己的
+`models/training_runs/<批次編號>/`，線上模型目錄一個位元組都不會動。要不要換是決策，
+不是計算——尤其眉型這種單次切分分數會在 0.43 ~ 0.56 之間跳的模型（見訓練歷程
+§16.4），自動換上分數最高的那顆等於自動部署一次運氣。
+
+用法
+----
+    python tools/training_worker.py                 # 一直守著，每 20 秒看一次
+    python tools/training_worker.py --once          # 只處理目前排隊中的，做完就結束
+    python tools/training_worker.py --dry-run       # 只顯示會做什麼，不真的訓練
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import time
+from collections import deque
+from datetime import datetime
+from pathlib import Path
+
+import _bootstrap  # noqa: F401  # 讓 tools/ 底下的腳本找得到 training/ 與 face/
+
+from training.training_run_store import (
+    RUNS_COLLECTION, claim_run, fail_run, heartbeat, list_runs, patch_document,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+# 後台的 selections 用的是使用者看到的中文欄位名；訓練腳本要的是部位代號。
+FIELD_TO_PART = {
+    "臉型": "face_shape",
+    "眉型": "brow_shape",
+    "眼型": "eye_shape",
+    "鼻型": "nose_shape",
+    "嘴型": "lip_shape",
+}
+
+
+def _log(message: str) -> None:
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}", flush=True)
+
+
+def _parts_of(run: dict) -> list[str]:
+    """這一批要重訓哪幾個部位——只訓練真的有新樣本的那些。
+
+    全部五個一起訓練要跑五倍時間，而其中四個的訓練資料跟上一次一模一樣，
+    產出的也會是同樣的東西。把沒有新樣本的部位一起跑，除了讓人等，還會讓
+    modelBefore/modelAfter 出現一堆「差 0.000」的列，把真正變動的那一個埋掉。
+    """
+    parts: list[str] = []
+    for fields in (run.get("selections") or {}).values():
+        for field in (fields or {}):
+            part = FIELD_TO_PART.get(str(field))
+            if part and part not in parts:
+                parts.append(part)
+    return parts
+
+
+def _run_step(cmd: list[str], env: dict, tail: deque) -> int:
+    """執行一個步驟，即時印出來，同時留下最後幾行給失敗訊息用。
+
+    邊跑邊印很重要：訓練是好幾分鐘的沉默，看不到 epoch 在動的時候，人分不出
+    「在跑」跟「當掉」。而 tail 是給 Firestore 的——後台的對話框要顯示為什麼失敗，
+    貼一整段 traceback 沒有人看得懂，最後幾行才是原因。
+    """
+    _log("$ " + " ".join(cmd[1:]))
+    process = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True,
+                               encoding="utf-8", errors="replace", bufsize=1)
+    for line in process.stdout:
+        line = line.rstrip()
+        if line:
+            print("   " + line, flush=True)
+            tail.append(line)
+    return process.wait()
+
+
+def process_run(run: dict, args, project: str) -> bool:
+    run_id = str(run.get("runId") or "")
+    parts = _parts_of(run)
+    if not parts:
+        fail_run(project, run_id, "這個批次沒有任何可訓練的部位——採用的欄位對不到五官分類。")
+        _log(f"{run_id} 沒有可訓練的部位，標記為失敗")
+        return False
+
+    out_dir = f"models/training_runs/{run_id}"
+    cache_dir = args.cache_dir
+    plus_dir = f"{cache_dir}_plus_feedback"
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "ROI_CACHE_DIR": plus_dir}
+    tail: deque = deque(maxlen=25)
+
+    _log(f"{run_id}：{len(run.get('selections') or {})} 筆回饋、部位 {'、'.join(parts)}")
+
+    steps = [
+        # 先把這一批被採用的樣本併進既有快取。--training-run 會讓它只收這個批次的
+        # selections，不會順手把其他還沒覆核的回饋一起拉進來。
+        [sys.executable, "training/import_feedback_samples.py",
+         "--training-run", run_id, "--cache-dir", cache_dir, "--out-dir", plus_dir],
+        # 再訓練。輸出到批次自己的目錄，線上模型目錄不動。
+        [sys.executable, "training/train_basic_cnn_roi.py",
+         "--training-run", run_id, "--parts", *parts,
+         "--architecture", "convnext_tiny", "--epochs", str(args.epochs),
+         "--skip-random", "--out-dir", out_dir],
+    ]
+
+    if args.dry_run:
+        for cmd in steps:
+            _log("（預演）" + " ".join(cmd[1:]))
+        return True
+
+    heartbeat(project, args.worker_id, "training", f"{run_id}：{'、'.join(parts)}")
+    for cmd in steps:
+        code = _run_step(cmd, env, tail)
+        if code != 0:
+            reason = "\n".join(list(tail)[-8:]) or f"步驟結束碼 {code}"
+            fail_run(project, run_id, f"{Path(cmd[1]).name} 失敗（結束碼 {code}）：\n{reason}")
+            _log(f"{run_id} 失敗，已寫回後台")
+            return False
+
+    # 訓練腳本自己會把 status 寫成 done 並附上前後指標；這裡只補上產出位置，
+    # 讓「這批的模型在哪」不必靠猜。
+    patch_document(project, RUNS_COLLECTION, run_id, {"outDir": out_dir})
+    _log(f"{run_id} 完成，產出在 {out_dir}")
+    return True
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--project", default=os.environ.get("GOOGLE_CLOUD_PROJECT", "decorate-me"))
+    parser.add_argument("--cache-dir", default="data/roi_cache_manual",
+                        help="既有的 ROI 快取；新樣本會併進它的 _plus_feedback 版本")
+    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--interval", type=int, default=20, help="幾秒看一次有沒有新批次")
+    parser.add_argument("--worker-id", default=os.environ.get("COMPUTERNAME") or "local",
+                        help="心跳用的識別字；後台顯示的就是這個")
+    parser.add_argument("--once", action="store_true", help="把目前排隊中的做完就結束")
+    parser.add_argument("--dry-run", action="store_true", help="只顯示會做什麼")
+    args = parser.parse_args()
+
+    _log(f"訓練機 {args.worker_id} 啟動｜專案 {args.project}｜快取 {args.cache_dir}")
+    _log("後台按下「送去訓練」的批次會在這裡自動執行。關掉這個視窗不會遺失批次，它們會等到下次啟動。")
+
+    current: str | None = None
+    try:
+        while True:
+            try:
+                queued = list_runs(args.project, status="queued", limit=10)
+            except Exception as exc:  # 網路或憑證問題不該讓守候中的 worker 直接死掉
+                _log(f"讀取批次失敗（{exc}），{args.interval} 秒後重試")
+                time.sleep(args.interval)
+                continue
+
+            if not queued:
+                heartbeat(args.project, args.worker_id, "idle")
+                if args.once:
+                    _log("沒有排隊中的批次，結束。")
+                    return 0
+                time.sleep(args.interval)
+                continue
+
+            for run in queued:
+                run_id = str(run.get("runId") or "")
+                claimed = claim_run(args.project, run_id, args.worker_id) if not args.dry_run else run
+                if not claimed:
+                    continue
+                current = run_id
+                process_run(claimed, args, args.project)
+                current = None
+
+            if args.once:
+                _log("排隊中的批次都處理完了，結束。")
+                return 0
+    except KeyboardInterrupt:
+        # 中途按 Ctrl+C 的話，把批次放回 queued。留在 running 會讓後台一直顯示
+        # 「訓練中」，而實際上沒有任何程式在跑——那比顯示「排隊中」更誤導。
+        if current:
+            patch_document(args.project, RUNS_COLLECTION, current,
+                           {"status": "queued", "startedAt": None,
+                            "error": "訓練被手動中斷，已放回排隊。"})
+            _log(f"{current} 已放回排隊")
+        heartbeat(args.project, args.worker_id, "offline", "手動停止")
+        _log("已停止。")
+        return 130
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

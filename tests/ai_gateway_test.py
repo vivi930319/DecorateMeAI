@@ -1500,5 +1500,122 @@ class GuestTrialTest(unittest.TestCase):
         self.assertEqual(raised.exception.detail["error"]["code"], "MEMBER_AUTH_REQUIRED")
 
 
+class FaceTrainingRunTest(unittest.TestCase):
+    """訓練批次是「使用者修正真的被拿去訓練」這件事唯一的書面證據。
+
+    兩件事要有測試守著，因為它們壞掉的時候畫面看起來都是正常的：
+    批次建立後要在每一筆回饋上蓋回批次編號（否則同一批資料每按一次就重送一次），
+    以及列表要帶出訓練機心跳（否則「還在排隊」與「訓練失敗」在畫面上長得一樣）。
+    """
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        import ai_gateway
+        import job_store
+
+        self.gw = ai_gateway
+        self._job_store = job_store
+        self._fs = (job_store.firestore, job_store._client)
+        job_store.firestore, job_store._client = None, None
+
+        token, _ = issue_access_token("admin@example.com", "admin", "active")
+        # 這條會寫，所以要帶 double-submit 的 CSRF token 與 X-Expected-Actor。
+        # 少了它們只會拿到 403，而那個 403 跟「權限不足」長得一模一樣。
+        self.csrf = "csrf-token-for-test"
+        self.cookies = {**session_cookies(token), ai_gateway.CSRF_COOKIE: self.csrf}
+        self.headers = {
+            ai_gateway.CSRF_HEADER: self.csrf,
+            "X-Expected-Actor": ai_gateway.opaque_actor_id("admin@example.com"),
+        }
+
+        self.feedback = {
+            "FB-JOB-1": {
+                "feedbackId": "FB-JOB-1", "jobId": "JOB-1", "contributed": True,
+                "corrections": {"眉型": "一字眉"},
+                "reviewDecisions": {"眉型": "accepted"},
+            },
+            "FB-JOB-2": {
+                "feedbackId": "FB-JOB-2", "jobId": "JOB-2", "contributed": False,
+                "corrections": {"眼型": "圓眼"},
+                "reviewDecisions": {"眼型": "accepted"},
+            },
+        }
+        self.created = []
+        self.patched = []
+        self.collections = {
+            "face_training_runs": [],
+            "face_training_workers": [{"workerId": "PC-1", "state": "idle",
+                                       "lastSeenAt": "2026-08-26T01:00:00+00:00"}],
+        }
+
+        self._orig = (job_store.get, job_store.create, job_store.patch, job_store.all_jobs)
+        job_store.get = lambda col, doc_id: (
+            self.feedback.get(f"FB-{doc_id}") if col == "face_feedback" else None)
+        job_store.create = lambda col, doc_id, data: self.created.append((col, doc_id, data))
+        job_store.patch = lambda col, doc_id, updates: self.patched.append((col, doc_id, updates))
+        job_store.all_jobs = lambda col, **kw: list(self.collections.get(col, []))
+        self.client = TestClient(ai_gateway.app)
+
+    def tearDown(self):
+        (self._job_store.get, self._job_store.create,
+         self._job_store.patch, self._job_store.all_jobs) = self._orig
+        self._job_store.firestore, self._job_store._client = self._fs
+
+    def _create(self, ids):
+        return self.client.post("/admin-api/face-training/runs",
+                                json={"feedbackIds": ids},
+                                cookies=self.cookies, headers=self.headers)
+
+    def test_run_stamps_the_batch_id_back_onto_each_feedback(self):
+        r = self._create(["FB-JOB-1"])
+        self.assertEqual(r.status_code, 202, r.text)
+        run_id = r.json()["runId"]
+        stamped = [p for p in self.patched
+                   if p[0] == "face_feedback" and p[2].get("trainingRunId")]
+        self.assertEqual(len(stamped), 1, f"應該只蓋一筆，實際 {self.patched}")
+        self.assertEqual(stamped[0][1], "JOB-1")
+        self.assertEqual(stamped[0][2]["trainingRunId"], run_id)
+
+    def test_sample_without_image_is_excluded_with_a_reason(self):
+        r = self._create(["FB-JOB-1", "FB-JOB-2"])
+        self.assertEqual(r.status_code, 202, r.text)
+        body = r.json()
+        self.assertEqual(body["feedbackIds"], ["FB-JOB-1"])
+        reasons = {item["feedbackId"]: item["reason"] for item in body["excluded"]}
+        self.assertIn("FB-JOB-2", reasons)
+        # 排除的理由要說得出口——這個欄位就是給人看「為什麼沒用這一筆」的。
+        self.assertIn("影像", reasons["FB-JOB-2"])
+
+    def test_stamp_failure_does_not_lose_the_batch(self):
+        # 蓋標記失敗時，批次本身仍然要建立起來：批次是證據，標記只是方便查詢。
+        def boom(col, doc_id, updates):
+            raise RuntimeError("firestore 暫時寫不進去")
+        self._job_store.patch = boom
+        r = self._create(["FB-JOB-1"])
+        self.assertEqual(r.status_code, 202, r.text)
+        self.assertEqual(len(self.created), 1)
+
+    def test_runs_listing_reports_the_training_machine(self):
+        r = self.client.get("/admin-api/face-training/runs",
+                            cookies=self.cookies, headers=self.headers)
+        self.assertEqual(r.status_code, 200, r.text)
+        worker = r.json().get("worker")
+        self.assertIsNotNone(worker, "沒有心跳的話，排隊中與訓練失敗在畫面上分不出來")
+        self.assertEqual(worker["workerId"], "PC-1")
+
+    def test_missing_worker_collection_is_not_an_error(self):
+        # worker 從來沒跑過的時候這個集合不存在，那本身就是有意義的答案（沒有訓練機），
+        # 不該讓整個後台讀不到批次。
+        def boom(col, **kw):
+            if col == "face_training_workers":
+                raise RuntimeError("collection not found")
+            return []
+        self._job_store.all_jobs = boom
+        r = self.client.get("/admin-api/face-training/runs",
+                            cookies=self.cookies, headers=self.headers)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(r.json()["worker"])
+
+
 if __name__ == "__main__":
     unittest.main()

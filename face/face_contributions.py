@@ -263,6 +263,37 @@ def load_for_job(job_id: str, *, max_bytes: int = 2_000_000) -> list[dict]:
     return out
 
 
+def delete_for_job(job_id: str) -> int:
+    """刪掉某一次分析留下的樣本影像，回傳實際刪掉幾個物件。
+
+    退回一筆修正時要呼叫這個。**是真的刪除，不是改旗標**：那些影像唯一的用途就是
+    當訓練標籤，一旦判定不採用，它們就只是在佔 GCS 空間，而且是臉部影像——留著
+    沒有用途的臉部資料，比刪掉的風險大。
+
+    路徑是 `user_contributed/<ROI版本>/<部位>/<類別>/<job_id>.png`，檔名就是 job_id，
+    所以同一次分析的五個部位會一起被掃到。用前綴掃描而不是猜路徑：那個版本號會
+    隨裁切規格改變，寫死在這裡遲早對不上（load_for_job 也是同樣的理由）。
+    """
+    if not job_id:
+        return 0
+    client = _client()
+    if client is None:
+        return 0
+    want = f"{job_id}.png"
+    removed = 0
+    try:
+        for blob in client.list_blobs(BUCKET, prefix=f"{PREFIX}/"):
+            if blob.name.endswith(want):
+                blob.delete()
+                removed += 1
+    except Exception:
+        # 刪不掉要讓呼叫端知道，不能安靜吞掉：覆核流程會據此決定要不要把
+        # contributed 標成 False，而「說已經刪了、其實還在」是最糟的狀態。
+        logging.exception("刪除貢獻樣本失敗 job_id=%s", job_id)
+        raise
+    return removed
+
+
 def delete_for_owner(owner_id: str) -> int:
     """刪掉某個會員貢獻的全部樣本，回傳刪除數。會員刪除流程要呼叫這個。
 

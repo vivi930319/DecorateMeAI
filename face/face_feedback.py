@@ -399,6 +399,13 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
                 "reviewStatus": row.get("reviewStatus") or REVIEW_PENDING,
                 "reviewedAt": row.get("reviewedAt"),
                 "reviewNote": row.get("reviewNote") or "",
+                # 這一筆進過哪一次訓練批次。有值代表「已經送去訓練過」——後台靠它
+                # 分辨「採用了但還沒送訓」與「已經在某一批裡」，不然採用完的資料
+                # 會每一批都被重送一次。
+                "trainingRunId": row.get("trainingRunId") or "",
+                # 退回時影像是真的被刪掉的，把時間留給畫面說明，避免管理員以為
+                # 只是被隱藏起來。
+                "samplesDeletedAt": row.get("samplesDeletedAt") or "",
                 "predictionConfidence": row.get("predictionConfidence") or {},
                 # 有沒有影像樣本決定覆核的人能不能真的判斷對錯：只有勾了同意的
                 # 才會存 ROI 到 GCS，沒存的那些只能看標籤字串。
@@ -557,15 +564,39 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
                   else "rejected" if values == {"rejected"}
                   else "partial")
         note = str((body or {}).get("note") or "").strip()[:500]
-        job_store.patch(FEEDBACK_COL, job_id, {
+        updates = {
             "reviewDecisions": merged,
             "reviewLabels": labels,
             "reviewStatus": status,
             "reviewedAt": datetime.now(timezone.utc).isoformat(),
             "reviewNote": note,
-        })
+        }
+
+        # 整筆退回 = 樣本影像真的從 GCS 刪掉，不是改個旗標。
+        #
+        # 那些影像唯一的用途就是當訓練標籤。判定不採用之後它們不會再被任何流程讀到，
+        # 留著只是在佔空間，而且是**臉部影像**——沒有用途的臉部資料留著，風險比刪掉大。
+        #
+        # 只在整筆 rejected 時刪。partial 代表還有部位要進訓練集，而同一次分析的五個
+        # 部位共用一個 job_id、存在同一組物件裡，刪掉會把還要用的那幾張一起帶走。
+        deleted = None
+        if status == "rejected" and doc.get("contributed"):
+            try:
+                deleted = face_contributions.delete_for_job(job_id)
+            except Exception:
+                # 刪不掉就不要宣稱刪掉了：contributed 維持原狀，讓它下次還能被清理工具
+                # 掃到。這裡不讓覆核整個失敗——決定本身是有效的，該記下來。
+                logging.exception("退回時刪除樣本影像失敗 job_id=%s", job_id)
+                updates["samplesDeleteError"] = datetime.now(timezone.utc).isoformat()
+            else:
+                updates["contributed"] = False
+                updates["samplesDeletedAt"] = datetime.now(timezone.utc).isoformat()
+                updates["samplesDeletedCount"] = deleted
+
+        job_store.patch(FEEDBACK_COL, job_id, updates)
         return {"status": "ok", "feedbackId": f"FB-{job_id}", "reviewStatus": status,
-                "reviewDecisions": merged, "reviewLabels": labels}
+                "reviewDecisions": merged, "reviewLabels": labels,
+                "samplesDeleted": deleted}
 
     @app.delete("/v1/face/users/{owner_id}")
     async def delete_member_face_data(  # noqa: ANN202
