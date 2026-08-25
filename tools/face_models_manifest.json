@@ -1,6 +1,6 @@
 {
-  "version": "20260806",
-  "gcsPrefix": "gs://decorate-me-models/20260806",
+  "version": "20260824_brow4",
+  "gcsPrefix": "gs://decorate-me-models/20260824_brow4",
   "files": [
     {
       "path": "models/basic_features_roi/face_shape.onnx",
@@ -11,8 +11,8 @@
     {
       "path": "models/basic_features_roi/brow_shape.onnx",
       "object": "basic_features_roi/brow_shape.onnx",
-      "size": 111374260,
-      "sha256": "40cebcd3b9eae7cf5ba53dba488829020e2d57c23fc98500008b780f26356d1c"
+      "size": 111377336,
+      "sha256": "6e4d5f122d1d681dabc45b480916b467e277faadd74ed2fd84e5655a98081407"
     },
     {
       "path": "models/basic_features_roi/eye_shape.onnx",
