@@ -90,7 +90,6 @@
 # basic_*_shape.py 也一支都沒進去，那個標題因此名不副實（2026-08-24 發現並補上）。
 !training/
 !training/*.py
-!training/README.md
 !deploy_face_cloudrun.ps1
 !deploy_gateway_cloudrun.ps1
 !setup.bat
@@ -98,9 +97,6 @@
 !start_full_stack_local.bat
 
 # 搬機與交接文件／前端無秘密設定範本
-!專案交接手冊_搬機版_2026-07-17.md
-!給爬蟲端與資料庫端_商品搜尋管理與推薦演算法整合規格書_2026-07-17.md
-!Admin商品管理安全Proxy三方對接規格書_2026-07-18.md
 # firebase-hosting-full/ 是 web_frontend 的另一份副本（63 檔、20MB），兩份會互蓋。
 # 這些放行規則從來沒有生效過——目錄下 0 個檔案進過版控。真正在部署的是
 # OneDrive 底下那份 web_frontend（它有自己的 repo）。留著放行只會讓某天有人
@@ -115,7 +111,6 @@ firebase-hosting-full/public/.gitignore
 firebase-hosting-full/public/README.md
 
 # 系統改善清單需要納入版本控制，完成項目才能長期追蹤。
-!系統資安效率流程改善總表.md
 
 # 本機新手教學文件，不上傳 Git
 local_only_notes/
@@ -125,7 +120,6 @@ local_only_notes/
 # 所以新的例外也必須加在這裡，加在上面沒有用（後面的規則優先）。
 *.md
 !README.md
-!臉部分析模型_完整發展歷程規格書_2026-07-29.md
 
 # 五官分類模型。
 #
@@ -154,66 +148,51 @@ local_only_notes/
 !models/basic_features_roi/*_dinov2_head.npz
 
 # 模型部署紀錄：搬機與交接都需要，納入版控。
-!模型部署紀錄_DINOv2_Shadow_2026-07-19.md
-!模型三方公平比較_2026-07-19.md
-!CNN訓練歷程_BASIC五官分類.md
-!DINOv2_臉部特徵分類模型規格書.md
-!給資料庫端_會員硬刪除規格_2026-07-19.md
-!給資料庫端_會員Session完整接口規格_Cursor版_2026-07-21.md
 
 # 搬機地雷清單：交接手冊（7/17）之後才踩到的坑，換機器一定要帶。
-!搬機地雷補充_2026-07-21.md
 
 # 會員端點數／打卡／任務／推薦碼規格：對資料庫端的正式需求，要能追蹤版本。
-!給資料庫端_會員點數打卡任務推薦碼規格_2026-07-21.md
 
 # 待修清單（Cursor 執行版）：實測後的完整版，取代上一份的第 2～4 節。
-!給資料庫端_待修清單_Cursor版_2026-07-22.md
 
 # 隱私說明：臉照存在哪、誰看得到。口試會問，搬機也要帶。
-!隱私說明_臉部照片怎麼存_給新手.md
 
 # 後端完整技術文件：架構／端點／資安機制／環境變數的單一權威參考，納入版控。
-!後端完整技術文件_2026-07-25.md
 
 # Demo 前設定與走查清單：Demo 前一天照著跑，納入版控。
-!Demo前設定與走查清單_2026-07-25.md
 
 # 待修清單（7/25）：登入修好之後實測到的三項，接續 7/22 那份，要能追蹤版本。
-!給資料庫端_待修清單_2026-07-25.md
 
 # 7/27 P0：會員端點全面 401，整站登入註冊歸零。事故紀錄要留在版控裡。
-!給資料庫端_緊急_會員端點全面401_2026-07-27.md
 
 # 7/26 資料庫端新版程式碼的審查結果：SMTP 憑證外洩與 X-Gateway-Key 串接。
-!給資料庫端_新版程式碼審查_2026-07-27.md
 
 # 文字建議服務接入規格：給跑 Ollama 那台的同學，含金鑰輪替要求（#26）。
-!給Ollama端_文字建議服務接入規格書_2026-07-25.md
 
 # Agent 設定：issue tracker 位置、triage 標籤、domain docs 採單一 context。
 # 換機器或換人接手時，沒有這份就得重新摸索一次。
 !CLAUDE.md
 
+# 2026-08-26：GitHub 上只留 README.md。
+#
+# 先前這裡有三十幾條逐檔案的 .md 放行，再加一條 `!/*.md` 把根目錄整批收進來——
+# 結果是 103 份工作文件（交接紀錄、給組員的規格書、實驗紀錄）都在公開的 repo 裡，
+# 而那不是任何人當初決定的，是規則長出來的。
+#
+# 文件現在依用途分在 docs/ 底下（見 docs/README.md），留在本機與組內流通，不入版控。
+# 例外只有三種，都在上面明確放行：README.md（GitHub 首頁）、CLAUDE.md 與
+# docs/agents/*.md（這兩者是 agent 的設定，不是文件——少了它們，重新 clone 之後
+# 工具不知道這個專案的規則）。
+
 # Ollama 資料包契約：schemaVersion 規則與每個欄位的語意，跨端對接的權威來源。
-!OLLAMA_DATA_PACKET_INTEGRATION_SPEC.md
 
 # 膚色可信度旗標 labReliable：講明什麼時候 lab 不可以拿去比色號。
 # 推薦端照這份實作，出錯就是粉底配錯色號，要能追蹤版本。
-!給演算法端_膚色可信度旗標接入_2026-08-03.md
 
 # 給演算法端的對接前提與待辦，含 job 失敗三種狀態碼的區分
 # （只有 FACE_IMAGE_UNUSABLE 的 message 可以原樣顯示給使用者）。
-!給演算法端_待辦彙總規格_2026-07-25.md
 
 # 跨端規格與修改單：對接對象照這些實作，內容都是介面約定，沒有個資也沒有金鑰。
-!MAKEUP_AI_CALLER_INTEGRATION_SPEC.md
-!OLLAMA_PROVIDER_CHANGE_REQUEST.md
-!OLLAMA_RENDER_PROMPT_FIX_RECOMMENDATION.md
-!PRODUCT_RECOMMEND_ALGORITHM_FIX_RECOMMENDATION.md
-!FRONTEND_REMOVE_FAKE_ADVICE_CHANGE_REQUEST.md
-!ollama_suggestion_merge_note.md
-!frontend-api-guide.md
 
 # Agent 設定指向的三份文件。CLAUDE.md 已入版控卻參照到未入版控的檔案，
 # 換機器就會讀到「檔案不存在」。
@@ -223,7 +202,6 @@ local_only_notes/
 
 # 搬機環境地雷：PowerShell 版本、Big5 編碼、防毒攔憑證、私有 Cloud Run 認證。
 # 2026-08-06 全端部署那天卡住的每一件事都在這裡，換機器不看會照撞一次。
-!搬機環境地雷_工具鏈與編碼_2026-08-06.md
 
 # 跨類別重複清單：要給標註端逐組判讀「這張到底屬於哪一類」。
 # 資料集本身不入版控，但這份是待辦清單不是資料，只有檔名與雜湊前綴。
@@ -238,7 +216,6 @@ local_only_notes/
 !data/roi_cache/
 !data/roi_cache/holdout_split_*.json
 # v1 的作廢說明，跟切分檔放在一起才不會有人先看到 json 就拿去用。
-!data/roi_cache/holdout_split_*.md
 
 # 各版本模型在保留集上的分數，累積比較用。
 !models/holdout_scores.json
@@ -253,7 +230,6 @@ local_only_notes/
 # 所以改成：根目錄的 .md 預設收，例外逐份排除（就在這條下面）。
 # `/` 開頭代表只管根目錄，子目錄（docs/、tmp/、.pnpm-store/、local_only_notes/、
 # .venv/ …）不受影響，維持原本的全擋。
-!/*.md
 
 # ⚠️ 唯一的例外：MEMBER_DATABASE_SECURITY_ISSUE.md 刻意**不**入版控。
 # 它報的是「GET /api/members 無權限驗證、會員個資全公開」，而它證明的方式是把當時

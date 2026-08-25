@@ -1,7 +1,7 @@
 """ROI CNN 的 shadow prediction：跑模型、記錄結果，但不影響 BASIC 的正式輸出。
 
 原因是 shadow 而不是直接用：這批模型按人切分的 macro accuracy 只有 0.38~0.67，
-全數低於規格書門檻 0.70（見 CNN訓練歷程_BASIC五官分類.md）。直接接上去會讓線上結果變差，
+全數低於規格書門檻 0.70（見 docs/模型與訓練/CNN訓練歷程_BASIC五官分類.md）。直接接上去會讓線上結果變差，
 所以照規格書 13.1 的做法先跑 shadow —— API 照樣回規則式答案，預設只把
 「規則式 vs 模型」的差異寫進 log，累積真實流量上的比較資料。若內部驗收需要看
 模型欄位，可用 ROI_SHADOW_EXPOSE_RESPONSE=1 暫時回傳。

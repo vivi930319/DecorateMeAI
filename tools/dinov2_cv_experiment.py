@@ -1,6 +1,6 @@
 """DINOv2 frozen encoder + 傳統分類器 vs MobileNetV3 fine-tune：同一把尺的對決。
 
-這是 DINOv2_臉部特徵分類模型規格書.md 第 3 節建議的路線：小資料場景下，
+這是 docs/模型與訓練/DINOv2_臉部特徵分類模型規格書.md 第 3 節建議的路線：小資料場景下，
 用自監督預訓練的 frozen encoder 抽 embedding、再訓練輕量分類器，
 理論上比從頭 fine-tune 一個 CNN 更不容易過擬合。
 
