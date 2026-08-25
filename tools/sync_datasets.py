@@ -158,7 +158,7 @@ ARCHIVED = {
     f"{MODEL_BUCKET}/20260731":
         "2026-07-31 上線版，含 DINOv2 融合頭與規則樹",
     f"{MODEL_BUCKET}/20260806":
-        "⚠ 只有 5 個 .onnx，缺 classes.json，單獨還原不出可用服務",
+        "[注意] 只有 5 個 .onnx，缺 classes.json，單獨還原不出可用服務",
 }
 
 
@@ -240,7 +240,7 @@ def main():
 
         if args.verify:
             if n_local != n_remote:
-                print(f"   ⚠ 數量不一致，差 {abs(n_local - n_remote)} 個")
+                print(f"   [注意] 數量不一致，差 {abs(n_local - n_remote)} 個")
                 failed.append(local_rel)
             else:
                 print("   一致")
@@ -287,7 +287,7 @@ def main():
 
         if args.verify:
             if n_local != n_remote:
-                print(f"   ⚠ 數量不一致，差 {abs(n_local - n_remote)} 個")
+                print(f"   [注意] 數量不一致，差 {abs(n_local - n_remote)} 個")
                 failed.append(pattern)
             else:
                 print("   一致")

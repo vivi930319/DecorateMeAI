@@ -92,7 +92,7 @@ def main():
 
     unmapped = sum(1 for r in rows if r["identity"] == -1)
     if unmapped:
-        print(f"  ⚠ identity=-1 有 {unmapped} 張（{100*unmapped/len(rows):.1f}%），"
+        print(f"  [注意] identity=-1 有 {unmapped} 張（{100*unmapped/len(rows):.1f}%），"
               f"這些一律留在 train。比例偏高代表 identity_map 過期，"
               f"請先跑 tools/build_identity_map.py")
 
@@ -149,7 +149,7 @@ def main():
         if h < args.min_per_class:
             warn.append(f"{part}/{label} 只有 {h} 張")
     if warn:
-        print("\n⚠ 下列類別的保留樣本偏少，該類分數會很不穩：")
+        print("\n[注意] 下列類別的保留樣本偏少，該類分數會很不穩：")
         for w in warn:
             print(f"    {w}")
     return 0

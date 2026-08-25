@@ -79,7 +79,7 @@ def main():
     print(f"  對應到快取的保留樣本 {len(row_of)} / {len(holdout)}")
     missing = len(holdout) - len(row_of)
     if missing:
-        print(f"  ⚠ 有 {missing} 張在快取裡找不到，請重跑 prepare_roi_cache.py")
+        print(f"  [注意] 有 {missing} 張在快取裡找不到，請重跑 prepare_roi_cache.py")
 
     model_dir = ROOT / args.model_dir
     parts = args.parts or ["face_shape", "brow_shape", "eye_shape", "nose_shape", "lip_shape"]
