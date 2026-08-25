@@ -43,7 +43,8 @@ from pathlib import Path
 import _bootstrap  # noqa: F401  # 讓 tools/ 底下的腳本找得到 training/ 與 face/
 
 from training.training_run_store import (
-    RUNS_COLLECTION, claim_run, fail_run, heartbeat, list_runs, patch_document,
+    RUNS_COLLECTION, claim_run, create_run_from_accepted, fail_run, heartbeat, list_runs,
+    patch_document,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -173,12 +174,21 @@ def main() -> int:
                 continue
 
             if not queued:
-                heartbeat(args.project, args.worker_id, "idle")
-                if args.once:
-                    _log("沒有排隊中的批次，結束。")
-                    return 0
-                time.sleep(args.interval)
-                continue
+                # 沒有現成的批次，就自己把「已送訓、還沒訓練過」的修正收成一批。
+                # 後台的「送訓」按在單一部位上，成批留到這裡做——那時候累積了哪些
+                # 才是確定的，也才不會為了一個新樣本跑完整整一輪訓練。
+                made = None if args.dry_run else create_run_from_accepted(args.project, args.worker_id)
+                if made:
+                    _log(f"收集到新批次 {made['runId']}：{made['sampleCount']} 個部位標註、"
+                         f"{len(made['feedbackIds'])} 筆回饋")
+                    queued = [made]
+                else:
+                    heartbeat(args.project, args.worker_id, "idle")
+                    if args.once:
+                        _log("沒有排隊中的批次，也沒有新的已送訓資料，結束。")
+                        return 0
+                    time.sleep(args.interval)
+                    continue
 
             for run in queued:
                 run_id = str(run.get("runId") or "")

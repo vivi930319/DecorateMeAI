@@ -148,15 +148,122 @@ def list_runs(project: str, status: str | None = None, limit: int = 20) -> list[
     worker 要先做最早排隊的那一批：管理員按下按鈕的順序就是他想要的順序，
     後進先出會讓最早送的那一批永遠排在後面。
     """
-    query: dict = {
-        "from": [{"collectionId": RUNS_COLLECTION}],
-        "orderBy": [{"field": {"fieldPath": "createdAt"}, "direction": "ASCENDING"}],
-        "limit": int(limit),
-    }
+    query: dict = {"from": [{"collectionId": RUNS_COLLECTION}], "limit": int(limit)}
     if status:
+        # 只篩選、不在查詢裡排序。Firestore 對「用 A 篩選、用 B 排序」要求一個複合
+        # 索引，沒有就回 400 Bad Request——而排隊中的批次一次不會超過個位數，
+        # 拿回來自己排比為了它建一個索引划算。
         query["where"] = {"fieldFilter": {
             "field": {"fieldPath": "status"}, "op": "EQUAL", "value": {"stringValue": status}}}
+        rows = _run_query(project, {"structuredQuery": query})
+        return sorted(rows, key=lambda row: str(row.get("createdAt") or ""))
+    query["orderBy"] = [{"field": {"fieldPath": "createdAt"}, "direction": "ASCENDING"}]
     return _run_query(project, {"structuredQuery": query})
+
+
+FEEDBACK_COLLECTION = "face_feedback"
+# 後台的欄位名是中文（使用者看到的那個），訓練那端用部位代號。
+_TRAINABLE_FIELDS = {"臉型", "眉型", "眼型", "鼻型", "嘴型"}
+
+
+def _list_collection(project: str, collection: str) -> list[tuple[str, dict]]:
+    """讀出整個集合。分頁要跟到底，漏掉的那些會被當成不存在。"""
+    from urllib.parse import quote
+    base = (f"https://firestore.googleapis.com/v1/projects/{quote(project, safe='')}"
+            f"/databases/(default)/documents/{quote(collection, safe='')}")
+    out: list[tuple[str, dict]] = []
+    page = ""
+    while True:
+        req = urllib.request.Request(base + "?pageSize=300" + (f"&pageToken={page}" if page else ""),
+                                     headers={"Authorization": f"Bearer {_token()}"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        for doc in data.get("documents", []):
+            out.append((doc["name"].rsplit("/", 1)[-1],
+                        {k: _unwrap(v) for k, v in (doc.get("fields") or {}).items()}))
+        page = data.get("nextPageToken") or ""
+        if not page:
+            return out
+
+
+def create_run_from_accepted(project: str, worker_id: str) -> dict | None:
+    """把所有「已送訓、有影像、還沒訓練過」的修正收成一個批次。回傳批次，沒有就回 None。
+
+    為什麼由訓練機建立批次，而不是後台按鈕
+    --------------------------------------
+    後台的「送訓」按在單一部位上——那是管理員的判斷，一次一個。如果每按一次就建立
+    一個批次，訓練機會為了一個新樣本跑完整整一輪（實測約 8 分鐘），而一個樣本對
+    489 張的訓練集不會有任何統計意義。
+
+    所以按鈕只負責記錄判斷（`reviewDecisions`），成批這件事留到訓練機真的要開工時
+    才做：那時候「累積了哪些」才是確定的。批次紀錄的證據力不受影響——它記的仍然是
+    哪一筆回饋的哪個部位進了這次訓練，而那些決定全都是人在後台按的。
+
+    只收 accepted 與 corrected：
+      accepted  用使用者的標籤
+      corrected 用管理員改判的標籤（管理員看得到影像，使用者是憑印象改的）
+    """
+    rows = _list_collection(project, FEEDBACK_COLLECTION)
+    selections: dict[str, dict[str, str]] = {}
+    excluded: list[dict] = []
+
+    for job_id, row in rows:
+        feedback_id = row.get("feedbackId") or f"FB-{job_id}"
+        if row.get("trainingRunId"):
+            continue                      # 已經進過某一批了
+        decisions = row.get("reviewDecisions") or {}
+        if not decisions:
+            continue                      # 還沒覆核，不是排除，是還沒輪到
+        corrections = row.get("corrections") or {}
+        labels = row.get("reviewLabels") or {}
+        fields: dict[str, str] = {}
+        for field, decision in decisions.items():
+            if decision not in ("accepted", "corrected") or field not in corrections:
+                continue
+            if field not in _TRAINABLE_FIELDS:
+                continue                  # 側臉鼻型走 PRO 那條線，不在這個訓練集裡
+            label = labels.get(field) if decision == "corrected" else corrections.get(field)
+            if isinstance(label, str) and label.strip():
+                fields[field] = label.strip()
+        if not fields:
+            continue
+        if not row.get("contributed"):
+            # 有判斷但沒有影像，訓練不了。列出來讓人知道它為什麼沒被用，
+            # 而不是安靜地跳過——安靜跳過會讓人以為系統漏了它。
+            excluded.append({"feedbackId": feedback_id, "reason": "沒有使用者同意保存的影像"})
+            continue
+        selections[feedback_id] = fields
+
+    if not selections:
+        return None
+
+    import secrets
+    run_id = "TR-" + secrets.token_hex(8)
+    now = now_iso()
+    run = {
+        "runId": run_id,
+        "status": "queued",
+        "model": "ConvNeXt-Tiny",
+        "createdAt": now,
+        "queuedAt": now,
+        "feedbackIds": sorted(selections),
+        "selections": selections,
+        "sampleCount": sum(len(f) for f in selections.values()),
+        "excluded": excluded,
+        "source": f"worker:{worker_id}",
+    }
+    patch_document(project, RUNS_COLLECTION, run_id, run)
+
+    # 蓋回批次編號，這一筆才不會被下一批再收一次。
+    for feedback_id in selections:
+        job_id = feedback_id[3:] if feedback_id.startswith("FB-") else feedback_id
+        try:
+            patch_document(project, FEEDBACK_COLLECTION, job_id,
+                           {"trainingRunId": run_id, "trainingQueuedAt": now})
+        except Exception:
+            # 蓋不上去頂多讓它下次再被收一次，不值得讓整批停下來。
+            pass
+    return run
 
 
 def claim_run(project: str, run_id: str, worker_id: str) -> dict | None:

@@ -78,6 +78,9 @@
 !tools/
 !tools/*.py
 !tools/face_models_manifest.json
+# 訓練機的啟動器。它是被 Windows 工作排程器叫起來的，換一台電腦要重新設排程，
+# 所以這支必須跟著 repo 走，不能只留在本機。
+!tools/start_training_worker.ps1
 # training/ 跟 tools/ 一樣是原始碼，不是產物，所以整個資料夾的 .py 都要進版本控制。
 #
 # 先前這裡沒有放行，而這份 .gitignore 是「* 全擋」的白名單，於是 training/ 底下只有
