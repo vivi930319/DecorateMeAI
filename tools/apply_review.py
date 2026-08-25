@@ -62,7 +62,8 @@ print(f"原圖：{img_dir}")
 print(f"輸出：{out_dir}" + ("" if args.apply else "　（試算模式，未寫檔）"))
 print()
 
-stats = {p: {"人工確認": 0, "未校對": 0, "不確定": 0, "無效標籤": 0, "缺欄": 0} for p in PARTS}
+stats = {p: {"人工確認": 0, "一致": 0, "未校對": 0, "不確定": 0, "無效標籤": 0, "缺欄": 0}
+         for p in PARTS}
 flow = defaultdict(Counter)
 plan = defaultdict(list)
 third_party = []
@@ -98,6 +99,12 @@ for r in rows:
             })
             continue
         stats[p]["人工確認"] += 1 if human else 0
+        # 一致與否要在**這一輪**算，跟分母同一個地方加。
+        # 先前分子是後面另開一輪重數的，那一輪沒有這裡的兩道排除（缺欄、無效標籤），
+        # 於是一個「跟模型相同但不在合法類別裡」的答案會進分子卻不進分母——
+        # 一致率因此可能超過 100%，而超過 100% 的準確率沒有人會相信後面任何一個數字。
+        if human and human == model:
+            stats[p]["一致"] += 1
         if human and human != model:
             flow[p][(model, human)] += 1
         plan[(p, final)].append(fname)
@@ -109,11 +116,8 @@ for p in PARTS:
     n = s["人工確認"]
     if not n:
         continue
-    agree = sum(1 for fname in rows for _ in [0]
-                if (fname.get(f"人工_{ZH[p]}") or "").strip()
-                and (fname.get(f"人工_{ZH[p]}") or "").strip() not in SKIP
-                and (fname.get(f"人工_{ZH[p]}") or "").strip() == (fname.get(f"模型_{ZH[p]}") or "").strip())
     # 只有人工明確確認才納入一致率；模型答案不會因為空白而被計成對。
+    agree = s["一致"]
     total_agree += agree
     total_n += n
     print(f"{ZH[p]:8s}{s['人工確認']:>10d}{s['未校對']:>9d}{s['不確定']:>9d}{agree / n * 100:>8.1f}%")

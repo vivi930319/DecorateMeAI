@@ -628,7 +628,10 @@ def main():
         patch_document(training_project, RUNS_COLLECTION, args.training_run, {
             "status": "running",
             "startedAt": now_iso(),
-            "modelBefore": read_model_metrics(OUT_DIR),
+            # 「訓練前」指的是**現在線上那顆**的分數，所以要讀正式模型目錄，
+            # 不是這次的輸出目錄——後者是剛剛才 mkdir 出來的空資料夾，讀出來永遠是空的，
+            # 而整個 before/after 對照正是這筆紀錄存在的理由。
+            "modelBefore": read_model_metrics(DEFAULT_OUT_DIR),
             "architecture": args.architecture,
             "outDir": str(OUT_DIR),
         })

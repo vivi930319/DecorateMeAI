@@ -229,6 +229,12 @@ def load_for_job(job_id: str, *, max_bytes: int = 2_000_000) -> list[dict]:
     （見 store 的 whole_image_parts），單張可能到幾百 KB。超過就跳過那一張
     並在結果裡註明，不要讓一次覆核請求拖著幾 MB 回應。
     """
+    # 空字串一定要先擋掉。`want` 會變成 ".png"，而 endswith(".png") 命中
+    # user_contributed/ 底下的**每一個**物件——覆核的人會看到別人的臉部影像，
+    # 還以為那是這一筆的樣本，然後照著它判標籤。/feedback/FB-/samples 就會踩到
+    # 這條路徑（feedback_id[3:] 是空字串）。delete_for_job 有這道防護，這裡漏了。
+    if not job_id:
+        return []
     client = _client()
     if client is None:
         return []

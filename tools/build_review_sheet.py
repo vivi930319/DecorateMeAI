@@ -45,7 +45,9 @@ import mediapipe as mp
 import numpy as np
 
 import basic_roi_shadow
-from basic_roi_shadow import PART_TO_FIELD
+# 校對表的欄位名用 review_sheet_schema，不要用服務端的 PART_TO_FIELD：
+# 唇型在兩邊叫不同名字，用錯的那一個會讓既有工具整欄讀不到（見該檔說明）。
+from review_sheet_schema import SHEET_FIELD
 
 MAX_IMAGE_SIZE = 1024
 PART_ORDER = ["face_shape", "brow_shape", "eye_shape", "nose_shape", "lip_shape"]
@@ -127,7 +129,7 @@ def main() -> int:
     if not sessions:
         raise SystemExit("載不到 ONNX 模型，確認 models/basic_features_roi/ 內容")
 
-    fields = [PART_TO_FIELD[p] for p in PART_ORDER if p in sessions]
+    fields = [SHEET_FIELD[p] for p in PART_ORDER if p in sessions]
     header = ["檔名", "看圖"]
     for field in fields:
         header += [f"模型_{field}", f"信心_{field}", f"次選_{field}", f"人工_{field}"]
@@ -167,9 +169,9 @@ def main() -> int:
 
         row = [path.name, f'=HYPERLINK("{path.resolve().as_posix()}","看圖")']
         for part in PART_ORDER:
-            if PART_TO_FIELD.get(part) not in dist:
+            if SHEET_FIELD.get(part) not in dist:
                 continue
-            field = PART_TO_FIELD[part]
+            field = SHEET_FIELD[part]
             label, conf, second = pred.get(part, ("", "", ""))
             row += [label, conf, second, ""]
             if label:

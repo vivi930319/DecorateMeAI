@@ -2253,6 +2253,12 @@ async def admin_face_feedback(request: Request):
             "reviewNote": row.get("reviewNote") or "",
             "predictionConfidence": row.get("predictionConfidence") or {},
             "hasSample": bool(row.get("contributed")),
+            # 這兩個欄位畫面上有在用，而這條路徑是後台唯一的資料來源（列表已經改成
+            # 直接讀 Firestore、不繞 face），所以漏掉一個就是那個功能整個不會動：
+            #   trainingRunId    分辨「已送訓但還沒進批次」與「已經在某一批裡」
+            #   samplesDeletedAt 說明影像是真的刪掉了，不是被隱藏起來
+            "trainingRunId": row.get("trainingRunId") or "",
+            "samplesDeletedAt": row.get("samplesDeletedAt") or "",
             # 這裡**不回任何身分欄位**：文件本來就不存 email 或 ownerId
             # （見 face_feedback.save），這裡也不去別的地方湊。
             "changes": [{"field": f, "predicted": predicted.get(f), "corrected": v}
@@ -2333,9 +2339,15 @@ async def admin_create_face_training_run(request: Request):
         job_id = feedback_id[3:] if feedback_id.startswith("FB-") else feedback_id
         if not job_id:
             continue
-        row = job_store.get(FACE_FEEDBACK_COL, job_id)
+        row = await asyncio.to_thread(job_store.get, FACE_FEEDBACK_COL, job_id)
         if not row:
             excluded.append({"feedbackId": feedback_id, "reason": "找不到回饋紀錄"})
+            continue
+        # 已經進過批次的不再收。少了這一道，同一批資料每按一次按鈕就再送一次，
+        # 匯入時同一張 ROI 會被重複收進快取，等於偷偷把某些樣本加權。
+        if row.get("trainingRunId"):
+            excluded.append({"feedbackId": row.get("feedbackId") or feedback_id,
+                             "reason": f"已在批次 {row.get('trainingRunId')} 裡"})
             continue
         if not row.get("contributed"):
             excluded.append({"feedbackId": row.get("feedbackId") or feedback_id, "reason": "沒有使用者同意保存的影像"})
@@ -2372,20 +2384,27 @@ async def admin_create_face_training_run(request: Request):
         "excluded": excluded,
         "source": "admin-face-feedback",
     }
-    job_store.create(FACE_TRAINING_RUNS_COL, run_id, run)
+    await asyncio.to_thread(job_store.create, FACE_TRAINING_RUNS_COL, run_id, run)
 
     # 在每一筆回饋上蓋回批次編號。兩個用途：
     # 一是後台能分辨「採用了但還沒送訓」與「已經在某一批裡」——沒有這個標記，
     # 已經送過的資料每按一次按鈕就會被重送一次；
     # 二是證據鏈可以從任何一筆回饋反查到它進了哪一次訓練，不必反過來翻批次清單。
-    for feedback_id in selections:
-        job_id = feedback_id[3:] if feedback_id.startswith("FB-") else feedback_id
-        try:
-            job_store.patch(FACE_FEEDBACK_COL, job_id,
-                            {"trainingRunId": run_id, "trainingQueuedAt": now})
-        except Exception:
-            # 標記失敗不該讓批次消失——批次本身已經寫進去了，那才是要緊的。
-            logging.exception("寫入 trainingRunId 失敗 job_id=%s run=%s", job_id, run_id)
+    #
+    # 這一整條端點的 Firestore 呼叫都要走 to_thread：最多 100 筆就是最多 201 次
+    # 網路往返，同步做的話整個 gateway 的事件迴圈會被卡住那麼久，其他人的請求
+    # 全部一起等——包括正在分析臉的那些。
+    def _stamp() -> None:
+        for feedback_id in selections:
+            job_id = feedback_id[3:] if feedback_id.startswith("FB-") else feedback_id
+            try:
+                job_store.patch(FACE_FEEDBACK_COL, job_id,
+                                {"trainingRunId": run_id, "trainingQueuedAt": now})
+            except Exception:
+                # 標記失敗不該讓批次消失——批次本身已經寫進去了，那才是要緊的。
+                logging.exception("寫入 trainingRunId 失敗 job_id=%s run=%s", job_id, run_id)
+
+    await asyncio.to_thread(_stamp)
 
     return JSONResponse(status_code=202, content={"status": "queued", **run})
 
@@ -2404,10 +2423,21 @@ async def admin_face_training_runs(request: Request):
         limit = max(1, min(20, int(request.query_params.get("limit") or 5)))
     except (TypeError, ValueError):
         limit = 5
-    runs = await asyncio.to_thread(
-        job_store.all_jobs, FACE_TRAINING_RUNS_COL, limit=limit,
-        order_by="createdAt", descending=True)
-    current = job_store.get(FACE_MODEL_METRICS_COL, "current") or {}
+    # Firestore 掛掉時要說「暫時讀不到」，不能讓它變成沒有處理的 500。
+    # 空清單更不行——那會被讀成「一次訓練都沒有跑過」，跟事實相反，
+    # 而這一頁存在的理由就是證明訓練跑過。旁邊的回饋清單也是這樣處理的。
+    try:
+        runs = await asyncio.to_thread(
+            job_store.all_jobs, FACE_TRAINING_RUNS_COL, limit=limit,
+            order_by="createdAt", descending=True)
+        current = await asyncio.to_thread(job_store.get, FACE_MODEL_METRICS_COL, "current") or {}
+    except Exception:
+        logging.exception("讀取訓練批次失敗")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "FACE_TRAINING_RUNS_UNAVAILABLE",
+                              "message": "暫時讀不到訓練批次，請稍後再試。"}},
+        )
     if not current:
         for run in runs:
             if run.get("status") == "done" and run.get("modelAfter"):

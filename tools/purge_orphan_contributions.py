@@ -116,6 +116,16 @@ def main() -> int:
     print(f"GCS 上有影像的分析：{len(objects)} 次（共 {sum(len(v) for v in objects.values())} 個物件）")
     print(f"face_feedback 文件：{len(statuses)} 筆\n")
 
+    # 防呆：一筆文件都讀不到，代表這次查的是錯的專案（--project 預設吃 gcloud 的
+    # 目前專案，而 BUCKET 是寫死的 decorate-me-datasets，兩邊可以不一致），
+    # 或 Firestore 回了空清單而不是錯誤。這種時候「每一張圖都是孤兒」，
+    # --apply 會把整個 bucket 前綴刪光，而刪除沒有回頭路。
+    if objects and not statuses:
+        raise SystemExit(
+            f"中止：GCS 上有 {len(objects)} 次分析的影像，但 face_feedback 一筆都讀不到。\n"
+            f"      這通常代表 --project（目前是 {project}）指到了錯的專案。\n"
+            f"      在這個狀態下每一張圖都會被判成孤兒，所以不繼續。")
+
     orphan, rejected, keep = [], [], 0
     for job_id, paths in objects.items():
         status = statuses.get(job_id)
@@ -144,6 +154,16 @@ def main() -> int:
     if not total:
         print("\n沒有需要清理的。")
         return 0
+
+    # 第二道防呆：要刪掉的比例高得不像清理，就是有東西不對。正常的清理是零星幾筆，
+    # 一次要刪掉七成以上，比較可能是查錯專案或 Firestore 回了殘缺的清單。
+    share = total / max(len(objects), 1)
+    if share > 0.7 and args.apply:
+        raise SystemExit(
+            f"中止：{total}/{len(objects)} 次分析（{share:.0%}）被判成要刪除，比例過高。\n"
+            f"      先不加 --apply 看一次清單，確認這真的是你要的再說。\n"
+            f"      確定無誤要強制執行，請暫時把這個門檻調高。")
+
     if not args.apply:
         print("\n這是預演，什麼都沒有刪。確認上面的清單沒問題後，加上 --apply 才會真的刪除。")
         return 0

@@ -131,12 +131,24 @@ def process_run(run: dict, args, project: str) -> bool:
         return True
 
     heartbeat(project, args.worker_id, "training", f"{run_id}：{'、'.join(parts)}")
-    for cmd in steps:
+    for index, cmd in enumerate(steps):
         code = _run_step(cmd, env, tail)
         if code != 0:
             reason = "\n".join(list(tail)[-8:]) or f"步驟結束碼 {code}"
             fail_run(project, run_id, f"{Path(cmd[1]).name} 失敗（結束碼 {code}）：\n{reason}")
             _log(f"{run_id} 失敗，已寫回後台")
+            return False
+        # 匯入這一步就算什麼都沒收到也會回 0，而且不會建立輸出目錄
+        # （見 import_feedback_samples 的 usable 判斷）。發生在文件說有影像、
+        # GCS 上其實已經沒有的時候——保留期限到了，或先前被清理掉。
+        #
+        # 不擋的話下一步會拿一個不存在的快取目錄去訓練，錯誤訊息變成「找不到檔案」的
+        # 堆疊，後台顯示的就是那一段——真正的原因（這批沒有影像）反而看不到。
+        if index == 0 and not (ROOT / plus_dir).is_dir():
+            fail_run(project, run_id,
+                     "這個批次沒有任何影像可以訓練。文件標示有影像，但 GCS 上已經找不到——"
+                     "可能是保留期限到了，或先前被清理掉。")
+            _log(f"{run_id} 沒有可用影像，標記為失敗")
             return False
 
     # 訓練腳本自己會把 status 寫成 done 並附上前後指標；這裡只補上產出位置，

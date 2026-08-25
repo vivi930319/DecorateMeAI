@@ -218,7 +218,12 @@ def _store_contribution(mode: str, job_id: str, payload: dict, corrections: dict
     if image_bytes is None and side_bytes is None:
         return False
     try:
-        face_contributions.store(
+        # store() 回傳的是**實際存了幾張**，一定要看。它在好幾種情況下會回 0 而不拋例外：
+        # FACE_CONTRIB_ENABLED 沒開、連不上 GCS、圖太大、landmark 抽不出來所以裁不出 ROI。
+        # 早先這裡把回傳值丟掉、一律回 True，於是文件寫著 contributed=true 但 GCS 上
+        # 一張都沒有——後台會顯示「看樣本影像」卻打開一片空白，而送訓時那一筆會被算進
+        # 批次，等到匯入才發現沒有東西可訓練，整批失敗。
+        saved = face_contributions.store(
             job_id, image_bytes, corrections,
             owner_id=owner_id,
             mode=mode,
@@ -235,7 +240,7 @@ def _store_contribution(mode: str, job_id: str, payload: dict, corrections: dict
     except Exception:
         logging.exception("貢獻樣本保存失敗 job_id=%s", job_id)
         return False
-    return True
+    return saved > 0
 
 
 def save(mode: str, job_id: str, payload: dict, owner_id: str | None = None) -> str | None:
@@ -556,8 +561,22 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
                     detail={"error": {"code": "CORRECTED_NEEDS_FIELDS",
                                       "message": "改判要逐部位指定，不能整筆一次"}},
                 )
-            merged = {f: decision for f in (doc.get("corrections") or {})} or {"_all": decision}
-            labels = {}
+            previous = doc.get("reviewDecisions") or {}
+            previous_labels = doc.get("reviewLabels") or {}
+            fields = doc.get("corrections") or {}
+            if decision == "accepted":
+                # 「全部送訓」的意思是「其餘也都送訓」，不是「把我剛才的改判撤掉」。
+                # 先前這裡直接用 decision 蓋掉每一個欄位、labels 一律清空，於是
+                # 管理員逐部位改判之後再按一次全部送訓，那些改判的標籤會靜靜消失，
+                # 訓練集收到的是使用者原本填的（可能就是錯的）那個答案。
+                merged = {f: ("corrected" if previous.get(f) == "corrected" else decision)
+                          for f in fields} or {"_all": decision}
+                labels = {f: l for f, l in previous_labels.items() if merged.get(f) == "corrected"}
+            else:
+                # 「排除這張」是對**照片**的判定（沒對到臉、戴口罩、糊掉），
+                # 那種情況下每個部位的標籤都用不了，所以蓋掉全部才是對的。
+                merged = {f: decision for f in fields} or {"_all": decision}
+                labels = {}
 
         values = set(merged.values())
         status = ("accepted" if values == {"accepted"}
@@ -579,8 +598,16 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
         #
         # 只在整筆 rejected 時刪。partial 代表還有部位要進訓練集，而同一次分析的五個
         # 部位共用一個 job_id、存在同一組物件裡，刪掉會把還要用的那幾張一起帶走。
+        # 同一次分析的五個部位共用一個 job_id、存在同一組物件裡，所以刪除是**整筆**的，
+        # 沒有辦法只刪一個部位。因此條件必須是「每一個被修正的部位都判過，而且全部退回」。
+        #
+        # 只看 merged 是不夠的：merged 只含**已經判過**的那些。改了眉型與眼型、
+        # 管理員只先退回眉型的時候，merged == {眉型: rejected}，值的集合就是 {rejected}，
+        # 於是整筆被當成退回，連還沒有人看過的眼型影像也一起刪掉——而刪除是不可逆的。
+        all_fields = set(doc.get("corrections") or {})
+        fully_decided = all_fields and all_fields.issubset(set(merged))
         deleted = None
-        if status == "rejected" and doc.get("contributed"):
+        if status == "rejected" and fully_decided and doc.get("contributed"):
             try:
                 deleted = face_contributions.delete_for_job(job_id)
             except Exception:

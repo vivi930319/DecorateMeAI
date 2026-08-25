@@ -402,6 +402,47 @@ class ReviewRouteTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(len(self.store.docs[(ff.FEEDBACK_COL, "JOB-1")]["reviewNote"]), 500)
 
+    def _two_part_job(self):
+        """一次分析改了兩個部位，而且留了影像。"""
+        self.store.docs[(ff.FEEDBACK_COL, "JOB-2")] = {
+            "jobId": "JOB-2",
+            "corrections": {"眉型": "一字眉", "眼型": "圓眼"},
+            "contributed": True,
+        }
+        self.deleted = []
+        ff.face_contributions.delete_for_job = lambda job_id: (self.deleted.append(job_id) or 1)
+
+    def test_rejecting_one_part_keeps_the_other_parts_images(self):
+        # 同一次分析的五個部位共用一個 job_id、存在同一組物件裡，刪除是整筆的。
+        # 所以只退回其中一個部位時**絕對不能刪**——另一個部位還沒有人看過，
+        # 而刪掉就回不來了。
+        self._two_part_job()
+        r = self._patch_review("FB-JOB-2", {"decisions": {"眉型": "rejected"}})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.deleted, [], "還有部位沒判過就不該刪影像")
+        self.assertTrue(self.store.docs[(ff.FEEDBACK_COL, "JOB-2")]["contributed"])
+
+    def test_rejecting_every_part_deletes_the_images(self):
+        self._two_part_job()
+        self._patch_review("FB-JOB-2", {"decisions": {"眉型": "rejected"}})
+        r = self._patch_review("FB-JOB-2", {"decisions": {"眼型": "rejected"}})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.deleted, ["JOB-2"], "全部退回之後影像要真的被刪掉")
+        self.assertFalse(self.store.docs[(ff.FEEDBACK_COL, "JOB-2")]["contributed"])
+
+    def test_accept_all_keeps_an_earlier_correction(self):
+        # 「全部送訓」的意思是「其餘也都送訓」，不是撤銷剛才的改判。
+        # 改判的標籤是管理員看著影像決定的，比使用者憑印象填的可信，不能被蓋掉。
+        self._two_part_job()
+        self._patch_review("FB-JOB-2", {"decisions": {"眉型": "corrected"},
+                                        "labels": {"眉型": "落尾眉"}})
+        r = self._patch_review("FB-JOB-2", {"decision": "accepted"})
+        self.assertEqual(r.status_code, 200, r.text)
+        doc = self.store.docs[(ff.FEEDBACK_COL, "JOB-2")]
+        self.assertEqual(doc["reviewDecisions"]["眉型"], "corrected")
+        self.assertEqual(doc["reviewLabels"]["眉型"], "落尾眉")
+        self.assertEqual(doc["reviewDecisions"]["眼型"], "accepted")
+
 
 class ContributedFlagTest(unittest.TestCase):
     """文件上的 contributed 要如實反映「GCS 上到底有沒有影像」。
@@ -417,7 +458,11 @@ class ContributedFlagTest(unittest.TestCase):
         self._real_get = ff.job_store.get if hasattr(ff.job_store, "get") else None
         self._real_store_fn = ff.face_contributions.store
         self.calls = []
-        ff.face_contributions.store = lambda *a, **k: self.calls.append(k)
+        # 真的那支回的是**存了幾張**，假的也要回數字。
+        # 先前這裡回 None，於是「回 0 張」這條路根本測不到——而那正是
+        # FACE_CONTRIB_ENABLED 沒開、連不上 GCS、或裁不出 ROI 時會走的路。
+        self.saved_count = 1
+        ff.face_contributions.store = lambda *a, **k: (self.calls.append(k) or self.saved_count)
 
     def tearDown(self):
         ff.job_store = self._real_store
@@ -443,6 +488,15 @@ class ContributedFlagTest(unittest.TestCase):
     def test_false_without_an_image(self):
         doc = self._save(allowTrainingUse=True)
         self.assertFalse(doc["contributed"])
+
+    def test_false_when_nothing_was_actually_stored(self):
+        # store() 有好幾條路會回 0 而不拋例外：功能沒開、連不上 GCS、圖太大、
+        # 或抽不出 landmark 所以裁不出 ROI。那些情況下文件不能說自己有影像——
+        # 後台會顯示一顆打開是空白的「看樣本影像」，送訓時那一筆還會被算進批次。
+        self.saved_count = 0
+        doc = self._save(allowTrainingUse=True, imageDataUrl=_TINY_PNG_DATA_URL)
+        self.assertFalse(doc["contributed"])
+        self.assertEqual(len(self.calls), 1, "store 還是要被呼叫，只是它回報一張都沒存")
 
     def test_false_when_the_upload_failed(self):
         # 存不進 GCS 時使用者的修正還是要收下（那是刻意的），但這個欄位不能說謊。

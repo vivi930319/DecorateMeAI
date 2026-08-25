@@ -37,7 +37,10 @@ import mediapipe as mp
 import numpy as np
 
 import basic_roi_shadow
-from basic_roi_shadow import PART_TO_FIELD
+# 同 build_review_sheet：校對表的欄位名跟服務端不完全一樣。
+# 先前這裡用服務端的名字，於是「人工_唇型」那一欄從來沒被讀到——
+# 沒有錯誤訊息，唇型就是靜靜地不列入準確率。
+from review_sheet_schema import SHEET_FIELD as PART_TO_FIELD
 
 MAX_IMAGE_SIZE = 1024
 
