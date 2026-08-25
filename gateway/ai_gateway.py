@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import os
 import re
 import secrets
@@ -12,6 +13,7 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from urllib.parse import quote, unquote, urlsplit
 
@@ -56,6 +58,14 @@ def _service_url(env_name: str) -> str:
 
 ALLOW_EXTERNAL_TEXT_UPSTREAM = os.getenv("GATEWAY_ALLOW_EXTERNAL_TEXT_UPSTREAM", "").strip().lower() in {"1", "true", "yes", "on"}
 
+
+# 使用者修正的集合名。跟 face_feedback.FEEDBACK_COL 是同一個字串——
+# 那邊是寫入方、這裡是讀取方，兩邊都直接讀同一個 Firestore 集合。
+# 改名的話兩處要一起改；沒有共用模組是因為 gateway 與 face 是兩個部署，
+# 為了一個常數多一個共用檔不划算，但值得在這裡指出關聯。
+FACE_FEEDBACK_COL = "face_feedback"
+FACE_TRAINING_RUNS_COL = "face_training_runs"
+FACE_MODEL_METRICS_COL = "face_model_metrics"
 
 UPSTREAMS = {
     "face-basic": Upstream(
@@ -2064,7 +2074,12 @@ async def admin_review_face_feedback(feedback_id: str, request: Request):
 
     face = await _face_internal_request(
         request, "PATCH", f"v1/face/feedback/{quote(feedback_id, safe='')}/review",
-        admin=True, json_body={"decision": body.get("decision"), "note": body.get("note")})
+        admin=True, json_body={
+            "decision": body.get("decision"),
+            "decisions": body.get("decisions"),
+            "labels": body.get("labels"),
+            "note": body.get("note"),
+        })
     if face is None:
         raise HTTPException(
             status_code=503,
@@ -2193,9 +2208,21 @@ async def admin_face_feedback(request: Request):
     except ValueError:
         limit = 50
 
-    face = await _face_internal_request(request, "GET", f"v1/face/feedback?limit={limit}",
-                                        admin=True)
-    if face is None or not face.is_success:
+    # 直接讀 Firestore，不繞 face-basic。
+    #
+    # 那一跳是這個畫面最慢的地方：face-basic 的 min-instances 是 0（刻意的，常駐每天
+    # 約 NT$246），所以沒人用的時候開後台要先等它冷啟動十幾秒。而這裡要的只是同一個
+    # Firestore 集合的內容，gateway 本來就有 job_store 與憑證，跳過去零成本——
+    # Firestore 讀 108 筆的費用是四捨五入到零的程度。
+    #
+    # 寫入（覆核）仍然走 face：那條路徑有 REVIEW_DECISIONS 白名單與文件存在性檢查，
+    # 複製到這裡就會變成兩份驗證邏輯，而寫入不頻繁，慢一點無所謂。
+    try:
+        rows = await asyncio.to_thread(
+            job_store.all_jobs, FACE_FEEDBACK_COL, limit=limit,
+            order_by="createdAt", descending=True)
+    except Exception:
+        logging.exception("讀取修正紀錄失敗")
         # 讀不到就明說，不要回空陣列——空陣列會被看成「使用者都沒有修正過」，
         # 那是完全相反的結論。
         raise HTTPException(
@@ -2203,7 +2230,172 @@ async def admin_face_feedback(request: Request):
             detail={"error": {"code": "FACE_FEEDBACK_UNAVAILABLE",
                               "message": "暫時讀不到修正紀錄，請稍後再試。"}},
         )
+
+    items = []
+    for row in rows:
+        predicted = row.get("predicted") or {}
+        corrections = row.get("corrections") or {}
+        items.append({
+            "feedbackId": row.get("feedbackId"),
+            "jobId": row.get("jobId"),
+            "mode": row.get("mode"),
+            "createdAt": row.get("createdAt"),
+            "reviewStatus": row.get("reviewStatus") or "pending",
+            # 逐部位的決定。摘要（reviewStatus）只夠畫一個狀態標籤，
+            # 但畫面上每個部位都要各自顯示採用或退回，靠的是這個。
+            "reviewDecisions": row.get("reviewDecisions") or {},
+            # corrected 時管理員給的正確類別。訓練匯入用它覆寫使用者的答案。
+            "reviewLabels": row.get("reviewLabels") or {},
+            "reviewedAt": row.get("reviewedAt"),
+            "reviewNote": row.get("reviewNote") or "",
+            "predictionConfidence": row.get("predictionConfidence") or {},
+            "hasSample": bool(row.get("contributed")),
+            # 這裡**不回任何身分欄位**：文件本來就不存 email 或 ownerId
+            # （見 face_feedback.save），這裡也不去別的地方湊。
+            "changes": [{"field": f, "predicted": predicted.get(f), "corrected": v}
+                        for f, v in corrections.items()],
+        })
+    return JSONResponse(content={"status": "ok", "count": len(items), "items": items})
+
+
+@app.get("/admin-api/face-feedback/{feedback_id}/samples")
+async def admin_face_feedback_samples(feedback_id: str, request: Request):
+    """這一筆修正對應的樣本影像。
+
+    刻意做成另一條端點、由前端點開某一筆時才要：影像即使是 96×96 的 ROI，
+    108 筆一次全帶也是幾 MB，而覆核的人一次只看一筆。
+
+    這條走 face：讀 GCS 需要 google-cloud-storage，那個依賴只裝在 face 映像裡
+    （gateway 的 requirements 只有 firestore）。慢一點可以接受——它只在
+    使用者主動點開時才發生，不像列表是一進畫面就要。
+    """
+    enforce_csrf(request)
+    if MULTI_SESSION_ENABLED:
+        _require_admin_claims(select_account(request, for_write=False)["claims"])
+    else:
+        claims = require_admin_access(request)
+        enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+
+    face = await _face_internal_request(
+        request, "GET", f"v1/face/feedback/{quote(feedback_id, safe='')}/samples", admin=True)
+    if face is None or not face.is_success:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "FACE_SAMPLES_UNAVAILABLE",
+                              "message": "暫時讀不到樣本影像，請稍後再試。"}},
+        )
     return JSONResponse(content=face.json())
+
+
+def _training_decisions(row: dict) -> dict[str, str]:
+    """把舊的整筆 accepted 與新的逐部位決定統一成欄位 -> 決定。"""
+    decisions = row.get("reviewDecisions") or {}
+    if decisions:
+        return {str(field): str(value) for field, value in decisions.items()}
+    if row.get("reviewStatus") == "accepted":
+        return {str(field): "accepted" for field in (row.get("corrections") or {})}
+    return {}
+
+
+@app.post("/admin-api/face-training/runs")
+async def admin_create_face_training_run(request: Request):
+    """把管理員已採用的影像樣本登記成一個可追蹤的 ConvNeXt 訓練批次。
+
+    這個按鈕不假裝在 Cloud Run request 裡直接訓練：它只建立 queued 批次。真正的
+    本機訓練腳本以 runId 讀取同一筆資料，完成後回寫 before/after metrics 與 done。
+    因此後台能證明「哪些 feedback、哪些部位、哪次訓練」真的有對上，而不是只有一個
+    看起來會動的按鈕。
+    """
+    enforce_csrf(request)
+    if MULTI_SESSION_ENABLED:
+        _require_admin_claims(select_account(request, for_write=True)["claims"])
+    else:
+        claims = require_admin_access(request)
+        enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    raw_ids = body.get("feedbackIds") if isinstance(body, dict) else None
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise HTTPException(status_code=422, detail={"error": {"code": "FEEDBACK_IDS_REQUIRED", "message": "請至少選一筆已採用且有影像的回饋"}})
+    if len(raw_ids) > 100:
+        raise HTTPException(status_code=422, detail={"error": {"code": "TOO_MANY_FEEDBACK_IDS", "message": "一次最多送 100 筆"}})
+
+    selections: dict[str, dict[str, str]] = {}
+    excluded: list[dict] = []
+    for raw_id in raw_ids:
+        feedback_id = str(raw_id or "").strip()
+        job_id = feedback_id[3:] if feedback_id.startswith("FB-") else feedback_id
+        if not job_id:
+            continue
+        row = job_store.get(FACE_FEEDBACK_COL, job_id)
+        if not row:
+            excluded.append({"feedbackId": feedback_id, "reason": "找不到回饋紀錄"})
+            continue
+        if not row.get("contributed"):
+            excluded.append({"feedbackId": row.get("feedbackId") or feedback_id, "reason": "沒有使用者同意保存的影像"})
+            continue
+        decisions = _training_decisions(row)
+        corrections = row.get("corrections") or {}
+        labels = row.get("reviewLabels") or {}
+        fields: dict[str, str] = {}
+        for field, decision in decisions.items():
+            if decision not in {"accepted", "corrected"} or field not in corrections:
+                continue
+            label = labels.get(field) if decision == "corrected" else corrections.get(field)
+            if isinstance(label, str) and label.strip():
+                fields[field] = label.strip()
+        if fields:
+            selections[row.get("feedbackId") or f"FB-{job_id}"] = fields
+        else:
+            excluded.append({"feedbackId": row.get("feedbackId") or feedback_id, "reason": "尚無任何部位被採用"})
+
+    if not selections:
+        raise HTTPException(status_code=422, detail={"error": {"code": "NO_TRAINABLE_SAMPLES", "message": "選取項目沒有可訓練的已採用影像部位"}, "excluded": excluded})
+
+    run_id = "TR-" + secrets.token_hex(8)
+    now = datetime.now(timezone.utc).isoformat()
+    run = {
+        "runId": run_id,
+        "status": "queued",
+        "model": "ConvNeXt-Tiny",
+        "createdAt": now,
+        "queuedAt": now,
+        "feedbackIds": sorted(selections),
+        "selections": selections,
+        "sampleCount": sum(len(fields) for fields in selections.values()),
+        "excluded": excluded,
+        "source": "admin-face-feedback",
+    }
+    job_store.create(FACE_TRAINING_RUNS_COL, run_id, run)
+    return JSONResponse(status_code=202, content={"status": "queued", **run})
+
+
+@app.get("/admin-api/face-training/runs")
+async def admin_face_training_runs(request: Request):
+    """回傳最近五次訓練與最新 ConvNeXt 指標，供後台顯示可驗證的狀態。"""
+    enforce_csrf(request)
+    if MULTI_SESSION_ENABLED:
+        _require_admin_claims(select_account(request, for_write=False)["claims"])
+    else:
+        claims = require_admin_access(request)
+        enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+    runs = await asyncio.to_thread(
+        job_store.all_jobs, FACE_TRAINING_RUNS_COL, limit=5,
+        order_by="createdAt", descending=True)
+    current = job_store.get(FACE_MODEL_METRICS_COL, "current") or {}
+    if not current:
+        for run in runs:
+            if run.get("status") == "done" and run.get("modelAfter"):
+                current = {"model": run.get("model", "ConvNeXt-Tiny"), **(run.get("modelAfter") or {})}
+                break
+    return JSONResponse(content={
+        "status": "ok", "model": "ConvNeXt-Tiny", "runs": runs,
+        "recentRuns": runs, "latest": runs[0] if runs else None,
+        "currentMetrics": current or None,
+    })
 
 
 async def proxy_public_product_request(request: Request, path: str):

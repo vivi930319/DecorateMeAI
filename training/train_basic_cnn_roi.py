@@ -38,6 +38,7 @@ from torchvision.models import (
 )
 
 from face_roi import IMAGENET_MEAN, IMAGENET_STD, PARTS, ROI_SPECS
+from training.training_run_store import RUNS_COLLECTION, get_document, now_iso, patch_document, read_model_metrics
 
 # 跟 prepare_roi_cache.py 讀同一個環境變數。先前這裡是寫死的 `data/roi_cache`，
 # 而產生快取的那支吃 ROI_CACHE_DIR——兩邊指到不同目錄時，訓練會安靜地拿舊快取跑完，
@@ -131,7 +132,7 @@ def load_excluded_rows(records, holdout_split: str | None, exclude_file: str | N
     print(f"訓練排除：{'、'.join(label)} -> 命中 {len(excluded)} 筆")
     missed = wanted - seen
     if missed:
-        print(f"  ⚠ 有 {len(missed)} 個 sha256 在快取裡找不到對應樣本。"
+        print(f"  [注意] 有 {len(missed)} 個 sha256 在快取裡找不到對應樣本。"
               f"可能是快取過期，請重跑 prepare_roi_cache.py 再訓練。")
     return excluded
 
@@ -544,6 +545,10 @@ def parse_args():
                    help="要讀哪一份輪廓快取（預設 face_contour.npy；高解析度是 face_contour_224.npy）")
     p.add_argument("--contour-parts", nargs="*", default=[], choices=list(PARTS),
                    help="指定使用 MediaPipe 二值形狀遮罩的部位")
+    p.add_argument("--training-run", default="", metavar="RUN_ID",
+                   help="從 Firestore 讀取後台已登記的 face_training_runs 批次，完成後回寫狀態與前後指標")
+    p.add_argument("--training-project", default=None, metavar="PROJECT",
+                   help="--training-run 使用的 GCP 專案；預設 GOOGLE_CLOUD_PROJECT 或 decorate-me")
     return p.parse_args()
 
 
@@ -607,7 +612,25 @@ def main():
         OUT_DIR = Path(args.out_dir)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     if OUT_DIR == DEFAULT_OUT_DIR and not args.cv:
-        print(f"⚠ 即將覆蓋線上模型目錄 {OUT_DIR}。對照實驗請加 --out-dir。")
+        # 不要用 ⚠ 這類符號：Windows 主控台預設 cp950，印不出來會直接拋
+        # UnicodeEncodeError。而這一行正好在訓練開始之前，於是整支腳本在
+        # 「警告使用者」這一步掛掉，什麼都沒跑（2026-08-25 踩到）。
+        print(f"[注意] 即將覆蓋線上模型目錄 {OUT_DIR}。對照實驗請加 --out-dir。")
+
+    training_project = args.training_project or os.environ.get("GOOGLE_CLOUD_PROJECT") or "decorate-me"
+    training_run = None
+    if args.training_run:
+        training_run = get_document(training_project, RUNS_COLLECTION, args.training_run)
+        if not training_run:
+            raise SystemExit(f"找不到訓練批次：{args.training_run}")
+        patch_document(training_project, RUNS_COLLECTION, args.training_run, {
+            "status": "running",
+            "startedAt": now_iso(),
+            "modelBefore": read_model_metrics(OUT_DIR),
+            "architecture": args.architecture,
+            "outDir": str(OUT_DIR),
+        })
+        print(f"訓練批次：{args.training_run}（Firestore {training_project}）")
     print(f"輸出目錄：{OUT_DIR}")
     print(f"device={device}  epochs={args.epochs}\n")
 
@@ -707,6 +730,11 @@ def main():
             folds_s = ", ".join(f"{m:.3f}" for m in cv["fold_macro_accuracies"])
             print(f"{part:12s} {cv['mean_macro']:>10.3f} {cv['std_macro']:>8.3f} "
                   f"{cv['pooled_macro']:>8.3f}   [{folds_s}]")
+        if training_run:
+            patch_document(training_project, RUNS_COLLECTION, args.training_run, {
+                "status": "done", "finishedAt": now_iso(),
+                "modelAfter": {"architecture": "ConvNeXt-Tiny", "cvSummary": summary},
+            })
         return
 
     header = f"{'部位':12s} {'隨機切分(虛高)':>16s} {'按人切分(可信)':>16s} {'洩漏':>8s}"
@@ -718,6 +746,14 @@ def main():
         rnd_s = f"{rnd:.3f}" if rnd is not None else "-"
         gap_s = f"{gap:+.3f}" if gap is not None else "-"
         print(f"{part:12s} {rnd_s:>16s} {ident:>16.3f} {gap_s:>8s}")
+
+    if training_run:
+        patch_document(training_project, RUNS_COLLECTION, args.training_run, {
+            "status": "done",
+            "finishedAt": now_iso(),
+            "modelAfter": read_model_metrics(OUT_DIR),
+            "metrics": summary,
+        })
 
 
 if __name__ == "__main__":

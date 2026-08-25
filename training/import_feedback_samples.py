@@ -59,6 +59,9 @@ import cv2
 import numpy as np
 
 from face_roi import PARTS
+from training.training_run_store import RUNS_COLLECTION, get_document, now_iso, patch_document
+
+# 反查：GCS 路徑用部位代號，覆核決定用中文欄位名。
 
 BUCKET = "decorate-me-datasets"
 PREFIX = "user_contributed"
@@ -73,6 +76,7 @@ FIELD_TO_PART = {
     "鼻型": "nose_shape",
     "嘴型": "lip_shape",
 }
+PART_TO_FIELD = {v: k for k, v in FIELD_TO_PART.items()}
 
 
 def _gcloud_exe() -> str:
@@ -169,6 +173,8 @@ def main() -> int:
                         help="輸出目錄。不給就是 <cache-dir>_plus_feedback")
     parser.add_argument("--dry-run", action="store_true",
                         help="只印出會收進什麼，不寫檔")
+    parser.add_argument("--training-run", default="",
+                        help="只匯入後台指定的 face_training_runs 批次")
     args = parser.parse_args()
 
     project = args.project or _gcloud("config", "get-value", "project")
@@ -178,11 +184,46 @@ def main() -> int:
     print(f"專案 {project}｜既有快取 {cache_dir}")
 
     docs = fetch_feedback(project)
+    training_run = None
+    run_selections: dict[str, dict[str, str]] = {}
+    if args.training_run:
+        training_run = get_document(project, RUNS_COLLECTION, args.training_run)
+        if not training_run:
+            raise SystemExit(f"找不到訓練批次：{args.training_run}")
+        run_selections = training_run.get("selections") or {}
+        selected_ids = set(run_selections)
+        docs = [d for d in docs if (d.get("feedbackId") or f"FB-{d.get('jobId')}") in selected_ids]
+        print(f"訓練批次 {args.training_run}：限定 {len(docs)} 筆回饋")
     status = Counter(d.get("reviewStatus") or "pending" for d in docs)
     print(f"face_feedback 共 {len(docs)} 筆：" +
           "、".join(f"{k} {v}" for k, v in sorted(status.items())))
 
-    accepted = [d for d in docs if d.get("reviewStatus") == "accepted"]
+    # 逐部位採用：一筆修正裡可能只有嘴型被採用、眼型被退回，所以要看
+    # reviewDecisions 而不是文件層級的 reviewStatus（那只是摘要）。
+    # 舊格式（只有 reviewStatus 沒有 reviewDecisions）仍然支援：整筆 accepted
+    # 就視同每個修正過的部位都被採用。
+    accepted = []
+    for d in docs:
+        dec = d.get("reviewDecisions") or {}
+        if dec:
+            # accepted  用使用者的標籤
+            # corrected 用管理員的標籤（管理員看得到影像，使用者是憑印象改的）
+            # rejected  不收
+            fields = {f for f, v in dec.items() if v in ("accepted", "corrected")}
+        elif d.get("reviewStatus") == "accepted":
+            fields = set((d.get("corrections") or {}).keys())
+        else:
+            fields = set()
+        # 舊版整筆 accepted 會在 reviewDecisions 留下 _all；它不是實際部位，
+        # 但仍代表 corrections 中的每一個欄位都被採用。
+        if fields == {"_all"}:
+            fields = set((d.get("corrections") or {}).keys())
+        if training_run:
+            selected = run_selections.get(d.get("feedbackId") or f"FB-{d.get('jobId')}") or {}
+            fields &= set(selected)
+        if fields:
+            accepted.append({**d, "_acceptedFields": fields,
+                             "_runLabels": (run_selections.get(d.get("feedbackId") or f"FB-{d.get('jobId')}") or {})})
     if not accepted:
         print("\n沒有任何一筆被採用，沒有東西可以併。")
         print("請先到後台的「模型修正複核」逐筆看過並按「採用」——這一步刻意需要人，"
@@ -210,6 +251,17 @@ def main() -> int:
                 # PRO 的側臉鼻型（nose_shape_side）走另一顆模型、另一個快取，
                 # 不屬於 BASIC 的五個部位，這裡跳過而不是硬塞。
                 continue
+            # 被退回的部位不能進訓練集，即使同一筆的其他部位被採用了。
+            # GCS 的路徑用部位代號（brow_shape），覆核用中文欄位名（眉型），
+            # 所以要換算過去再比對。
+            field = PART_TO_FIELD.get(part)
+            if field and field not in doc["_acceptedFields"]:
+                continue
+            # GCS 的路徑是存檔當下寫的，用的是**使用者**說的類別。管理員改判之後
+            # 那個路徑就不代表正確答案了——檔案不必搬，讀進來的時候換掉標籤即可。
+            override = doc.get("_runLabels", {}).get(field or "") or (doc.get("reviewLabels") or {}).get(field or "")
+            if override:
+                label = override
             usable.append((job_id, part, label, gs_path))
 
     print(f"\n採用 {len(accepted)} 筆，其中 {no_sample} 筆沒有影像（使用者沒同意保存），"
@@ -313,6 +365,13 @@ def main() -> int:
     src_map = cache_dir / "identity_map.json"
     if src_map.is_file():
         shutil.copy2(src_map, out_dir / "identity_map.json")
+
+    if training_run and not args.dry_run:
+        patch_document(project, RUNS_COLLECTION, args.training_run, {
+            "samplesImported": len(new_records),
+            "samplesImportedAt": now_iso(),
+            "cacheDir": str(out_dir),
+        })
 
     print(f"\n完成：{len(records)} + {total_new} = {len(records) + total_new} 張，寫到 {out_dir}")
     for part in PARTS:

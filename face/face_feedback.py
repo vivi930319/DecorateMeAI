@@ -49,7 +49,14 @@ FEEDBACK_COL = "face_feedback"
 # 只有 accepted 會被 training/import_feedback_samples.py 收進訓練集。沒有這個欄位的
 # 舊文件視同 pending：欄位是 2026-08-24 才加的，在那之前的 108 筆沒有人覆核過，
 # 把它們當成已採用等於讓「還沒做的事」看起來像做過了。
-REVIEW_DECISIONS = {"accepted", "rejected"}
+# accepted   使用者說的對，照用
+# rejected   使用者說的不對，這個部位不進訓練集
+# corrected  兩邊都不對，管理員給第三個答案（標籤存在 reviewLabels）
+#
+# corrected 是 2026-08-24 加的：管理員看得到影像，而使用者是憑印象改的，
+# 所以很可能兩個都不對。少了這一個選項，遇到這種情況只能整筆退回，
+# 等於把一張有影像、有人看過的樣本丟掉——那正是最貴的一種資料。
+REVIEW_DECISIONS = {"accepted", "rejected", "corrected"}
 REVIEW_PENDING = "pending"
 
 # 線上準確率的量測用集合。跟 FEEDBACK_COL 分開，理由見 save() 的說明：
@@ -254,6 +261,7 @@ def save(mode: str, job_id: str, payload: dict, owner_id: str | None = None) -> 
     """
     corrections = payload.get("corrections") or {}
     predicted = payload.get("predicted") or {}
+    confidence = payload.get("predictionConfidence") or {}
     _record_eval_event(mode, job_id, predicted, corrections)
     contributed = _store_contribution(mode, job_id, payload, corrections, owner_id)
 
@@ -273,6 +281,10 @@ def save(mode: str, job_id: str, payload: dict, owner_id: str | None = None) -> 
         "packageId": payload.get("packageId"),
         # predicted 與 corrections 併看就是「模型錯在哪」，兩個都要留。
         "predicted": {k: v for k, v in predicted.items() if k in fields},
+        "predictionConfidence": {
+            k: round(float(v), 4) for k, v in confidence.items()
+            if k in fields and isinstance(v, (int, float)) and 0 <= float(v) <= 1
+        },
         "corrections": corrections,
         "createdAt": datetime.now(timezone.utc).isoformat(),
         # 覆核的人要知道這筆能不能調得出影像來對照——只有勾了同意的才有。
@@ -286,6 +298,9 @@ def save(mode: str, job_id: str, payload: dict, owner_id: str | None = None) -> 
 class FeedbackIn(BaseModel):
     packageId: str | None = None
     predicted: dict = Field(default_factory=dict)
+    # ConvNeXt 的 top-1 softmax 信心；只作管理端對照，不作自動採用依據。
+    # 信心未校準且可能與正確率反向，因此資料層保留原值，但訓練資格只看人工答案。
+    predictionConfidence: dict = Field(default_factory=dict)
     corrections: dict = Field(default_factory=dict)
     # 前端在送出當下就判定好，不要在這裡用 corrections 是否為空去反推——
     # 語意留在產生它的那一刻，接收端不做推論。
@@ -384,6 +399,7 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
                 "reviewStatus": row.get("reviewStatus") or REVIEW_PENDING,
                 "reviewedAt": row.get("reviewedAt"),
                 "reviewNote": row.get("reviewNote") or "",
+                "predictionConfidence": row.get("predictionConfidence") or {},
                 # 有沒有影像樣本決定覆核的人能不能真的判斷對錯：只有勾了同意的
                 # 才會存 ROI 到 GCS，沒存的那些只能看標籤字串。
                 "hasSample": bool(row.get("contributed")),
@@ -398,51 +414,158 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
             })
         return {"status": "ok", "count": len(items), "items": items}
 
+    @app.get("/v1/face/feedback/{feedback_id}/samples")
+    async def feedback_samples(  # noqa: ANN202
+        feedback_id: str,
+        x_admin_request: str | None = Header(default=None),
+    ):
+        """取出這一筆修正對應的樣本影像，給管理端覆核時對照。
+
+        沒有圖就沒辦法真的覆核：眉型、唇型要看到形狀才有辦法判斷使用者說得對不對。
+        看不到圖還按「採用」，等於給了「有人看過」的假象，比不覆核更糟。
+
+        只有勾過「同意提供影像」的才有圖，其餘回空陣列——那是結構上的結果，
+        不是錯誤，前端要能分辨這兩者。
+        """
+        if str(x_admin_request or "").strip() != "1":
+            raise HTTPException(
+                status_code=403,
+                detail={"error": {"code": "ADMIN_REQUIRED", "message": "只有管理員可以檢視樣本影像"}},
+            )
+        job_id = feedback_id[3:] if feedback_id.startswith("FB-") else feedback_id
+        samples = face_contributions.load_for_job(job_id)
+        return {"status": "ok", "jobId": job_id, "count": len(samples), "samples": samples}
+
     @app.patch("/v1/face/feedback/{feedback_id}/review")
     async def review_feedback(  # noqa: ANN202
         feedback_id: str,
         body: dict,
         x_admin_request: str | None = Header(default=None),
     ):
-        """管理員對一筆修正下判斷：採用進訓練集，或退回不用。
+        """管理員對一筆修正下判斷，**可以逐部位決定**。
 
-        為什麼要有這一步：使用者的修正是**免費但未經查核**的標籤。上面 list_feedback
-        的說明講了風險，但光看不做決定的話，那些修正還是會躺在同一個集合裡，
-        誰也不知道哪些被認可過——重訓時只能全收或全不收，兩個都不對。
+        為什麼要有這一步：使用者的修正是免費但**未經查核**的標籤。光看不做決定的話，
+        重訓時只能全收或全不收，兩個都不對——使用者會誤點，眉型唇型這種也本來就主觀。
 
-        決定寫回同一份文件而不是另開集合：一筆修正只會有一個最終狀態，分兩處存
-        就要處理兩邊不同步。`training/import_feedback_samples.py` 讀的就是這個欄位。
+        為什麼要逐部位：一次分析會同時修正好幾個部位，而它們的對錯是獨立的。
+        管理員很可能覺得「嘴型改得對、眼型改錯了」，那就該只採用嘴型。
+        第一版做成整筆一個狀態，等於逼人在「全收一個錯的」與「連對的一起丟掉」
+        之間選，兩個都會讓訓練集變差。
 
-        沒有 reviewStatus 的舊資料一律當 pending，不當成已採用——沒人看過的東西
-        不該因為欄位還沒加就自動獲得信任。
+        body 支援兩種形狀，舊的那種留著是為了不讓已經送出的請求突然失敗：
+            {"decisions": {"眉型": "accepted", "眼型": "rejected"}}   逐部位（現在的做法）
+            {"decision": "accepted"}                                  整筆一次（舊版）
+
+        reviewStatus 變成**摘要**，由各部位的決定推出來：全採用是 accepted、
+        全退回是 rejected、有採有退是 partial。真正決定哪些資料進訓練集的是
+        reviewDecisions，`training/import_feedback_samples.py` 讀的是那個。
+
+        沒有 reviewStatus 的舊資料一律當 pending——沒人看過的東西不該因為
+        欄位還沒加就自動獲得信任。
         """
         if str(x_admin_request or "").strip() != "1":
             raise HTTPException(
                 status_code=403,
                 detail={"error": {"code": "ADMIN_REQUIRED", "message": "只有管理員可以覆核修正紀錄"}},
             )
-        decision = str((body or {}).get("decision") or "").strip()
-        if decision not in REVIEW_DECISIONS:
-            raise HTTPException(
-                status_code=422,
-                detail={"error": {"code": "INVALID_DECISION",
-                                  "message": f"decision 只能是 {sorted(REVIEW_DECISIONS)}"}},
-            )
         # feedbackId 是 FB-<jobId>，但文件 id 用的是 jobId（見 save()）。
         # 前端兩種都可能送過來，這裡統一剝掉前綴，不要讓呼叫端記這個細節。
         job_id = feedback_id[3:] if feedback_id.startswith("FB-") else feedback_id
-        if job_store.get(FEEDBACK_COL, job_id) is None:
+        doc = job_store.get(FEEDBACK_COL, job_id)
+        if doc is None:
             raise HTTPException(
                 status_code=404,
                 detail={"error": {"code": "FEEDBACK_NOT_FOUND", "message": "找不到這筆修正紀錄"}},
             )
+
+        raw = (body or {}).get("decisions")
+        if isinstance(raw, dict) and raw:
+            # 只能對「這筆真的改過的部位」下決定。放行未修正的部位會在文件裡留下
+            # 一個沒有對應資料的決定，之後匯入時對不到東西。
+            corrected = set((doc.get("corrections") or {}).keys())
+            decisions: dict[str, str] = {}
+            for field, value in raw.items():
+                if field not in corrected:
+                    raise HTTPException(
+                        status_code=422,
+                        detail={"error": {"code": "FIELD_NOT_CORRECTED",
+                                          "message": f"這筆修正沒有動到「{field}」"}},
+                    )
+                if value not in REVIEW_DECISIONS:
+                    raise HTTPException(
+                        status_code=422,
+                        detail={"error": {"code": "INVALID_DECISION",
+                                          "message": f"{field} 的決定只能是 {sorted(REVIEW_DECISIONS)}"}},
+                    )
+                decisions[field] = value
+            # 保留先前已經下過、這次沒送的決定：前端一次只送改動的那一項，
+            # 整份覆蓋會把管理員上一輪的判斷清掉。
+            merged = {**(doc.get("reviewDecisions") or {}), **decisions}
+
+            # corrected 要附上管理員給的標籤，而且那個標籤一樣要通過分類表驗證。
+            # 管理員也可能打錯字或用了已合併的舊類別——放行的話會在訓練集裡留下
+            # 一個模型沒有的標籤，那正是 validate() 存在的理由。
+            labels = {**(doc.get("reviewLabels") or {})}
+            raw_labels = (body or {}).get("labels")
+            if isinstance(raw_labels, dict):
+                table = allowed_classes()
+                for field, label in raw_labels.items():
+                    if merged.get(field) != "corrected":
+                        raise HTTPException(
+                            status_code=422,
+                            detail={"error": {"code": "LABEL_WITHOUT_CORRECTION",
+                                              "message": f"「{field}」不是 corrected，不該帶標籤"}},
+                        )
+                    if not isinstance(label, str) or label not in table.get(field, set()):
+                        raise HTTPException(
+                            status_code=422,
+                            detail={"error": {"code": "INVALID_LABEL",
+                                              "message": f"「{field}」沒有「{label}」這個類別"}},
+                        )
+                    labels[field] = label
+            # corrected 卻沒有標籤是不完整的決定，存下去之後匯入時對不到東西。
+            missing = [f for f, v in merged.items() if v == "corrected" and not labels.get(f)]
+            if missing:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": {"code": "LABEL_REQUIRED",
+                                      "message": f"改判時要指定正確類別：{'、'.join(missing)}"}},
+                )
+            # 從 corrected 改回 accepted／rejected 時，舊標籤要清掉，
+            # 否則會留下一個沒有人在看、卻仍然會被匯入讀到的值。
+            labels = {f: l for f, l in labels.items() if merged.get(f) == "corrected"}
+        else:
+            decision = str((body or {}).get("decision") or "").strip()
+            if decision not in REVIEW_DECISIONS:
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": {"code": "INVALID_DECISION",
+                                      "message": f"decision 只能是 {sorted(REVIEW_DECISIONS)}"}},
+                )
+            if decision == "corrected":
+                # 整筆改判沒有意義：每個部位的正確答案不一樣，沒辦法用一個值表示。
+                raise HTTPException(
+                    status_code=422,
+                    detail={"error": {"code": "CORRECTED_NEEDS_FIELDS",
+                                      "message": "改判要逐部位指定，不能整筆一次"}},
+                )
+            merged = {f: decision for f in (doc.get("corrections") or {})} or {"_all": decision}
+            labels = {}
+
+        values = set(merged.values())
+        status = ("accepted" if values == {"accepted"}
+                  else "rejected" if values == {"rejected"}
+                  else "partial")
         note = str((body or {}).get("note") or "").strip()[:500]
         job_store.patch(FEEDBACK_COL, job_id, {
-            "reviewStatus": decision,
+            "reviewDecisions": merged,
+            "reviewLabels": labels,
+            "reviewStatus": status,
             "reviewedAt": datetime.now(timezone.utc).isoformat(),
             "reviewNote": note,
         })
-        return {"status": "ok", "feedbackId": f"FB-{job_id}", "reviewStatus": decision}
+        return {"status": "ok", "feedbackId": f"FB-{job_id}", "reviewStatus": status,
+                "reviewDecisions": merged, "reviewLabels": labels}
 
     @app.delete("/v1/face/users/{owner_id}")
     async def delete_member_face_data(  # noqa: ANN202

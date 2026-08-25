@@ -213,6 +213,56 @@ def store(job_id: str, image_bytes: bytes | None, corrections: dict, *,
     return saved
 
 
+def load_for_job(job_id: str, *, max_bytes: int = 2_000_000) -> list[dict]:
+    """取出某一次分析留下的樣本影像，給管理端覆核時對照用。
+
+    為什麼需要看圖：覆核的人要判斷「使用者說這是落尾眉」對不對，光看兩個詞
+    是判斷不了的——眉型、唇型這種本來就要看到形狀才有辦法談。看不到圖的覆核
+    等於在猜，那比不覆核更糟，因為它會給出「已經有人看過」的假象。
+
+    回傳 data URL 而不是簽名網址：這些是臉部影像，簽名網址一旦產生就是一段時間內
+    誰拿到誰能看，而且會離開我們的存取控制。走 data URL 的話，每一次讀取都還是
+    經過端點自己的管理員驗證。圖是部位 ROI（96×96 PNG，通常 5~20KB），
+    一次分析最多五個部位，總量比一張商品圖還小。
+
+    max_bytes 是保險絲：臉型與側臉鼻型存的是整張照片而不是 ROI 裁切
+    （見 store 的 whole_image_parts），單張可能到幾百 KB。超過就跳過那一張
+    並在結果裡註明，不要讓一次覆核請求拖著幾 MB 回應。
+    """
+    client = _client()
+    if client is None:
+        return []
+    want = f"{job_id}.png"
+    out: list[dict] = []
+    total = 0
+    try:
+        # 用前綴掃描而不是猜路徑：路徑裡有 ROI 規格版本（見 store），
+        # 那個版本會隨裁切規格改變，寫死在這裡遲早對不上。
+        for blob in client.list_blobs(BUCKET, prefix=f"{PREFIX}/"):
+            if not blob.name.endswith(want):
+                continue
+            parts = blob.name.split("/")
+            if len(parts) < 4:
+                continue
+            size = int(blob.size or 0)
+            if total + size > max_bytes:
+                out.append({"part": parts[-3], "label": parts[-2],
+                            "skipped": "圖片太大，未載入"})
+                continue
+            data = blob.download_as_bytes()
+            total += len(data)
+            out.append({
+                "part": parts[-3],
+                "label": parts[-2],
+                "dataUrl": "data:image/png;base64," + base64.b64encode(data).decode("ascii"),
+                "bytes": len(data),
+            })
+    except Exception:
+        logging.exception("讀取貢獻樣本失敗 job_id=%s", job_id)
+        return []
+    return out
+
+
 def delete_for_owner(owner_id: str) -> int:
     """刪掉某個會員貢獻的全部樣本，回傳刪除數。會員刪除流程要呼叫這個。
 

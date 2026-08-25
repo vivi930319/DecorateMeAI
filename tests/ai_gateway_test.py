@@ -1057,6 +1057,101 @@ class MemberMediaPurgeTest(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
 
+class FaceFeedbackListTest(unittest.TestCase):
+    """修正紀錄的列表直接讀 Firestore，不繞 face-basic。
+
+    繞過去的理由是速度：face-basic 的 min-instances 是 0，開後台要先等它冷啟動
+    十幾秒，而這裡要的只是同一個集合的內容。但「跳過一層」也代表這裡自己負責
+    欄位的形狀與預設值，所以那幾條要有測試守著——尤其是沒有 reviewStatus 的舊資料
+    必須算 pending，把它當成已採用，等於讓沒做過的覆核看起來像做過了。
+    """
+
+    def setUp(self):
+        from fastapi.testclient import TestClient
+        import ai_gateway
+        import job_store
+
+        self.gw = ai_gateway
+        self._job_store = job_store
+        self._fs = (job_store.firestore, job_store._client)
+        job_store.firestore, job_store._client = None, None
+
+        token, _ = issue_access_token("admin@example.com", "admin", "active")
+        self.cookies = session_cookies(token)
+        self.rows = [{
+            "feedbackId": "FB-JOB-1", "jobId": "JOB-1", "mode": "basic",
+            "createdAt": "2026-08-24T02:00:00+00:00",
+            "predicted": {"眉型": "落尾眉", "眼型": "圓眼"},
+            "corrections": {"眉型": "一字眉"},
+            "contributed": True,
+            # 這兩個欄位是不該外流的：文件本來就不存，但萬一將來有人加了，
+            # 這個測試要擋住它被順手回出去。
+            "ownerId": "actor_secret", "email": "someone@example.com",
+        }]
+        self.called = []
+        self._orig_all = job_store.all_jobs
+        job_store.all_jobs = lambda col, **kw: (self.called.append((col, kw)) or self.rows)
+        # 打到 face 就是繞路了，這裡要能發現
+        self._orig_face = ai_gateway._face_internal_request
+        self.face_calls = []
+
+        async def no_face(*a, **k):
+            self.face_calls.append(a)
+            raise AssertionError("列表不該打 face-basic")
+        ai_gateway._face_internal_request = no_face
+        self.client = TestClient(ai_gateway.app)
+
+    def tearDown(self):
+        self._job_store.firestore, self._job_store._client = self._fs
+        self._job_store.all_jobs = self._orig_all
+        self.gw._face_internal_request = self._orig_face
+
+    def test_reads_firestore_directly(self):
+        r = self.client.get("/admin-api/face-feedback?limit=5", cookies=self.cookies)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.face_calls, [], "不該繞 face-basic")
+        col, kw = self.called[0]
+        self.assertEqual(col, "face_feedback")
+        self.assertEqual(kw["limit"], 5)
+        # 最新的在前面，否則管理員要往下捲才看得到剛送出的修正
+        self.assertTrue(kw["descending"])
+
+    def test_missing_review_status_counts_as_pending(self):
+        r = self.client.get("/admin-api/face-feedback", cookies=self.cookies)
+        self.assertEqual(r.json()["items"][0]["reviewStatus"], "pending")
+
+    def test_changes_pair_prediction_with_correction(self):
+        item = self.client.get("/admin-api/face-feedback", cookies=self.cookies).json()["items"][0]
+        self.assertEqual(item["changes"],
+                         [{"field": "眉型", "predicted": "落尾眉", "corrected": "一字眉"}])
+        # 沒有被改的部位不該出現在 changes 裡，那會讓畫面上多出幾列「改成同一個值」
+        self.assertEqual(len(item["changes"]), 1)
+
+    def test_no_identity_fields_leak(self):
+        body = self.client.get("/admin-api/face-feedback", cookies=self.cookies).text
+        self.assertNotIn("actor_secret", body)
+        self.assertNotIn("someone@example.com", body)
+
+    def test_limit_is_clamped(self):
+        self.client.get("/admin-api/face-feedback?limit=9999", cookies=self.cookies)
+        self.assertLessEqual(self.called[-1][1]["limit"], 200)
+        self.client.get("/admin-api/face-feedback?limit=abc", cookies=self.cookies)
+        self.assertEqual(self.called[-1][1]["limit"], 50)
+
+    def test_firestore_failure_is_503_not_empty_list(self):
+        # 回空陣列會被讀成「使用者都沒有修正過」，那是完全相反的結論
+        def boom(*a, **k):
+            raise RuntimeError("Firestore 掛了")
+        self._job_store.all_jobs = boom
+        r = self.client.get("/admin-api/face-feedback", cookies=self.cookies)
+        self.assertEqual(r.status_code, 503)
+        self.assertIn("FACE_FEEDBACK_UNAVAILABLE", r.text)
+
+    def test_anonymous_is_refused(self):
+        r = self.client.get("/admin-api/face-feedback", cookies={})
+        self.assertIn(r.status_code, (401, 403))
+
+
 class FaceFeedbackReviewProxyTest(unittest.TestCase):
     """後台的「採用／退回」要真的走到臉部服務，而且失敗要說得出是哪一種失敗。
 
