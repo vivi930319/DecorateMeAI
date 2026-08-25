@@ -163,6 +163,26 @@ def main() -> int:
     _log(f"訓練機 {args.worker_id} 啟動｜專案 {args.project}｜快取 {args.cache_dir}")
     _log("後台按下「送去訓練」的批次會在這裡自動執行。關掉這個視窗不會遺失批次，它們會等到下次啟動。")
 
+    # 開機時把自己上次沒做完的批次撿回來。
+    #
+    # 被關機、當掉、或工作排程重啟殺掉的時候，那一批會留在 running——而 running 的意思是
+    # 「正在訓練」，後台會一直顯示訓練中，實際上沒有任何程式在跑。這是最難發現的一種壞：
+    # 畫面看起來一切正常，只是永遠不會結束。
+    #
+    # 只撿 workerId 是自己的：多台機器時，別人正在跑的那一批不該被這裡搶回來。
+    if not args.dry_run:
+        try:
+            for stale in list_runs(args.project, status="running", limit=20):
+                if stale.get("workerId") != args.worker_id:
+                    continue
+                patch_document(args.project, RUNS_COLLECTION, str(stale.get("runId")), {
+                    "status": "queued", "startedAt": None,
+                    "error": "上一次執行被中斷，已自動放回排隊。",
+                })
+                _log(f"撿回中斷的批次 {stale.get('runId')}，放回排隊")
+        except Exception as exc:
+            _log(f"檢查中斷批次時失敗（{exc}），略過")
+
     current: str | None = None
     try:
         while True:

@@ -80,10 +80,23 @@ def _wrap(value):
     if isinstance(value, int) and not isinstance(value, bool):
         return {"integerValue": str(value)}
     if isinstance(value, float):
+        # NaN 與 Infinity 不是合法的 JSON，送出去會被 Firestore 打回 400。
+        # 而它們**會**出現：某一類在驗證集裡一張都沒有時，該類的 recall 就是 NaN。
+        if value != value or value in (float("inf"), float("-inf")):
+            return {"nullValue": None}
         return {"doubleValue": value}
     if isinstance(value, str):
         return {"stringValue": value}
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
+        # Firestore **不支援陣列裡再放陣列**。混淆矩陣正是二維陣列，所以
+        # 「訓練跑完、寫回結果」這一步會回 400——訓練白跑，紀錄還停在 running。
+        # （2026-08-26 實測踩到：eye/face 都訓練完、ONNX 也匯出了，卻寫不進去。）
+        #
+        # 巢狀的整包轉成 JSON 字串。看得到內容、對得起來，只是不能用 Firestore
+        # 的欄位查詢去查——而混淆矩陣本來就不是拿來查詢的東西。
+        if any(isinstance(v, (list, tuple)) for v in value):
+            return {"stringValue": json.dumps(value, ensure_ascii=False, allow_nan=False,
+                                              default=str)}
         return {"arrayValue": {"values": [_wrap(v) for v in value]}}
     if isinstance(value, dict):
         return {"mapValue": {"fields": {str(k): _wrap(v) for k, v in value.items()}}}
