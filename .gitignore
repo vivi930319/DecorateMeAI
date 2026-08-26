@@ -98,6 +98,9 @@
 # 訓練機的啟動器。它是被 Windows 工作排程器叫起來的，換一台電腦要重新設排程，
 # 所以這支必須跟著 repo 走，不能只留在本機。
 !tools/start_training_worker.ps1
+# 重建訓練機排程。設定原本只活在這台機器的工作排程器裡，而其中兩項是實測
+# 出來的（Once 看門狗、Duration 留空），換機器時查文件查不到。
+!tools/setup_training_task.ps1
 # 部署腳本共用的錯誤診斷。三支部署腳本都 dot-source 它，少了它們連解析都過不了。
 !tools/deploy_helpers.ps1
 # training/ 跟 tools/ 一樣是原始碼，不是產物，所以整個資料夾的 .py 都要進版本控制。
