@@ -10,7 +10,11 @@
 !.github/
 !.github/workflows/
 !.github/workflows/ci.yml
-!README.md
+# 只放行根目錄那一份。`!README.md` 沒有斜線，git 會拿它去比對每一層——
+# docs/README.md 與 training/README.md 因此也被放行，而 docs/README.md 是
+# 那 103 份未入版控文件的索引：推上 GitHub 就是一整頁指向不存在檔案的連結，
+# 剛好把「這裡只留 README」這個決定拆掉。加斜線把它綁回根目錄。
+!/README.md
 !Face_analyzer_BASIC.py
 
 # ROI CNN（BASIC 五官分類）：訓練腳本、共用裁切定義、shadow 推論、訓練歷程
@@ -121,7 +125,11 @@ local_only_notes/
 # 規則放在檔案最後，覆蓋上方曾為交接文件設定的個別例外——
 # 所以新的例外也必須加在這裡，加在上面沒有用（後面的規則優先）。
 *.md
-!README.md
+# 只放行根目錄那一份。`!README.md` 沒有斜線，git 會拿它去比對每一層——
+# docs/README.md 與 training/README.md 因此也被放行，而 docs/README.md 是
+# 那 103 份未入版控文件的索引：推上 GitHub 就是一整頁指向不存在檔案的連結，
+# 剛好把「這裡只留 README」這個決定拆掉。加斜線把它綁回根目錄。
+!/README.md
 
 # 五官分類模型。
 #
