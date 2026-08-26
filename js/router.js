@@ -698,6 +698,13 @@ function productSourceLinkHtml(p) {
 // 三種 null 各自要正確處理：
 //   shadeRecommendation 是 null → 整個區塊不出現（不要自己補商品湊出三階）
 //   lighter 或 darker 是 null   → 只隱藏那一格（主推薦已經是系列最淺或最深）
+// null 與空字串都不是分數。分開判是因為 Number(null) 會變成 0，
+// 而 0 是一個看起來很有意義、意思卻完全相反的分數。
+function hasMatch(node) {
+    const v = node && node.matchPercent;
+    return v != null && v !== '' && Number.isFinite(Number(v));
+}
+
 function shadeRecommendationHtml(p) {
     const sr = Router.shadeRecommendation;
     if (!sr || !sr.anchor) return '';
@@ -705,23 +712,120 @@ function shadeRecommendationHtml(p) {
     const anchorId = String(sr.anchor.product?.id ?? '');
     if (anchorId && String(p?.id ?? '') !== anchorId) return '';
 
-    const card = (node, kind) => node ? `
-        <button type="button" class="sr-card sr-${kind}" data-shade-kind="${kind}">
-            <span class="sr-label">${escapeHtml(node.label)}</span>
-            <span class="sr-code">${escapeHtml(String(node.shadeCode || '—'))}</span>
-            ${Number.isFinite(Number(node.matchPercent))
-                ? `<span class="sr-match">${Math.round(Number(node.matchPercent))}% MATCH</span>` : ''}
+    const a = sr.anchor;
+    // Number(null) 是 0，而 isFinite(0) 為真——直接丟給 Number 的話，
+    // 「沒有分數」會被畫成「0% MATCH」，那等於告訴使用者這個色號完全不合。
+    // Api._normalizeShadeRecommendation 那層已經擋過一次，這裡再擋一次：
+    // 這個函式是實際上色的地方，而測試與其他呼叫端可能不經過正規化。
+    const pct = (a.matchPercent == null || a.matchPercent === '')
+        ? NaN : Number(a.matchPercent);
+    const hasPct = Number.isFinite(pct);
+
+    // 匹配度的形容詞跟著數字走。寫死「與你的膚色高度匹配」的話，
+    // 62% 的時候畫面會用很有把握的語氣說一件沒把握的事——
+    // 而使用者是照這句話決定要不要買的。
+    const matchWord = !hasPct ? ''
+        : pct >= 90 ? '與你的膚色高度匹配'
+        : pct >= 75 ? '與你的膚色相當接近'
+        : pct >= 60 ? '與你的膚色大致相符'
+        : '色調方向接近，建議先試色';
+
+    // 上下階用小列，不用等大的卡片：三張一樣大會讓人以為三個都是推薦，
+    // 但只有中間那個是。主推薦要看得出來是主角。
+    const variantRow = (node, kind) => node ? `
+        <button type="button" class="sr-alt" data-shade-kind="${kind}">
+            <span class="sr-alt-code">${escapeHtml(String(node.shadeCode || '—'))}</span>
+            <span class="sr-alt-sep">｜</span>
+            <span class="sr-alt-label">${escapeHtml(node.label)}</span>
+            ${node.description ? `<span class="sr-alt-desc">${escapeHtml(node.description)}</span>` : ''}
+            ${hasMatch(node)
+                ? `<span class="sr-alt-match">${Math.round(Number(node.matchPercent))}% MATCH</span>` : ''}
         </button>` : '';
 
+    const hasVariants = Boolean(sr.lighter || sr.darker);
+
     return `<section class="shade-rec">
-        <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">❧</span><h2>同系列相鄰色號</h2></div></div>
-        <div class="sr-row">
-            ${card(sr.lighter, 'lighter')}
-            ${card(sr.anchor, 'anchor')}
-            ${card(sr.darker, 'darker')}
+        <div class="sr-hero">
+            <div class="sr-eyebrow">✦ 根據系統演算法推薦</div>
+            ${hasPct ? `<div class="sr-bigmatch">${Math.round(pct)}% MATCH</div>` : ''}
+            ${matchWord ? `<div class="sr-bigmatch-sub">${escapeHtml(matchWord)}</div>` : ''}
+            <div class="sr-anchor-label">${escapeHtml(a.label)}</div>
+            <div class="sr-anchor-code">${escapeHtml(String(a.shadeCode || '—'))}</div>
+            ${a.description ? `<p class="sr-anchor-desc">${escapeHtml(a.description)}</p>` : ''}
         </div>
+        ${hasVariants ? `
+        <div class="sr-alts">
+            <div class="sr-alts-head">想比較不同妝效？</div>
+            ${variantRow(sr.lighter, 'lighter')}
+            ${variantRow(sr.darker, 'darker')}
+            <button type="button" class="btn-gold sr-compare" data-shade-compare>查看三個色號的完整比較</button>
+        </div>` : ''}
         ${sr.disclaimer ? `<p class="sr-disclaimer">${escapeHtml(sr.disclaimer)}</p>` : ''}
     </section>`;
+}
+
+// 三色並排比較（契約 §5.2）。跟 openShadeModal 是兩件事：
+// 這個回答「三個差在哪」，那個回答「這一個是什麼」。
+function openShadeCompareModal() {
+    const sr = Router.shadeRecommendation;
+    if (!sr || !sr.anchor) return;
+    document.getElementById('shadeModal')?.remove();
+    document.getElementById('shadeCompare')?.remove();
+
+    const col = (node, kind) => node ? `
+        <button type="button" class="sc-col sc-${kind}" data-shade-kind="${kind}">
+            <span class="sc-label">${escapeHtml(node.label)}</span>
+            <span class="sc-code">${escapeHtml(String(node.shadeCode || '—'))}</span>
+            ${hasMatch(node)
+                ? `<span class="sc-match">${Math.round(Number(node.matchPercent))}% MATCH</span>` : ''}
+        </button>` : '';
+
+    const detail = (node) => node ? `
+        <div class="sc-detail">
+            <div class="sc-detail-head">${escapeHtml(String(node.shadeCode || '—'))}｜${escapeHtml(node.label)}</div>
+            ${node.description ? `<p>${escapeHtml(node.description)}</p>` : ''}
+        </div>` : '';
+
+    const ov = document.createElement('div');
+    ov.id = 'shadeCompare';
+    ov.className = 'sr-overlay';
+    ov.innerHTML = `<div class="sc-dialog" role="dialog" aria-modal="true" aria-labelledby="scTitle">
+        <button class="sr-close" type="button" aria-label="關閉">×</button>
+        <h3 id="scTitle">選擇適合你的粉底色號</h3>
+        <p class="sc-lead">系統根據你的膚色分析，推薦
+           <strong>${escapeHtml(String(sr.anchor.shadeCode || '主色號'))}</strong> 作為主色號。
+           你也可以依照想呈現的妝效，比較${escapeHtml(sr.official ? '淺一階或深一階' : '較明亮或較深的替代色')}。</p>
+        <div class="sc-row">
+            ${col(sr.lighter, 'lighter')}
+            ${col(sr.anchor, 'anchor')}
+            ${col(sr.darker, 'darker')}
+        </div>
+        ${detail(sr.lighter)}
+        ${detail(sr.anchor)}
+        ${detail(sr.darker)}
+        <p class="sr-disclaimer">${escapeHtml(sr.disclaimer
+            || '實際顏色可能受到拍攝光線、螢幕顯色與上妝厚度影響，購買前仍建議至實體通路試色。')}</p>
+    </div>`;
+    document.body.appendChild(ov);
+
+    // 焦點處理跟 openShadeModal 一樣：只能用滑鼠關掉的浮層，
+    // 對鍵盤操作的人等於卡死整個頁面。
+    const previouslyFocused = document.activeElement;
+    const closeBtn = ov.querySelector('.sr-close');
+    closeBtn.focus();
+    const close = () => {
+        ov.remove();
+        document.removeEventListener('keydown', onKey);
+        if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    closeBtn.onclick = close;
+    ov.addEventListener('click', (ev) => { if (ev.target === ov) close(); });
+    // 從比較視窗還能再點進單一色號的說明。
+    ov.querySelectorAll('[data-shade-kind]').forEach(b => {
+        b.onclick = () => { close(); openShadeModal(b.dataset.shadeKind); };
+    });
 }
 
 // 點色號卡片之後開的說明視窗（契約 §5.3）。
@@ -3815,6 +3919,8 @@ const PageInit = {
             area.querySelectorAll('[data-shade-kind]').forEach(btn => {
                 btn.onclick = () => openShadeModal(btn.dataset.shadeKind);
             });
+            const srCompare = area.querySelector('[data-shade-compare]');
+            if (srCompare) srCompare.onclick = () => openShadeCompareModal();
             const bag = area.querySelector('[data-bag]');
             if (bag) bag.onclick = () => {
                 Cart.add(p.id);

@@ -38,6 +38,9 @@ vm.runInContext(
   cut('function recommendationCardHtml(p) {') + '\n'
   + cut('function recommendationDetailHtml(p) {') + '\n'
   + cut('function productSourceLinkHtml(p) {') + '\n'
+  // hasMatch 是 shadeRecommendationHtml 的相依，抽了後者沒抽它，
+  // 測試會在執行時炸 ReferenceError——那是測試的問題，不是程式的。
+  + cut('function hasMatch(node) {') + '\n'
   + cut('function shadeRecommendationHtml(p) {') + '\n'
   + 'globalThis.__card = recommendationCardHtml;'
   + 'globalThis.__detail = recommendationDetailHtml;'
@@ -122,6 +125,40 @@ check('官方色階顯示「淺一階」「深一階」', out.includes('淺一�
 check('顯示主推薦色號', out.includes('N20'));
 check('顯示 disclaimer', out.includes('色階依同品牌同系列'));
 
+// 版面：主推薦是主角，上下階是配角。三張等大並排會讓人以為三個都在推薦，
+// 但只有中間那個是——另外兩個是「想比較的話可以看看」。
+check('有演算法推薦的標示', out.includes('根據系統演算法推薦'));
+check('主推薦有大字匹配度', /sr-bigmatch">95% MATCH/.test(out));
+check('有「想比較不同妝效？」', out.includes('想比較不同妝效？'));
+check('有完整比較按鈕', out.includes('data-shade-compare')
+  && out.includes('查看三個色號的完整比較'));
+// 上下階用 sr-alt 小列，不是跟主推薦一樣的卡片
+check('替代色是小列不是等大卡片',
+  out.includes('sr-alt') && !/class="sr-card sr-anchor"/.test(out));
+
+// 匹配度的形容詞要跟著數字走。寫死「高度匹配」的話，62% 時畫面會用
+// 很有把握的語氣說一件沒把握的事，而使用者是照這句話決定要不要買。
+sandbox.Router.shadeRecommendation = {
+  ...official, anchor: { ...official.anchor, matchPercent: 95 } };
+check('95% → 高度匹配', shade({ id: 'api-foundations-1' }).includes('高度匹配'));
+sandbox.Router.shadeRecommendation = {
+  ...official, anchor: { ...official.anchor, matchPercent: 62 } };
+out = shade({ id: 'api-foundations-1' });
+check('62% → 不說高度匹配', !out.includes('高度匹配'));
+check('62% → 說大致相符', out.includes('大致相符'));
+sandbox.Router.shadeRecommendation = {
+  ...official, anchor: { ...official.anchor, matchPercent: 41 } };
+out = shade({ id: 'api-foundations-1' });
+check('41% → 建議先試色', out.includes('建議先試色'));
+// 沒有分數就整段不出現，不要自己編一個
+sandbox.Router.shadeRecommendation = {
+  ...official, anchor: { ...official.anchor, matchPercent: null } };
+out = shade({ id: 'api-foundations-1' });
+check('沒有 matchPercent → 不顯示匹配度', !out.includes('MATCH') && !out.includes('匹配'));
+
+sandbox.Router.shadeRecommendation = official;
+out = shade({ id: 'api-foundations-1' });
+
 const approx = {
   method: 'lab_lightness_approximation', official: false,
   anchor: { label: '主推薦色號', shadeCode: 'A1', product: anchorProduct },
@@ -143,6 +180,11 @@ check('shadeRecommendation 是 null → 整個區塊不出現', shade({ id: 'x' 
 sandbox.Router.shadeRecommendation = { ...official, lighter: null };
 out = shade({ id: 'api-foundations-1' });
 check('lighter 是 null → 只少那一格，其餘照常', !out.includes('淺一階') && out.includes('深一階'));
+sandbox.Router.shadeRecommendation = { ...official, lighter: null, darker: null };
+out = shade({ id: 'api-foundations-1' });
+// 只有主推薦時不給比較按鈕：按開一個只有一欄的比較視窗是空動作
+check('沒有替代色 → 不出現比較按鈕', !out.includes('data-shade-compare'));
+check('沒有替代色 → 主推薦照常顯示', out.includes('N20'));
 sandbox.Router.shadeRecommendation = { ...official, darker: null };
 out = shade({ id: 'api-foundations-1' });
 check('darker 是 null → 只少那一格', !out.includes('深一階') && out.includes('淺一階'));

@@ -1003,6 +1003,22 @@ const Api = {
         const method = String(raw.method || '').trim();
         if (!method) return null;
         const official = method === 'official_depth_index';
+        // 契約 §5 送的是 matchScore（0–1），先前這裡只讀 matchPercent（0–100）。
+        // 兩個都不接的話，後端做好之後畫面上仍然什麼都不會出現——這個專案
+        // 已經踩過兩次同樣的「上一層補了、下一層漏掉」（labReliable、browLab）。
+        //
+        // 還要擋 null：Number(null) 是 0 而 isFinite(0) 為真，於是「沒有分數」
+        // 會被畫成「0% MATCH」——那等於告訴使用者這個色號完全不合，
+        // 比不顯示糟得多。所以先判 == null，再判是不是數字。
+        const pickMatchPercent = (node) => {
+            const asNum = (v) => (v == null || v === '' ? null
+                : (Number.isFinite(Number(v)) ? Number(v) : null));
+            const pct = asNum(node.matchPercent);
+            if (pct != null) return pct;
+            const score = asNum(node.matchScore ?? node.match_score);
+            // 0–1 才乘 100。有些回傳已經是百分比，乘了會變 9500。
+            return score == null ? null : (score <= 1 ? score * 100 : score);
+        };
         const pick = (node, fallbackLabel) => {
             if (!node || typeof node !== 'object') return null;
             return {
@@ -1010,7 +1026,7 @@ const Api = {
                 label: String(node.label || fallbackLabel),
                 shadeCode: node.shadeCode ?? node.shade_code ?? '',
                 description: String(node.description || ''),
-                matchPercent: Number.isFinite(Number(node.matchPercent)) ? Number(node.matchPercent) : null,
+                matchPercent: pickMatchPercent(node),
                 product: node.product ? this._normalizeProduct(node.product) : null,
             };
         };

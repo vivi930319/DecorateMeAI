@@ -1680,6 +1680,61 @@ body.admin-mode .main-content * { letter-spacing:0; }
    版面用 space-between 撐開，缺一格不會歪掉。 */
 .shade-rec { margin:34px 0 0; }
 .sr-row { display:flex; flex-wrap:wrap; gap:12px; margin-top:14px; }
+
+/* 主推薦是主角。先前三張卡等大並排，看起來像三個都在推薦——
+   但只有中間那個是，另外兩個是「想比較的話可以看看」。 */
+.sr-hero { padding:22px 20px; border:1px solid var(--gold-deep); border-radius:12px;
+    background:var(--paper-soft); text-align:center; }
+.sr-eyebrow { color:var(--gold-deep); font-size:11px; letter-spacing:.12em; }
+.sr-bigmatch { margin-top:12px; font-size:30px; font-weight:600; color:var(--gold-deep);
+    font-variant-numeric:tabular-nums; }
+.sr-bigmatch-sub { color:var(--mid); font-size:12px; }
+.sr-anchor-label { margin-top:18px; color:var(--mid); font-size:11px; letter-spacing:.08em; }
+.sr-anchor-code { font-size:26px; font-weight:600; color:var(--ink-soft); }
+.sr-anchor-desc { margin:10px auto 0; max-width:34em; color:var(--ink-soft);
+    font-size:13px; line-height:1.8; }
+
+.sr-alts { margin-top:18px; }
+.sr-alts-head { color:var(--ink-soft); font-size:13px; font-weight:600; }
+.sr-alt { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px; width:100%;
+    margin-top:10px; padding:12px 14px; text-align:left; cursor:pointer;
+    border:1px solid var(--line); border-radius:10px; background:var(--paper); }
+.sr-alt:hover { border-color:var(--gold-deep); }
+.sr-alt:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; }
+.sr-alt-code { font-size:16px; font-weight:600; color:var(--ink-soft); }
+.sr-alt-sep { color:var(--mid); }
+.sr-alt-label { color:var(--mid); font-size:12px; }
+.sr-alt-desc { flex:1 1 100%; margin-top:4px; color:var(--mid); font-size:12px; line-height:1.7; }
+.sr-alt-match { color:var(--gold-deep); font-size:11px; margin-left:auto;
+    font-variant-numeric:tabular-nums; }
+.sr-compare { width:100%; margin-top:14px; }
+
+/* 三色比較視窗 */
+.sc-dialog { position:relative; width:min(560px,100%); max-height:90vh; overflow:auto;
+    padding:26px 22px; border-radius:14px; background:var(--paper); }
+.sc-dialog h3 { margin:0 0 8px; font-size:17px; color:var(--ink-soft); }
+.sc-lead { margin:0; color:var(--mid); font-size:12.5px; line-height:1.8; }
+.sc-row { display:flex; gap:10px; margin:18px 0 4px; }
+.sc-col { flex:1 1 0; display:flex; flex-direction:column; gap:6px; align-items:center;
+    padding:14px 8px; cursor:pointer; border:1px solid var(--line); border-radius:10px;
+    background:var(--paper-soft); }
+.sc-col:hover { border-color:var(--gold-deep); }
+.sc-col:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; }
+/* 主推薦那一欄要比左右明顯：等大等於說三個一樣好 */
+.sc-anchor { border-color:var(--gold-deep); box-shadow:0 0 0 1px var(--gold-deep) inset; }
+.sc-label { color:var(--mid); font-size:10.5px; letter-spacing:.08em; }
+.sc-code { font-size:19px; font-weight:600; color:var(--ink-soft); }
+.sc-match { color:var(--gold-deep); font-size:11px; font-variant-numeric:tabular-nums; }
+.sc-detail { margin-top:16px; }
+.sc-detail-head { font-size:13px; font-weight:600; color:var(--ink-soft); }
+.sc-detail p { margin:5px 0 0; color:var(--mid); font-size:12.5px; line-height:1.8; }
+
+/* 手機：三欄並排會擠到看不清色號，改成橫向滑動 */
+@media (max-width:520px) {
+    .sc-row { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    .sc-col { flex:0 0 42%; }
+    .sr-bigmatch { font-size:26px; }
+}
 .sr-card { flex:1 1 140px; display:flex; flex-direction:column; gap:5px; align-items:flex-start;
     padding:14px 16px; border:1px solid var(--line-gold); border-radius:10px;
     background:var(--white); cursor:pointer; text-align:left; font:inherit; }
