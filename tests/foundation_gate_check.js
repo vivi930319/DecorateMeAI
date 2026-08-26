@@ -1,0 +1,131 @@
+// 粉底膚色色差 0～2 與替代色 0～5（契約 2026-08-27）的驗收清單。
+//
+// 這一份的重點是**兩個門檻的比較對象不同**：
+//   主推薦   使用者膚色 vs 粉底色號   ΔE00 ≤ 2.0   硬性過濾
+//   替代色   主推薦色號 vs 替代色     ΔE00 ≤ 5.0   同品牌同系列
+//
+// 混為一談的後果很具體：把替代色的數字寫成「與您的膚色…」，
+// 使用者會以為那支也通過了膚色檢查，而它根本不必貼近膚色——
+// 它的用途是同系列裡明暗不同的選擇。契約 §7 明文禁止這種寫法。
+//
+// 用法：node tests/foundation_gate_check.js <web_frontend 路徑>
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+const ROOT = process.argv[2] || path.join(__dirname, '..');
+const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8');
+const api = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8');
+const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8');
+
+const cut = (s, sig) => {
+    const i = s.indexOf(sig);
+    if (i < 0) throw new Error('找不到 ' + sig);
+    let d = 0;
+    for (let k = s.indexOf('{', i); k < s.length; k++) {
+        if (s[k] === '{') d++;
+        else if (s[k] === '}') { d--; if (!d) return s.slice(i, k + 1); }
+    }
+};
+
+const sb = { Router: {}, escapeHtml: (s) => String(s), console,
+             AnalysisDraft: { load: () => null } };
+vm.createContext(sb);
+vm.runInContext(cut(src, 'function hasMatch(node) {') + '\n'
+    + cut(src, 'function currentShadeRecommendation() {') + '\n'
+    + cut(src, 'function shadeRecommendationHtml(p) {') + '\n'
+    + 'globalThis.__shade = shadeRecommendationHtml;', sb);
+const shade = sb.__shade;
+
+let pass = 0, fail = 0;
+const check = (name, cond, detail) => {
+    console.log((cond ? '  PASS ' : '  FAIL ') + name + (detail ? `  ${detail}` : ''));
+    cond ? pass++ : fail++;
+};
+
+const sr = {
+    method: 'lab_lightness_approximation', official: false,
+    anchor: { label: '主推薦色號', shadeCode: 'PO-02', matchPercent: 92, anchorDeltaE: 0,
+              description: '目前最接近你的膚色明暗與色調。',
+              product: { id: 'api-foundations-968',
+                         foundationSkinMatch: { deltaE: 1.46, accepted: true,
+                                                minInclusive: 0, maxInclusive: 2 } } },
+    lighter: { label: '較明亮的替代色', shadeCode: 'PO-03', matchPercent: 41, anchorDeltaE: 4.59,
+               description: '適合希望提亮膚色時比較。',
+               product: { id: 'api-foundations-969',
+                          foundationSkinMatch: { deltaE: 4.59, accepted: false,
+                                                 minInclusive: 0, maxInclusive: 2 } } },
+    darker: { label: '較深的替代色', shadeCode: 'O-03', matchPercent: 44, anchorDeltaE: 4.27,
+              description: '適合近期有日曬時比較。',
+              product: { id: 'api-foundations-970',
+                         foundationSkinMatch: { deltaE: 4.27, accepted: false,
+                                                minInclusive: 0, maxInclusive: 2 } } },
+    disclaimer: '不代表品牌定義的淺一階或深一階。',
+};
+sb.Router.shadeRecommendation = sr;
+const out = shade({ id: 'api-foundations-968' });
+
+console.log('');
+console.log('=== 1. 兩個門檻的比較對象不能混 ===');
+check('主推薦寫「與您的膚色」', /與您的膚色[^<]*色差 1\.5/.test(out));
+check('替代色寫「與主推薦色號」', out.includes('與主推薦色號的色差 4.6'));
+check('替代色也標明是跟主推薦比', out.includes('與主推薦色號的色差 4.3'));
+// 契約 §7 明文禁止：替代色本來就不必貼近膚色
+check('替代色不得寫成與膚色匹配',
+  !/較明亮的替代色[\s\S]{0,160}與您的膚色/.test(out)
+  && !/較深的替代色[\s\S]{0,160}與您的膚色/.test(out));
+// 替代色的 foundationSkinMatch.deltaE 是它跟膚色的色差，不能拿來當 anchorDeltaE
+check('替代色不用自己的膚色色差充數',
+  /anchorDeltaE/.test(cut(src, 'function shadeRecommendationHtml(p) {')));
+
+console.log('');
+console.log('=== 2. 門檻要寫出來 ===');
+check('主推薦標示通過 0～2 門檻', out.includes('膚色色差 0～2 推薦門檻'));
+// 未通過門檻的不會是主推薦，所以那句話不該出現在別的地方
+sb.Router.shadeRecommendation = { ...sr,
+    anchor: { ...sr.anchor,
+              product: { ...sr.anchor.product,
+                         foundationSkinMatch: { deltaE: 2.54, accepted: false,
+                                                minInclusive: 0, maxInclusive: 2 } } } };
+check('未通過門檻就不寫「通過門檻」',
+  !shade({ id: 'api-foundations-968' }).includes('推薦門檻'));
+
+console.log('');
+console.log('=== 3. 缺欄位時不要編數字 ===');
+sb.Router.shadeRecommendation = { ...sr,
+    lighter: { ...sr.lighter, anchorDeltaE: null } };
+const noDelta = shade({ id: 'api-foundations-968' });
+check('沒有 anchorDeltaE 就不顯示那一行',
+  !/較明亮的替代色[\s\S]{0,120}色差/.test(noDelta));
+check('但色號本身照常顯示', noDelta.includes('PO-03'));
+sb.Router.shadeRecommendation = { ...sr,
+    anchor: { ...sr.anchor, product: { id: 'api-foundations-968' } } };
+check('沒有 foundationSkinMatch 時不硬寫膚色色差',
+  !shade({ id: 'api-foundations-968' }).includes('與您的膚色'));
+
+console.log('');
+console.log('=== 4. no_match 的處置（§4、§7）===');
+const notice = cut(src, 'foundationNoticeHtml() {');
+check('有 no_match 的說明區塊', Boolean(notice));
+// 訊息一律用後端的：兩邊各寫一份說法遲早不一致
+check('訊息取自後端而不是自己寫', notice.includes('st.message'));
+check('matched 時不顯示', /status === 'matched'/.test(notice));
+// 最接近的那支確實存在，但它沒通過檢查——放購買按鈕等於把
+// 「我們查過了」的信任借給一個沒通過的商品
+check('沒有給購買或查看商品的入口',
+  !/data-bag|data-shade-go|加入購物|查看商品/.test(notice));
+check('樣式存在', css.includes('.rec-foundation-note'));
+
+console.log('');
+console.log('=== 5. api 層要把新欄位帶過來 ===');
+check('帶 anchorDeltaE', api.includes('anchorDeltaE:'));
+check('帶 foundationSkinMatch', api.includes('foundationSkinMatch:'));
+check('帶 colorDifferencePolicy', api.includes('colorDifferencePolicy:'));
+check('帶 foundationMatchStatus', api.includes('foundationMatchStatus:'));
+// 門檻一律以後端為準，前端不自己算也不自己放寬
+check('前端不自己寫死門檻數字',
+  !/deltaE\s*[<>]=?\s*2(\.0)?\b/.test(src));
+
+console.log('');
+console.log(`${pass}/${pass + fail} passed`);
+process.exit(fail ? 1 : 0);

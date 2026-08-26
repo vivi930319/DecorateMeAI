@@ -1031,6 +1031,13 @@ const Api = {
                 shadeCode: node.shadeCode ?? node.shade_code ?? '',
                 description: String(node.description || ''),
                 matchPercent: pickMatchPercent(node),
+                // 替代色與**主推薦色號**的色差（契約 2026-08-27 §3）。
+                // 不能拿替代色自己的 foundationSkinMatch.deltaE 代替——那是它跟
+                // **使用者膚色**的色差，比較對象完全不同。替代色的用途是
+                // 「同系列裡明暗不同的選擇」，它本來就不必貼近使用者膚色。
+                anchorDeltaE: (node.anchorDeltaE == null || node.anchorDeltaE === '')
+                    ? null
+                    : (Number.isFinite(Number(node.anchorDeltaE)) ? Number(node.anchorDeltaE) : null),
                 product: node.product ? this._normalizeProduct(node.product) : null,
             };
         };
@@ -1113,6 +1120,12 @@ const Api = {
             // 本機商品 id 固定使用 api-{item_type}-{item_id}，才能和遠端收藏互相對應。
             id: product.id != null ? `api-${apiType || rawCat || cat}-${product.id}` : `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             rawId: product.id ?? null,
+            // 這件粉底跟使用者膚色的色差與判定（契約 2026-08-27 §3）。
+            // 主推薦一定是 accepted:true；替代色可能是 false，那是正常的——
+            // 它走的是「與主推薦色號 ΔE ≤ 5」那條規則。
+            foundationSkinMatch: (product.foundationSkinMatch
+                && typeof product.foundationSkinMatch === 'object')
+                ? product.foundationSkinMatch : null,
             apiType, // 原始 type slug（例如 lipsticks），呼叫 /api/product/{type}/{id} 這類單品 API 要用
             cat,
             name: product.name || '推薦商品',
@@ -2504,6 +2517,15 @@ const Api = {
                 // 粉底的相鄰色階（契約 §5）。null 代表沒有這個區塊，畫面要整個隱藏——
                 // 不要自己補商品湊出「淺一階／深一階」，那是編造的。
                 shadeRecommendation: this._normalizeShadeRecommendation(rec.shadeRecommendation),
+                // 兩組門檻（膚色 0～2、替代色 0～5）與粉底的判定結果。
+                // 前端不自己算門檻也不自己放寬——顯示的數字與界線一律以後端為準，
+                // 兩邊各判一次遲早會不一致，而不一致的樣子是「卡片說通過、說明說沒通過」。
+                colorDifferencePolicy: (rec.colorDifferencePolicy
+                    && typeof rec.colorDifferencePolicy === 'object')
+                    ? rec.colorDifferencePolicy : null,
+                foundationMatchStatus: (rec.foundationMatchStatus
+                    && typeof rec.foundationMatchStatus === 'object')
+                    ? rec.foundationMatchStatus : null,
                 products
             };
         } catch (_) {

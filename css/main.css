@@ -1792,6 +1792,8 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .sr-bigmatch { margin-top:14px; font-size:38px; line-height:1.05; font-weight:600;
     color:var(--gold-deep); font-variant-numeric:tabular-nums; letter-spacing:.01em; }
 .sr-bigmatch-sub { margin-top:2px; color:var(--mid); font-size:12px; }
+/* 門檻寫出來，使用者才知道「接近」是照什麼標準說的。 */
+.sr-gate { margin-top:6px; color:var(--gold-deep); font-size:11px; line-height:1.6; }
 /* 主推薦色號跟上面的匹配度之間拉一條細線：兩者是「有多合」與「合的是哪一支」，
    不是同一件事，擠在一起會被讀成一段。 */
 .sr-anchor-label { margin-top:20px; padding-top:16px; border-top:1px solid var(--line-gold);
@@ -2084,6 +2086,14 @@ body.admin-mode .main-content * { letter-spacing:0; }
 
 /* 這批推薦依據什麼而來（契約 §3 的 personalization）。
    刻意做得低調——它是背景說明，不是要跟商品搶注意力。 */
+/* 粉底沒有色號通過門檻時的說明。刻意不給購買入口——最接近的那支確實存在，
+   但它沒通過檢查，放按鈕在旁邊等於把「我們查過了」的信任借給它。 */
+.rec-foundation-note { display:flex; gap:10px; margin:0 0 14px; padding:12px 14px;
+    border:1px solid var(--line-gold); border-radius:10px; background:var(--glass);
+    color:var(--ink-soft); font-size:12.5px; line-height:1.7; }
+.rfn-mark { color:var(--gold-deep); flex:0 0 auto; }
+.rec-foundation-note p { margin:0; }
+.rfn-sub { margin-top:4px !important; color:var(--mid); font-size:11.5px; }
 .rec-personal { margin:-6px 0 18px; color:var(--lt); font-family:var(--cjk);
     font-size:12.5px; letter-spacing:.05em; }
 

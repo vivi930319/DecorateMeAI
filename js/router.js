@@ -420,6 +420,11 @@ const RecommendationNotice = {
         // 粉底相鄰色階存在 Router 上，讓商品詳情頁畫得出來——它跟著這一次推薦，
         // 不屬於任何單一商品。null 就是「沒有這個區塊」，畫面要整個隱藏。
         Router.shadeRecommendation = rec.shadeRecommendation || null;
+        // 粉底門檻的判定結果（契約 2026-08-27 §4）。no_match 時不能拿最接近但
+        // 超標的色號硬補——那正是這個門檻要防的事：2.54 的色差上臉看得出來，
+        // 而「系統推薦的」這五個字會讓人以為它已經檢查過了。
+        this.foundationStatus = (rec.foundationMatchStatus
+            && typeof rec.foundationMatchStatus === 'object') ? rec.foundationMatchStatus : null;
         // 契約 §3：personalization 要讓使用者知道有沒有套用個人化、依據多少互動。
         // 後端一直有回這包，先前前端完全沒用——於是「這是依你的使用紀錄推的」還是
         // 「這只是依這次的臉部分析推的」，畫面上分不出來。
@@ -433,6 +438,7 @@ const RecommendationNotice = {
 
     clear() {
         this.reasons = []; this.error = null; this.isEmpty = false; this.personalization = null;
+        this.foundationStatus = null;
         Router.shadeRecommendation = null;
     },
 
@@ -449,6 +455,26 @@ const RecommendationNotice = {
         // 未登入或互動不足時，後端只用這次的臉部分析與風格。說清楚比含糊好：
         // 使用者才知道登入之後結果會更貼近自己。
         return '<div class="rec-personal">依這次的臉部分析與妝容風格推薦（尚未納入使用紀錄）</div>';
+    },
+
+    // 粉底沒有色號通過門檻時的說明。
+    //
+    // 訊息一律用後端給的：門檻與最接近的色差都在那邊算，前端再寫一份說法，
+    // 兩邊遲早會不一致——而不一致的樣子是「畫面說 2.5、後端說 2.54」。
+    //
+    // 這一段刻意**不給任何購買入口**。最接近的那支確實存在，但它沒通過門檻；
+    // 放一顆按鈕在旁邊等於把「我們查過了」的信任借給一個沒通過檢查的商品。
+    foundationNoticeHtml() {
+        const st = this.foundationStatus;
+        if (!st || st.status === 'matched' || st.status === 'not_requested') return '';
+        const msg = String(st.message || '').trim();
+        if (!msg) return '';
+        return `<div class="rec-foundation-note">
+            <span class="rfn-mark">✦</span>
+            <div><p>${escapeHtml(msg)}</p>
+            ${st.status === 'no_match'
+                ? '<p class="rfn-sub">建議重新確認拍攝光線，或到實體通路試色。</p>' : ''}</div>
+        </div>`;
     },
 
     // 畫面上方的一條提示。沒有東西要說時回空字串，不佔版面。
@@ -899,14 +925,22 @@ function shadeRecommendationHtml(p) {
     const pct = (a.matchPercent == null || a.matchPercent === '') ? NaN : Number(a.matchPercent);
     const hasPct = Number.isFinite(pct);
 
-    // 匹配度的形容詞跟著數字走。寫死「與你的膚色高度匹配」的話，
-    // 62% 的時候畫面會用很有把握的語氣說一件沒把握的事——
-    // 而使用者是照這句話決定要不要買的。
-    const matchWord = !hasPct ? ''
-        : pct >= 90 ? '與你的膚色高度匹配'
-        : pct >= 75 ? '與你的膚色相當接近'
-        : pct >= 60 ? '與你的膚色大致相符'
-        : '色調方向接近，建議先試色';
+    // 主推薦的形容詞改用**膚色色差**，不是 matchPercent。
+    //
+    // matchPercent 是綜合排序分數（含風格、關鍵字、行為），拿它說「與你的膚色多接近」
+    // 是用一個數字回答另一個問題。契約 2026-08-27 §7 要求主推薦寫的是膚色色差，
+    // 而那個數字現在後端有給（foundationSkinMatch.deltaE）。
+    const skin = a.product?.foundationSkinMatch || null;
+    // 同上：null 不能丟給 Number，否則「沒有資料」會變成「色差 0.0」。
+    const skinDelta = (skin && skin.deltaE != null && skin.deltaE !== ''
+        && Number.isFinite(Number(skin.deltaE))) ? Number(skin.deltaE) : null;
+    const matchWord = skinDelta == null ? ''
+        : skinDelta <= 1 ? `與您的膚色非常接近（色差 ${skinDelta.toFixed(1)}）`
+        : `與您的膚色接近（色差 ${skinDelta.toFixed(1)}）`;
+    // 門檻寫出來，使用者才知道這個「接近」是照什麼標準說的。
+    const gate = (skin && skin.accepted === true && Number.isFinite(Number(skin.maxInclusive)))
+        ? `這款粉底通過系統設定的膚色色差 ${Number(skin.minInclusive ?? 0)}～${Number(skin.maxInclusive)} 推薦門檻。`
+        : '';
 
     // 三欄並排，而不是「主推薦 ＋ 兩列小字 ＋ 一顆要按的按鈕」。
     //
@@ -923,11 +957,37 @@ function shadeRecommendationHtml(p) {
         const prod = node.product || {};
         const np = (node.matchPercent == null || node.matchPercent === '')
             ? NaN : Number(node.matchPercent);
+        // 每一欄底下那行數字，兩種角色講的是**不同的比較對象**：
+        //   主推薦   與使用者膚色的色差（門檻 0～2）
+        //   替代色   與主推薦色號的色差（門檻 0～5）
+        // 契約 2026-08-27 §7 明文禁止把替代色寫成「與您的膚色高度匹配」——
+        // 替代色本來就不必貼近膚色，它的用途是同系列裡明暗不同的選擇。
+        // 先前這裡對三欄一律印 matchPercent，那個數字是綜合排序分數，
+        // 放在替代色底下會被讀成「這支也很配你的膚色」，而那不是它的意思。
+        // ⚠️ 不能直接丟給 Number：Number(null) 是 0，而 isFinite(0) 為真，
+        // 於是「沒有色差資料」會被畫成「色差 0.0」——那是「顏色完全相同」，
+        // 是最有把握的一句話，卻在完全沒有資料的時候說出口。
+        // matchPercent 踩過同一個坑（見 hasMatch），這裡是第二次。
+        const num = (v) => (v == null || v === '' || !Number.isFinite(Number(v)))
+            ? null : Number(v);
+        let metric = '';
+        if (kind === 'anchor') {
+            const skinDeltaE = num(node.product?.foundationSkinMatch?.deltaE);
+            if (skinDeltaE != null) {
+                metric = `與您的膚色的色差 ${skinDeltaE.toFixed(1)}`;
+            } else if (Number.isFinite(np)) {
+                metric = `${Math.round(np)}% MATCH`;
+            }
+        } else {
+            const anchorDeltaE = num(node.anchorDeltaE);
+            if (anchorDeltaE != null) {
+                metric = `與主推薦色號的色差 ${anchorDeltaE.toFixed(1)}`;
+            }
+        }
         return `<div class="sc2-col sc2-${kind}">
             <div class="sc2-label">${escapeHtml(node.label || label)}</div>
             <div class="sc2-code">${escapeHtml(String(node.shadeCode || '—'))}</div>
-            ${Number.isFinite(np)
-                ? `<div class="sc2-match">${Math.round(np)}% MATCH</div>` : ''}
+            ${metric ? `<div class="sc2-match">${escapeHtml(metric)}</div>` : ''}
             ${node.description ? `<p class="sc2-desc">${escapeHtml(node.description)}</p>` : ''}
             ${prod.id && kind !== 'anchor'
                 ? `<button type="button" class="sc2-go" data-shade-go="${escapeHtml(String(prod.id))}">查看商品</button>`
@@ -940,6 +1000,7 @@ function shadeRecommendationHtml(p) {
             <div class="sr-eyebrow">✦ 根據系統演算法推薦</div>
             ${hasPct ? `<div class="sr-bigmatch">${Math.round(pct)}% MATCH</div>` : ''}
             ${matchWord ? `<div class="sr-bigmatch-sub">${escapeHtml(matchWord)}</div>` : ''}
+            ${gate ? `<div class="sr-gate">${escapeHtml(gate)}</div>` : ''}
             <!-- 有並排的三欄時，主推薦的色號由中間那一欄負責——
                  上下各印一次同樣的 PO-02 只是佔位置，還會讓人以為是兩件事。
                  沒有替代色可比時才在這裡印，否則整塊會只剩一個百分比。 -->
@@ -3739,6 +3800,7 @@ const PageInit = {
                 ${recommended.length ? `<section class="recommended-strip">
                     <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">❧</span><h2>本次個人化推薦</h2></div></div>
                     ${RecommendationNotice.personalizationHtml()}
+                    ${RecommendationNotice.foundationNoticeHtml()}
                     ${RecFilter.html(recommendedAll)}
                     ${!recommendedByCat.length ? RecFilter.emptyHtml() : ''}
                     <div class="prod-grid recommended-grid">${recommendedByCat.slice(0, RECOMMENDED_DISPLAY_LIMIT).map((p, i) => `
