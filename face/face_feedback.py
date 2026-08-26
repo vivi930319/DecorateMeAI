@@ -139,6 +139,44 @@ def validate(corrections: dict) -> None:
             raise FeedbackRejected(f"{field} 沒有「{value}」這個類別，前端選項可能與模型分類表不同步")
 
 
+def _model_version() -> str:
+    """這次判斷是哪一版模型做的。
+
+    沒有這個欄位，線上分數就只能算出「所有時間、所有版本混在一起的一個數字」——
+    而換模型之後最想知道的正是「換了之後有沒有比較好」，那需要把事件分成兩組。
+    2026-08-26 查到既有的 126 筆全都沒有版本，所以那個比較目前做不了。
+
+    版本取自 tools/face_models_manifest.json，那是部署時打包進映像、
+    且 download_face_models.py 會逐檔驗證 sha256 的同一份清單，所以它跟映像裡的
+    模型檔是對得起來的。只讀一次就快取：這是每次回饋都會走到的路徑。
+    """
+    if _MODEL_VERSION_CACHE["value"] is None:
+        version = ""
+        try:
+            # 兩種佈局都要找得到：
+            #   本機   <repo>/face/face_feedback.py  → 清單在 <repo>/tools/
+            #   映像   /app/face_feedback.py          → 清單在 /app/tools/
+            # Dockerfile 把 face/ 底下的檔案平鋪進 /app，所以層級少一層。
+            # 寫死其中一種，另一種就會安靜地留下空版本——而空版本要到分析線上分數
+            # 的時候才會發現，那時候資料已經收了幾個月。
+            here = Path(__file__).resolve().parent
+            candidates = [here / "tools" / "face_models_manifest.json",
+                          here.parent / "tools" / "face_models_manifest.json"]
+            manifest = next((p for p in candidates if p.is_file()), None)
+            if manifest is None:
+                raise FileNotFoundError(f"找不到模型清單，找過：{[str(p) for p in candidates]}")
+            version = str(json.loads(manifest.read_text(encoding="utf-8")).get("version") or "")
+        except Exception:
+            # 讀不到就留空字串，不要讓量測把回饋弄壞。空字串本身也是有意義的：
+            # 它代表「這一筆不知道是哪一版」，分組時要排除而不是猜。
+            logging.exception("讀取模型版本失敗，線上評分事件將不帶版本")
+        _MODEL_VERSION_CACHE["value"] = version
+    return str(_MODEL_VERSION_CACHE["value"])
+
+
+_MODEL_VERSION_CACHE: dict[str, str | None] = {"value": None}
+
+
 def _record_eval_event(mode: str, job_id: str, predicted: dict, corrections: dict) -> None:
     """記一筆「模型這次答得如何」，給線上信任分數用。
 
@@ -165,6 +203,9 @@ def _record_eval_event(mode: str, job_id: str, predicted: dict, corrections: dic
             "jobId": job_id,
             "mode": mode,
             "createdAt": datetime.now(timezone.utc).isoformat(),
+            # 哪一版模型做的判斷。要回答「換了模型之後有沒有變好」就得靠它分組——
+            # 少了它，所有事件混在一起，只算得出一個跨版本的平均值。
+            "modelVersion": _model_version(),
             # 使用者接受的部位＝模型答對；被改的＝答錯。兩者相加就是分母。
             "agreed": [f for f in asked if f not in corrections],
             "corrected": changed,

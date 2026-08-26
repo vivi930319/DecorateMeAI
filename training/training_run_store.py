@@ -33,15 +33,21 @@ def _gcloud_exe() -> str:
 _TOKEN_CACHE: dict[str, float | str] = {"value": "", "expires": 0.0}
 
 
-def _token() -> str:
+def _token(force_refresh: bool = False) -> str:
     """取 access token，並在記憶體裡快取。
 
     原本每一次讀寫都 spawn 一次 gcloud，單次約 1 秒。腳本一輪只寫兩三次還好，
     但 training_worker 是每隔幾秒輪詢一次，那就變成整台機器都在跑 gcloud。
-    token 實際有效約一小時，這裡只留 45 分鐘，把時鐘誤差與換發留出餘裕。
+
+    **快取時間不能當成有效期。** `gcloud auth print-access-token` 回的是 gcloud
+    自己快取的那一張，它可能已經用掉大半壽命了。2026-08-26 就踩到：worker 在
+    13:05 拿到一張，程式假設它還有 45 分鐘，實際上 13:22 就過期——之後每一次
+    Firestore 呼叫都 401，而快取還理直氣壯地把同一張過期 token 遞出去。
+    所以真正的防線是下面 `_open()` 的「遇到 401 就換一張再試」，這裡的時間
+    只是為了少 spawn 幾次 gcloud。
     """
     now = time.time()
-    if _TOKEN_CACHE["value"] and now < float(_TOKEN_CACHE["expires"]):
+    if not force_refresh and _TOKEN_CACHE["value"] and now < float(_TOKEN_CACHE["expires"]):
         return str(_TOKEN_CACHE["value"])
     out = subprocess.run([_gcloud_exe(), "auth", "print-access-token"], capture_output=True,
                          text=True, encoding="utf-8", errors="replace")
@@ -51,6 +57,24 @@ def _token() -> str:
     _TOKEN_CACHE["value"] = token
     _TOKEN_CACHE["expires"] = now + 45 * 60
     return token
+
+
+def _open(build_request, timeout: int = 60):
+    """送出請求；遇到 401 就換一張新 token 再試一次。
+
+    `build_request(token)` 要回傳一個 urllib Request——每次重試都重建，因為
+    Authorization 標頭要換成新的 token。
+
+    只重試 401，而且只重試一次。401 的意思是「這張憑證不被接受」，換一張是
+    唯一有意義的補救；其他錯誤（400 資料有問題、404 找不到、503 對方掛了）
+    重試都只是把同一個錯誤再做一次。
+    """
+    try:
+        return urllib.request.urlopen(build_request(_token()), timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 401:
+            raise
+        return urllib.request.urlopen(build_request(_token(force_refresh=True)), timeout=timeout)
 
 
 def _unwrap(value):
@@ -110,9 +134,10 @@ def _url(project: str, collection: str, doc_id: str) -> str:
 
 
 def get_document(project: str, collection: str, doc_id: str) -> dict | None:
-    req = urllib.request.Request(_url(project, collection, doc_id), headers={"Authorization": f"Bearer {_token()}"})
+    build = lambda tok: urllib.request.Request(  # noqa: E731
+        _url(project, collection, doc_id), headers={"Authorization": f"Bearer {tok}"})
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with _open(build) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
@@ -124,13 +149,12 @@ def get_document(project: str, collection: str, doc_id: str) -> dict | None:
 def patch_document(project: str, collection: str, doc_id: str, updates: dict) -> None:
     from urllib.parse import quote
     fields = "&".join(f"updateMask.fieldPaths={quote(str(k), safe='')}" for k in updates)
-    req = urllib.request.Request(
-        f"{_url(project, collection, doc_id)}?{fields}",
-        data=json.dumps({"fields": {str(k): _wrap(v) for k, v in updates.items()}}).encode("utf-8"),
-        headers={"Authorization": f"Bearer {_token()}", "Content-Type": "application/json"},
-        method="PATCH",
-    )
-    with urllib.request.urlopen(req, timeout=60):
+    payload = json.dumps({"fields": {str(k): _wrap(v) for k, v in updates.items()}}).encode("utf-8")
+    build = lambda tok: urllib.request.Request(  # noqa: E731
+        f"{_url(project, collection, doc_id)}?{fields}", data=payload,
+        headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
+        method="PATCH")
+    with _open(build):
         pass
 
 
@@ -138,11 +162,12 @@ def _run_query(project: str, body: dict) -> list[dict]:
     from urllib.parse import quote
     url = (f"https://firestore.googleapis.com/v1/projects/{quote(project, safe='')}"
            f"/databases/(default)/documents:runQuery")
-    req = urllib.request.Request(
-        url, data=json.dumps(body).encode("utf-8"),
-        headers={"Authorization": f"Bearer {_token()}", "Content-Type": "application/json"},
+    payload = json.dumps(body).encode("utf-8")
+    build = lambda tok: urllib.request.Request(  # noqa: E731
+        url, data=payload,
+        headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
         method="POST")
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    with _open(build) as resp:
         rows = json.loads(resp.read().decode("utf-8"))
     out = []
     for row in rows:
@@ -187,9 +212,10 @@ def _list_collection(project: str, collection: str) -> list[tuple[str, dict]]:
     out: list[tuple[str, dict]] = []
     page = ""
     while True:
-        req = urllib.request.Request(base + "?pageSize=300" + (f"&pageToken={page}" if page else ""),
-                                     headers={"Authorization": f"Bearer {_token()}"})
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        url = base + "?pageSize=300" + (f"&pageToken={page}" if page else "")
+        build = lambda tok, u=url: urllib.request.Request(  # noqa: E731
+            u, headers={"Authorization": f"Bearer {tok}"})
+        with _open(build) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         for doc in data.get("documents", []):
             out.append((doc["name"].rsplit("/", 1)[-1],
@@ -346,12 +372,13 @@ def push_alive_metric(project: str, worker_id: str) -> None:
         "points": [{"interval": {"endTime": stamp}, "value": {"doubleValue": 1.0}}],
     }]}
     try:
-        req = urllib.request.Request(
+        payload = json.dumps(body).encode("utf-8")
+        build = lambda tok: urllib.request.Request(  # noqa: E731
             f"https://monitoring.googleapis.com/v3/projects/{project}/timeSeries",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Authorization": f"Bearer {_token()}", "Content-Type": "application/json"},
+            data=payload,
+            headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"},
             method="POST")
-        with urllib.request.urlopen(req, timeout=30):
+        with _open(build, timeout=30):
             pass
     except Exception:
         pass
