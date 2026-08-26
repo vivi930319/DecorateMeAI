@@ -5275,9 +5275,12 @@ const PageInit = {
                         </select>
                     </td>
                     <td>
-                        <button class="admin-status ${perm.status === 'suspended' ? 'off' : 'on'}" data-admin-status type="button">
+                        <!-- 2026-08-27 拿掉按鈕，改成純顯示：停權這個動作沒有在用。
+                             欄位保留是因為資料庫端仍然有 status 欄，真的出現停權的會員時
+                             畫面上要看得出來——拿掉顯示會讓一個被停權的帳號看起來正常。 -->
+                        <span class="admin-status ${perm.status === 'suspended' ? 'off' : 'on'}">
                             ${perm.status === 'suspended' ? '已停權' : '啟用中'}
-                        </button>
+                        </span>
                     </td>
                     <td><span class="admin-fail ${AdminStore.failureReason(member) === '正常' ? 'ok' : 'warn'}">${escapeHtml(AdminStore.failureReason(member))}</span></td>
                     <td>
@@ -5295,22 +5298,6 @@ const PageInit = {
                     </td>
                 </tr>`;
             }).join('') || '<tr><td colspan="7"><div class="empty-state compact">沒有符合條件的使用者</div></td></tr>';
-
-            rowsEl.querySelectorAll('[data-admin-status]').forEach(btn => {
-                btn.onclick = async () => {
-                    const row = btn.closest('[data-admin-email]');
-                    const email = row?.dataset.adminEmail;
-                    const target = dbMembers.find(m => m.email === email);
-                    const nextStatus = (target?.status === 'suspended') ? 'active' : 'suspended';
-                    btn.disabled = true;
-                    const result = await Api.patchMember(email, { status: nextStatus });
-                    btn.disabled = false;
-                    if (!result.ok) { showAlert(`停權狀態同步失敗：${result.error}`, { type: 'error' }); return; }
-                    if (target) target.status = nextStatus;
-                    showToast(nextStatus === 'suspended' ? '已停權（已寫入資料庫）' : '已恢復啟用（已寫入資料庫）');
-                    render();
-                };
-            });
 
             rowsEl.querySelectorAll('[data-admin-delete]').forEach(btn => {
                 btn.onclick = () => {
@@ -5513,7 +5500,12 @@ const PageInit = {
             for (const r of rows) {
                 const patch = { role: r.role, allowedPages: r.allowedPages };
                 if (r.level) patch.level = r.level;
-                const result = await Api.patchMember(r.email, patch);
+                // skipAssert：整批開始前才剛驗過身分（上面那段 validateSession）。
+                // 逐筆再驗的話，每一筆都會打一次 /auth/session，而那條路徑會
+                // **重寫 session cookie**——cookie 在批次中途被換掉，後面幾筆
+                // 就拿著舊的那份而 401。2026-08-27 的「前兩筆成功、後七筆失敗」
+                // 就是這樣來的，而使用者只是在改權限而已。
+                const result = await Api.patchMember(r.email, patch, { skipAssert: true });
                 if (!result.ok) { failures.push(`${r.email}：${result.error}`); continue; }
                 const target = dbMembers.find(m => m.email === r.email);
                 const memberFromServer = result.member || {};
@@ -6088,6 +6080,14 @@ const PageInit = {
             let fbItems = [];
             const fbSelected = new Set();
 
+            // 卡片右上角那個標籤。跟分頁是同一組語彙，不然同一筆在分頁叫「送訓中」、
+            // 卡片上叫「已採用」，看的人得自己在腦中對應。
+            const FB_BUCKET_LABEL = {
+                pending: '待覆核',
+                training: '送訓中',
+                trained: '送訓完成',
+                rejected: '退回',
+            };
             const FB_REVIEW_LABEL = {
                 accepted: '已採用',
                 rejected: '已退回',
@@ -6270,7 +6270,9 @@ const PageInit = {
                     const approvedFields = fbApprovedFields(it);
                     const selectable = Boolean(it.hasSample && approvedFields.length);
                     return `
-                    <article class="fb-card ${escapeHtml(status)}" data-fb-row="${escapeHtml(id)}">
+                    <!-- awaiting：已採用但還沒進任何批次。這一類在畫面上要跟「已送訓」分得開，
+                         否則一百張卡片長一樣，而其中只有二十張還需要動作。 -->
+                    <article class="fb-card ${escapeHtml(status)}${status === 'accepted' && !it.trainingRunId ? ' awaiting' : ''}" data-fb-row="${escapeHtml(id)}">
                       <header class="fb-card-head">
                         <div>
                           <!-- 勾選框只出現在「可以送訓」的卡片上（已採用、有影像、
@@ -6284,7 +6286,7 @@ const PageInit = {
                           <span class="fb-mode">${escapeHtml(String(it.mode || '—').toUpperCase())}</span>
                           <span class="fb-job">${escapeHtml(it.jobId || '—')}</span>
                         </div>
-                        <span class="fb-review-state">${escapeHtml(FB_REVIEW_LABEL[status] || status)}${
+                        <span class="fb-review-state">${escapeHtml(FB_BUCKET_LABEL[fbBucket(it)] || status)}${
                           changes.length ? ` <em>${decided}/${changes.length}</em>` : ''}</span>
                       </header>
                       <!-- 兩個結果要在卡片上看得到，否則管理員無從確認自己按下去的事真的發生了：
@@ -6306,9 +6308,18 @@ const PageInit = {
                           <span class="fb-arrow" aria-hidden="true">→</span>
                           <span class="fb-now">${escapeHtml(c.corrected ?? '—')}</span>
                           <span class="fb-one">
-                            <button type="button" class="fb-mini fb-accept" data-fb-id="${escapeHtml(id)}"
+                            <!-- 三態，不是兩態。
+                                 先前不論已採用、已進批次，按鈕文字都是「送訓」，只是變灰——
+                                 而一顆寫著「送訓」的灰按鈕讀起來仍然是「可以送」，
+                                 於是已經送過的還會被再送一次。文字要跟著狀態走。 -->
+                            <button type="button" class="fb-mini fb-accept${fd === 'accepted' ? (it.trainingRunId ? ' is-queued' : ' is-accepted') : ''}"
+                              data-fb-id="${escapeHtml(id)}"
                               data-fb-field="${escapeHtml(c.field)}" data-fb-decision="accepted"
-                              ${fd === 'accepted' ? 'disabled' : ''} title="使用者說的對，這個部位收進下一次訓練">送訓</button>
+                              ${fd === 'accepted' ? 'disabled' : ''}
+                              title="${fd === 'accepted'
+                                ? (it.trainingRunId ? '這個部位已經收進批次 ' + escapeHtml(it.trainingRunId) : '已採用，等待送出下一個訓練批次')
+                                : '使用者說的對，這個部位收進下一次訓練'}"
+                              >${fd === 'accepted' ? (it.trainingRunId ? '已送訓' : '待送訓') : '送訓'}</button>
                             <!-- 這裡沒有「退回」：使用者說錯了就直接從右邊的選單改成正確答案，
                                  那比退回有用——退回只是丟掉一張圖，改判會留下一個正確的標籤。 -->
                             ${fbOptions(c.field, id, decisions[c.field] === 'corrected'
@@ -6324,8 +6335,10 @@ const PageInit = {
                           ${it.reviewedAt ? `<span class="fb-reviewed-at">覆核於 ${escapeHtml(fbTime(it.reviewedAt))}</span>` : ''}
                         </span>
                         <span class="fb-review-buttons">
-                          <button type="button" class="fb-accept" data-fb-id="${escapeHtml(id)}"
-                            data-fb-decision="accepted" ${status === 'accepted' ? 'disabled' : ''}>全部送訓</button>
+                          <button type="button" class="fb-accept${status === 'accepted' ? (it.trainingRunId ? ' is-queued' : ' is-accepted') : ''}"
+                            data-fb-id="${escapeHtml(id)}"
+                            data-fb-decision="accepted" ${status === 'accepted' ? 'disabled' : ''}
+                            >${status === 'accepted' ? (it.trainingRunId ? '已送訓' : '待送訓') : '全部送訓'}</button>
                           <!-- 排除這張 = 整筆 rejected。留著它不是為了否定使用者的判斷（那用改判），
                                而是為了**照片本身不能用**的情況：沒對到臉、戴口罩、糊掉。
                                那種照片改判也救不回來，而它是唯一會把影像從 GCS 真的刪掉的動作。 -->
@@ -6344,10 +6357,29 @@ const PageInit = {
 
             // 分頁歸屬。partial（只採用了部分部位）歸在「已送訓」而不是待覆核：
             // 它已經有東西進了訓練批次，再放回待辦會讓人以為那些部位還沒處理。
+            // 批次 id → 批次狀態。loadTrainingRuns 拿到資料後填進來，
+            // 讓每一筆回饋知道自己那一批跑完了沒。
+            const fbRunStatus = new Map();
+
+            // 四個分頁對應四個**還在進行中的位置**，不是三個覆核決定。
+            //
+            // 先前是 待覆核／已採用／已排除，而「已採用」把兩種完全不同的狀態混在一起：
+            // 已經採用但**還沒送進任何批次**的，跟已經在跑的。一百張卡片長一樣，
+            // 其中只有二十張還需要動作——2026-08-27 因此把已經送過的又送了一次。
+            //
+            // 現在「待覆核」的定義是**還需要你動手的**：沒覆核過的，加上覆核了卻還沒送出的。
+            // 送出之後那一格就會清空，這正是使用者要的行為。
             const fbBucket = (item) => {
                 const status = item.reviewStatus || 'pending';
-                if (status === 'accepted' || status === 'partial') return 'accepted';
                 if (status === 'rejected') return 'rejected';
+                if (status === 'accepted' || status === 'partial') {
+                    const runId = item.trainingRunId;
+                    if (!runId) return 'pending';        // 採用了但還沒送出 → 仍然要你動手
+                    const runState = fbRunStatus.get(runId);
+                    // 查不到那一批的狀態時當成還在跑：說「完成了」而其實沒有，
+                    // 比說「還在跑」而其實跑完了糟——前者會讓人以為模型已經更新。
+                    return runState === 'done' ? 'trained' : 'training';
+                }
                 return 'pending';
             };
             // 剛剛在這個分頁上處理過的那幾筆。
@@ -6369,9 +6401,10 @@ const PageInit = {
                 });
                 const n = fbRender(fbVisible());
                 const pending = fbItems.filter(it => fbBucket(it) === 'pending').length;
-                const accepted = fbItems.filter(it => fbBucket(it) === 'accepted').length;
+                const training = fbItems.filter(it => fbBucket(it) === 'training').length;
+                const trained = fbItems.filter(it => fbBucket(it) === 'trained').length;
                 const rejected = fbItems.filter(it => fbBucket(it) === 'rejected').length;
-                const bucketCounts = { pending, accepted, rejected };
+                const bucketCounts = { pending, training, trained, rejected };
                 fbCounts.forEach((el) => { el.textContent = String(bucketCounts[el.dataset.fbCount] ?? 0); });
                 fbTabButtons.forEach((btn) => {
                     btn.setAttribute('aria-selected', String(btn.dataset.fbTab === fbTab));
@@ -6549,6 +6582,13 @@ const PageInit = {
 
             const loadTrainingRuns = async () => {
                 const res = await Api.fetchFaceTrainingRuns();
+                // 每一筆回饋要知道自己那一批跑完了沒，分頁才分得出「送訓中」與「送訓完成」。
+                if (Array.isArray(res?.runs)) {
+                    fbRunStatus.clear();
+                    res.runs.forEach(r => { if (r && r.runId) fbRunStatus.set(r.runId, r.status); });
+                    // 狀態可能剛從 running 變 done，卡片要跟著換分頁
+                    if (fbItems.length) fbRepaint();
+                }
                 if (res.ok) renderTrainingRuns(res);
                 else if (fbRuns) fbRuns.textContent = `訓練批次讀取失敗：${res.error || '未知錯誤'}`;
             };

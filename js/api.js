@@ -1590,7 +1590,19 @@ const Api = {
 
     // 擋下時回傳統一形狀：ok:false + blocked:true + 可直接顯示的中文 error。
     // 呼叫端本來就在看 result.ok / result.error，不必為了這道防線多寫分支。
-    async _protectedWrite(actorEmail, run) {
+    // 批次寫入時，呼叫端可以先自己驗一次再把 skipAssert 打開。
+    //
+    // 為什麼需要這個開關：每一次 assertSessionOwner 都會打 /auth/session，
+    // 而那條路徑在 gateway 端會去會員資料庫做一次 profile 讀取，**並且重寫
+    // session cookie**。存九筆會員權限就是九次驗證、九次 cookie 輪替，
+    // 夾在九次 PATCH 中間——cookie 在批次跑到一半被換掉，後面幾筆就拿著
+    // 舊的那份，於是「前兩筆成功、後七筆 401」。2026-08-27 實際發生過。
+    //
+    // 少驗幾次不等於少了保護：批次開始前才剛驗過，而整個迴圈只有幾秒。
+    // 真正的保護是「開始之前確認過身分」，不是「每一筆都重新確認」。
+    _batchGuard: null,
+    async _protectedWrite(actorEmail, run, opts) {
+        if (opts && opts.skipAssert) return run();
         const actor = String(actorEmail || '').trim().toLowerCase() || this._writeActorEmail();
         const owner = await this.assertSessionOwner(actor);
         if (owner.ok) return run();
@@ -1723,7 +1735,7 @@ const Api = {
         }
     },
 
-    async patchMember(email, patch) {
+    async patchMember(email, patch, opts) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl) return { ok: false, error: 'memberDatabaseUrl 未設定' };
         // actor 是操作的人（後台是管理員），不是 email 這個被改的對象——傳 null 取本機 profile。
@@ -1741,7 +1753,7 @@ const Api = {
             } catch (err) {
                 return { ok: false, error: '連線失敗：' + err.message };
             }
-        });
+        }, opts);
     },
 
     // 刪帳號前先清掉臉部與渲染服務裡的影像。

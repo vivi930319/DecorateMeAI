@@ -1505,6 +1505,14 @@ body.admin-mode .main-content * { letter-spacing:0; }
 }
 .fb-card.accepted { border-left-color:var(--admin-green); }
 .fb-card.rejected { border-left-color:#b0b8bd; }
+/* 已採用但還沒送進批次：左緣用金色標出來。
+   一百張卡片裡只有二十張還需要動作，長一樣的話那二十張就找不到。 */
+.fb-card.awaiting { border-left-color:var(--gold-deep); }
+/* 已經處理過的按鈕要看起來像「狀態」而不是「可按的東西」——
+   一顆寫著「送訓」的灰按鈕，讀起來仍然是「可以送」。 */
+.fb-accept.is-queued, .fb-accept.is-accepted { border-style:dashed; cursor:default; }
+.fb-accept.is-queued { color:var(--mid); }
+.fb-accept.is-accepted { color:var(--gold-deep); border-color:var(--gold-soft); }
 .fb-card-head {
     display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
     padding:11px 14px; border-bottom:1px solid var(--line-gold); background:var(--paper);
@@ -1910,7 +1918,12 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .admin-user b { color:var(--admin-ink); font-size:13px; font-weight:600; }
 .admin-user span { margin-top:4px; color:#78838b; font-size:11px; }
 .admin-select { min-width:126px; height:36px; border:1px solid #cfd5d9; border-radius:4px; background:#fff; color:#344049; padding:0 9px; font:400 12px/1 "Noto Sans TC",sans-serif; }
-.admin-status { min-width:76px; height:34px; border:1px solid #cfd5d9; border-radius:4px; background:#fff; cursor:pointer; font:600 11px/1 "Noto Sans TC",sans-serif; }
+/* 2026-08-27 從 button 改成 span：停權沒有在用，這一欄現在只是顯示。
+   cursor:pointer 要拿掉——游標變成手指等於在說「可以按」，
+   而按下去不會有任何事。 */
+.admin-status { display:inline-flex; align-items:center; justify-content:center;
+    min-width:76px; height:34px; border:1px solid #cfd5d9; border-radius:4px;
+    background:#fff; font:600 11px/1 "Noto Sans TC",sans-serif; }
 .admin-status.on { color:var(--admin-green); border-color:#9bcabb; background:#f2faf7; }
 .admin-status.off { color:var(--admin-red); border-color:#e4b6b9; background:#fff6f6; }
 .admin-perms { display:flex; flex-wrap:wrap; gap:6px; max-width:520px; }

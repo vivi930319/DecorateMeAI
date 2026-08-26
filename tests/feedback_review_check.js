@@ -53,6 +53,11 @@ sandbox.AnalysisFeedback = { OPTIONS: {
 vm.createContext(sandbox);
 vm.runInContext(
   cut('const FB_REVIEW_LABEL = {') + ';\n'
+  // 卡片標籤與分頁用同一組四態語彙，fbRender 依賴這三個。
+  // 抽了 fbRender 沒抽相依，測試會在執行時炸 ReferenceError——那是測試的問題。
+  + cut('const FB_BUCKET_LABEL = {') + ';\n'
+  + 'const fbRunStatus = new Map();\n'
+  + cut('const fbBucket = (item) => {') + ';\n'
   + 'const fbSamples = {};\n'
   + 'const fbSelected = new Set();\n'
   + 'const fbApprovedFields = (it) => (it.changes || []).filter(c => (it.reviewDecisions || {})[c.field] === "accepted").map(c => c.field);\n'
@@ -118,7 +123,11 @@ console.log('\n=== 2. 狀態決定按鈕能不能按 ===');
 reset(); render([item({ reviewStatus: 'accepted', reviewedAt: '2026-08-24T03:00:00+00:00' })]);
 out = sandbox.feedbackBody.innerHTML;
 check('已採用時顯示「已採用」', out.includes('已採用'));
-check('已採用時「採用」不能再按', /class="fb-accept"[^>]*disabled/.test(out));
+// class 現在會多帶一個狀態（is-accepted / is-queued），所以不能寫死 class="fb-accept"
+check('已採用時「採用」不能再按', /class="fb-accept[^"]*"[^>]*disabled/.test(out));
+// 已採用但還沒進批次 → 顯示「待送訓」，而不是看起來還能送的「送訓」
+check('已採用未進批次顯示「待送訓」', out.includes('待送訓'));
+check('已採用未進批次的卡片標成 awaiting', out.includes('fb-card accepted awaiting'));
 check('已採用時「退回」仍可按（要能改判）', !/class="fb-reject"[^>]*disabled/.test(out));
 check('已採用時卡片帶上樣式類別', out.includes('fb-card accepted'));
 check('顯示覆核時間', out.includes('覆核於'));
@@ -213,9 +222,24 @@ check('feedbackId 有做 encodeURIComponent',
 console.log('\n=== 10. 接線 ===');
 check('admin.html 用卡片容器而不是表格',
   html.includes('admin-feedback-list') && !/id="adminFeedbackBody"[^>]*>\s*<\/tbody>/.test(html));
-// 三個分頁取代了原本的「只看待覆核」勾選框：待覆核／已送訓／已排除的意義不同。
-check('admin.html 有三個覆核分頁',
-  ['pending', 'accepted', 'rejected'].every(t => html.includes(`data-fb-tab="${t}"`)));
+// 四個分頁對應四個位置，不是三個覆核決定。
+//
+// 舊的「已採用」把兩種完全不同的狀態混在一起：已採用但**還沒送進任何批次**的，
+// 跟已經在跑的。一百張卡片長一樣，其中只有二十張還需要動作——
+// 2026-08-27 使用者因此把已經送過的那批又送了一次。
+//
+// 現在「待覆核」＝**還需要你動手的**（沒覆核過的 ＋ 覆核了卻還沒送出的），
+// 送出之後那一格就會清空。
+check('admin.html 有四個分頁',
+  ['pending', 'training', 'trained', 'rejected'].every(t => html.includes(`data-fb-tab="${t}"`)));
+check('分頁文字是四態語彙',
+  ['待覆核', '送訓中', '送訓完成', '退回'].every(t => html.includes(t)));
+// 採用但還沒送出的要留在「待覆核」，不然使用者不知道還有二十筆等著送
+check('採用但未送出仍算待覆核', /if \(!runId\) return 'pending'/.test(src));
+check('批次跑完才算送訓完成', /runState === 'done' \? 'trained' : 'training'/.test(src));
+// 查不到批次狀態時當成還在跑：說「完成了」而其實沒有，比反過來糟——
+// 前者會讓人以為模型已經更新
+check('批次狀態未知時算送訓中', /fbRunStatus\.get\(runId\)/.test(src));
 // 每次重畫都會換掉整個容器，逐張綁的處理器會跟著沒掉
 check('用事件委派而不是逐張綁定', src.includes("feedbackBody.addEventListener('click'"));
 // 影像不再需要按開：卡片捲進畫面就自動抓。要判斷眉型、唇型本來就得看到形狀，
@@ -246,7 +270,13 @@ check('全選框有三態', src.includes('fbPickAll.indeterminate'));
 // 送訓不可逆，而且會佔住訓練機數十分鐘到數小時。
 check('送訓前先確認', /showConfirm\([\s\S]{0,400}確認送出訓練/.test(src));
 check('確認視窗說出筆數', /okText: `送出 \$\{ids\.length\} 筆`/.test(src));
-check('逐部位的按鈕寫「送訓」', src.includes('>送訓</button>'));
+// 三態，不是兩態：先前不論已採用或已進批次，文字都是「送訓」只是變灰，
+// 而一顆寫著「送訓」的灰按鈕讀起來仍然是「可以送」——2026-08-27 使用者
+// 因此把已經送過的那批又送了一次。
+check('未處理時寫「送訓」', src.includes("? '已送訓' : '待送訓') : '送訓'"));
+check('已進批次寫「已送訓」', src.includes("'已送訓'"));
+check('已採用未進批次寫「待送訓」', src.includes("'待送訓'"));
+check('待送訓的卡片有標記', src.includes("' awaiting'") && css.includes('.fb-card.awaiting'));
 check('摘要說明已採用的會進重訓', src.includes('import_feedback_samples.py'));
 check('卡片樣式存在', css.includes('.fb-card') && css.includes('.fb-shots'));
 
