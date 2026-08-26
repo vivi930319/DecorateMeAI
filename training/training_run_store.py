@@ -312,6 +312,51 @@ def fail_run(project: str, run_id: str, message: str) -> None:
     })
 
 
+ALIVE_METRIC = "custom.googleapis.com/training_worker/alive"
+_LAST_METRIC_PUSH = {"at": 0.0}
+
+
+def push_alive_metric(project: str, worker_id: str) -> None:
+    """往 Cloud Monitoring 推一個「訓練機還活著」的點。
+
+    為什麼要推到雲端，而不是只寫 Firestore 的心跳
+    ----------------------------------------------
+    訓練機跑在本機。它死掉的原因很可能**就是網路斷了**——2026-08-26 那次正是
+    DNS 解析失敗。這種時候本機不可能自己寄信通知你，因為寄信也要網路。
+
+    負責發現的東西，不能是可能壞掉的那個東西。所以改成反過來：訓練機定期
+    往 Google 推一個點，Google 那邊用 conditionAbsent（指標消失就告警）盯著。
+    斷網時推不上去，Google 就會發現「這個指標不見了」並寄信；網路回來之後
+    點又進來，告警自動關閉。
+
+    推送失敗不重要，安靜忽略：它只是告訴外界「我還在」，不是訓練的一部分。
+    真的推不上去，正好就是應該被告警的那個狀態。
+    """
+    now = time.time()
+    # Cloud Monitoring 對同一條時間序列有最小寫入間隔，而且自訂指標按量計費。
+    # 每分鐘一點對「15 分鐘沒心跳就告警」已經綽綽有餘。
+    if now - float(_LAST_METRIC_PUSH["at"]) < 60:
+        return
+    _LAST_METRIC_PUSH["at"] = now
+    stamp = datetime.now(timezone.utc).isoformat()
+    body = {"timeSeries": [{
+        "metric": {"type": ALIVE_METRIC, "labels": {"worker_id": worker_id}},
+        # global 資源：這台機器不是 GCP 的資源，沒有 instance id 可以填。
+        "resource": {"type": "global", "labels": {"project_id": project}},
+        "points": [{"interval": {"endTime": stamp}, "value": {"doubleValue": 1.0}}],
+    }]}
+    try:
+        req = urllib.request.Request(
+            f"https://monitoring.googleapis.com/v3/projects/{project}/timeSeries",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Authorization": f"Bearer {_token()}", "Content-Type": "application/json"},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=30):
+            pass
+    except Exception:
+        pass
+
+
 def heartbeat(project: str, worker_id: str, state: str, detail: str = "") -> None:
     """訓練機回報「我還在」。
 
@@ -328,6 +373,9 @@ def heartbeat(project: str, worker_id: str, state: str, detail: str = "") -> Non
     except Exception:
         # 心跳寫不進去不該讓訓練停下來——它只是狀態顯示，不是訓練的一部分。
         pass
+    # Firestore 那份是給後台畫面看的（要有人打開才看得到）；
+    # 這一份是給 Google 的告警看的（沒人看也會寄信）。兩份都要。
+    push_alive_metric(project, worker_id)
 
 
 def model_digests(model_dir: Path) -> dict:

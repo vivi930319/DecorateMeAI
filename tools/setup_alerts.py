@@ -136,6 +136,38 @@ def policies(channel: str) -> list[dict]:
             "alertStrategy": {"notificationRateLimit": {"period": "900s"}},
             "enabled": True,
         },
+        {
+            "displayName": "訓練機失聯",
+            "documentation": {
+                "content": "訓練機超過 15 分鐘沒有回報。可能是那台電腦關機、睡眠、"
+                           "或網路斷了。開機並確認工作排程「DecorateMe 訓練機」在跑；"
+                           "記錄在 logs/training_worker.log。\n\n"
+                           "排隊中的批次不會消失，它們會等訓練機回來。",
+                "mimeType": "text/markdown",
+            },
+            "conditions": [{
+                "displayName": "十五分鐘沒有心跳",
+                # 這一條是**指標消失**才告警，不是指標超標。
+                #
+                # 訓練機跑在本機，它壞掉的原因很可能就是網路斷了——那時候本機
+                # 不可能自己寄信。所以反過來做：本機定期往 Google 推「我還活著」，
+                # 由 Google 盯著那個訊號有沒有中斷。
+                # 負責發現的東西，不能是可能壞掉的那個東西。
+                "conditionAbsent": {
+                    "filter": ('metric.type="custom.googleapis.com/training_worker/alive" '
+                               'AND resource.type="global"'),
+                    "aggregations": [{
+                        "alignmentPeriod": "300s",
+                        "perSeriesAligner": "ALIGN_COUNT",
+                    }],
+                    "duration": "900s",
+                    "trigger": {"count": 1},
+                },
+            }],
+            "combiner": "OR",
+            "notificationChannels": [channel],
+            "enabled": True,
+        },
     ]
 
 
