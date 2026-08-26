@@ -1,6 +1,6 @@
 # AI Gateway 依賴——鎖定版本，讓 Cloud Build 產出的映像與本機測試一致。
 # 升級時一次改一個、重跑 ai_gateway_test.py 再部署，不要讓上游自動跳版。
-cryptography==49.0.0
+cryptography==50.0.0
 fastapi==0.139.2
 google-auth==2.56.0
 google-cloud-firestore==2.27.0

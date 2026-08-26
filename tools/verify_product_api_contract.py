@@ -17,8 +17,15 @@ import urllib.request
 
 import os
 
-URL = os.getenv("PRODUCT_API_URL",
-                "https://fewer-guestbook-oriented-witnesses.trycloudflare.com")
+# 不放預設網址。Tunnel 每次重啟就換一組，寫死的那個隔天就是錯的——
+# 而錯的網址跑起來像「API 掛了」，不像「腳本過期了」，會讓人去查錯的地方。
+# 它同時也是 CI 秘密掃描擋下的東西：暫時性網址不該躺在會被部署的程式裡。
+URL = os.getenv("PRODUCT_API_URL", "").rstrip("/")
+if not URL:
+    raise SystemExit(
+        "請先設定 PRODUCT_API_URL，例如："
+        "  PRODUCT_API_URL=https://xxx.trycloudflare.com "
+        "python tools/verify_product_api_contract.py")
 results = []
 
 

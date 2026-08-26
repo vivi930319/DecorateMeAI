@@ -67,6 +67,10 @@
 # 目錄本身要先放行，否則裡面逐檔案的 ! 規則不會生效——git 不會走進一個
 # 被排除的目錄去找例外。tools/ 與 training/ 上面已經是這樣寫的。
 !tests/
+# CI 的 backend-tests 靠它組出容器裡那個扁平的 import 命名空間。
+# 這個檔一直沒進版控，於是 CI 上 `import ai_gateway` 永遠 ModuleNotFoundError，
+# 而本機因為讀得到它所以全綠——本機過、CI 掛，找起來最花時間的那一種。
+!pytest.ini
 # 訓練批次寫回的測試：釘住「批次失敗會推出告警指標」。這行要是被拿掉，
 # 症狀是失敗時**沒有任何人收到通知**——沉默不會讓任何測試變紅，所以要測。
 !training_run_store_test.py
