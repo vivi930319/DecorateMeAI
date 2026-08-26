@@ -108,6 +108,10 @@ def main() -> int:
     # (模型版本, 部位, 原預測, 修正後, 同意與否) -> 筆數
     cells: Counter = Counter()
     versions: Counter = Counter()
+    # 各部位的 total / agreed / corrected。演算法端 2026-08-26 驗收時發現
+    # 「列數合計 649」對不上「129 事件 x 5 部位 = 645」，靠彙總本身查不出差在哪，
+    # 只能回頭問來源端。有了這組數字，對不對得起來當場就看得出來。
+    per_part: dict[str, Counter] = defaultdict(Counter)
     for ev in events:
         version = _val(ev, "modelVersion") or "unknown"
         versions[version] += 1
@@ -121,14 +125,19 @@ def main() -> int:
         for part, before in predicted.items():
             if part in agreed:
                 cells[(version, part, str(before), None, True)] += 1
+                per_part[part]["agreed"] += 1
+                per_part[part]["total"] += 1
             elif part in corrected:
                 cells[(version, part, str(before), corrections.get(part), False)] += 1
+                per_part[part]["corrected"] += 1
+                per_part[part]["total"] += 1
 
     rows, suppressed_cells, suppressed_count = [], 0, 0
     for (version, part, before, after, agreed_flag), n in sorted(cells.items(), key=lambda kv: -kv[1]):
         if n < args.min_count:
             suppressed_cells += 1
             suppressed_count += n
+            per_part[part]["suppressed"] += n
             continue
         rows.append({
             "modelVersion": version,
@@ -145,11 +154,32 @@ def main() -> int:
             "note": f"其他（{suppressed_cells} 種組合，每種少於 {args.min_count} 筆，已合併）",
         })
 
+    # 五官是這五個。第六個 側臉鼻型 只在部分事件出現（正臉照片拍不到側臉鼻型），
+    # 它是造成「總數比 事件數 x 5 多出幾筆」的原因——不是重複列，也不是母體不同。
+    BASIC_PARTS = ("臉型", "眉型", "眼型", "鼻型", "嘴型")
+    part_records = sum(c["total"] for c in per_part.values())
+    basic_records = sum(per_part[p]["total"] for p in BASIC_PARTS)
+    extra_parts = {p: dict(c) for p, c in per_part.items() if p not in BASIC_PARTS}
+
     payload = {
         "generatedFor": "演算法端（Decorate Me 商品推薦）",
         "dateRange": date_range,
         "modelVersions": dict(versions),
         "minCount": args.min_count,
+        "eventCount": len(events),
+        "partRecordCount": part_records,
+        "expectedPartsPerEvent": len(BASIC_PARTS),
+        "countsByPart": {p: dict(c) for p, c in sorted(per_part.items())},
+        # 額外部位單獨列出來，讓「多出來的那幾筆」有名有姓，不用回頭問來源端。
+        "extraParts": extra_parts,
+        "consistencyChecks": {
+            "rowCountEqualsPartRecordCount":
+                sum(r["count"] for r in rows) == part_records,
+            "basicPartsEqualEventsTimesFive":
+                basic_records == len(events) * len(BASIC_PARTS),
+            "partRecordCountEqualsBasicPlusExtra":
+                part_records == basic_records + sum(c["total"] for c in extra_parts.values()),
+        },
         "rows": rows,
         "usage": {
             "ok": "觀察上游輸入品質與分布漂移",
@@ -161,6 +191,11 @@ def main() -> int:
                     "所以同意率偏向低估，適合當下限與趨勢，不適合當精確值。",
         },
         "excluded": ["身分", "影像", "job id", "逐筆時間戳"],
+        "notes": {
+            "extraParts": "側臉鼻型是第六個部位，只有拍得到側臉的事件才有。"
+                          "它讓 partRecordCount 高於 eventCount x 5，這是預期行為，"
+                          "不是重複計數。要只看五官就用 countsByPart 的那五項。",
+        },
     }
 
     with open(args.out, "w", encoding="utf-8") as handle:
@@ -168,6 +203,14 @@ def main() -> int:
 
     print(f"\n日期區間 {date_range}")
     print("模型版本：" + "、".join(f"{k} {v} 筆" for k, v in versions.most_common()))
+    checks = payload["consistencyChecks"]
+    extra_note = ""
+    if extra_parts:
+        extra_note = "，另有 " + "、".join(
+            f"{name} {c['total']} 筆" for name, c in extra_parts.items())
+    print(f"事件 {len(events)}｜部位筆數 {part_records}"
+          f"（五官 {basic_records} ＝ {len(events)}×5{extra_note}）")
+    print("一致性檢查：" + "、".join(f"{k} {'OK' if v else '不符'}" for k, v in checks.items()))
     print(f"輸出 {len(rows)} 列" + (f"（另有 {suppressed_cells} 種罕見組合被併成一列）"
                                     if suppressed_cells else ""))
     print(f"寫入 {args.out}")
