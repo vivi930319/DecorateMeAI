@@ -143,9 +143,30 @@ def main() -> int:
             source.write_text(text.replace(doc, new_ref), encoding="utf-8")
             print(f"  更新引用：{rel} -> {new_ref}")
 
-    write_index(plan)
+    write_index(scan_docs())
     print(f"\n完成：搬了 {moved} 份，索引寫在 docs/README.md")
     return 0
+
+
+def scan_docs() -> dict[str, list[Path]]:
+    """掃 docs/ 底下**實際存在**的文件，而不是「這次搬了哪些」。
+
+    先前這裡傳的是搬移計畫。根目錄清空之後，計畫是空的，於是索引被重建成一份
+    空表——把先前一百多筆全部蓋掉，而腳本照樣回報「完成」。
+    這種壞法沒有人會當場發現：索引是給人看的，不是給程式讀的。
+
+    索引要反映的是「現在有什麼」，那就只能從現況掃，不能從這次的動作推。
+    """
+    found: dict[str, list[Path]] = {}
+    for path in sorted(DOCS.rglob("*.md")):
+        rel = path.relative_to(DOCS)
+        if rel.parts[0] in ("agents",) or rel.name == "README.md":
+            continue          # agent 設定不是文件；索引自己也不列自己
+        folder = str(rel.parent).replace("\\", "/")
+        if folder == ".":
+            continue
+        found.setdefault(folder, []).append(path)
+    return found
 
 
 def write_index(plan: dict[str, list[Path]]) -> None:
