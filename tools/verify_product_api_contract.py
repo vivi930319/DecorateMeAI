@@ -24,7 +24,7 @@ URL = os.getenv("PRODUCT_API_URL", "").rstrip("/")
 if not URL:
     raise SystemExit(
         "請先設定 PRODUCT_API_URL，例如："
-        "  PRODUCT_API_URL=https://xxx.trycloudflare.com "
+        "  PRODUCT_API_URL=<商品 API 的網址> "
         "python tools/verify_product_api_contract.py")
 results = []
 
