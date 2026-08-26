@@ -2004,6 +2004,19 @@ async def admin_product(product_id: str, request: Request):
     return await proxy_admin_request(request, f"/api/products/{safe_id}")
 
 
+# 刪除前的影響查詢：這一筆商品被幾個人收藏、放在幾個購物車裡。
+#
+# 硬刪除是不可逆的，而它會讓別人的收藏變成「已下架」。在按下之前先看到
+# 「這會影響 12 個人的收藏」，跟按下之後才知道，是兩件不同的事。
+#
+# 這條路由必須獨立寫：上面那條的 {product_id} 只吃單一片段，
+# `901/delete-impact` 有斜線，配不到，前端打過來會是 404。
+@app.get("/admin-api/products/{product_id}/delete-impact")
+async def admin_product_delete_impact(product_id: str, request: Request):
+    safe_id = validate_path_segment(product_id)
+    return await proxy_admin_request(request, f"/api/products/{safe_id}/delete-impact")
+
+
 # 爬蟲只寫入 crawler_staging_products，不再與前端直連。
 # 新流程為：爬蟲、暫存表、管理員審核、匯入正式商品。
 #
