@@ -1335,7 +1335,7 @@ body.admin-mode .main-content { max-width:none; min-height:100vh; margin:0; padd
 body.admin-mode .main-content.page-enter,
 body.admin-mode .main-content.page-back { animation:none; }
 body.admin-mode .main-content * { letter-spacing:0; }
-.admin-workspace { --admin-ink:#20272d; --admin-muted:#66717a; --admin-line:#d9dee2; --admin-soft:#eef1f3; --admin-green:#176b58; --admin-amber:#a65f24; --admin-red:#b63f46; display:grid; grid-template-columns:252px minmax(0,1fr); min-height:100vh; background:#f3f5f7; color:var(--admin-ink); }
+.admin-workspace { --admin-ink:#20272d; --admin-muted:#66717a; --admin-line:#d9dee2; --admin-soft:#eef1f3; --admin-surface:#fff; --admin-shade:32,39,45; --admin-green:#176b58; --admin-amber:#a65f24; --admin-red:#b63f46; display:grid; grid-template-columns:252px minmax(0,1fr); min-height:100vh; background:#f3f5f7; color:var(--admin-ink); }
 .admin-sidebar { position:sticky; top:0; height:100vh; display:flex; flex-direction:column; padding:28px 20px 22px; background:#171d22; color:#f5f7f8; z-index:10; }
 .admin-brand { padding:0 10px 26px; border-bottom:1px solid rgba(255,255,255,.1); }
 .admin-brand strong { display:block; font:600 19px/1.35 "Noto Sans TC",sans-serif; }
@@ -1392,6 +1392,10 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .admin-service-row > div strong,.admin-service-row > div span { display:block; }
 .admin-service-row > div strong { font-size:13px; font-weight:600; }
 .admin-service-row > div span { margin-top:4px; color:var(--admin-muted); font-size:11px; }
+/* ⚠️ .admin-crawler-* 這組樣式在「暫存商品審核」移除後仍然要留著——
+   「模型修正複核」區塊複用了 .admin-crawler-state 與 .admin-crawler-message
+   （見 pages/admin.html 的 adminFeedbackState / adminFeedbackSummary）。
+   類名跟實際用途已經對不上，但改名要同步動 HTML，暫時以這段註解標記。 */
 .admin-service-row > b,.admin-crawler-state { min-width:62px; min-height:28px; display:inline-flex; align-items:center; justify-content:center; border-radius:999px; padding:0 10px; font-size:11px; font-weight:600; }
 .admin-service-row > b.ok,.admin-crawler-state.success { background:#e7f4f0; color:var(--admin-green); }
 .admin-service-row > b.error,.admin-crawler-state.error { background:#fae9ea; color:var(--admin-red); }
@@ -1474,6 +1478,296 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .admin-table th { height:46px; padding:0 16px; background:#f5f7f8; color:#647078; font:600 11px/1 "Noto Sans TC",sans-serif; text-align:left; white-space:nowrap; }
 .admin-table td { padding:15px 16px; border-top:1px solid #e4e8ea; color:#344049; font-size:12px; vertical-align:top; }
 .admin-table tbody tr:hover { background:#fafbfb; }
+
+/* 模型修正複核的表格。沿用 .admin-table 的既有版型，只補這張表獨有的三欄。
+   「模型判斷」與「使用者改成」要一眼分得出來——這張表存在的目的就是讓人
+   判斷那個修正合不合理，兩欄長一樣就等於沒有幫上忙。 */
+.admin-table td.fb-was { color:#8a949b; text-decoration:line-through; }
+.admin-table td.fb-now { color:#1f7a5a; font-weight:600; }
+.admin-table td.fb-job { color:#8a949b; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; }
+
+/* 修正複核：一筆一張卡。
+   2026-08-24 從表格改過來——覆核要先看完一個人的全部修正與影像才有辦法決定，
+   表格把一筆攤成好幾列，得先在腦中拼回同一次分析。 */
+.admin-feedback-list { display:grid; gap:12px; }
+.admin-feedback-list .admin-empty {
+    padding:34px 16px; color:var(--admin-muted); text-align:center; font-size:12.5px;
+    border:1px solid var(--admin-line); border-radius:10px;
+}
+.fb-card {
+    border:1px solid var(--admin-line); border-radius:10px; background:var(--white); overflow:hidden;
+    border-left:3px solid var(--line-gold); transition:border-color .2s;
+}
+.fb-card.accepted { border-left-color:var(--admin-green); }
+.fb-card.rejected { border-left-color:#b0b8bd; }
+.fb-card-head {
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    padding:11px 14px; border-bottom:1px solid var(--line-gold); background:var(--paper);
+}
+.fb-when { font-size:12.5px; color:var(--admin-ink); font-weight:600; }
+.fb-select-wrap { display:inline-flex; align-items:center; gap:4px; margin-right:8px; color:var(--admin-muted); font-size:10.5px; cursor:pointer; }
+.fb-select { width:14px; height:14px; margin:0; accent-color:var(--admin-green); }
+.fb-select:disabled { cursor:default; opacity:.45; }
+.fb-mode {
+    margin-left:8px; padding:1px 7px; border-radius:9px; background:var(--paper);
+    color:var(--admin-muted); font-size:10.5px; letter-spacing:.04em;
+}
+.fb-card .fb-job {
+    margin-left:8px; color:var(--admin-muted); font-size:11px;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+.fb-review-state { font-size:12px; font-weight:600; color:var(--admin-muted); }
+.fb-card.accepted .fb-review-state { color:var(--admin-green); }
+
+.fb-changes { padding:10px 14px; display:grid; gap:6px; }
+.fb-change { display:flex; align-items:center; gap:9px; flex-wrap:wrap; font-size:13px; }
+.fb-change.fb-none { color:var(--admin-muted); font-size:12px; }
+.fb-field { min-width:44px; color:var(--admin-muted); font-size:12px; }
+.fb-change .fb-was { color:var(--admin-muted); text-decoration:line-through; }
+.fb-arrow { color:var(--lt); }
+.fb-change .fb-now { color:var(--admin-green); font-weight:600; }
+.fb-confidence { color:var(--admin-muted); font-size:10px; white-space:nowrap; }
+
+/* 樣本影像：點開才載，所以這一區平常不存在 */
+.fb-shots {
+    display:flex; flex-wrap:wrap; gap:10px; padding:4px 14px 12px;
+    border-top:1px dashed var(--line-gold); margin-top:2px;
+}
+.fb-shots.is-loading, .fb-shots.is-error, .fb-shots.is-empty {
+    display:block; padding:10px 14px 12px; font-size:12px; color:var(--admin-muted);
+}
+.fb-shots.is-error { color:var(--danger); }
+.fb-shots figure { margin:0; text-align:center; }
+.fb-shots img {
+    display:block; width:88px; height:88px; object-fit:cover;
+    border:1px solid var(--admin-line); border-radius:6px; background:var(--ivory);
+}
+.fb-shots figcaption { margin-top:4px; font-size:10.5px; color:var(--admin-muted); line-height:1.5; }
+.fb-shots figcaption b { color:var(--admin-ink); font-weight:600; }
+.fb-shots .fb-skip {
+    width:88px; height:88px; display:flex; align-items:center; justify-content:center;
+    border:1px dashed var(--line-gold); border-radius:6px; font-size:10px; color:var(--lt); padding:6px;
+}
+
+.fb-card-foot {
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    padding:10px 14px; border-top:1px solid var(--line-gold); background:var(--paper);
+}
+.fb-foot-left { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.fb-shots-btn {
+    padding:4px 11px; border-radius:6px; border:1px solid var(--line-gold); background:var(--white);
+    color:var(--admin-muted); font-size:11.5px; cursor:pointer;
+}
+.fb-shots-btn:hover { border-color:var(--gold); }
+.fb-no-sample { font-size:11px; color:var(--lt); }
+.fb-reviewed-at { color:var(--lt); font-size:10.5px; }
+.fb-review-buttons { display:flex; gap:6px; }
+.fb-review-buttons button {
+    padding:5px 13px; border-radius:6px; border:1px solid var(--line-gold); background:var(--white);
+    color:var(--admin-ink); font-size:11.5px; cursor:pointer;
+}
+.fb-review-buttons button:hover:not(:disabled) { border-color:var(--gold); }
+.fb-review-buttons button:disabled { opacity:.45; cursor:default; }
+.fb-review-buttons .fb-accept:hover:not(:disabled) { border-color:var(--admin-green); color:var(--admin-green); }
+.fb-review-buttons .fb-reject:hover:not(:disabled) { border-color:var(--danger); color:var(--danger); }
+
+.admin-feedback-actions { display:flex; align-items:center; gap:14px; }
+.admin-feedback-train { white-space:nowrap; }
+/* ── 模型修正複核：訓練紀錄與覆核工作檯合成同一塊面板 ──────────────
+   兩層各自有實體上的意義，不是為了好看才加陰影：
+     凹槽（acp-sunk）  已經發生、不能再改的事實 —— 訓練批次紀錄
+     浮起（acp-raised）你正要在上面動作的檯面 —— 待覆核清單
+   凹的看得出是紀錄，浮的看得出可以操作。 */
+.admin-console-panel {
+    margin:4px 0 0;
+    border:1px solid var(--admin-line);
+    border-radius:14px;
+    background:var(--admin-surface);
+    overflow:hidden;
+    /* 三層：貼邊的實線、近距離的接觸陰影、遠距離的落地陰影。
+       只用一層 box-shadow 會糊成一片灰，看起來像模糊而不是浮起。 */
+    box-shadow:
+        0 1px 1px rgba(var(--admin-shade),.05),
+        0 6px 16px rgba(var(--admin-shade),.07),
+        0 18px 38px rgba(var(--admin-shade),.05);
+}
+.acp-deck { padding:18px 20px; }
+.acp-sunk {
+    background:var(--admin-soft);
+    border-bottom:1px solid var(--admin-line);
+    /* 上緣的內陰影就是「凹」的全部來源：光從上面來，凹槽的上緣才會有影子。
+       四邊都加內陰影會變成發光的框，反而不像凹的。 */
+    box-shadow:inset 0 3px 7px -3px rgba(var(--admin-shade),.16);
+}
+.acp-raised {
+    position:relative;
+    /* 蓋住凹槽的底線，讓浮起那層真的疊在它上面而不是接在後面。 */
+    margin-top:-1px;
+    border-radius:13px 13px 0 0;
+    background:var(--admin-surface);
+    box-shadow:0 -5px 12px rgba(var(--admin-shade),.05);
+}
+.admin-training-board { margin:0; }
+.atb-head { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:12px; }
+.atb-title span { display:block; color:var(--admin-muted); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; }
+.atb-title h3 { margin:2px 0 0; color:var(--admin-ink); font-size:15px; font-weight:600; }
+.atb-current { color:var(--admin-ink); font-size:11.5px; }
+.atb-runs { display:grid; gap:10px; }
+.atb-empty { padding:18px; border:1px dashed var(--admin-line); border-radius:8px; color:var(--admin-muted); font-size:12px; text-align:center; }
+.atb-run { padding:12px 14px; border:1px solid var(--admin-line); border-radius:8px; background:#fff; font-size:11.5px; cursor:pointer; text-align:left; }
+.atb-run:hover { border-color:var(--admin-ink); }
+.atb-run:focus-visible { outline:2px solid var(--admin-ink); outline-offset:2px; }
+.atb-run-head { display:flex; align-items:center; gap:9px; margin-bottom:10px; }
+.atb-run-head b { color:var(--admin-ink); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
+.atb-model { margin-left:auto; color:var(--admin-muted); font-size:11px; }
+.atb-badge { padding:2px 8px; border-radius:999px; font-size:10.5px; font-weight:600; }
+.atb-badge-queued { color:#8a6d20; background:#fdf5e3; }
+.atb-badge-running { color:#1d5f88; background:#e8f2f9; }
+.atb-badge-done { color:var(--admin-green); background:#f2faf7; }
+.atb-badge-failed { color:var(--admin-red); background:#fff6f6; }
+/* 時間鏈分三格：第一格是後台寫的，後兩格只有訓練腳本寫得進去。
+   還沒被撿走的批次，後兩格會是灰的破折號——那一眼就看得出「還沒真的訓練」。 */
+.atb-steps { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin-bottom:10px; }
+.atb-step { padding:7px 9px; border-radius:6px; background:#f6f8f9; }
+.atb-step span { display:block; color:var(--admin-muted); font-size:10.5px; }
+.atb-step b { color:var(--admin-ink); font-size:11.5px; font-weight:600; }
+.atb-step-wait { background:#fafbfb; }
+.atb-step-wait b { color:#b3bcc2; font-weight:500; }
+.atb-samples { color:#68747b; }
+.atb-samples b { color:var(--admin-ink); }
+.atb-chips { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+.atb-chip { padding:2px 8px; border:1px solid var(--admin-line); border-radius:999px; color:#68747b; font-size:10.5px; }
+.atb-delta { margin-top:10px; padding-top:10px; border-top:1px solid var(--admin-line); }
+.atb-delta-title { display:block; margin-bottom:6px; color:var(--admin-muted); font-size:10.5px; }
+.atb-delta-row { display:flex; justify-content:space-between; gap:12px; padding:3px 0; }
+.atb-delta-row > span:first-child { color:#68747b; }
+.atb-delta-nums { color:var(--admin-ink); font-variant-numeric:tabular-nums; }
+.atb-delta-nums i { margin:0 3px; color:var(--admin-muted); font-style:normal; }
+.atb-delta-nums b { margin-left:7px; font-variant-numeric:tabular-nums; }
+.atb-delta-only { color:var(--admin-muted); }
+.atb-up { color:var(--admin-green); }
+.atb-down { color:var(--admin-red); }
+.atb-flat { color:var(--admin-muted); }
+.atb-pending { margin-top:10px; padding-top:10px; border-top:1px solid var(--admin-line); color:var(--admin-muted); line-height:1.6; }
+.atb-excluded { margin-top:9px; color:var(--admin-muted); }
+.atb-excluded summary { cursor:pointer; }
+.atb-excluded ul { margin:6px 0 0; padding-left:18px; line-height:1.7; }
+.atb-note { margin:12px 0 0; padding-top:11px; border-top:1px solid var(--admin-line); color:var(--admin-muted); font-size:11px; line-height:1.7; }
+.atb-note code { padding:1px 5px; border-radius:4px; background:#eef1f2; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; }
+.atb-note b { color:var(--admin-ink); }
+
+/* 覆核狀態分頁：待覆核／已送訓／已退回。用分頁而不是勾選框，是因為這三堆的
+   意義不同——待覆核是待辦，已送訓是已經變成訓練標籤，已退回的影像已經刪掉了。 */
+/* ── 推薦文案（契約 2026-08-v2 §4.3）─────────────────────────────
+   systemLabel 一律「根據系統演算法推薦」；matchPercent 緊接著標示「推薦匹配度」，
+   少了那四個字，95% MATCH 會被讀成「95% 準確」。 */
+.rec-sys { margin-top:8px; color:var(--mid); font-size:10.5px; letter-spacing:.06em; }
+.rec-match { display:flex; align-items:baseline; gap:6px; margin-top:2px; }
+.rec-match b { color:var(--gold-deep); font-size:14px; font-weight:600; letter-spacing:.04em; }
+.rec-match small { color:var(--mid); font-size:10px; }
+.rec-headline { margin-top:6px; color:var(--ink-soft); font-size:12.5px; line-height:1.6; }
+.rec-traits { display:flex; flex-wrap:wrap; gap:5px; margin-top:7px; }
+.rec-traits span { padding:2px 8px; border:1px solid var(--line-gold); border-radius:999px;
+    color:var(--mid); font-size:10.5px; }
+.rec-detail { margin-top:14px; padding-top:12px; border-top:1px solid var(--line-gold); }
+.rec-summary { margin:0; color:var(--ink-soft); font-size:13.5px; line-height:1.8; }
+.rec-reasons { margin:10px 0 0; padding-left:18px; color:var(--mid); font-size:12.5px; line-height:1.8; }
+.rec-disclaimer { margin:12px 0 0; color:var(--mid); font-size:11px; line-height:1.7; }
+.pd-source { display:inline-block; margin-top:14px; color:var(--gold-deep); font-size:12.5px; }
+
+/* ── 粉底相鄰色號（契約 §5）──────────────────────────────────────
+   三格橫排：淺 / 主推薦 / 深。lighter 或 darker 是 null 時那一格不會被畫出來，
+   版面用 space-between 撐開，缺一格不會歪掉。 */
+.shade-rec { margin:34px 0 0; }
+.sr-row { display:flex; flex-wrap:wrap; gap:12px; margin-top:14px; }
+.sr-card { flex:1 1 140px; display:flex; flex-direction:column; gap:5px; align-items:flex-start;
+    padding:14px 16px; border:1px solid var(--line-gold); border-radius:10px;
+    background:var(--white); cursor:pointer; text-align:left; font:inherit; }
+.sr-card:hover { border-color:var(--gold-deep); }
+.sr-card:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; }
+.sr-anchor { border-color:var(--gold-deep); box-shadow:0 0 0 1px var(--gold-deep) inset; }
+.sr-label { color:var(--mid); font-size:10.5px; letter-spacing:.08em; }
+.sr-code { color:var(--ink-soft); font-size:18px; font-weight:600; }
+.sr-match { color:var(--gold-deep); font-size:11px; }
+.sr-disclaimer { margin:12px 0 0; color:var(--mid); font-size:11px; line-height:1.7; }
+
+.sr-overlay { position:fixed; inset:0; z-index:130; display:flex; align-items:center;
+    justify-content:center; padding:20px; background:rgba(60,44,46,.44); }
+.sr-dialog { position:relative; width:min(400px,100%); max-height:90vh; overflow:auto;
+    padding:26px 24px; border-radius:14px; background:var(--white); text-align:center; }
+.sr-close { position:absolute; top:10px; right:12px; border:0; background:none;
+    color:var(--mid); font-size:22px; line-height:1; cursor:pointer; }
+.sr-tag { color:var(--gold-deep); font-size:11px; letter-spacing:.1em; }
+.sr-dialog h3 { margin:6px 0 2px; font-size:16px; color:var(--ink-soft); }
+.sr-brand { color:var(--mid); font-size:12px; }
+.sr-codebig { margin:10px 0 4px; font-size:26px; font-weight:600; color:var(--ink-soft); }
+.sr-dialog .rec-match { justify-content:center; }
+.sr-img { display:block; width:150px; max-width:100%; margin:14px auto 0; border-radius:8px; }
+.sr-desc { margin:14px 0 0; color:var(--ink-soft); font-size:13px; line-height:1.8; }
+.sr-go { margin-top:16px; }
+
+/* 購物車裡已下架的商品。留著讓使用者自己移除，但不能結帳、不能加減數量。 */
+.cart-item.is-gone { opacity:.66; }
+.cart-gone-thumb { display:grid; place-items:center; background:var(--paper);
+    color:#b6aca4; font-size:20px; border:1px dashed var(--line-gold); }
+.cart-item.is-gone .cart-qty button { padding:4px 10px; font-size:11.5px; }
+.cart-gone-note { padding:10px 18px; color:var(--mid); font-size:11.5px; line-height:1.7;
+    border-top:1px solid var(--line-gold); }
+
+/* 已下架的收藏。灰階、不可點，但「移除收藏」的愛心留著——
+   使用者要能自己清掉，那是她的資料。 */
+.prod-card.is-gone { opacity:.62; cursor:default; }
+.prod-card.is-gone .pc-imgwrap {
+    display:grid; place-items:center; min-height:150px;
+    background:repeating-linear-gradient(45deg, #f2f0ee 0 10px, #eceae7 10px 20px);
+}
+.prod-card.is-gone .pc-gone-mark { font-size:26px; color:#b6aca4; }
+.prod-card.is-gone .pc-name { color:var(--mid); }
+.prod-card.is-gone .pc-cat { color:#b6aca4; letter-spacing:.08em; }
+
+/* 卡片上的兩條結果痕跡：進了哪一批訓練、影像什麼時候被刪掉。 */
+.fb-trace { margin:8px 0 0; padding:6px 9px; border-radius:6px; font-size:11px; }
+.fb-trace code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.fb-trace-run { background:#f2faf7; color:#4a6b5f; }
+.fb-trace-del { background:#f7f8f9; color:#78838b; }
+
+/* 訓練機心跳。綠點＝在線、灰點＝沒開。這一行是「為什麼還沒開始」的答案。 */
+.atb-worker { display:flex; align-items:center; gap:7px; padding:7px 10px; border-radius:6px; background:#f6f8f9; color:#68747b; font-size:11px; }
+.atb-worker i { width:7px; height:7px; border-radius:50%; background:#c3cbd0; }
+.atb-worker-on i { background:var(--admin-green); }
+.atb-worker-on { color:#4a6b5f; }
+
+/* 送訓進度對話框。訓練在另一台機器上、要好幾分鐘，HTTP 回應等不了，
+   所以按鈕只能回「已登記」，結論靠這個框輪詢出來。 */
+.tp-overlay { position:fixed; inset:0; z-index:120; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(24,32,38,.42); }
+.tp-dialog { width:min(460px,100%); border-radius:12px; background:#fff; box-shadow:0 18px 48px rgba(20,28,34,.24); overflow:hidden; }
+.tp-head { display:flex; align-items:center; justify-content:space-between; padding:14px 16px 12px; border-bottom:1px solid var(--admin-line); }
+.tp-head h3 { margin:0; color:var(--admin-ink); font-size:14px; font-weight:600; }
+.tp-close { border:0; background:none; color:var(--admin-muted); font-size:20px; line-height:1; cursor:pointer; }
+.tp-body { padding:16px; }
+.tp-line { color:var(--admin-ink); font-size:13px; font-weight:600; }
+.tp-good { color:var(--admin-green); }
+.tp-bad { color:var(--admin-red); }
+.tp-warn { color:#8a6d20; }
+.tp-busy::after { content:"…"; animation:tpDots 1.2s steps(4,end) infinite; }
+@keyframes tpDots { 0% { opacity:.3; } 50% { opacity:1; } 100% { opacity:.3; } }
+.tp-hint { margin-top:8px; color:var(--admin-muted); font-size:11.5px; line-height:1.7; }
+.tp-hint b { color:var(--admin-ink); }
+.tp-hint code { padding:1px 5px; border-radius:4px; background:#eef1f2; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; }
+.tp-delta { margin-top:12px; padding-top:11px; border-top:1px solid var(--admin-line); font-size:11.5px; }
+.tp-error { margin:10px 0 0; padding:10px; border-radius:6px; background:#fff6f6; color:#8c4a4d; font-size:11px; line-height:1.6; white-space:pre-wrap; word-break:break-word; max-height:180px; overflow:auto; }
+.tp-foot { padding:10px 16px; border-top:1px solid var(--admin-line); background:#fbfcfc; color:var(--admin-muted); font-size:10.5px; }
+.tp-foot code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+
+.admin-feedback-tabs { display:flex; gap:4px; margin:0 0 12px; border-bottom:1px solid var(--admin-line); }
+.admin-feedback-tab { position:relative; padding:8px 14px; border:0; background:none; color:var(--admin-muted); font:600 12px/1 "Noto Sans TC",sans-serif; cursor:pointer; }
+.admin-feedback-tab[aria-selected="true"] { color:var(--admin-ink); }
+.admin-feedback-tab[aria-selected="true"]::after { content:""; position:absolute; left:10px; right:10px; bottom:-1px; height:2px; background:var(--admin-ink); }
+.admin-feedback-tab .atb-count { margin-left:6px; padding:1px 6px; border-radius:999px; background:#eef1f2; color:#68747b; font-size:10.5px; font-weight:600; }
+.admin-feedback-filter {
+    display:flex; align-items:center; gap:6px; color:var(--admin-muted); font-size:12px; cursor:pointer;
+}
+.admin-table td.admin-empty { padding:34px 16px; color:#8a949b; text-align:center; font-size:12.5px; }
 .admin-user b,.admin-user span { display:block; }
 .admin-user b { color:var(--admin-ink); font-size:13px; font-weight:600; }
 .admin-user span { margin-top:4px; color:#78838b; font-size:11px; }
@@ -1607,6 +1901,40 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .rec-ev .ev-item { display:flex; justify-content:space-between; gap:8px; font-size:11.5px;
     color:var(--mid); font-family:var(--cjk); }
 .rec-ev .ev-v { font-variant-numeric:tabular-nums; color:var(--lt); }
+
+/* 推薦結果的價格／品牌篩選。
+   說明文字比篩選鈕更重要——使用者必須知道這是在「這批推薦」裡篩，
+   不是搜尋全庫，否則篩到空的時候會誤以為平台沒有那個價位的商品。 */
+.rec-filter { margin:0 0 20px; display:flex; flex-direction:column; gap:9px; }
+.rf-note { font-family:var(--cjk); font-size:12.5px; color:var(--mid); letter-spacing:.05em; }
+.rf-hint { color:var(--lt); font-size:11.5px; }
+.rf-row { display:flex; flex-wrap:wrap; gap:7px; }
+.rf-chip { border:1px solid var(--line-gold); background:transparent; color:var(--mid);
+    font-family:var(--cjk); font-size:11.5px; letter-spacing:.05em; padding:5px 12px;
+    border-radius:999px; cursor:pointer; transition:background .18s ease, color .18s ease; }
+.rf-chip:hover { background:var(--glass); }
+.rf-chip.active { background:var(--gold-dim); color:var(--paper); border-color:var(--gold-dim); }
+/* 品牌後面的件數：讓使用者選之前就知道有幾件，不必試了才發現是空的 */
+.rf-chip .rf-n { margin-left:5px; opacity:.6; font-variant-numeric:tabular-nums; }
+.rf-empty { text-align:center; padding:34px 0 30px; color:var(--mid);
+    font-family:var(--cjk); font-size:14px; line-height:1.9; letter-spacing:.05em; }
+
+/* 色塊比對：你的顏色 vs 商品顏色。
+   讓使用者用眼睛判斷，而不是相信一個 0.66 的分數。色塊要夠大才看得出色差——
+   小於 16px 的圓點在膚色這種低彩度的顏色上幾乎分辨不出差異。 */
+.color-compare { margin:7px 0 2px; display:flex; flex-direction:column; gap:5px; }
+.cc-pair { display:flex; align-items:center; gap:8px; font-family:var(--cjk);
+    font-size:11.5px; color:var(--mid); letter-spacing:.04em; }
+.cc-item { display:inline-flex; align-items:center; gap:5px; }
+.cc-dot { width:18px; height:18px; border-radius:50%; display:inline-block;
+    border:1px solid var(--line-gold); box-shadow:inset 0 0 0 1px rgba(255,255,255,.35); }
+.cc-vs { color:var(--lt); font-size:10.5px; }
+.cc-warn { font-size:11px; color:var(--danger); font-family:var(--cjk); line-height:1.5; }
+
+/* 詳情頁空間大，色塊放大一點 */
+.pd-info .color-compare { margin-top:14px; }
+.pd-info .cc-pair { font-size:13px; }
+.pd-info .cc-dot { width:26px; height:26px; }
 
 @media (max-width:1100px) {
     .prod-grid { grid-template-columns:repeat(3,1fr); }
@@ -2057,7 +2385,10 @@ body {
 .glass-alert.error .ga-mark { color:var(--danger); font-style:normal; font-weight:500;
     background:var(--btn-glass); }
 .glass-alert.success .ga-mark { color:var(--success); background:var(--btn-glass); }
-.ga-msg { font-family:var(--cjk); font-size:16px; font-weight:400; line-height:1.7; letter-spacing:.02em; color:var(--ink-soft); margin-bottom:26px; }
+/* pre-line：訊息是用 textContent 塞進去的，沒有這個 \n 會被摺成一行。
+   刪除確認要分行列出「會影響幾筆收藏」，擠成一段就沒有人會讀。
+   用 pre-line 而不是 pre：多餘的縮排仍然會被收掉，只有換行保留。 */
+.ga-msg { font-family:var(--cjk); font-size:16px; font-weight:400; line-height:1.7; letter-spacing:.02em; color:var(--ink-soft); margin-bottom:26px; white-space:pre-line; }
 .ga-ok { min-width:132px; }
 
 /* —— 雙鈕對話框 / 改密碼 / 訪客提示 —— */
@@ -2615,6 +2946,10 @@ body.admin-mode .main-content,
     --admin-muted:var(--mid);
     --admin-line:var(--line-gold);
     --admin-soft:var(--paper);
+    /* 浮起那一層的面。跟著主題走，不要在元件裡寫死 #fff——寫死的話玫瑰米白配色
+       底下會出現一塊冷白，那一塊會看起來像沒套到樣式。 */
+    --admin-surface:var(--white);
+    --admin-shade:38,26,28;
     --admin-green:var(--gold-deep);
     --admin-amber:var(--terra-deep);
     --admin-red:var(--danger);
@@ -2666,33 +3001,6 @@ body.admin-mode .main-content,
 .admin-fail.warn { border-color:rgba(176,69,63,.38); background:rgba(240,205,201,.4); color:var(--danger); }
 
 /* ═══════════════ 後台專題展示（AI 工作階段資料流向） ═══════════════ */
-.admin-demo { margin:0; padding:0; border:0; border-radius:0; background:transparent; color:var(--ink-soft); font-family:"Noto Sans TC",Arial,sans-serif; box-shadow:none; }
-.admin-demo[hidden] { display:none !important; }
-.admin-demo-heading,.admin-demo-footer { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
-.admin-demo-meta { min-height:32px; display:flex; align-items:center; justify-content:space-between; gap:18px; margin-bottom:12px; }
-.admin-demo-meta p { margin:0; color:var(--mid); font-size:12px; line-height:1.6; }
-.admin-demo-heading span { color:var(--gold-deep); font-size:11px; font-weight:600; }
-.admin-demo-heading h2 { margin:7px 0 0; font-size:21px; font-weight:600; }
-.admin-demo-heading p { margin:8px 0 0; color:var(--mid); font-size:12px; line-height:1.7; }
-.admin-demo-state { min-height:32px; display:flex; align-items:center; gap:8px; padding:0 11px; border:1px solid rgba(164,103,90,.35); border-radius:999px; background:rgba(232,196,180,.25); white-space:nowrap; }
-.admin-demo-state i { width:7px; height:7px; border-radius:50%; background:var(--gold-deep); }
-.admin-demo-state span { color:var(--gold-deep); }
-.admin-demo-steps { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); margin-top:0; border:0; border-bottom:1px solid var(--line-gold); border-radius:0; overflow:visible; }
-.admin-demo-steps button { min-height:54px; display:flex; align-items:center; justify-content:center; gap:9px; border:0; border-bottom:3px solid transparent; background:transparent; color:var(--mid); cursor:pointer; }
-.admin-demo-steps button b { font-size:10px; font-weight:600; }
-.admin-demo-steps button span { font-size:12px; font-weight:500; }
-.admin-demo-steps button:hover { background:var(--glass); color:var(--ink-soft); }
-.admin-demo-steps button.active { border-bottom-color:var(--gold-deep); background:transparent; color:var(--gold-deep); }
-.admin-demo-progress { margin-top:20px; }
-.admin-demo-progress > div:first-child { display:flex; justify-content:space-between; gap:12px; font-size:13px; }
-.admin-demo-progress-track { height:8px; margin-top:9px; border-radius:999px; background:var(--ivory-2); overflow:hidden; }
-.admin-demo-progress-track i { display:block; width:10%; height:100%; border-radius:inherit; background:var(--terra-grad); transition:width .25s ease; }
-.admin-demo-progress p { margin:8px 0 0; color:var(--mid); font-size:12px; }
-.admin-demo-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-top:20px; }
-.admin-demo-grid article { min-width:0; border:1px solid var(--line-gold); border-radius:7px; overflow:hidden; background:var(--white); }
-.admin-demo-grid article > span { display:block; padding:11px 14px; border-bottom:1px solid var(--line-gold); background:var(--ivory); color:var(--ink-soft); font-size:12px; font-weight:600; }
-.admin-demo-grid pre { min-height:190px; margin:0; padding:14px; overflow:auto; background:var(--white); color:var(--ink-soft); font:400 12px/1.65 Consolas,monospace; white-space:pre-wrap; word-break:break-word; }
-.admin-demo-footer { align-items:center; margin-top:16px; color:var(--mid); font-size:11px; }
 @media (max-width:900px) { .admin-demo-steps { grid-template-columns:repeat(5,minmax(112px,1fr)); overflow-x:auto; overflow-y:hidden; } .admin-demo-grid { grid-template-columns:1fr; } }
 @media (max-width:600px) { .admin-demo-meta,.admin-demo-heading,.admin-demo-footer { align-items:flex-start; flex-direction:column; } }
 /* ═══════════════ 舊版功能上的輕量動態與選妝容視窗 ═══════════════ */
@@ -2910,3 +3218,195 @@ select:focus, .af-select:focus { outline:none; border-color:var(--gold); }
     color:var(--gold-deep); background:rgba(201,169,110,0.08);
     border-left:2px solid var(--gold);
 }
+
+/* ═══════════════ 五官圖鑑（浮層） ═══════════════
+   分析結果那六格點開來看分類說明。做成浮層而不是就地展開，是因為這頁最後要裝進
+   手機：inline 展開會把結果區推長一大截，使用者得捲很久才回得到原本的位置。
+   手機從底部滑上來、桌機置中，同一份 DOM 靠 media query 切。 */
+.fa-layer { position:fixed; inset:0; z-index:180; display:flex; align-items:flex-end; justify-content:center; }
+.fa-layer[hidden] { display:none; }
+.fa-scrim {
+    position:absolute; inset:0; background:rgba(44,32,36,0.42);
+    backdrop-filter:blur(3px); opacity:0; transition:opacity .26s var(--ease);
+}
+.fa-layer.fa-on .fa-scrim { opacity:1; }
+.fa-sheet {
+    position:relative; width:100%; max-width:520px; max-height:86vh; overflow-y:auto;
+    background:var(--paper); border:1px solid var(--line-gold); border-bottom:0;
+    border-radius:16px 16px 0 0; padding:14px 20px 26px;
+    box-shadow:0 -12px 40px rgba(90,52,48,0.22);
+    transform:translateY(14px); opacity:0; transition:transform .3s var(--ease), opacity .26s var(--ease);
+    -webkit-overflow-scrolling:touch;
+}
+.fa-layer.fa-on .fa-sheet { transform:none; opacity:1; }
+/* 手機上那條抓握提示：告訴人這是可以往下收的面板 */
+.fa-grip { width:38px; height:4px; border-radius:999px; background:var(--line-gold); margin:0 auto 14px; }
+.fa-x {
+    position:absolute; right:12px; top:10px; width:32px; height:32px; line-height:1;
+    border:0; background:transparent; color:var(--lt); font-size:22px; cursor:pointer; border-radius:50%;
+    transition:color .2s, background .2s;
+}
+.fa-x:hover { color:var(--ink); background:var(--ivory-2); }
+.fa-x:focus-visible { outline:2px solid var(--gold); outline-offset:2px; }
+
+.fa-head {
+    font-family:var(--sans); font-size:9.5px; letter-spacing:.3em; text-transform:uppercase;
+    color:var(--lt); margin-bottom:14px; padding-right:30px;
+}
+.fa-kinds { display:grid; grid-template-columns:repeat(auto-fit,minmax(84px,1fr)); gap:8px; }
+.fa-kind {
+    background:var(--white); border:1px solid var(--line-gold); padding:10px 6px 9px;
+    cursor:pointer; font:inherit; color:inherit; text-align:center;
+    transition:border-color .25s var(--ease), transform .25s var(--ease), background .25s var(--ease);
+}
+.fa-kind:hover { border-color:var(--gold); transform:translateY(-2px); }
+.fa-kind:focus-visible { outline:2px solid var(--gold); outline-offset:2px; }
+.fa-kind[data-cur="1"] { border-color:var(--gold-deep); background:var(--blush-panel); }
+.fa-thumb { width:100%; aspect-ratio:4/3; display:block; margin-bottom:6px; object-fit:contain; }
+.fa-nothumb { background:var(--ivory-2); }
+.fa-kn { font-size:13px; font-weight:500; }
+.fa-ktag {
+    display:block; font-family:var(--sans); font-size:8px; letter-spacing:.14em;
+    color:var(--gold-deep); margin-top:2px; min-height:11px;
+}
+.fa-detail { margin-top:16px; padding-top:15px; border-top:1px solid var(--line-gold); }
+.fa-detail h3 { margin:0 0 5px; font-family:var(--cjk); font-size:16px; font-weight:500; }
+.fa-how { margin:0 0 9px; font-size:13.5px; color:var(--ink-soft); line-height:1.8; }
+.fa-look { margin:0; font-size:13px; color:var(--mid); line-height:1.8; }
+.fa-look b {
+    display:block; margin-bottom:2px; font-family:var(--sans); font-size:9px;
+    letter-spacing:.2em; text-transform:uppercase; color:var(--gold-deep); font-weight:500;
+}
+.fa-acts { display:flex; gap:8px; flex-wrap:wrap; margin-top:15px; }
+.fa-act {
+    font:inherit; font-size:12.5px; padding:9px 18px; cursor:pointer;
+    border:1px solid var(--gold); background:var(--gold); color:var(--white);
+    border-radius:999px; transition:background .2s, opacity .2s;
+}
+.fa-act:hover:not([disabled]) { background:var(--gold-deep); }
+.fa-act:focus-visible { outline:2px solid var(--gold); outline-offset:2px; }
+.fa-act[disabled] { opacity:.4; cursor:default; background:transparent; color:var(--mid); }
+.fa-toast { font-size:12px; color:var(--gold-deep); margin-top:10px; min-height:18px; line-height:1.7; }
+
+.fa-why { margin-top:14px; border-top:1px solid var(--line-gold); padding-top:12px; }
+.fa-why summary {
+    cursor:pointer; font-family:var(--sans); font-size:9.5px; letter-spacing:.2em;
+    text-transform:uppercase; color:var(--lt); list-style:none;
+}
+.fa-why summary::-webkit-details-marker { display:none; }
+.fa-why summary:hover { color:var(--gold-deep); }
+.fa-why-body { padding-top:11px; font-size:12.5px; color:var(--mid); line-height:1.8; }
+.fa-why-body p { margin:0 0 8px; }
+.fa-dist-row { display:grid; grid-template-columns:48px 1fr; gap:9px; align-items:center; margin-bottom:4px; }
+.fa-dl { font-size:11px; color:var(--ink-soft); text-align:right; }
+.fa-dist-bar { position:relative; height:14px; background:var(--ivory-2); }
+.fa-dist-span { position:absolute; top:3px; height:8px; background:var(--blush); opacity:.5; }
+.fa-dist-med { position:absolute; top:0; width:2px; height:14px; background:var(--blush-deep); }
+.fa-note { font-size:11px; color:var(--lt); margin-top:7px; }
+
+/* 結果格變成可點：只加游標與 hover，padding 與字級都不動 */
+.result-cell[data-fa-field] { cursor:pointer; transition:background .3s var(--ease); }
+.result-cell[data-fa-field]:hover { background:var(--white); }
+.result-cell[data-fa-field]:focus-visible { outline:2px solid var(--gold); outline-offset:-2px; }
+.result-cell[data-fa-field] .rmore {
+    position:absolute; right:14px; top:18px; font-family:var(--sans); font-size:8.5px;
+    letter-spacing:.16em; color:var(--gold); opacity:0; transition:opacity .3s var(--ease);
+}
+.result-cell[data-fa-field] { position:relative; }
+.result-cell[data-fa-field]:hover .rmore { opacity:1; }
+/* 觸控裝置沒有 hover，提示要一直看得到，否則沒人知道可以點 */
+@media (hover:none) { .result-cell[data-fa-field] .rmore { opacity:.75; } }
+
+/* 桌機改成置中的視窗 */
+@media (min-width:700px) {
+    .fa-layer { align-items:center; }
+    .fa-sheet {
+        border-radius:4px; border-bottom:1px solid var(--line-gold);
+        padding:22px 26px 26px; max-height:82vh;
+        box-shadow:0 24px 60px rgba(90,52,48,0.28);
+        transform:translateY(10px) scale(.985);
+    }
+    .fa-layer.fa-on .fa-sheet { transform:none; }
+    .fa-grip { display:none; }
+}
+@media (prefers-reduced-motion:reduce) {
+    .fa-scrim, .fa-sheet { transition:none; }
+}
+
+/* ═══════════════ 影像提供同意 ═══════════════
+   規則要在勾選的當下就完整攤開，不是等使用者改了臉型才補一句。
+   2026-08-24 改：GCS 上 152 張樣本裡有 43 張是完整正面照（臉型與側臉鼻型存整張圖，
+   其餘存部位裁切），那是 43 個認得出來的人，值得把界線寫在畫面上而不是條款裡。 */
+.af-consent {
+    margin-top:14px; padding:16px 18px;
+    border:1px solid var(--line-gold); background:rgba(255,255,255,0.45);
+}
+.af-consent-title {
+    font-family:var(--sans); font-size:9.5px; letter-spacing:.24em; text-transform:uppercase;
+    color:var(--gold-deep); margin-bottom:9px;
+}
+.af-consent-lead { margin:0 0 10px; font-size:13px; color:var(--ink-soft); line-height:1.75; }
+.af-consent-list { margin:0 0 10px; padding:0; list-style:none; display:grid; gap:7px; }
+.af-consent-list li {
+    font-size:12.5px; color:var(--mid); line-height:1.7;
+    padding:8px 11px; border-left:2px solid var(--line-gold); background:rgba(255,255,255,0.5);
+}
+/* 這次真的會被存到的那幾條要看得出來，否則整段會被當成一般條款略過 */
+.af-consent-list li.hit { border-left-color:var(--gold); background:rgba(201,169,110,0.10); }
+.af-consent-list li b { color:var(--ink); font-weight:600; margin-right:8px; }
+.af-scope {
+    display:inline-block; padding:1px 8px; border-radius:999px; margin-right:8px;
+    font-family:var(--sans); font-size:10px; letter-spacing:.06em;
+}
+/* 整張照片與部位裁切是完全不同的兩件事，顏色要分開 */
+.af-scope.whole { background:rgba(176,69,63,0.12); color:var(--danger); }
+.af-scope.crop { background:rgba(201,169,110,0.14); color:var(--gold-deep); }
+.af-consent-warn {
+    margin:0 0 11px; padding:9px 12px; font-size:12.5px; line-height:1.75;
+    color:var(--danger); background:rgba(176,69,63,0.07); border-left:2px solid var(--danger);
+}
+.af-consent-warn strong { font-weight:600; }
+.af-consent-check {
+    display:flex; align-items:flex-start; gap:9px; cursor:pointer;
+    font-size:13.5px; color:var(--ink); padding:6px 0;
+}
+.af-consent-check input { margin-top:4px; flex-shrink:0; }
+.af-consent-note { margin:6px 0 0; font-size:11.5px; color:var(--lt); line-height:1.8; }
+.af-consent-note strong { color:var(--mid); font-weight:600; }
+
+/* 逐部位覆核：每一列各自決定。整筆一個狀態等於逼人在「全收一個錯的」與
+   「連對的一起丟掉」之間選，而管理員很可能覺得嘴型改得對、眼型改錯了。 */
+.fb-change { justify-content:flex-start; }
+.fb-change .fb-one { margin-left:auto; display:flex; gap:5px; flex-shrink:0; }
+.fb-mini {
+    padding:3px 9px; border-radius:5px; border:1px solid var(--line-gold); background:var(--white);
+    color:var(--admin-muted); font-size:11px; cursor:pointer; transition:border-color .15s,color .15s;
+}
+.fb-mini:hover:not(:disabled) { border-color:var(--gold); }
+.fb-mini:disabled { opacity:.4; cursor:default; }
+.fb-mini.fb-accept:hover:not(:disabled) { border-color:var(--admin-green); color:var(--admin-green); }
+.fb-mini.fb-reject:hover:not(:disabled) { border-color:var(--danger); color:var(--danger); }
+/* 已經決定過的那一列要看得出來，否則覆核到一半分不清哪些看過了 */
+.fb-change.decided { padding-left:8px; border-left:2px solid transparent; }
+.fb-change.decided.accepted { border-left-color:var(--admin-green); background:rgba(192,137,122,.10); }
+.fb-change.decided.rejected { border-left-color:var(--line-gold); background:var(--paper); opacity:.72; }
+.fb-change.decided.corrected { border-left-color:var(--gold-deep); background:rgba(192,137,122,.16); }
+/* 進度：3/5 這樣，一眼看得出這張卡還有沒有沒決定的 */
+.fb-review-state em { font-style:normal; color:var(--admin-muted); font-weight:400; font-size:11px; }
+
+/* 改判下拉。它是 <select> 不是 <button>，只套 .fb-mini 的話瀏覽器會用自己的
+   預設外觀（箭頭、內距、字級都不一樣），跟旁邊兩顆按鈕擺在一起會很突兀。 */
+select.fb-fix {
+    appearance:none; -webkit-appearance:none;
+    padding:3px 22px 3px 9px; font-family:inherit; line-height:1.5;
+    background-image:linear-gradient(45deg,transparent 50%,var(--admin-muted) 50%),
+                     linear-gradient(135deg,var(--admin-muted) 50%,transparent 50%);
+    background-position:calc(100% - 11px) center, calc(100% - 7px) center;
+    background-size:4px 4px, 4px 4px;
+    background-repeat:no-repeat;
+    color:var(--admin-muted); cursor:pointer;
+}
+select.fb-fix:hover:not(:disabled) { border-color:var(--gold-deep); color:var(--gold-deep); }
+select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset:1px; }
+/* 已經改判過的那一列，下拉要看得出來停在管理員給的答案上 */
+.fb-change.decided.corrected select.fb-fix { border-color:var(--gold-deep); color:var(--gold-deep); font-weight:600; }

@@ -953,6 +953,78 @@ const Api = {
         return raw;
     },
 
+    // 商品圖不在我們家：來源是品牌官網（sdcdn.io 63%、za-cosmetics 19%、
+    // yslbeauty 13%、laneige 5%）。它們給的是商品頁用的原圖，而清單卡片只顯示
+    // 約 200px——2026-08-25 實測一頁 20 張共 5.2 MB、平均 262 KB 一張，
+    // 其中 sdcdn.io 單張要 1.2 ~ 5.4 秒。
+    //
+    // 三個來源自己就支援縮圖參數，換掉即可（同一張 sdcdn.io 圖：
+    // width=1080 是 233 KB、width=320 只有 23 KB）。za-cosmetics 是 IIS 靜態檔，
+    // 沒有轉檔參數可用，只能原樣送出——它本來就是最快的一個（約 300ms）。
+    //
+    // 取 400 而不是 200：高解析度螢幕會用 2 倍像素去畫那個 200px 的格子，
+    // 給 200 會糊掉。清單用縮圖，原圖留在 imgFull 給詳情頁放大用。
+    _thumbUrl(raw, px = 400) {
+        const value = String(raw || '').trim();
+        // 相對路徑（本機 demo 圖）與 data: 進不了 URL()，也不需要縮圖。
+        if (!value || !/^https?:\/\//i.test(value)) return value;
+        let url;
+        try {
+            url = new URL(value);
+        } catch {
+            return value;
+        }
+        const host = url.hostname.toLowerCase();
+        const set = (pairs) => { Object.entries(pairs).forEach(([k, v]) => url.searchParams.set(k, v)); };
+        if (host === 'sdcdn.io' || host.endsWith('.sdcdn.io')) {
+            set({ width: px, height: px });
+        } else if (host.endsWith('laneige.com')) {
+            // Magento 的 media cache：canvas 要跟著改，否則它會把小圖再貼回大畫布。
+            set({ width: px, height: px, canvas: `${px}:${px}` });
+        } else if (url.pathname.includes('/dw/image/')) {
+            // Salesforce Commerce Cloud（YSL 等品牌都是這一套）用 sw/sh。
+            set({ sw: px, sh: px });
+        } else {
+            return value;
+        }
+        return url.toString();
+    },
+
+    // 粉底相鄰色階（契約 2026-08-v2 §5）。
+    //
+    // 兩種模式的**措辭不能互換**，這是規格裡講得最重的一條：
+    //   official_depth_index         品牌官方的由淺至深順序 → 可以說「淺一階／深一階」
+    //   lab_lightness_approximation  只是 L* 比較出來的近似 → 只能說「較明亮／較深的替代色」
+    //
+    // 說錯的後果很具體：使用者以為那是品牌真的相鄰的色號，照著去買會買錯。
+    // 所以標籤在這裡就依 method 決定，不讓畫面層自己拼——畫面層拼錯不會有人發現。
+    _normalizeShadeRecommendation(raw) {
+        if (!raw || typeof raw !== 'object') return null;
+        const method = String(raw.method || '').trim();
+        if (!method) return null;
+        const official = method === 'official_depth_index';
+        const pick = (node, fallbackLabel) => {
+            if (!node || typeof node !== 'object') return null;
+            return {
+                // 後端給了 label 就用它；沒給才用依 method 決定的預設。
+                label: String(node.label || fallbackLabel),
+                shadeCode: node.shadeCode ?? node.shade_code ?? '',
+                description: String(node.description || ''),
+                matchPercent: Number.isFinite(Number(node.matchPercent)) ? Number(node.matchPercent) : null,
+                product: node.product ? this._normalizeProduct(node.product) : null,
+            };
+        };
+        return {
+            method,
+            official,
+            seriesId: raw.seriesId ?? raw.series_id ?? null,
+            anchor: pick(raw.anchor, '主推薦色號'),
+            lighter: pick(raw.lighter, official ? '淺一階' : '較明亮的替代色'),
+            darker: pick(raw.darker, official ? '深一階' : '較深的替代色'),
+            disclaimer: String(raw.disclaimer || ''),
+        };
+    },
+
     _normalizeProduct(product) {
         if (!product || typeof product !== 'object') return null;
         const categoryMap = {
@@ -1026,7 +1098,10 @@ const Api = {
             name: product.name || '推薦商品',
             brand: product.brand || '',
             price,
-            img: product.imageUrl || product.image_url || product.image_src || product.img || product.image || '',
+            // img 是清單／卡片用的縮圖，imgFull 是原圖（詳情頁放大才需要）。
+            // 兩個都留著：只留縮圖會讓詳情頁變糊，只留原圖就是現在這個 5.2 MB。
+            img: this._thumbUrl(product.imageUrl || product.image_url || product.image_src || product.img || product.image || ''),
+            imgFull: product.imageUrl || product.image_url || product.image_src || product.img || product.image || '',
             desc: this._safeMatchReason(product) || product.description || product.desc || '',
             matchReason: this._safeMatchReason(product),
             score: product.score ?? null,
@@ -1086,6 +1161,14 @@ const Api = {
             // 2026-08-23 補。這些欄位後端一直都有回，但先前在這裡就被丟掉了，
             // 於是畫面上只剩一行 matchReason，使用者看不到「為什麼推薦給我」。
             // 契約與設計文件 §19.10 要求的「查看推薦依據」需要的就是這些。
+            // 推薦端整理好的使用者文案（契約 2026-08-v2 §4.3）。
+            //
+            // 這一包**優先於**前端自己拼的說明：技術分數（matchScore、scoreBreakdown、
+            // ΔE）不該由前端翻譯成人話——同一個數字前後端各講一套，使用者看到的
+            // 就會是兩種說法。後端已經決定好措辭，前端照著顯示。
+            recommendationPresentation: (product.recommendationPresentation
+                && typeof product.recommendationPresentation === 'object')
+                ? product.recommendationPresentation : null,
             matchScore: Number.isFinite(Number(product.matchScore ?? product.score))
                 ? Number(product.matchScore ?? product.score) : null,
             scoreBreakdown: (product.scoreBreakdown && typeof product.scoreBreakdown === 'object')
@@ -1192,10 +1275,22 @@ const Api = {
     },
     _productApiError(data, status) {
         const error = data?.detail?.error || data?.error || {};
+        // `field` 與 `allowed` 是 2026-08-26 商品後端新增的：錯誤直接指出是哪一個
+        // 欄位不合格、合法值有哪些。帶著它們，管理員自己就能修；只說「分類無效」
+        // 的錯誤，每一次都要回頭找工程師——我方就為了那一句話查了半天。
+        const field = typeof error.field === 'string' ? error.field
+            : (typeof error.details?.field === 'string' ? error.details.field : '');
+        const allowed = Array.isArray(error.allowed) ? error.allowed
+            : (Array.isArray(error.details?.allowed) ? error.details.allowed : []);
+        const base = error.message || data?.message || `HTTP ${status}`;
         return {
             status,
             code: error.code || `HTTP_${status}`,
-            error: error.message || data?.message || `HTTP ${status}`,
+            // 合法值直接接在訊息後面。使用者看到的是完整的一句話，
+            // 不必再點開什麼才知道該填什麼。
+            error: allowed.length ? `${base}：${allowed.join('、')}` : base,
+            field,
+            allowed,
             details: error.details || {},
             retryable: !!error.retryable
         };
@@ -1497,7 +1592,20 @@ const Api = {
             });
             if (!res.ok) return { ok: false, status: res.status, favorites: [] };
             const data = await res.json().catch(() => ({}));
-            return { ok: true, favorites: Array.isArray(data.favorites) ? data.favorites : [] };
+            const favorites = Array.isArray(data.favorites) ? data.favorites : [];
+            // 商品硬刪除之後，收藏那一列還在但商品沒了。資料庫端會把那種標成
+            // unavailable（見 docs/對外規格書/資料庫端/
+            // 給資料庫端_收藏與購物車標記已下架商品_2026-08-26.md）。
+            //
+            // **這個判斷只能由後端做。** 前端「查不到商品」有三種原因長得一模一樣：
+            // 商品被刪、商品清單還沒載完、商品清單某一頁抓失敗。前端自己猜的話，
+            // 只要有一頁沒抓到就會對使用者說「此商品已下架」——而商品好好的。
+            //
+            // 後端還沒上線這個欄位時，這裡會是空集合，畫面維持原本的行為。
+            Fav.setUnavailable(favorites
+                .filter(row => row && row.unavailable === true)
+                .map(row => `api-${String(row.item_type ?? row.itemType ?? '').trim()}-${row.item_id ?? row.itemId}`));
+            return { ok: true, favorites };
         } catch (_) {
             return { ok: false, favorites: [] };
         }
@@ -1517,7 +1625,20 @@ const Api = {
             });
             if (!res.ok) return { ok: false, status: res.status, items: [] };
             const data = await res.json().catch(() => ({}));
-            return { ok: true, items: Array.isArray(data.items) ? data.items : [] };
+            // 契約（2026-08-26）回應同時有 `items` 與舊的 `cart`，內容一樣。
+            // 兩個都認得：只讀其中一個的話，換成另一種格式的服務就整車不見。
+            const rows = Array.isArray(data.items) ? data.items
+                : (Array.isArray(data.cart) ? data.cart : []);
+            return {
+                ok: true,
+                items: rows.map(row => ({
+                    ...row,
+                    // 商品被硬刪除之後，購物車那一列還在但商品沒了。
+                    // **只信任 API 這個欄位**——前端自己「查不到商品」有三種原因
+                    //（已刪除／清單沒載完／某一頁抓失敗），猜錯就是對使用者說謊。
+                    unavailable: row?.unavailable === true,
+                })),
+            };
         } catch (_) {
             return { ok: false, items: [] };
         }
@@ -1873,80 +1994,6 @@ const Api = {
         });
     },
 
-    // 暫存商品審核：管理員透過 Gateway 審核爬蟲寫入的候選商品。
-    // 上游路徑集中在 Gateway 的 _STAGING_BASE，前端不需知道真實網址。
-    _stagingBase() { return `${gatewayService('admin-api')}/crawler-staging/products`; },
-
-    // 將暫存商品錯誤碼轉成使用者看得懂的訊息。
-    _stagingError(result) {
-        const known = {
-            STAGING_NOT_FOUND: '找不到這筆暫存商品，可能已被匯入或刪除。',
-            INVALID_STATUS_TRANSITION: '這筆的狀態已經變了，請重新整理後再試。',
-            ALREADY_IMPORTED: '這筆已經匯入過了。',
-            IMPORT_FAILED: '匯入失敗：' + (result?.error || '請稍後再試')
-        };
-        return known[result?.code] || result?.error || '操作失敗，請重新載入後再試';
-    },
-
-    async listStagingProducts({ status = 'pending', page = 1, pageSize = 20 } = {}) {
-        try {
-            const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-            if (status) query.set('status', status);
-            const res = await this._protectedFetch(`${this._stagingBase()}?${query}`, {
-                credentials: 'include', headers: this._adminProductHeaders(), cache: 'no-store'
-            });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) return { ok: false, items: [], ...this._productApiError(data, res.status) };
-            return {
-                ok: true,
-                items: Array.isArray(data.items) ? data.items : [],
-                total: Number(data.total) || 0,
-                page: Number(data.page) || page,
-                pageSize: Number(data.pageSize) || pageSize
-            };
-        } catch (err) {
-            return { ok: false, items: [], error: '連線失敗：' + err.message };
-        }
-    },
-
-    // status 只接受 approved / rejected；退回時建議帶 reason，會顯示在清單上。
-    async reviewStagingProduct(id, status, reason = '') {
-        const body = { status };
-        if (reason) body.reason = reason;
-        return this._protectedWrite(null, async () => {
-            try {
-                const res = await this._protectedFetch(`${this._stagingBase()}/${encodeURIComponent(id)}`, {
-                    method: 'PATCH',
-                    credentials: 'include',
-                    headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
-                    body: JSON.stringify(body)
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
-                return { ok: true, item: data.item || data };
-            } catch (err) {
-                return { ok: false, error: '連線失敗：' + err.message };
-            }
-        });
-    },
-
-    async importStagingProduct(id) {
-        return this._protectedWrite(null, async () => {
-            try {
-                const res = await this._protectedFetch(`${this._stagingBase()}/${encodeURIComponent(id)}/import`, {
-                    method: 'POST',
-                    credentials: 'include',
-                    headers: this._adminProductHeaders({ 'Content-Type': 'application/json' })
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
-                return { ok: true, item: data.item || data };
-            } catch (err) {
-                return { ok: false, error: '連線失敗：' + err.message };
-            }
-        });
-    },
-
     // 使用者對五官判斷做的修正，給管理端第二次人工檢查用。
     // 只有管理員讀得到（Gateway 端驗 admin claims + CSRF + actor 綁定）。
     // 讀不到時 Gateway 回 503 而不是空陣列——空陣列會被誤讀成「沒有人修正過」。
@@ -1960,6 +2007,104 @@ const Api = {
             const data = await res.json().catch(() => ({}));
             if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
             return { ok: true, items: Array.isArray(data.items) ? data.items : [] };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    // 管理員對一筆修正下判斷：accepted 進訓練集、rejected 不用，corrected 以 labels 指定新類別。
+    //
+    // 這條跟 fetchFaceFeedback 是一組的：光讀不寫的話，那個列表只能看，
+    // 重訓時仍然分不出哪些修正被認可過——使用者的誤點會跟正確的修正一起被學進去。
+    // 覆核一筆修正。可以整筆（decision 是字串），也可以逐部位
+    // （decision 是 {部位: 'accepted'|'rejected'|'corrected'}）——管理員很可能覺得
+    // 「嘴型改得對、眼型改錯了」，那就該只採用嘴型。
+    async reviewFaceFeedback(feedbackId, decision, note = '', labels = null) {
+        const baseUrl = gatewayService('admin-api');
+        if (!baseUrl) return { ok: false, error: 'admin-api 未設定' };
+        if (!feedbackId) return { ok: false, error: '缺少 feedbackId' };
+        const valid = v => v === 'accepted' || v === 'rejected' || v === 'corrected';
+        let body;
+        if (decision && typeof decision === 'object') {
+            const entries = Object.entries(decision);
+            if (!entries.length) return { ok: false, error: '沒有要送出的決定' };
+            if (!entries.every(([, v]) => valid(v))) {
+                return { ok: false, error: '決定只能是 accepted、rejected 或 corrected' };
+            }
+            body = { decisions: decision, note };
+            // corrected 一定要帶標籤，後端會擋沒有標籤的改判——
+            // 那種紀錄之後匯入時對不到任何東西。
+            if (labels && typeof labels === 'object') body.labels = labels;
+        } else {
+            if (!valid(decision)) return { ok: false, error: 'decision 只能是 accepted、rejected 或 corrected' };
+            body = { decision, note };
+        }
+        try {
+            const res = await this._protectedFetch(
+                `${baseUrl}/face-feedback/${encodeURIComponent(feedbackId)}/review`,
+                {
+                    method: 'PATCH',
+                    credentials: 'include',
+                    headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
+                    body: JSON.stringify(body),
+                });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
+            return { ok: true, reviewStatus: data.reviewStatus, reviewDecisions: data.reviewDecisions || {} };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    // 某一筆修正對應的樣本影像。點開那一筆才要——影像即使是 96×96 的 ROI，
+    // 108 筆一次全帶也是幾 MB，而覆核的人一次只看一筆。
+    async fetchFaceFeedbackSamples(feedbackId) {
+        const baseUrl = gatewayService('admin-api');
+        if (!baseUrl) return { ok: false, error: 'admin-api 未設定' };
+        if (!feedbackId) return { ok: false, error: '缺少 feedbackId' };
+        try {
+            const res = await this._protectedFetch(
+                `${baseUrl}/face-feedback/${encodeURIComponent(feedbackId)}/samples`,
+                { credentials: 'include', cache: 'no-store', headers: this._adminProductHeaders() });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
+            return { ok: true, samples: Array.isArray(data.samples) ? data.samples : [] };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    // 將管理員已採用的回饋登記成可追蹤的 ConvNeXt 訓練批次；實際訓練由後端腳本執行。
+    async queueFaceTraining(feedbackIds) {
+        const baseUrl = gatewayService('admin-api');
+        if (!baseUrl) return { ok: false, error: 'admin-api 未設定' };
+        if (!Array.isArray(feedbackIds) || !feedbackIds.length) {
+            return { ok: false, error: '請先選擇至少一筆已覆核資料' };
+        }
+        try {
+            const res = await this._protectedFetch(`${baseUrl}/face-training/runs`, {
+                method: 'POST', credentials: 'include',
+                headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ feedbackIds }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
+            return { ok: true, ...data };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    async fetchFaceTrainingRuns() {
+        const baseUrl = gatewayService('admin-api');
+        if (!baseUrl) return { ok: false, error: 'admin-api 未設定' };
+        try {
+            const res = await this._protectedFetch(`${baseUrl}/face-training/runs`, {
+                credentials: 'include', cache: 'no-store', headers: this._adminProductHeaders(),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
+            return { ok: true, ...data };
         } catch (err) {
             return { ok: false, error: '連線失敗：' + err.message };
         }
@@ -2015,10 +2160,38 @@ const Api = {
                 headers: this._adminProductHeaders()
             });
             const data = await res.json().catch(() => ({}));
+            // 重複刪除回 404 PRODUCT_NOT_FOUND，那是冪等成功不是故障：
+            // 東西已經不在了，正是我們要的結果。當成錯誤會讓管理員以為刪不掉，
+            // 然後再按一次——而每一次都會再收到同一個 404。
+            if (res.status === 404 && data?.error?.code === 'PRODUCT_NOT_FOUND') {
+                return { ok: true, alreadyDeleted: true, mode: 'hard' };
+            }
             if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
-            return { ok: true };
+            // 後端保證回 mode:"hard"。不是 hard 就代表它退回軟刪除了——
+            // 那時候**不能**從畫面上移除商品，否則畫面說刪掉了、資料庫裡還在，
+            // 而那正是這次改動要消滅的狀態。
+            if (data.mode !== 'hard') {
+                return { ok: false, error: '商品後端沒有確認硬刪除（mode 不是 hard），商品可能仍在資料庫裡' };
+            }
+            return { ok: true, ...data };
         } catch (err) {
             return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    // 刪除前先問：這一筆被幾個人收藏、放在幾個購物車裡。
+    // 拿不到就回 null——影響數字是「錦上添花」，不該因為它讀不到而擋住刪除。
+    async getProductDeleteImpact(rawId) {
+        const baseUrl = gatewayService('admin-api');
+        if (!baseUrl || rawId == null) return null;
+        try {
+            const res = await this._protectedFetch(
+                `${baseUrl}/products/${encodeURIComponent(rawId)}/delete-impact`,
+                { credentials: 'include', headers: this._adminProductHeaders() });
+            if (!res.ok) return null;
+            return await res.json().catch(() => null);
+        } catch {
+            return null;
         }
     },
 
@@ -2272,14 +2445,29 @@ const Api = {
                 });
             }
 
+            // 同一商品只留一筆。回應同時有 analysisPackage.recommendations.products
+            // 與最外層 products（後者是相容舊前端的重複欄位），萬一日後兩邊被合併，
+            // 沒有去重就會在畫面上出現兩張一模一樣的卡。
+            const seenIds = new Set();
+            const products = (Array.isArray(list) ? list : [])
+                .map(item => this._normalizeProduct(item))
+                .filter(p => {
+                    if (!p) return false;
+                    const key = String(p.rawId ?? p.id);
+                    if (seenIds.has(key)) return false;
+                    seenIds.add(key);
+                    return true;
+                });
+
             return {
                 ok: true,
                 ...data,
                 skinToneLabReliable,
                 fallbackReasons,
-                products: Array.isArray(list)
-                    ? list.map(item => this._normalizeProduct(item)).filter(Boolean)
-                    : []
+                // 粉底的相鄰色階（契約 §5）。null 代表沒有這個區塊，畫面要整個隱藏——
+                // 不要自己補商品湊出「淺一階／深一階」，那是編造的。
+                shadeRecommendation: this._normalizeShadeRecommendation(rec.shadeRecommendation),
+                products
             };
         } catch (_) {
             return { ok: false, products: [], code: 'NETWORK_ERROR', retryable: true };
@@ -3477,6 +3665,16 @@ const Fav = {
     // 只加不刪。本機可能有「遠端寫入失敗」的收藏（toggle 的遠端呼叫是盡力而為、
     // 錯誤被吞掉），砍掉就是靜默丟資料。代價是在 A 裝置取消過的收藏，B 裝置下次
     // 載入會復活一次；比起弄丟收藏，讓使用者再按一次取消是比較輕的錯。
+    // 後端說「這幾筆收藏的商品已經不在了」。只記在記憶體裡，不寫 localStorage——
+    // 它是伺服器當下的事實，不是這台裝置的設定；商品若重新上架，下次同步就會清掉。
+    _unavailable: new Set(),
+    setUnavailable(keys) {
+        this._unavailable = new Set((keys || []).filter(Boolean));
+    },
+    isUnavailable(id) {
+        return this._unavailable.has(String(id));
+    },
+
     mergeRemote(rows) {
         if (!Array.isArray(rows) || !rows.length) return 0;
         const arr = this.list();
@@ -3505,9 +3703,18 @@ const AnalysisFeedback = {
     // 不要自己重排——對照 log 與訓練資料都用那個順序。
     OPTIONS: Object.freeze({
         '臉型': ['圓形臉', '心形臉', '方形臉', '長形臉', '鵝蛋臉'],
-        '眉型': ['一字眉', '彎月眉', '落尾眉'],
+        // 2026-08-26：補上「挑眉」。它在 08-24 就進了模型（brow_shape_classes.json
+        // 是四類），但這裡沒跟著加，所以使用者連把判斷改成挑眉的選項都沒有——
+        // 模型最需要回饋的那一類，永遠收不到任何修正。順序照模型的類別順序。
+        '眉型': ['一字眉', '彎月眉', '挑眉', '落尾眉'],
         // 選項必須與模型分類表一致，避免送出後端不認得的標籤。
-        '眼型': ['細長眼', '桃杏眼', '圓眼', '鳳眼', '下垂眼'],
+        //
+        // 2026-08-24：這裡原本多一個「細長眼」。它在訓練端早就併進鳳眼了
+        // （見 prepare_roi_cache.LABEL_ALIASES），線上的 eye_shape_classes.json 是
+        // ['下垂眼','圓眼','桃杏眼','鳳眼'] 四類。使用者選到細長眼時，後端 validate()
+        // 會把**整包修正**退回，訊息正是「前端選項可能與模型分類表不同步」——
+        // 那條訊息就是為這種情況寫的，而它真的發生了。
+        '眼型': ['下垂眼', '圓眼', '桃杏眼', '鳳眼'],
         // 窄鼻已合併到標準鼻。
         '鼻型': ['寬鼻', '標準鼻'],
         // M 型唇已合併到花瓣唇。
@@ -3569,7 +3776,18 @@ const Cart = {
         if (row) row.qty = Math.max(0, row.qty + delta);
         this.save(items.filter(item => item.qty > 0));
     },
-    count() { return this.list().reduce((sum, item) => sum + item.qty, 0); },
+    // 整筆移除。已下架的商品只剩這個操作——加減數量沒有意義，商品不在了。
+    remove(id) {
+        this.save(this.list().filter(item => String(item.id) !== String(id)));
+    },
+    // 只數買得到的。已下架的商品仍留在購物車裡（那是使用者的資料），
+    // 但把它們算進「共 N 件」會讓徽章上的數字跟結帳時的數量對不起來，
+    // 而那個落差沒有任何地方解釋得了。
+    count() {
+        return this.list()
+            .filter(item => item.unavailable !== true)
+            .reduce((sum, item) => sum + item.qty, 0);
+    },
 
     // 只有登入的真實會員才同步；訪客沒有 email，維持純本機。
     _canSync() {
@@ -3591,8 +3809,14 @@ const Cart = {
     //   sum=true ：同商品數量相加（登入時合併訪客車，見 _mergeGuestOnce）。
     //   sum=false：以伺服器為準直接取代（重載／換裝置還原）。
     mergeServer(serverItems, sum) {
+        // unavailable 跟著 id 一起留在本機：畫面要據它停用結帳與商品操作。
+        // **不要把這些項目刪掉**——那是使用者自己放進去的東西，要不要移除由她決定。
         const server = (Array.isArray(serverItems) ? serverItems : [])
-            .map(it => ({ id: String(it.id), qty: Math.max(1, parseInt(it.qty, 10) || 1) }))
+            .map(it => ({
+                id: String(it.id ?? it.item_id ?? ''),
+                qty: Math.max(1, parseInt(it.qty, 10) || 1),
+                unavailable: it?.unavailable === true,
+            }))
             .filter(it => it.id);
         if (!sum) { this._setLocal(server); return server; }
         const byId = new Map(server.map(it => [it.id, { ...it }]));
@@ -3600,7 +3824,7 @@ const Cart = {
             const id = String(it.id);
             const qty = Math.max(1, parseInt(it.qty, 10) || 1);
             if (byId.has(id)) byId.get(id).qty += qty;
-            else byId.set(id, { id, qty });
+            else byId.set(id, { id, qty, unavailable: it?.unavailable === true });
         }
         const merged = [...byId.values()];
         this._setLocal(merged);

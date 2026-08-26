@@ -169,12 +169,17 @@ async function jobFailingWith(error) {
     apiSource.includes('分析紀錄空間不足，已保留最近'), true);
 
   console.log('\n-- 收藏：面板數量與實際顯示要對得起來 --');
-  check('算出查不到的差額',
-    routerSource.includes('const missingCount = Math.max(0, Fav.list().length - items.length)'), true);
-  check('把差額告訴使用者，不要靜默消失',
-    routerSource.includes('件收藏的商品目前查不到資料'), true);
-  check('載入中不要誤報找不到',
-    /missingCount && !Router\.generalProductLoading && syncState !== 'loading'/.test(routerSource), true);
+  // 這一節原本測的是「把差額用一行字告訴使用者」。2026-08-13 改掉了：會員中心與
+  // 收藏頁改成共用 resolveFavoriteProducts()，兩邊數的是同一份解析結果，數字不可能
+  // 再分岔——差額不必再向使用者解釋，只留著給排查用。
+  // 斷言跟著改成測現在的做法；繼續測舊做法的話，每次部署前都會看到三個假失敗，
+  // 久了就會連真的失敗一起略過。
+  check('收藏解析獨立成一支，兩邊共用',
+    /function resolveFavoriteProducts\(\)/.test(routerSource), true);
+  check('差額仍算得出來（排查用）',
+    /missingCount: Math\.max\(0, Fav\.list\(\)\.length - items\.length\)/.test(routerSource), true);
+  check('會員中心數的是解析後的件數，不是本機 id 數',
+    routerSource.includes('resolveFavoriteProducts().items.length'), true);
 
   console.log('\n-- 購物車：縮圖可點看詳情 --');
   check('縮圖是 button 不是 div',

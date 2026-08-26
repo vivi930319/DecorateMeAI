@@ -9,20 +9,14 @@
             <button class="active" type="button" data-admin-section="overview">
                 <span class="admin-nav-index">01</span><span>營運總覽</span>
             </button>
-            <button type="button" data-admin-section="demo">
-                <span class="admin-nav-index">02</span><span>專題展示</span>
-            </button>
             <button type="button" data-admin-section="members">
-                <span class="admin-nav-index">03</span><span>會員管理</span>
+                <span class="admin-nav-index">02</span><span>會員管理</span>
             </button>
             <button type="button" data-admin-section="products">
-                <span class="admin-nav-index">04</span><span>商品管理</span>
-            </button>
-            <button type="button" data-admin-section="crawler">
-                <span class="admin-nav-index">05</span><span>暫存商品審核</span>
+                <span class="admin-nav-index">03</span><span>商品管理</span>
             </button>
             <button type="button" data-admin-section="feedback">
-                <span class="admin-nav-index">06</span><span>模型修正複核</span>
+                <span class="admin-nav-index">04</span><span>模型修正複核</span>
             </button>
         </nav>
 
@@ -55,21 +49,6 @@
                     <time id="adminLastSync">尚未同步</time>
                 </div>
 
-                <section class="admin-demo-launch" aria-labelledby="adminDemoLaunchTitle">
-                    <div>
-                        <span class="admin-demo-launch-kicker">GRADUATION PROJECT · LIVE DEMO</span>
-                        <h2 id="adminDemoLaunchTitle">讓老師完整看見 AI 從照片到妝容成果</h2>
-                        <p>五個步驟依序展示上傳驗證、臉部分析、個人化建議、圖片渲染與安全保存；同時保留可驗證的工作狀態與資料保護摘要。</p>
-                        <div class="admin-demo-launch-flow" aria-label="專題展示流程">
-                            <span>01 上傳</span><i></i><span>02 分析</span><i></i><span>03 建議</span><i></i><span>04 渲染</span><i></i><span>05 完成</span>
-                        </div>
-                    </div>
-                    <div class="admin-demo-launch-action">
-                        <small>建議現場從這裡開始</small>
-                        <button class="admin-primary-button admin-demo-start-button" type="button" data-admin-jump="demo">開始專題 Demo <b aria-hidden="true">→</b></button>
-                    </div>
-                </section>
-
                 <div class="admin-summary">
                     <article><span>全部會員</span><b id="adminTotal">—</b><small>資料庫帳號</small></article>
                     <article><span>啟用中</span><b id="adminActive">—</b><small>可正常使用</small></article>
@@ -88,61 +67,14 @@
                             <div><strong>商品資料庫</strong><span>商品清單與上架資料</span></div>
                             <b class="pending" id="adminProductConnection">連線中</b>
                         </div>
-                        <div class="admin-service-row">
-                            <div><strong>暫存商品</strong><span>待審核的爬蟲資料</span></div>
-                            <b class="idle" id="adminStagingConnection">未載入</b>
-                        </div>
                     </section>
 
                     <section class="admin-quick-actions" aria-labelledby="adminQuickTitle">
                         <div class="admin-block-heading"><span>Actions</span><h3 id="adminQuickTitle">常用操作</h3></div>
                         <button type="button" data-admin-jump="members"><span>會員權限與停權</span><b>前往</b></button>
                         <button type="button" data-admin-jump="products"><span>手動新增商品</span><b>前往</b></button>
-                        <button type="button" data-admin-jump="crawler"><span>審核爬蟲暫存商品</span><b>前往</b></button>
                     </section>
                 </div>
-            </section>
-
-            <section class="admin-view" data-admin-view="demo" hidden>
-                <div class="admin-view-heading">
-                    <div>
-                        <span>PROJECT WORKFLOW</span>
-                        <h2>專題展示</h2>
-                        <p>顯示目前帳號與五個工作階段，方便現場核對前台操作和後台紀錄。</p>
-                    </div>
-                </div>
-                <section class="admin-demo" id="adminDemoPanel" hidden>
-                    <div class="admin-demo-account-proof">
-                        <div><small>目前登入帳號</small><strong id="adminDemoAccountName">管理員</strong><span id="adminDemoAccountEmail">—</span></div>
-                        <div><small>帳號身分</small><strong>管理員</strong><span>已通過會員資料庫驗證</span></div>
-                        <div><small>資料狀態</small><strong class="ok"><i></i>同步中</strong><span id="adminDemoLiveTime">—</span></div>
-                    </div>
-                    <div class="admin-demo-meta">
-                        <p>下方僅顯示工作摘要；照片、權杖、完整分析包與完整提示詞不會顯示。</p>
-                        <div class="admin-demo-state"><i></i><span id="adminDemoSource">Demo 範例資料</span></div>
-                    </div>
-                    <div class="admin-demo-steps" id="adminDemoSteps" aria-label="工作階段">
-                        <button type="button" class="active" data-demo-step="0"><b>01</b><span>上傳驗證</span></button>
-                        <button type="button" data-demo-step="1"><b>02</b><span>臉部分析</span></button>
-                        <button type="button" data-demo-step="2"><b>03</b><span>妝容建議</span></button>
-                        <button type="button" data-demo-step="3"><b>04</b><span>圖片渲染</span></button>
-                        <button type="button" data-demo-step="4"><b>05</b><span>完成保存</span></button>
-                    </div>
-                    <div class="admin-demo-progress" aria-label="工作進度">
-                        <div><span id="adminDemoStage">uploaded</span><b id="adminDemoProgressText">10%</b></div>
-                        <div class="admin-demo-progress-track"><i id="adminDemoProgressBar"></i></div>
-                        <p id="adminDemoStageNote">照片已進入私人暫存區。</p>
-                    </div>
-                    <div class="admin-demo-grid">
-                        <article><span>前端可見資料</span><pre id="adminDemoPublicData"></pre></article>
-                        <article><span>後端受限暫存</span><pre id="adminDemoProtectedData"></pre></article>
-                        <article><span>一般系統 Log</span><pre id="adminDemoLogData"></pre></article>
-                    </div>
-                    <div class="admin-demo-footer">
-                        <span id="adminDemoExpiry"></span>
-                        <button type="button" class="admin-secondary-button compact" id="adminDemoRestart">重新展示</button>
-                    </div>
-                </section>
             </section>
 
             <section class="admin-view" data-admin-view="members" hidden>
@@ -195,7 +127,25 @@
                 <div class="admin-product-search-panel">
                     <label><span>搜尋資料庫商品</span><input id="adminProductSearch" type="search" placeholder="輸入品牌、商品名稱、分類或關鍵字" autocomplete="off"></label>
                     <label><span>商品類型</span><select id="adminProductTypeFilter"><option value="">全部類型</option><option value="foundations">底妝</option><option value="lipsticks">唇彩</option><option value="blushes">腮紅</option><option value="eyeshadows">眼影</option><option value="eyeliner_mascara">眼線/睫毛</option><option value="eyebrows">眉毛彩妝</option><option value="contouring">修容</option><option value="highlighters">打亮</option></select></label>
-                    <label><span>商品狀態</span><select id="adminProductStatusFilter"><option value="active">上架中</option><option value="draft">草稿</option><option value="inactive">已停用</option><option value="deleted">已刪除</option><option value="">全部狀態</option></select></label>
+                    <!-- 商品狀態篩選拿掉了（2026-08-26）。
+                         刪除即將改成硬刪除（見 docs/對外規格書/商品與推薦/
+                         給商品後端_商品刪除改為硬刪除規格_2026-08-26.md），
+                         之後商品只有「在」與「不在」兩種狀態，
+                         已停用／已刪除這兩個選項會沒有對應的東西可以篩。
+                         清單的查詢仍然帶 status=active——程式碼用的是
+                         `?.value ?? 'active'`，元素不在就落回預設值。 -->
+                    <!-- 排序。預設「最新在上」，因為新增或編輯完最想確認的就是那一筆。
+                         用 id 遞減當「最新」：商品 API 的 25 個欄位裡**沒有 createdAt
+                         或 updatedAt**，而 id 是遞增的，所以它是目前唯一可用的時間代理。
+                         ⚠️ 這代表「編輯過的商品不會浮到最上面」——要做到那個，
+                         得先請商品後端加 updatedAt。 -->
+                    <label><span>排序</span><select id="adminProductSort">
+                        <option value="newest">最新在上</option>
+                        <option value="oldest">最舊在上</option>
+                        <option value="name">名稱 A→Z</option>
+                        <option value="price-desc">價格高→低</option>
+                        <option value="price-asc">價格低→高</option>
+                    </select></label>
                     <button class="admin-secondary-button" id="adminProductSearchClearBtn" type="button">清除</button>
                     <a class="admin-secondary-button" id="adminProductGoogleSearch" href="https://www.google.com/search?q=%E5%BD%A9%E5%A6%9D+%E5%95%86%E5%93%81" target="_blank" rel="noopener noreferrer">到 Google 找商品</a>
                     <p id="adminProductSearchStatus" aria-live="polite">輸入關鍵字即可快速篩選資料庫商品。</p>
@@ -207,8 +157,15 @@
                         <div class="admin-product-form-mode">編輯中：<span id="adminProductEditingLabel"></span></div>
                         <label>商品名稱<input id="adminProductName" type="text" placeholder="例如：柔霧粉底液" required></label>
                         <label>品牌<input id="adminProductBrand" type="text" placeholder="例如：DECORATE ME" required></label>
-                        <label>SKU<input id="adminProductSku" type="text" placeholder="品牌內部商品編號（選填）"></label>
-                        <label>色號名稱<input id="adminProductShadeName" type="text" placeholder="例如：Ruby Woo"></label>
+                        <!-- SKU 與色號名稱：商品 API 沒有這兩個欄位（實測 25 個欄位裡都沒有），
+                             所以填了存不進去。欄位改成 hidden 而不是整個刪掉——
+                             router.js 的編輯回填與送出都會讀它們，直接刪會變成 null 參考。
+                             它們送出去的值一律是空的，上游本來就會忽略。
+
+                             ⚠️ 這兩個對化妝品其實是有意義的資訊（色號是選色的關鍵），
+                             要真正支援得請商品後端把欄位加進資料表與 API，不是前端補得起來的。 -->
+                        <input id="adminProductSku" type="hidden">
+                        <input id="adminProductShadeName" type="hidden">
                         <label>分類
                             <select id="adminProductCategory">
                                 <option value="底妝">底妝</option>
@@ -232,10 +189,16 @@
                         <label>狀態<select id="adminProductStatus"><option value="active">上架中</option><option value="draft">草稿</option><option value="inactive">停用</option></select></label>
                         <label>審核<select id="adminProductReviewStatus"><option value="approved">已核准</option><option value="pending">待審核</option><option value="rejected">退回</option></select></label>
                         <label class="admin-checkbox-field"><input id="adminProductInStock" type="checkbox" checked><span>有庫存</span></label>
-                        <label>風格標籤<input id="adminProductStyleTags" type="text" placeholder="clean, elegant（逗號分隔）"></label>
-                        <label>妝效標籤<input id="adminProductFinishTags" type="text" placeholder="matte, dewy（逗號分隔）"></label>
                         <label>季節標籤<input id="adminProductSeasonTags" type="text" placeholder="spring, summer（逗號分隔）"></label>
-                        <label>場合標籤<input id="adminProductOccasionTags" type="text" placeholder="daily, party（逗號分隔）"></label>
+                        <!-- 2026-08-26：拿掉「風格標籤／妝效標籤／場合標籤」三個欄位。
+                             實測商品 API（清單與單品都是同樣 25 個欄位）**沒有**
+                             styleTags / finishTags / occasionTags——填了會被送出去，
+                             但存不進去、也讀不回來。一個填了會靜靜消失的欄位，
+                             比沒有那個欄位更糟：它讓人以為資料進去了。
+                             季節標籤留著，因為 seasonTags 是 API 真的有的欄位。
+
+                             同一批拿掉的還有「SKU」與「色號名稱」（見下方 hidden 欄位的說明）。
+                             要恢復這些欄位的話，得先請商品後端把欄位加進資料表與 API。 -->
                         <div class="admin-product-form-actions">
                             <button class="admin-primary-button" type="button" id="adminProductCreateBtn">新增商品</button>
                             <button class="admin-secondary-button" type="button" id="adminProductEditBtn" disabled>儲存編輯</button>
@@ -269,29 +232,6 @@
                 </section>
             </section>
 
-            <section class="admin-view" data-admin-view="crawler" hidden>
-                <div class="admin-view-heading">
-                    <div><span>Crawler Staging</span><h2>暫存商品審核</h2></div>
-                    <span class="admin-crawler-state idle" id="adminStagingState">尚未載入</span>
-                </div>
-
-                <!-- 爬蟲 2026-07-28 起只寫 crawler_staging_products，不再即時擷取。
-                     這一頁是審核那批資料：待審核 → 核准／退回 → 匯入正式商品。 -->
-                <div class="admin-staging-toolbar">
-                    <div class="admin-staging-filters" id="adminStagingFilters" role="group" aria-label="狀態篩選"></div>
-                    <button class="admin-primary-button" id="adminStagingRefresh" type="button">重新載入</button>
-                </div>
-                <p class="admin-crawler-message" id="adminStagingMessage" aria-live="polite"></p>
-
-                <div class="admin-staging-list" id="adminStagingList"></div>
-
-                <div class="admin-staging-pager" id="adminStagingPager" hidden>
-                    <button class="admin-secondary-button" id="adminStagingPrev" type="button">上一頁</button>
-                    <span id="adminStagingPageInfo"></span>
-                    <button class="admin-secondary-button" id="adminStagingNext" type="button">下一頁</button>
-                </div>
-            </section>
-
             <!-- 模型修正複核：使用者按「這判斷不準」改過的每一筆，攤開讓管理員第二次檢查。
                  這些修正會直接變成重訓的標籤，而在這一頁出現之前沒有任何人看過它們。 -->
             <section class="admin-view" data-admin-view="feedback" hidden>
@@ -300,23 +240,74 @@
                     <span class="admin-crawler-state idle" id="adminFeedbackState">尚未載入</span>
                 </div>
 
-                <div class="admin-staging-toolbar">
-                    <p class="admin-crawler-message" id="adminFeedbackSummary" aria-live="polite">
-                        使用者修正過的五官判斷。每一筆都會成為重訓的標籤，請逐筆確認合理再採用。
-                    </p>
-                    <button class="admin-primary-button" id="adminFeedbackRefresh" type="button">重新載入</button>
-                </div>
+                <!-- 兩個模塊合成同一塊面板，因為它們是同一件事的兩半：上面那層是
+                     「這些決定真的被拿去訓練了」，下面那層是「我正在做哪些決定」。
+                     原本分成兩張白卡，中間那道空隙讓它們看起來像不相干的兩個功能。
 
-                <div class="admin-table-wrap">
-                    <table class="admin-table">
-                        <thead>
-                            <tr>
-                                <th>時間</th><th>模式</th><th>部位</th>
-                                <th>模型判斷</th><th>使用者改成</th><th>Job</th>
-                            </tr>
-                        </thead>
-                        <tbody id="adminFeedbackBody"></tbody>
-                    </table>
+                     層次是有意義的，不是裝飾：上層做成**凹槽**（訓練紀錄是已經發生、
+                     不能再改的事實，沉進去），下層做成**浮起的工作檯**（待辦，你會在
+                     上面動作）。凹的看得出是紀錄，浮的看得出可以操作。 -->
+                <div class="admin-console-panel">
+
+                    <!-- 一筆批次的欄位由兩個不同的程式寫：queued／樣本清單由後台寫，
+                         running、done、訓練前後指標**只有本機訓練腳本寫得進去**（Cloud Run
+                         一個 request 裡不可能跑完 8 分鐘的 ConvNeXt 訓練）。這正是它能當
+                         證據的原因，所以畫面要把兩批分開標示，而不是只印一行狀態。 -->
+                    <section class="acp-deck acp-sunk admin-training-board" id="adminFeedbackTraining" aria-live="polite">
+                        <div class="atb-head">
+                            <div class="atb-title">
+                                <span>Training</span>
+                                <h3>模型訓練批次紀錄</h3>
+                            </div>
+                            <span class="atb-current" id="adminFeedbackCurrentScore">目前指標載入中…</span>
+                        </div>
+                        <div class="atb-runs" id="adminFeedbackRuns">尚未載入訓練批次。</div>
+                        <p class="atb-note">
+                            按「送訓」只是記下你的判斷。訓練機會把所有已送訓、還沒訓練過的修正
+                            收成一個批次，由它自己寫回開始時間、完成時間與<b>訓練前後的實測指標</b>——
+                            那些欄位後台寫不到，所以看到 <b>已完成</b> 就代表訓練真的跑過。
+                        </p>
+                    </section>
+
+                    <section class="acp-deck acp-raised">
+                        <div class="admin-staging-toolbar">
+                            <p class="admin-crawler-message" id="adminFeedbackSummary" aria-live="polite">
+                                使用者修正過的五官判斷。每一筆都會成為重訓的標籤，請逐筆確認合理再送訓。
+                            </p>
+                            <!-- 一筆一筆按「送訓」會產生一筆一個批次：那不只是麻煩，
+                                 每個批次都要**從頭重訓一次**（上一批一個部位就跑了 112 分鐘），
+                                 而且每批各自隨機切分，跑出來的數字彼此不能比。
+                                 一次送一整批，才會是同一次訓練、同一組切分。 -->
+                            <div class="admin-feedback-actions">
+                                <label class="fb-pick-all" title="勾選所有可以送訓的（已採用、有影像、還沒送過）">
+                                    <input type="checkbox" id="adminFeedbackPickAll">
+                                    <span>全選可送訓</span>
+                                </label>
+                                <button class="admin-primary-button" id="adminFeedbackTrain" type="button" disabled>送去訓練</button>
+                                <button class="admin-primary-button" id="adminFeedbackRefresh" type="button">重新載入</button>
+                            </div>
+                        </div>
+
+                <!-- 三個分頁而不是一個「只看待覆核」勾選框：這三堆的意義不同，
+                     待覆核是待辦、已送訓的已經變成訓練標籤、已退回的影像已經刪掉。
+                     混在一起看，就會分不出「我還沒看」與「我看過但沒採用」。 -->
+                <div class="admin-feedback-tabs" role="tablist" aria-label="覆核狀態">
+                    <button class="admin-feedback-tab" type="button" role="tab" data-fb-tab="pending" aria-selected="true">
+                        待覆核<span class="atb-count" data-fb-count="pending">0</span>
+                    </button>
+                    <button class="admin-feedback-tab" type="button" role="tab" data-fb-tab="accepted" aria-selected="false">
+                        已送訓<span class="atb-count" data-fb-count="accepted">0</span>
+                    </button>
+                    <button class="admin-feedback-tab" type="button" role="tab" data-fb-tab="rejected" aria-selected="false">
+                        已排除<span class="atb-count" data-fb-count="rejected">0</span>
+                    </button>
+                        </div>
+
+                        <!-- 一筆一張卡，不用表格：那個人的所有修正、樣本影像、覆核按鈕要在
+                             同一個地方看完再決定。表格會把一筆攤成好幾列，覆核的人得先在腦中
+                             把它們拼回同一次分析。 -->
+                        <div class="admin-feedback-list" id="adminFeedbackBody"></div>
+                    </section>
                 </div>
             </section>
         </main>

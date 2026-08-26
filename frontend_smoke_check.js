@@ -328,9 +328,12 @@ for (const source of ['/', '/index.html']) {
 }
 
 // ── Api 方法 ─────────────────────────────────────────────────
-for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult', 'waitForFaceJob', 'suggestMakeup', 'validateSession',
-  // 暫存商品審核（爬蟲改流程後取代 previewCrawledProduct）
-  'listStagingProducts', 'reviewStagingProduct', 'importStagingProduct']) {
+// 2026-08-23：暫存商品審核整個功能移除（UI、router 邏輯、api 方法都清掉了），
+// 所以 listStagingProducts / reviewStagingProduct / importStagingProduct 也從這裡拿掉。
+// 這份清單的用途是「這些方法不見了就擋下部署」，功能移除時必須同步縮短——
+// 否則部署會被自己的檢查擋住，而錯誤訊息看起來像是有人不小心刪了東西。
+for (const method of ['createFaceJob', 'createFaceProJob', 'getFaceJob', 'getFaceJobResult',
+                      'waitForFaceJob', 'suggestMakeup', 'validateSession']) {
   if (typeof sandbox.Api[method] !== 'function') throw new Error(`Missing Api.${method}`);
 }
 if (!routerSource.includes('const session = await Api.validateSession()')) throw new Error('Private pages must validate Gateway session before showApp');

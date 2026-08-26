@@ -156,124 +156,6 @@ function getProductPopularity(product) {
     return Number(product?.popularity || product?.sales || product?.views || product?.reviews || product?.score || 0);
 }
 
-// 後台「專題展示」：用一次 AI 工作階段說明資料流向——哪些欄位前端看得到、哪些只留在後端。
-// 只顯示白名單摘要，照片、Email、權杖、完整分析包與完整提示詞一律不出現。
-// 由 adminDemoEnabled 控制開關、adminDemoExpiresAt 控制到期，專題結束後可直接關掉。
-function initAdminDemo() {
-    const panel = document.getElementById('adminDemoPanel');
-    if (!panel || typeof AdminStore === 'undefined' || !AdminStore.isAdmin()) return;
-    const featureDefaults = (typeof window !== 'undefined' && window.DECORATE_ME_FEATURES) || {};
-    const runtimeConfig = (typeof window !== 'undefined' && window.DECORATE_ME_CONFIG) || {};
-    const runtime = { ...featureDefaults, ...runtimeConfig };
-    const expiresAt = runtime.adminDemoExpiresAt ? new Date(runtime.adminDemoExpiresAt) : null;
-    const enabled = runtime.adminDemoEnabled === true && (!expiresAt || Number.isNaN(expiresAt.getTime()) || Date.now() < expiresAt.getTime());
-    if (!enabled) {
-        panel.remove();
-        return;
-    }
-    panel.hidden = false;
-
-    // 有真實分析資料就用遮罩後的摘要，否則用示範值，確保沒跑過分析也能展示流程
-    const packageData = (typeof Router !== 'undefined' && Router.analysisPackage && typeof Router.analysisPackage === 'object')
-        ? Router.analysisPackage : null;
-    const face = packageData && typeof packageData.faceAnalysis === 'object' ? packageData.faceAnalysis : {};
-    const valueFrom = (keys, fallback) => {
-        for (const key of keys) {
-            const value = face?.[key] ?? packageData?.[key];
-            if (typeof value === 'string' && value.trim()) return value.trim().slice(0, 48);
-        }
-        return fallback;
-    };
-    const summary = {
-        faceShape: valueFrom(['faceShape', 'face_shape'], 'oval'),
-        skinTone: valueFrom(['skinTone', 'skin_tone'], 'medium'),
-        undertone: valueFrom(['undertone', 'skinUndertone'], 'warm'),
-        styleId: String((packageData?.render && packageData.render.styleId) || packageData?.styleId || 'natural').slice(0, 48)
-    };
-    const source = document.getElementById('adminDemoSource');
-    if (source) source.textContent = packageData ? '本次工作遮罩摘要' : 'Demo 範例資料';
-    const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
-    const accountName = document.getElementById('adminDemoAccountName');
-    const accountEmail = document.getElementById('adminDemoAccountEmail');
-    const liveTime = document.getElementById('adminDemoLiveTime');
-    if (accountName) accountName.textContent = profile.name || '管理員';
-    if (accountEmail) accountEmail.textContent = profile.email || '未取得 Email';
-    const paintLiveTime = () => { if (liveTime) liveTime.textContent = `更新時間 ${new Date().toLocaleTimeString('zh-TW', { hour:'2-digit', minute:'2-digit', second:'2-digit' })}`; };
-    paintLiveTime();
-    if (panel._liveTimeTimer) window.clearInterval(panel._liveTimeTimer);
-    panel._liveTimeTimer = window.setInterval(paintLiveTime, 1000);
-
-    const stages = [
-        {
-            presenterTitle: '步驟 1：照片上傳與安全驗證', presenterNote: '系統先驗證檔案格式與大小，照片只進入私人暫存區，不會公開暴露。',
-            stage: 'uploaded', progress: 10, note: '照片已進入私人暫存區。',
-            publicData: { jobId: 'JOB-DEMO-7C21', status: 'running', stage: 'uploaded', progress: 10 },
-            protectedData: { imageObject: 'temporary/USER-***/JOB-***/input.webp', access: 'worker-only', expiresIn: '24h' },
-            logData: { jobId: 'JOB-DEMO-7C21', event: 'upload.validated', durationMs: 218 }
-        },
-        {
-            presenterTitle: '步驟 2：AI 臉部特徵分析', presenterNote: '模型辨識臉型、膚色與五官特徵，完整特徵點只保留在受限的後端工作環境。',
-            stage: 'face_analysis', progress: 35, note: '模型正在產生結構化臉部特徵。',
-            publicData: { jobId: 'JOB-DEMO-7C21', status: 'running', stage: 'face_analysis', progress: 35 },
-            protectedData: { analysisPackage: '[完整特徵已隱藏]', landmarks: '[468 points hidden]', access: 'worker-only' },
-            logData: { jobId: 'JOB-DEMO-7C21', event: 'analysis.running', modelVersion: 'basic-roi-v1' }
-        },
-        {
-            presenterTitle: '步驟 3：產生個人化妝容建議', presenterNote: '分析摘要被轉換成適合使用者的風格與妝容方案，畫面只顯示必要的白名單結果。',
-            stage: 'recommendation', progress: 55, note: '分析摘要已轉換為妝容方案。',
-            publicData: { faceShape: summary.faceShape, skinTone: summary.skinTone, undertone: summary.undertone, styleId: summary.styleId },
-            protectedData: { renderPrompt: '[完整提示詞已隱藏]', promptVersion: 'v3', access: 'worker-only' },
-            logData: { jobId: 'JOB-DEMO-7C21', event: 'recommendation.completed', durationMs: 1840 }
-        },
-        {
-            presenterTitle: '步驟 4：AI 妝容圖片渲染', presenterNote: '渲染服務依照妝容方案生成結果，同時維持人物身分與原始臉部結構。',
-            stage: 'rendering', progress: 78, note: '第三方模型正在產生妝容結果圖。',
-            publicData: { jobId: 'JOB-DEMO-7C21', status: 'running', stage: 'rendering', progress: 78 },
-            protectedData: { inputObject: 'temporary/USER-***/JOB-***/input.webp', resultObject: null, tokenHash: 'sha256:••••••••' },
-            logData: { jobId: 'JOB-DEMO-7C21', event: 'render.provider_wait', attempt: 1 }
-        },
-        {
-            presenterTitle: '步驟 5：成果保存與安全存取', presenterNote: '結果完成後保存於私人空間，使用者查看時才取得短效網址，完整流程可追蹤但不記錄敏感內容。',
-            stage: 'completed', progress: 100, note: '結果已保存至私人 GCS，查看時才簽發短效網址。',
-            publicData: { recordId: 'LOOK-DEMO-19', status: 'completed', styleId: summary.styleId, signedUrlTtl: '10 minutes' },
-            protectedData: { resultObject: 'users/USER-***/renders/LOOK-***.webp', temporaryPayload: 'scheduled_for_deletion', bucket: 'private' },
-            logData: { jobId: 'JOB-DEMO-7C21', event: 'workflow.completed', sensitivePayload: '[not logged]' }
-        }
-    ];
-    const text = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
-    let currentIndex = 0;
-    const render = index => {
-        currentIndex = Math.max(0, Math.min(stages.length - 1, index));
-        const item = stages[currentIndex] || stages[0];
-        text('adminDemoStage', item.stage);
-        text('adminDemoProgressText', `${item.progress}%`);
-        text('adminDemoStageNote', item.note);
-        text('adminDemoPublicData', JSON.stringify(item.publicData, null, 2));
-        text('adminDemoProtectedData', JSON.stringify(item.protectedData, null, 2));
-        text('adminDemoLogData', JSON.stringify(item.logData, null, 2));
-        const bar = document.getElementById('adminDemoProgressBar');
-        if (bar) bar.style.width = `${item.progress}%`;
-        panel.querySelectorAll('[data-demo-step]').forEach((button, buttonIndex) => {
-            button.classList.toggle('active', buttonIndex === currentIndex);
-            button.classList.toggle('complete', buttonIndex < currentIndex);
-            button.setAttribute('aria-pressed', String(buttonIndex === currentIndex));
-        });
-    };
-    panel.querySelectorAll('[data-demo-step]').forEach(button => {
-        button.onclick = () => render(Number(button.dataset.demoStep));
-    });
-    const restart = document.getElementById('adminDemoRestart');
-    if (restart) restart.onclick = () => render(0);
-    if (expiresAt && !Number.isNaN(expiresAt.getTime())) {
-        text('adminDemoExpiry', `展示功能到期：${expiresAt.toLocaleString('zh-TW')}`);
-    } else {
-        text('adminDemoExpiry', '展示功能未設定到期時間');
-    }
-    render(0);
-}
-
-// 會員資料庫的點數紀錄回的是英文代碼（check_in、task_first_analysis…），本機補的紀錄則已經是中文。
-// 這裡只翻譯代碼、中文原樣保留；認不出來的代碼也照原樣顯示，不要變成空白或「點數異動」而失去線索。
 const POINT_REASON_LABELS = {
     check_in: '每日打卡',
     daily_checkin: '每日打卡',
@@ -443,7 +325,17 @@ const RecommendationNotice = {
     _ERROR_TEXT: {
         INVALID_REQUEST: '推薦條件有誤，請重新選擇風格後再試。',
         INVALID_ANALYSIS_PACKAGE: '臉部分析資料不完整，請重新完成臉部分析。',
+        INVALID_FACE_ANALYSIS: '臉部分析資料不完整，請重新完成臉部分析。',
         UNKNOWN_MAKEUP_STYLE: '這個妝容風格目前無法推薦，請換一個風格。',
+        // 401／403 是身分問題，不是推薦壞掉。措辭要指向使用者能做的事。
+        UNAUTHENTICATED: '登入狀態已失效，請重新登入後再試。',
+        ACCOUNT_SUSPENDED: '這個帳號目前已停權，請聯絡客服。',
+        // CSRF 被擋通常是環境設定問題（Origin 不在允許清單），使用者做什麼都沒用，
+        // 所以**不給重試按鈕**——讓人一直按只是浪費他的時間。
+        CSRF_ORIGIN_REJECTED: '這個來源的請求被安全機制擋下，請回報這個代碼給我們。',
+        // 送出的資料裡含個資或影像被後端擋下。這是我們的 bug，不是使用者的錯，
+        // 所以不要叫他「檢查輸入」——他沒有輸入任何東西。
+        IDENTITY_DATA_NOT_ALLOWED: '推薦請求被安全檢查擋下，請回報這個代碼給我們。',
         PRODUCT_DB_UNAVAILABLE: '商品服務暫時無法使用。',
         PRODUCT_DB_TIMEOUT: '商品查詢逾時。',
         NETWORK_ERROR: '連線不穩，沒能取得推薦商品。',
@@ -465,6 +357,9 @@ const RecommendationNotice = {
             return;
         }
         this.error = null;
+        // 粉底相鄰色階存在 Router 上，讓商品詳情頁畫得出來——它跟著這一次推薦，
+        // 不屬於任何單一商品。null 就是「沒有這個區塊」，畫面要整個隱藏。
+        Router.shadeRecommendation = rec.shadeRecommendation || null;
         // 契約 §3：personalization 要讓使用者知道有沒有套用個人化、依據多少互動。
         // 後端一直有回這包，先前前端完全沒用——於是「這是依你的使用紀錄推的」還是
         // 「這只是依這次的臉部分析推的」，畫面上分不出來。
@@ -476,7 +371,10 @@ const RecommendationNotice = {
             || list.some(r => r?.code === 'RECOMMENDATION_EMPTY');
     },
 
-    clear() { this.reasons = []; this.error = null; this.isEmpty = false; this.personalization = null; },
+    clear() {
+        this.reasons = []; this.error = null; this.isEmpty = false; this.personalization = null;
+        Router.shadeRecommendation = null;
+    },
 
     // 這批推薦是依什麼推的。措辭要能區分「只用了這次的臉部分析」與
     // 「已納入你過去的使用紀錄」——兩者對使用者的意義完全不同，
@@ -570,6 +468,319 @@ const SCORE_LABELS = Object.freeze({
 const SCORE_ORDER = ['colorScore', 'styleScore', 'featureScore', 'priceFit',
                      'brandAffinity', 'behaviorScore', 'availabilityScore', 'contentScore'];
 
+// ── 推薦結果的價格／品牌篩選 ────────────────────────────────────────────
+//
+// ⚠️ 這是在**已經拿回來的那批推薦**裡篩選，不是搜尋全部商品。
+// 推薦端一次只回 8–12 件，所以選了「400 元以下」很可能一件都不剩——那不代表
+// 商品庫沒有這個價位（全庫 1041 件，四分位是 332 / 900 / 1200），只代表這批推薦裡沒有。
+// UI 必須把這件事講明白，否則使用者會以為平台沒有便宜的商品。
+//
+// 要做成真正的推薦條件得後端支援 pricePreference 與 avoidedBrands 的硬過濾，
+// 已回報：補充文件md檔案/給演算法端_個人化推薦實作差異與改善需求_2026-08-23.md B2、B3。
+const RecFilter = {
+    price: 'all',
+    brand: 'all',
+
+    // 價格級距依全庫實際分布訂（p25=332、中位=900、p75=1200），不是隨手取整數。
+    // 這樣每一段大致對得上四分之一的商品，而不是某一段塞滿、某一段空著。
+    PRICE_BANDS: Object.freeze([
+        { id: 'all',  label: '不限價格' },
+        { id: 'p1',   label: '400 以下',    max: 400 },
+        { id: 'p2',   label: '400–900',     min: 400, max: 900 },
+        { id: 'p3',   label: '900–1500',    min: 900, max: 1500 },
+        { id: 'p4',   label: '1500 以上',   min: 1500 },
+    ]),
+
+    // 價格是 "NT$950" 這種字串，不是數字。解析不出來就回 null，
+    // 而不是當成 0——當成 0 會讓它落進最低價那一段，看起來像有結果其實是錯的。
+    parsePrice(raw) {
+        const m = String(raw ?? '').replace(/,/g, '').match(/(\d+(?:\.\d+)?)/);
+        return m ? Number(m[1]) : null;
+    },
+
+    matches(p) {
+        if (this.brand !== 'all' && String(p.brand || '') !== this.brand) return false;
+        if (this.price === 'all') return true;
+        const band = this.PRICE_BANDS.find(b => b.id === this.price);
+        if (!band) return true;
+        const v = this.parsePrice(p.price);
+        if (v == null) return false;   // 沒有價格就不該出現在價格篩選的結果裡
+        if (band.min != null && v < band.min) return false;
+        if (band.max != null && v > band.max) return false;
+        return true;
+    },
+
+    apply(list) {
+        return (Array.isArray(list) ? list : []).filter(p => this.matches(p));
+    },
+
+    isActive() { return this.price !== 'all' || this.brand !== 'all'; },
+    reset() { this.price = 'all'; this.brand = 'all'; },
+
+    // 品牌選項只列這批推薦裡真的有的品牌——列出全部 34 個品牌，
+    // 其中 30 個選了都是空結果，那種選單只會浪費使用者的時間。
+    brandsIn(list) {
+        const c = new Map();
+        for (const p of (list || [])) {
+            const b = String(p.brand || '').trim();
+            if (b) c.set(b, (c.get(b) || 0) + 1);
+        }
+        return [...c.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    },
+
+    html(list) {
+        const brands = this.brandsIn(list);
+        const priceChips = this.PRICE_BANDS.map(b =>
+            `<button type="button" class="rf-chip ${this.price === b.id ? 'active' : ''}" data-rf-price="${b.id}">${b.label}</button>`
+        ).join('');
+        const brandChips = [`<button type="button" class="rf-chip ${this.brand === 'all' ? 'active' : ''}" data-rf-brand="all">全部品牌</button>`]
+            .concat(brands.map(([b, n]) =>
+                `<button type="button" class="rf-chip ${this.brand === b ? 'active' : ''}" data-rf-brand="${escapeHtml(b)}">${escapeHtml(b)}<span class="rf-n">${n}</span></button>`
+            )).join('');
+        return `<div class="rec-filter">
+            <div class="rf-note">在這 ${list.length} 件推薦中篩選<span class="rf-hint">（不是搜尋全部商品）</span></div>
+            <div class="rf-row">${priceChips}</div>
+            <div class="rf-row">${brandChips}</div>
+        </div>`;
+    },
+
+    // 篩到沒東西時，要說清楚是「這批推薦裡沒有」而不是「平台沒有」。
+    emptyHtml() {
+        return `<div class="rf-empty">
+            這批推薦中沒有符合條件的商品。<br>
+            <span class="rf-hint">推薦一次只挑出每個品類最適合的幾件，換個條件或到下方瀏覽全部商品看看。</span>
+            <div class="rec-empty-actions">
+                <button type="button" class="btn-outline btn-sm" data-rf-reset="1">清除篩選</button>
+            </div>
+        </div>`;
+    },
+
+    bind(root, redraw) {
+        if (!root) return;
+        root.querySelectorAll('[data-rf-price]').forEach(el => el.onclick = () => {
+            this.price = el.dataset.rfPrice; redraw();
+        });
+        root.querySelectorAll('[data-rf-brand]').forEach(el => el.onclick = () => {
+            this.brand = el.dataset.rfBrand; redraw();
+        });
+        const reset = root.querySelector('[data-rf-reset]');
+        if (reset) reset.onclick = () => { this.reset(); redraw(); };
+    },
+};
+
+// ── 色塊比對：你的顏色 vs 商品顏色 ──────────────────────────────────────
+//
+// 分數說「色彩適配 0.66」，但 0.66 是什麼感覺沒有人知道。把兩個顏色並排放，
+// 使用者自己一眼就能判斷準不準——這比任何數字都直接，也讓她能不同意系統。
+//
+// ⚠️ 比對的對象必須依品類選對：粉底比膚色、唇彩比唇色。配錯的話色塊會並排
+// 顯示兩個不相干的顏色，看起來像系統算錯了。這個對應與後端實測的行為一致
+// （換膚色時眼影 colorScore 會變、唇彩不會變）。
+const COMPARE_SOURCE = Object.freeze({
+    foundations: 'skin',
+    blushes: 'skin',
+    contouring: 'skin',
+    highlighters: 'skin',
+    eyeshadows: 'skin',
+    eyeliner_mascara: 'skin',
+    lipsticks: 'lip',
+    // eyebrows 沒有對應：臉部分析端不產出眉色，拿膚色比是契約明文禁止的。
+});
+
+const COMPARE_LABEL = Object.freeze({ skin: '您的膚色', lip: '您的唇色' });
+
+function userLabFor(kind) {
+    const fa = Router.analysisPackage?.faceAnalysis;
+    if (!fa) return null;
+    const raw = kind === 'lip' ? fa.lipLab : fa.skinTone?.lab;
+    if (!raw) return null;
+    // 分析結果可能是 {L,a,b} 也可能是 [L,a,b]，兩種都要接。
+    const arr = Array.isArray(raw)
+        ? raw.map(Number)
+        : [raw.L ?? raw.l, raw.a ?? raw.A, raw.b ?? raw.B].map(Number);
+    return arr.length === 3 && arr.every(Number.isFinite) ? arr : null;
+}
+
+function colorCompareHtml(p) {
+    const kind = COMPARE_SOURCE[p?.type || p?.cat];
+    if (!kind) return '';
+    const prodLab = Array.isArray(p.lab) && p.lab.length === 3 && p.lab.every(n => Number.isFinite(Number(n)))
+        ? p.lab.map(Number) : null;
+    const userLab = userLabFor(kind);
+    // 缺任何一邊就不顯示。只放一個色塊沒有比較的意義，還會讓人以為那是「建議色」。
+    if (!prodLab || !userLab) return '';
+
+    const userCss = Api.labToRgb(userLab[0], userLab[1], userLab[2]);
+    const prodCss = Api.labToRgb(prodLab[0], prodLab[1], prodLab[2]);
+    if (!userCss || !prodCss) return '';
+
+    // 膚色取樣不可信時要說出來，否則使用者會拿一個本來就不準的色塊去判斷商品。
+    const reliable = Router.analysisPackage?.faceAnalysis?.skinTone?.labReliable !== false;
+    const warn = (kind === 'skin' && !reliable)
+        ? '<div class="cc-warn">膚色取樣可能不準（臉頰被頭髮或陰影遮住），這個比對僅供參考</div>' : '';
+
+    return `<div class="color-compare">
+        <div class="cc-pair">
+            <span class="cc-item"><span class="cc-dot" style="background:${userCss}"></span>${COMPARE_LABEL[kind]}</span>
+            <span class="cc-vs">對</span>
+            <span class="cc-item"><span class="cc-dot" style="background:${prodCss}"></span>商品色</span>
+        </div>
+        ${warn}
+    </div>`;
+}
+
+// 推薦端整理好的使用者文案（契約 2026-08-v2 §4.3）。
+//
+// 為什麼一律以它為準，不再由前端拼：技術分數（matchScore、scoreBreakdown、ΔE）
+// 翻成人話的工作只能有一個地方做。兩邊各翻一次，同一件事就會出現兩種說法，
+// 而使用者不知道該信哪一個。後端已經決定好措辭，前端照著顯示。
+//
+// 契約明訂的三條紅線，都在這裡守住：
+//   1. 標籤一律是「根據系統演算法推薦」，**不得寫成「AI 推薦」**
+//   2. matchPercent 是排序用的綜合匹配度，**不是準確率**——所以緊接著標示「推薦匹配度」
+//   3. deltaE、Jaccard、權重與 scoreBreakdown **不進一般推薦卡**
+function recommendationCardHtml(p) {
+    const pr = p?.recommendationPresentation;
+    if (!pr || typeof pr !== 'object') return '';
+    const parts = [];
+    parts.push(`<div class="rec-sys">${escapeHtml(pr.systemLabel || '根據系統演算法推薦')}</div>`);
+    if (pr.matchLabel || Number.isFinite(Number(pr.matchPercent))) {
+        const label = pr.matchLabel || `${Math.round(Number(pr.matchPercent))}% MATCH`;
+        // 「推薦匹配度」這四個字是契約要求的，不能省：少了它，95% MATCH
+        // 會被讀成「95% 準確」或「95% 會適合」，而那兩個都不是它的意思。
+        parts.push(`<div class="rec-match"><b>${escapeHtml(label)}</b><small>推薦匹配度</small></div>`);
+    }
+    if (pr.headline) parts.push(`<div class="rec-headline">${escapeHtml(pr.headline)}</div>`);
+    const traits = Array.isArray(pr.suitedTraits) ? pr.suitedTraits.filter(Boolean).slice(0, 4) : [];
+    if (traits.length) {
+        parts.push(`<div class="rec-traits">${traits
+            .map(t => `<span>${escapeHtml(String(t))}</span>`).join('')}</div>`);
+    }
+    return parts.join('');
+}
+
+// 詳情頁用的完整版：卡片放不下的 summary 與推薦理由放這裡。
+// reasonTexts 契約規定**最多三項**——超過就變成技術報告，沒有人會讀完。
+function recommendationDetailHtml(p) {
+    const pr = p?.recommendationPresentation;
+    if (!pr || typeof pr !== 'object') return '';
+    const reasons = Array.isArray(pr.reasonTexts) ? pr.reasonTexts.filter(Boolean).slice(0, 3) : [];
+    return `<div class="rec-detail">
+        ${pr.summary ? `<p class="rec-summary">${escapeHtml(pr.summary)}</p>` : ''}
+        ${reasons.length ? `<ul class="rec-reasons">${reasons
+            .map(r => `<li>${escapeHtml(String(r))}</li>`).join('')}</ul>` : ''}
+        ${pr.disclaimer ? `<p class="rec-disclaimer">${escapeHtml(pr.disclaimer)}</p>` : ''}
+    </div>`;
+}
+
+// 外部商品連結。契約 §8.1 要求 rel="noopener noreferrer"。
+//
+// 那不是形式：沒有 noopener 的話，被開啟的那一頁可以用 window.opener 把我們這一頁
+// 導去任何地方（反向 tabnabbing），而使用者剛才還在這裡輸入過登入資訊。
+// noreferrer 順便不把來源網址洩漏給對方站台。
+//
+// 只接受 http(s)。`javascript:` 開頭的字串放進 href 就是一個可執行的腳本，
+// 而商品資料來自爬蟲——那是外部輸入。
+function productSourceLinkHtml(p) {
+    const raw = String(p?.sourceUrl || p?.productUrl || '').trim();
+    if (!/^https?:\/\//i.test(raw)) return '';
+    return `<a class="pd-source" href="${escapeHtml(raw)}" target="_blank" rel="noopener noreferrer">查看商品原頁 ↗</a>`;
+}
+
+// 粉底相鄰色階（契約 §5）。
+//
+// 兩種模式的措辭**不能互換**：official_depth_index 是品牌官方的由淺至深順序，
+// 可以說「淺一階／深一階」；lab_lightness_approximation 只是用 L* 比出來的近似，
+// 只能說「較明亮／較深的替代色」。說錯的後果很具體——使用者以為那是品牌真的
+// 相鄰的色號，照著去買會買錯。標籤在 Api._normalizeShadeRecommendation 依 method
+// 決定好了，這裡只負責畫。
+//
+// 三種 null 各自要正確處理：
+//   shadeRecommendation 是 null → 整個區塊不出現（不要自己補商品湊出三階）
+//   lighter 或 darker 是 null   → 只隱藏那一格（主推薦已經是系列最淺或最深）
+function shadeRecommendationHtml(p) {
+    const sr = Router.shadeRecommendation;
+    if (!sr || !sr.anchor) return '';
+    // 只在看的就是主推薦那件商品時顯示，否則會出現在不相干的商品頁上。
+    const anchorId = String(sr.anchor.product?.id ?? '');
+    if (anchorId && String(p?.id ?? '') !== anchorId) return '';
+
+    const card = (node, kind) => node ? `
+        <button type="button" class="sr-card sr-${kind}" data-shade-kind="${kind}">
+            <span class="sr-label">${escapeHtml(node.label)}</span>
+            <span class="sr-code">${escapeHtml(String(node.shadeCode || '—'))}</span>
+            ${Number.isFinite(Number(node.matchPercent))
+                ? `<span class="sr-match">${Math.round(Number(node.matchPercent))}% MATCH</span>` : ''}
+        </button>` : '';
+
+    return `<section class="shade-rec">
+        <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">❧</span><h2>同系列相鄰色號</h2></div></div>
+        <div class="sr-row">
+            ${card(sr.lighter, 'lighter')}
+            ${card(sr.anchor, 'anchor')}
+            ${card(sr.darker, 'darker')}
+        </div>
+        ${sr.disclaimer ? `<p class="sr-disclaimer">${escapeHtml(sr.disclaimer)}</p>` : ''}
+    </section>`;
+}
+
+// 點色號卡片之後開的說明視窗（契約 §5.3）。
+//
+// Modal 需要關閉方式與鍵盤焦點處理——這是契約 §8.2 明列的檢查項，
+// 而它不只是規範：一個只能用滑鼠關掉的浮層，對鍵盤操作的人等於卡死整個頁面。
+function openShadeModal(kind) {
+    const sr = Router.shadeRecommendation;
+    const node = sr && sr[kind];
+    if (!node) return;
+    document.getElementById('shadeModal')?.remove();
+    const prod = node.product || {};
+    const ov = document.createElement('div');
+    ov.id = 'shadeModal';
+    ov.className = 'sr-overlay';
+    ov.innerHTML = `<div class="sr-dialog" role="dialog" aria-modal="true" aria-labelledby="srTitle">
+        <button class="sr-close" type="button" aria-label="關閉">×</button>
+        <div class="sr-tag">${escapeHtml(node.label)}</div>
+        <h3 id="srTitle">${escapeHtml(prod.name || '這個色號')}</h3>
+        ${prod.brand ? `<div class="sr-brand">${escapeHtml(prod.brand)}</div>` : ''}
+        <div class="sr-codebig">${escapeHtml(String(node.shadeCode || '—'))}</div>
+        ${Number.isFinite(Number(node.matchPercent))
+            ? `<div class="rec-match"><b>${Math.round(Number(node.matchPercent))}% MATCH</b><small>推薦匹配度</small></div>` : ''}
+        ${prod.img ? `<img class="sr-img" src="${escapeHtml(prod.img)}" alt="${escapeHtml(prod.name || '')}"
+             onerror="this.style.display='none'">` : ''}
+        ${node.description ? `<p class="sr-desc">${escapeHtml(node.description)}</p>` : ''}
+        ${prod.id ? `<button class="btn-gold sr-go" type="button" data-shade-go="${escapeHtml(prod.id)}">查看商品</button>` : ''}
+        ${sr.disclaimer ? `<p class="sr-disclaimer">${escapeHtml(sr.disclaimer)}</p>` : ''}
+    </div>`;
+    document.body.appendChild(ov);
+
+    // 焦點先移進來，關掉時再還回去——不然鍵盤使用者按 Tab 會跑到浮層後面的頁面。
+    const previouslyFocused = document.activeElement;
+    const closeBtn = ov.querySelector('.sr-close');
+    closeBtn.focus();
+    const close = () => {
+        ov.remove();
+        document.removeEventListener('keydown', onKey);
+        if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
+    };
+    const onKey = (e) => {
+        if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+        if (e.key !== 'Tab') return;
+        // 焦點鎖在浮層裡：Tab 走到底就回到第一個，Shift+Tab 反之。
+        const items = [...ov.querySelectorAll('button, [href]')].filter(el => !el.disabled);
+        if (!items.length) return;
+        const first = items[0], last = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKey);
+    closeBtn.onclick = close;
+    ov.onclick = (e) => { if (e.target === ov) close(); };
+    const go = ov.querySelector('[data-shade-go]');
+    if (go) go.onclick = () => { const id = go.dataset.shadeGo; close(); Router.go('products', { productId: id }); };
+}
+
+// ⚠️ 技術分數的展開區塊。契約 §4.2 明訂 scoreBreakdown「僅除錯／後台，不給一般使用者」，
+// 所以它**已經從三個使用者畫面移除**。函式保留是為了後台除錯時還叫得出來。
 function recommendationEvidenceHtml(p) {
     const sb = p?.scoreBreakdown;
     const kws = Array.isArray(p?.matchedKeywords) ? p.matchedKeywords.filter(Boolean) : [];
@@ -647,13 +858,24 @@ function resolveFavoriteProducts() {
         return true;
     });
     const items = catalog.filter(p => Fav.has(p.id));
+    // 後端明確說「這件已經不在了」的收藏。
+    //
+    // 2026-08-13 原本的決定是「查不到就安靜地不顯示，商品重新上架會自己回來」。
+    // 商品改成硬刪除之後那個前提不成立了：重新匯入會拿到新的 id，舊收藏永遠對不回去。
+    // 使用者會看到收藏莫名其妙少一件，而且永遠不知道少了什麼。
+    //
+    // 所以現在分成兩種：**後端說已下架的**畫出來（讓使用者知道、可以自己移除），
+    // 其餘查不到的維持原本的安靜——因為那些可能只是商品清單還沒載完。
+    const shown = new Set(items.map(p => String(p.id)));
+    const unavailable = Fav.list()
+        .filter(id => !shown.has(String(id)) && Fav.isUnavailable(id))
+        .map(id => ({ id: String(id), unavailable: true }));
     return {
         items,
-        // 收藏了、但三個來源都查不到的商品。它們仍留在收藏裡，商品重新上架就會回來，
-        // 所以不能從 Fav 清單裡刪掉——只是不計入「看得到的數量」，也不對使用者顯示
-        // （2026-08-13 決定，見 PageInit.favorites 的說明）。保留這個數字是為了排查用：
-        // 需要知道差額時不必再重算一次。
-        missingCount: Math.max(0, Fav.list().length - items.length),
+        unavailable,
+        // 收藏了、三個來源都查不到、而且後端也沒說它已下架的。多半是商品清單
+        // 還沒載完或某一頁抓失敗，所以不對使用者顯示。保留這個數字是為了排查用。
+        missingCount: Math.max(0, Fav.list().length - items.length - unavailable.length),
     };
 }
 
@@ -792,6 +1014,8 @@ function applyAnalysisCorrections(corrections, predicted) {
         if (el && Router.analysisResult[field]) el.textContent = Router.analysisResult[field];
     });
     paintNoseCell(Router.analysisResult);
+    // 圖鑑若正開著，「你的判斷」那個標記還掛在舊答案上，一起重畫。
+    if (typeof FeatureAtlas !== 'undefined') FeatureAtlas.refresh();
     // 已經排隊等收藏的那筆快照是修正前建的，丟掉讓它重建。
     Router.pendingLook = null;
 }
@@ -892,17 +1116,23 @@ function renderAnalysisFeedback(result, packageId) {
       }).join('')}</div>
       ${Object.keys(corrections).length ? `
       <div class="af-consent">
-        <label>
+        <div class="af-consent-title">臉部影像保存同意</div>
+        <!-- 這裡刻意只有一句話，沒有分部位的範圍說明。
+             先前有一張表寫「眉眼鼻唇只存那一小塊、臉型存整張」——每一行都是真的，
+             但排版讓人讀成「主要是小裁切，臉型是例外」。實測不是這樣：102 次分析裡
+             有 46 次（45%）存了整張照片，因為臉型正是最多人修正的部位。
+             而且「只有那一小塊」容易被讀成「認不出是我」，眼睛裁切並不成立。
+             所以改成一句涵蓋最壞情況的話，不要用細節去換取安心感。 -->
+        <p class="af-consent-lead">勾選後，這次分析<strong>你的臉部影像會被保存下來</strong>，
+           用於重新訓練五官分類模型。不論你修正的是哪一個部位，保存的都是你臉上的影像。</p>
+        <label class="af-consent-check">
           <input type="checkbox" id="afAllowTraining"${allowTraining ? ' checked' : ''}>
-          <span>同意提供這次修正的影像協助改善模型</span>
+          <span>我同意保存上述臉部影像，協助改善模型</span>
         </label>
-        <p class="af-consent-note">眉型、眼型、鼻型、嘴型：只會上傳你改過的那幾個部位的小圖
-           （例如眼睛、鼻子那一小塊），<strong>不是完整照片</strong>。${corrections['臉型'] ? `
-           <br><strong>臉型會上傳你那張完整的正面照。</strong>臉型要看整張臉的長寬比例與下顎輪廓，
-           小塊裁切判斷不了。` : ''}${corrections['側臉鼻型'] ? `
-           <br><strong>側臉鼻型會上傳你那張完整的側臉照。</strong>判斷側臉鼻型的模型讀的是整張側臉，
-           不是裁切，所以只送小圖對它沒有用處。` : ''}
-           僅用於模型訓練，刪除帳號時一併移除。不勾選也能送出修正。</p>
+        <p class="af-consent-note">影像只用於模型訓練，不會公開、不會提供給第三方，
+           刪除帳號時一併移除。管理員覆核時若判定這筆修正不採用，影像會一併從儲存空間刪除。
+           <strong>不勾選也能送出修正</strong>——你的判斷本身就有用，
+           我們會拿它去修正分類，只是沒有影像可以重新訓練。</p>
       </div>` : ''}
       <div class="af-foot">
         <button class="btn-gold btn-sm" id="afSubmit">送出回饋</button>
@@ -1054,9 +1284,14 @@ function showCartPanel(){
         // 購物車只存 id 與數量，因此要從本機商品、API 清單與推薦資料回查內容。
         const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
         const catalog = [...getProductCatalog(), ...apiCatalog, ...getRecommendedProductCatalog()];
-        const rows = Cart.list()
-            .map(item => ({ ...item, product: catalog.find(p => String(p.id) === String(item.id)) }))
-            .filter(item => item.product);
+        const all = Cart.list()
+            .map(item => ({ ...item, product: catalog.find(p => String(p.id) === String(item.id)) }));
+        // 商品被硬刪除的那幾筆：資料庫端明確回 unavailable:true（契約 2026-08-26）。
+        // 它們**不能被靜默丟掉**——那是使用者自己放進去的東西，要不要移除由她決定。
+        // 只信任 API 的欄位，不用「catalog 裡查不到」去猜：查不到有三種原因，
+        // 其中兩種（清單沒載完、某一頁抓失敗）猜錯就是對使用者說謊。
+        const gone = all.filter(item => item.unavailable === true);
+        const rows = all.filter(item => item.product && item.unavailable !== true);
         // 找不到商品內容時先載入清單，避免徽章有數量但購物車空白。
         if (!rows.length && Cart.count() > 0 && !apiCatalog.length
                 && !Router.generalProductLoading && !catalogLoadAttempted) {
@@ -1074,12 +1309,22 @@ function showCartPanel(){
                 <button class="cart-thumb" type="button" data-cart-open="${escapeHtml(item.id)}" aria-label="查看 ${escapeHtml(item.product.name)} 的商品詳情">${phBox('', item.product.name, item.product.img)}</button>
                 <div class="cart-item-info"><span>${escapeHtml(CAT_EN[item.product.cat] || item.product.cat)}</span><h3>${escapeHtml(item.product.name)}</h3><p>${escapeHtml(item.product.price)}</p></div>
                 <div class="cart-qty"><button data-cart-minus="${escapeHtml(item.id)}" aria-label="減少 ${escapeHtml(item.product.name)}">−</button><b>${escapeHtml(item.qty)}</b><button data-cart-plus="${escapeHtml(item.id)}" aria-label="增加 ${escapeHtml(item.product.name)}">＋</button></div>
-            </article>`).join('') : `<div class="cart-empty">${emptyMessage}</div>`}</div>
-            <footer><span>共 ${Cart.count()} 件商品</span><button class="cart-checkout" ${rows.length ? '' : 'disabled'}>前往結帳</button></footer>
+            </article>`).join('') : (gone.length ? '' : `<div class="cart-empty">${emptyMessage}</div>`)}
+            ${gone.map(item => `<article class="cart-item is-gone">
+                <div class="cart-thumb cart-gone-thumb" aria-hidden="true">✕</div>
+                <div class="cart-item-info"><span>已下架</span><h3>此商品已下架</h3><p>—</p></div>
+                <div class="cart-qty"><button data-cart-remove="${escapeHtml(item.id)}">移除</button></div>
+            </article>`).join('')}</div>
+            ${gone.length ? `<div class="cart-gone-note">有 ${gone.length} 件商品已下架，結帳時不會計入。可以自行移除。</div>` : ''}
+            <footer><span>共 ${rows.reduce((n, r) => n + (parseInt(r.qty, 10) || 0), 0)} 件商品</span><button class="cart-checkout" ${rows.length ? '' : 'disabled'}>前往結帳</button></footer>
         </section>`;
         overlay.querySelector('.cart-close').onclick = () => overlay.remove();
         overlay.querySelectorAll('[data-cart-minus]').forEach(btn => btn.onclick = () => { Cart.change(btn.dataset.cartMinus, -1); updateCartBadge(); render(); });
         overlay.querySelectorAll('[data-cart-plus]').forEach(btn => btn.onclick = () => { Cart.change(btn.dataset.cartPlus, 1); updateCartBadge(); render(); });
+        // 已下架的只留「移除」。加減數量與查看商品都沒有意義——商品不在了。
+        overlay.querySelectorAll('[data-cart-remove]').forEach(btn => btn.onclick = () => {
+            Cart.remove(btn.dataset.cartRemove); updateCartBadge(); render();
+        });
         // 點縮圖看商品詳情。用 <button> 不是掛 onclick 的 <div>——Tab 到得了、Enter 有作用、
         // 螢幕閱讀器唸得出是按鈕，跟這個檔案裡會員中心那幾張統計卡同一個理由。
         // 要先關掉購物車覆蓋層，否則詳情頁被蓋在後面看不到。
@@ -1819,8 +2064,9 @@ function openProductRecommendationModal(){
                 </div>
                 <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}${p.brand?` · ${escapeHtml(p.brand)}`:''}</div>
                 <div class="pc-name">${escapeHtml(p.name)}</div>
-                ${p.matchReason?`<div class="pc-reason">${escapeHtml(p.matchReason)}</div>`:''}
-                ${recommendationEvidenceHtml(p)}
+                ${(!p.recommendationPresentation?.headline && p.matchReason)?`<div class="pc-reason">${escapeHtml(p.matchReason)}</div>`:''}
+                ${colorCompareHtml(p)}
+                ${recommendationCardHtml(p)}
                 <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
             </div>`).join('');
         grid.querySelectorAll('.prod-card').forEach(card=>{
@@ -2103,6 +2349,9 @@ const Router = {
 
     async go(page, opts) {
         opts = opts || {};
+        // 換頁前先收掉五官圖鑑的浮層。它是掛在 body 上的，不跟著頁面內容換掉——
+        // 留著的話會浮在下一頁上，而且 body 的 overflow:hidden 也解不開，整頁捲不動。
+        if (typeof FeatureAtlas !== 'undefined') FeatureAtlas.close();
         // 分析完成後，選擇風格會開啟彈窗並直接前往妝容建議。
         if (page === 'style' && hasStartedJourney()) { openMakeupStyleModal(opts.styleId); return; }
         const adminSession = typeof AdminStore !== 'undefined' && Auth.isLoggedIn() && AdminStore.isAdmin();
@@ -2343,6 +2592,17 @@ const PageInit = {
     },
 
     analysis() {
+        // 五官圖鑑：把結果那幾格變成可點，點開看分類說明。
+        // 目前值一律現查 Router.analysisResult，不快照——使用者在圖鑑裡改完之後
+        // 那個值就變了，快照會讓「你的判斷」標記留在舊答案上。
+        // 鼻型要走 noseDisplayText：PRO 有側臉結果時顯示的是另一套分類。
+        if (typeof FeatureAtlas !== 'undefined') {
+            FeatureAtlas.attach(field => {
+                const r = Router.analysisResult || {};
+                if (field === '鼻型') return (typeof noseDisplayText === 'function' ? noseDisplayText(r) : r['鼻型']) || '';
+                return r[field] || '';
+            });
+        }
         const fileInput = document.getElementById('fileInput');
         const uploadBox = document.getElementById('uploadBox');
         const preview = document.getElementById('preview');
@@ -3258,7 +3518,9 @@ const PageInit = {
             const recommended = getRecommendedProductCatalog();
             // 排列與張數都跟推薦彈窗共用（見 orderRecommendedProducts）：同一份推薦
             // 在兩個地方必須列出同樣的商品。
-            const recommendedByCat = orderRecommendedProducts(recommended);
+            const recommendedAll = orderRecommendedProducts(recommended);
+            // 篩選只作用在這批推薦上，不會回頭跟後端要更多商品（後端目前也不支援）。
+            const recommendedByCat = RecFilter.apply(recommendedAll);
             const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
             // 就算已有個人化推薦也要載全部商品清單：下方「全部商品」要靠它，推薦卡缺圖時也要用它補圖
             const shouldLoadGeneralProducts = !apiCatalog.length && !Router.generalProductLoading;
@@ -3281,13 +3543,16 @@ const PageInit = {
                 ${recommended.length ? `<section class="recommended-strip">
                     <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">❧</span><h2>本次個人化推薦</h2></div></div>
                     ${RecommendationNotice.personalizationHtml()}
+                    ${RecFilter.html(recommendedAll)}
+                    ${!recommendedByCat.length ? RecFilter.emptyHtml() : ''}
                     <div class="prod-grid recommended-grid">${recommendedByCat.slice(0, RECOMMENDED_DISPLAY_LIMIT).map((p, i) => `
                         <div class="prod-card reveal-in" data-rec-pid="${escapeHtml(p.id)}" style="animation-delay:${Math.min(i*0.035,0.2)}s">
                             <div class="pc-imgwrap">${phBox('', p.name, p.img)}</div>
                             <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}${p.brand ? ` · ${escapeHtml(p.brand)}` : ''}</div>
                             <div class="pc-name">${escapeHtml(p.name)}</div>
-                            ${p.matchReason ? `<div class="pc-reason">${escapeHtml(p.matchReason)}</div>` : ''}
-                            ${recommendationEvidenceHtml(p)}
+                            ${(!p.recommendationPresentation?.headline && p.matchReason) ? `<div class="pc-reason">${escapeHtml(p.matchReason)}</div>` : ''}
+                            ${colorCompareHtml(p)}
+                            ${recommendationCardHtml(p)}
                             <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
                         </div>`).join('')}
                     </div>
@@ -3302,6 +3567,8 @@ const PageInit = {
                 // 提示列的「重試」與空狀態的兩顆按鈕。跟 chip 一起綁，因為
                 // 每次 renderShop 都會重畫 area，事件必須跟著重新掛上。
                 RecommendationNotice.bind(area);
+                // 價格／品牌篩選：改變條件就重畫整個商品頁（保留目前的分類 filter）。
+                RecFilter.bind(area, () => renderShop(filter));
             };
             if (!recommended.length && !Router.productRecommendationLoading && Router.analysisPackage?.faceAnalysis) {
                 Router.productRecommendationLoading = true;
@@ -3521,7 +3788,8 @@ const PageInit = {
                     <button class="pd-close" aria-label="關閉" onclick="PageInit.products({category:'${catToken}'});return false;">×</button>
                 </div>
                 <div class="pd-wrap">
-                    <div class="pd-img">${phBox('', p.name, p.img)}</div>
+                    <!-- 詳情頁是唯一要看清楚商品的地方，用原圖；清單一律用 img 的縮圖版本。 -->
+                    <div class="pd-img">${phBox('', p.name, p.imgFull || p.img)}</div>
                     <div class="pd-info">
                         <div class="pd-en">${CAT_EN[p.cat]||'BEAUTY'}</div>
                         <div class="pd-name">${escapeHtml(p.name)}</div>
@@ -3533,10 +3801,20 @@ const PageInit = {
                             <button class="heart-btn pd-heart ${Fav.has(p.id)?'fav':''}" data-fav-detail="${p.id}" aria-label="收藏">${HEART_SVG}</button>
                         </div>
                         <div class="pd-desc">${escapeHtml(p.desc || p.matchReason || '商品詳細說明區域。可放入完整描述、使用方式、成分說明等資訊。')}</div>
+                        ${colorCompareHtml(p)}
+                        ${recommendationCardHtml(p)}
+                        ${recommendationDetailHtml(p)}
+                        ${productSourceLinkHtml(p)}
                     </div>
                 </div>
+                ${shadeRecommendationHtml(p)}
                 <div id="pdRelatedBox">${renderRelatedGrid(related, '你可能也喜歡')}</div>
             `;
+            // 三張色號卡都要打得開（契約 §8.2 的檢查項）。用委派：整個區塊
+            // 是重新渲染出來的，逐張綁會在下一次重畫時全部失效。
+            area.querySelectorAll('[data-shade-kind]').forEach(btn => {
+                btn.onclick = () => openShadeModal(btn.dataset.shadeKind);
+            });
             const bag = area.querySelector('[data-bag]');
             if (bag) bag.onclick = () => {
                 Cart.add(p.id);
@@ -3575,7 +3853,7 @@ const PageInit = {
         // 三個來源的解析與「查不到的件數」跟會員中心共用 resolveFavoriteProducts()，
         // 否則兩邊各算各的就會再次分岔。
         const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
-        const { items } = resolveFavoriteProducts();
+        const { items, unavailable } = resolveFavoriteProducts();
         const area = document.getElementById('favArea');
         if (!area) return;
         const syncState = Router.favoriteSyncState || 'idle';
@@ -3595,13 +3873,25 @@ const PageInit = {
         // 一件他從沒察覺自己失去的收藏，講出來只會製造疑慮，而他也無法做任何處理。
         // 查不到的收藏仍留在 Fav 清單裡（resolveFavoriteProducts 不會刪它們），商品重新
         // 上架就會自己回來；會員中心的數字也一律只數畫得出來的件數，兩邊因此一致。
-        if (!items.length) {
+        if (!items.length && !unavailable.length) {
             const emptyText = syncState === 'loading' ? '正在讀取收藏商品' : '目前尚無收藏商品';
             area.innerHTML = syncNote + `<div class="empty-state">${emptyText}</div>`;
             bindRetry();
             return;
         }
-        area.innerHTML = syncNote + `<div class="prod-count">${items.length} 件收藏</div><div class="prod-grid">` + items.map((p, i) => `
+        // 已下架的排在後面：使用者要先看到還買得到的那些。
+        const goneCards = unavailable.map(p => `
+            <div class="prod-card is-gone" data-gone-pid="${escapeHtml(p.id)}">
+                <div class="pc-imgwrap">
+                    <div class="pc-gone-mark">✕</div>
+                    <button class="heart-btn pc-heart fav" data-unfav="${escapeHtml(p.id)}" aria-label="移除收藏">${HEART_SVG}</button>
+                </div>
+                <div class="pc-cat">已下架</div>
+                <div class="pc-name">此商品已下架</div>
+                <div class="pc-foot"><span class="pc-price">—</span></div>
+            </div>`).join('');
+        area.innerHTML = syncNote + `<div class="prod-count">${items.length} 件收藏${
+            unavailable.length ? `　·　${unavailable.length} 件已下架` : ''}</div><div class="prod-grid">` + items.map((p, i) => `
             <div class="prod-card reveal-in" data-pid="${p.id}" style="animation-delay:${Math.min(i*0.035,0.4)}s">
                 <div class="pc-imgwrap">
                     ${phBox('', p.name, p.img)}
@@ -3611,7 +3901,7 @@ const PageInit = {
                 <div class="pc-name">${escapeHtml(p.name)}</div>
                 <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
             </div>
-        `).join('') + `</div>`;
+        `).join('') + goneCards + `</div>`;
         area.querySelectorAll('.prod-card').forEach(card => {
             card.onclick = (e) => { if (!e.target.closest('.heart-btn')) Router.go('products',{productId:card.dataset.pid}); };
         });
@@ -4448,12 +4738,15 @@ const PageInit = {
         if (profileNameEl) profileNameEl.textContent = profile.name || '管理員';
         if (profileEmailEl) profileEmailEl.textContent = profile.email || '—';
 
+        // ⚠️ 這張表是 setAdminSection 的白名單：`sectionMeta[section] ? section : 'overview'`。
+        // 少列一個區塊，那顆按鈕就會安靜地把人踢回營運總覽，而且不會有任何錯誤訊息。
+        // feedback 先前就是這樣——導覽上有「模型修正複核」，點下去卻永遠回到總覽，
+        // 那個頁面等於做了但進不去。新增區塊時務必同步加進這裡。
         const sectionMeta = {
             overview: { eyebrow: 'ADMIN OVERVIEW', title: '營運總覽' },
-            demo: { eyebrow: 'PROJECT DEMONSTRATION', title: '專題展示' },
             members: { eyebrow: 'MEMBER ACCESS', title: '會員與權限管理' },
             products: { eyebrow: 'PRODUCT CATALOG', title: '商品管理' },
-            crawler: { eyebrow: 'CRAWLER STAGING', title: '暫存商品審核' }
+            feedback: { eyebrow: 'MODEL CORRECTION REVIEW', title: '模型修正複核' }
         };
         const sectionButtons = Array.from(document.querySelectorAll('[data-admin-section]'));
         const sectionViews = Array.from(document.querySelectorAll('[data-admin-view]'));
@@ -4471,6 +4764,9 @@ const PageInit = {
             if (eyebrow) eyebrow.textContent = meta.eyebrow;
             if (title) title.textContent = meta.title;
             try { sessionStorage.setItem('beautyAdminSection', next); } catch (_) {}
+            // 切進來才載入，避免每次開後台都去打一次不一定會看的資料。
+            if (next === 'feedback') Router._loadFeedbackOnce?.();
+            if (next === 'products') Router._loadProductAuditOnce?.();
             document.querySelector('.admin-stage')?.scrollTo({ top: 0, behavior: 'smooth' });
         };
         let initialSection = 'overview';
@@ -4478,7 +4774,6 @@ const PageInit = {
         sectionButtons.forEach(btn => { btn.onclick = () => setAdminSection(btn.dataset.adminSection); });
         document.querySelectorAll('[data-admin-jump]').forEach(btn => { btn.onclick = () => setAdminSection(btn.dataset.adminJump); });
         setAdminSection(initialSection);
-        initAdminDemo();
 
         let memberConnectionState = 'pending';
         let productConnectionState = 'pending';
@@ -4996,10 +5291,9 @@ const PageInit = {
             document.getElementById('adminProductStatus').value = product.status || 'active';
             document.getElementById('adminProductReviewStatus').value = product.reviewStatus || 'pending';
             document.getElementById('adminProductInStock').checked = product.inStock !== false;
-            document.getElementById('adminProductStyleTags').value = joinTags(product.styleTags);
-            document.getElementById('adminProductFinishTags').value = joinTags(product.finishTags);
+            // 只回填 API 真的有的標籤。風格／妝效／場合三個欄位已經移除
+            // （商品 API 沒有那些欄位，見 admin.html 的說明）。
             document.getElementById('adminProductSeasonTags').value = joinTags(product.seasonTags);
-            document.getElementById('adminProductOccasionTags').value = joinTags(product.occasionTags);
             productForm.classList.add('is-editing');
             editingLabel.textContent = product.name || id;
             createBtn.disabled = true;
@@ -5007,6 +5301,41 @@ const PageInit = {
             cancelBtn.style.display = '';
             if (formDeleteBtn) formDeleteBtn.disabled = false;
             productForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        };
+
+        // 商品清單的排序。預設最新在上：新增或編輯完之後，最想確認的就是那一筆。
+        //
+        // 「最新」用 id 遞減。商品 API 的 25 個欄位裡**沒有 createdAt 也沒有 updatedAt**
+        // （2026-08-26 實測，清單與單品都一樣），而 id 是遞增的主鍵，所以它是目前
+        // 唯一可用的時間代理。代價是**編輯過的商品不會浮上來**——那要等後端補 updatedAt。
+        //
+        // 排序在前端做而不是交給 API：清單本來就已經全部抓回本機了（fetchAllPages），
+        // 為了換個順序再打一次網路不划算，而且切換排序會有明顯延遲。
+        const sortAdminProducts = (list) => {
+            const rows = [...(list || [])];
+            const mode = document.getElementById('adminProductSort')?.value || 'newest';
+            // 價格是 "NT$377" 這種字串，比大小前要先抽出數字；抽不出來的排到最後，
+            // 不要讓它們因為 NaN 而跑到最前面（NaN 的比較結果不可預期）。
+            const priceOf = (p) => {
+                const n = Number(String(p.price ?? '').replace(/[^0-9.]/g, ''));
+                return Number.isFinite(n) ? n : null;
+            };
+            const byPrice = (dir) => (a, b) => {
+                const x = priceOf(a), y = priceOf(b);
+                if (x === null && y === null) return 0;
+                if (x === null) return 1;
+                if (y === null) return -1;
+                return dir * (x - y);
+            };
+            const idOf = (p) => Number(p.rawId ?? p.id) || 0;
+            switch (mode) {
+                case 'oldest': return rows.sort((a, b) => idOf(a) - idOf(b));
+                case 'name': return rows.sort((a, b) =>
+                    String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant'));
+                case 'price-desc': return rows.sort(byPrice(-1));
+                case 'price-asc': return rows.sort(byPrice(1));
+                default: return rows.sort((a, b) => idOf(b) - idOf(a));
+            }
         };
 
         const renderProducts = () => {
@@ -5022,7 +5351,7 @@ const PageInit = {
                 return;
             }
             const normalizedQuery = productSearchQuery.trim().toLowerCase();
-            const products = dbProducts;
+            const products = sortAdminProducts(dbProducts);
             const searchStatus = document.getElementById('adminProductSearchStatus');
             if (searchStatus) {
                 searchStatus.textContent = normalizedQuery
@@ -5069,6 +5398,13 @@ const PageInit = {
                 const usedCursors = new Set();
                 let cursor = null;
                 let firstRec = null;
+                // 「還有下一頁但頁數用完了」才算截斷。
+                //
+                // 先前是用 `partial: cursor != null` 判斷，那是錯的：迴圈靠 `if (!next) break`
+                // 收尾，跳出時 cursor 還留著**上一頁**的游標，不會變回 null。於是只要商品
+                // 超過一頁（100 筆），正常載完也會被標成「部分載入」並跳出重試提示——
+                // 而 1041 筆商品每次都會翻頁，所以每次都誤報。2026-08-24 修。
+                let truncated = false;
                 for (let page = 0; page < PRODUCT_MAX_PAGES; page++) {
                     const rec = await Api.listProducts(cursor ? { ...baseParams, cursor } : baseParams);
                     // 中途某一頁失敗：前面撈到的仍然有用，但**不能假裝撈完了**。
@@ -5088,11 +5424,13 @@ const PageInit = {
                     if (!next || !(rec.products || []).length || usedCursors.has(next)) break;
                     usedCursors.add(next);
                     cursor = next;
+                    // 還有下一頁，但這是最後一圈——真的被上限截斷了。
+                    if (page === PRODUCT_MAX_PAGES - 1) truncated = true;
                 }
                 // 迴圈是被 PRODUCT_MAX_PAGES 上限中止、而不是自然翻完的話，同樣是一份
                 // 不完整的清單。先前只有「某一頁失敗」那條標了 partial，這條沒標，於是
                 // 截斷的結果照樣掛著伺服器回的總數——同一個 bug 換一個分支重演。
-                return { ...firstRec, products: all, partial: cursor != null };
+                return { ...firstRec, products: all, partial: truncated };
             };
             return fetchAllPages().then(rec => {
                 if (rec?.ok) {
@@ -5146,6 +5484,9 @@ const PageInit = {
             const el = document.getElementById(id);
             if (el) el.onchange = loadAdminProducts;
         });
+        // 排序只重畫，不重新抓：清單已經在本機了（見 sortAdminProducts 的說明）。
+        const sortSelect = document.getElementById('adminProductSort');
+        if (sortSelect) sortSelect.onchange = renderProducts;
         if (productSearchClearBtn) productSearchClearBtn.onclick = () => {
             if (productSearchInput) productSearchInput.value = '';
             const type = document.getElementById('adminProductTypeFilter'); if (type) type.value = '';
@@ -5216,28 +5557,47 @@ const PageInit = {
                 const id = deleteTrigger.dataset.deleteProduct;
                 const product = (dbProducts || []).find(p => String(p.id) === String(id));
                 if (!product) return;
-                showConfirm(`確定要停用「${product.name || '這項商品'}」嗎？資料會保留在資料庫與稽核紀錄，但不再出現在上架商品及推薦結果。`, {
-                    title: '停用商品',
-                    type: 'error',
-                    okText: '確認停用',
-                    cancelText: '保留',
-                    onOk: async () => {
-                        deleteTrigger.disabled = true;
-                        deleteTrigger.textContent = '停用中';
-                        const result = await Api.deleteRemoteProduct(product.rawId ?? product.id);
-                        if (!result.ok) {
-                            deleteTrigger.disabled = false;
-                            deleteTrigger.textContent = '刪除';
-                            showAlert(`商品停用失敗：${result.error || '未知錯誤'}${result.status === 401 ? '（登入狀態已失效，請重新登入）' : ''}`, { type: 'error' });
-                            return;
+                // 2026-08-26 起商品後端改成硬刪除：資料列會從資料庫實體移除，不可復原。
+                // 所以確認文案必須說「永久刪除」——先前寫「停用、資料會保留」，
+                // 那句話現在是錯的，而在不可逆的動作上寫錯話是最糟的一種錯。
+                (async () => {
+                    deleteTrigger.disabled = true;
+                    deleteTrigger.textContent = '查詢影響';
+                    // 先問這一筆被幾個人收藏。拿不到就用通用警語，不擋刪除。
+                    const impact = await Api.getProductDeleteImpact(product.rawId ?? product.id);
+                    deleteTrigger.disabled = false;
+                    deleteTrigger.textContent = '刪除';
+                    const detail = impact
+                        ? `\n\n${impact.favorites ?? 0} 筆收藏與 ${impact.cartItems ?? 0} 筆購物車項目會保留，但顯示「此商品已下架」。`
+                          + `\n${impact.recommendationRecords ?? 0} 筆推薦／試妝歷史會保留。`
+                        : '';
+                    showConfirm(`確定要永久刪除「${product.name || '這項商品'}」嗎？\n\n此操作不可復原。${detail}`, {
+                        title: '永久刪除商品',
+                        type: 'error',
+                        okText: '永久刪除',
+                        cancelText: '取消',
+                        onOk: async () => {
+                            deleteTrigger.disabled = true;
+                            deleteTrigger.textContent = '刪除中';
+                            const result = await Api.deleteRemoteProduct(product.rawId ?? product.id);
+                            if (!result.ok) {
+                                deleteTrigger.disabled = false;
+                                deleteTrigger.textContent = '刪除';
+                                showAlert(`商品刪除失敗：${result.error || '未知錯誤'}${result.status === 401 ? '（登入狀態已失效，請重新登入）' : ''}`, { type: 'error' });
+                                return;
+                            }
+                            if (String(editingProductId) === String(product.id)) exitEditMode();
+                            Router.generalProductCatalog = null;
+                            // 只有後端確認 mode:"hard" 才會走到這裡（見 deleteRemoteProduct）。
+                            showAlert(result.alreadyDeleted
+                                ? '這項商品已經不在資料庫裡了。'
+                                : `商品已永久刪除。${(result.preserved?.favorites ?? 0)} 筆收藏會顯示為已下架。`,
+                                { type: 'success' });
+                            loadAdminProducts();
+                            loadProductAuditLogs();
                         }
-                        if (String(editingProductId) === String(product.id)) exitEditMode();
-                        Router.generalProductCatalog = null;
-                        showToast('商品已停用並保留稽核紀錄');
-                        loadAdminProducts();
-                        loadProductAuditLogs();
-                    }
-                });
+                    });
+                })();
                 return;
             }
             const trigger = e.target.closest('[data-edit-btn], [data-edit-product]');
@@ -5311,6 +5671,12 @@ const PageInit = {
             const payload = {
                 name, brand, price,
                 type: resolvedType,
+                // 一起送中文分類。商品 API 回傳的每一筆都同時有 `category`（中文）與
+                // `type`（英文 slug），但這裡先前只送 type——如果上游驗的是 category，
+                // 那就是「沒送」而不是「送錯」，錯誤訊息會是「分類無效」。
+                // 2026-08-26 實測新增回 400「資料庫寫入失敗：分類無效」，這是最可能的成因。
+                // 詳見 docs/對外規格書/商品與推薦/給商品後端_新增商品分類無效_問題回報_2026-08-26.md
+                category: cat,
                 imageUrl: img,
                 imageUrls: [img],
                 image_url: img,
@@ -5326,10 +5692,10 @@ const PageInit = {
                 reviewStatus: document.getElementById('adminProductReviewStatus')?.value || 'approved',
                 inStock: document.getElementById('adminProductInStock')?.checked !== false,
                 currency: 'TWD',
-                styleTags: splitTags(document.getElementById('adminProductStyleTags')?.value),
-                finishTags: splitTags(document.getElementById('adminProductFinishTags')?.value),
-                seasonTags: splitTags(document.getElementById('adminProductSeasonTags')?.value),
-                occasionTags: splitTags(document.getElementById('adminProductOccasionTags')?.value)
+                // 只送 API 真的有的標籤欄位。styleTags / finishTags / occasionTags
+                // 在商品 API 的 25 個欄位裡都不存在，送過去只會被丟掉——
+                // 而「送了但沒存」比「沒送」更難查，因為前端看起來一切正常。
+                seasonTags: splitTags(document.getElementById('adminProductSeasonTags')?.value)
             };
             const actionBtn = editingProductId ? editBtn : createBtn;
             actionBtn.disabled = true;
@@ -5342,13 +5708,28 @@ const PageInit = {
                         loadAdminProducts();
                     } else if (result.code === 'PRODUCT_ALREADY_EXISTS') {
                         showAlert('資料庫已有相同來源／SKU／色號的商品，請改用編輯功能。', { type: 'error' });
+                    } else if (result.code === 'INVALID_CATEGORY') {
+                        // 後端會指出是哪一個欄位（type 或 category）與合法值。
+                        // 把焦點移到那一欄，人才知道要改哪裡——只丟一句錯誤訊息，
+                        // 表單有十個欄位，他得自己猜。
+                        const el = document.getElementById(
+                            result.field === 'category' ? 'adminProductCategory' : 'adminProductCategory');
+                        showAlert(result.error, { type: 'error', onOk: () => el?.focus() });
                     } else {
                         showAlert(`資料庫寫入失敗：${result.error}${result.status === 401 ? '（登入狀態已失效，請重新登入）' : ''}`, { type: 'error' });
                     }
                     return false;
                 }
-                showToast(okMsg);
+                // 新增與編輯都用對話框確認，不只是一個會自己消失的 toast。
+                // 寫進資料庫是不可逆的動作，而 toast 幾秒後就沒了——
+                // 人離開座位再回來，會分不出「成功了」與「根本沒送出」。
+                // showAlert 只認得 type 與 onOk，沒有 title 這個選項——
+                // 傳了會被安靜忽略，所以標題要寫進訊息本身。
+                showAlert(okMsg, { type: 'success' });
                 Router.generalProductCatalog = null; // 讓商品頁下次重抓最新清單
+                // 排序回到「最新在上」，讓剛動過的那一筆直接出現在第一列。
+                const sortEl = document.getElementById('adminProductSort');
+                if (sortEl && !editingProductId) sortEl.value = 'newest';
                 loadAdminProducts();
                 loadProductAuditLogs();
                 return true;
@@ -5366,164 +5747,835 @@ const PageInit = {
             }
         };
 
-        // ═══ 暫存商品審核 ═══
-        // 爬蟲 2026-07-28 起只寫 crawler_staging_products，不再即時擷取。這一塊是審核那批資料。
+        // ═══ 模型修正複核 ═══
+        // 使用者按「這判斷不準」改過的每一筆，攤開讓管理員第二次檢查。
         //
-        // 商品後端尚未回覆最終路徑。 照規格書 §1 的提案先接起來；對方定案後只要改
-        // ai_gateway.py 的 _STAGING_BASE 一行，這裡與 js/api.js 都不必動。
-        const stagingList = document.getElementById('adminStagingList');
-        if (stagingList) {
-            const stagingFilters = document.getElementById('adminStagingFilters');
-            const stagingState = document.getElementById('adminStagingState');
-            const stagingMessage = document.getElementById('adminStagingMessage');
-            const stagingPager = document.getElementById('adminStagingPager');
-            const stagingPageInfo = document.getElementById('adminStagingPageInfo');
+        // 這些修正會直接變成重訓的標籤，而寫進去之前沒有任何人看過——使用者可能誤點，
+        // 也可能自己判斷錯（眉型、唇型本來就主觀）。一筆錯的標籤進了訓練集，
+        // 之後分數變差很難查回是哪來的。
+        //
+        // 後端不回任何身分欄位（見 face_feedback.py 的 list_feedback 說明），
+        // 所以這張表只有「模型答什麼、使用者改成什麼」，沒有誰改的。
+        const feedbackBody = document.getElementById('adminFeedbackBody');
+        if (feedbackBody) {
+            const fbState = document.getElementById('adminFeedbackState');
+            const fbSummary = document.getElementById('adminFeedbackSummary');
+            const fbRefresh = document.getElementById('adminFeedbackRefresh');
+            const fbTabButtons = Array.from(document.querySelectorAll('[data-fb-tab]'));
+            const fbCounts = Array.from(document.querySelectorAll('[data-fb-count]'));
+            let fbTab = 'pending';
+            const fbTrain = document.getElementById('adminFeedbackTrain');
+            const fbPickAll = document.getElementById('adminFeedbackPickAll');
+            const fbTrainingPanel = document.getElementById('adminFeedbackTraining');
+            const fbCurrentScore = document.getElementById('adminFeedbackCurrentScore');
+            const fbRuns = document.getElementById('adminFeedbackRuns');
+            const FB_HINT = '使用者修正過的五官判斷。每一筆都會成為重訓的標籤，請逐筆確認合理再採用。';
 
-            // 後端回的是小寫英文狀態碼，中文與配色留在前端——要改字面不必動資料庫。
-            const STATUS_ZH = {
-                pending: '待審核', approved: '已核准', rejected: '已退回',
-                imported: '已匯入', failed: '匯入失敗'
+            const fbSetState = (text, cls) => {
+                if (!fbState) return;
+                fbState.textContent = text;
+                fbState.className = `admin-crawler-state ${cls}`;
             };
-            let filter = 'pending';
-            let page = 1;
-            const PAGE_SIZE = 20;
-
-            const setState = (text, cls) => {
-                if (stagingState) { stagingState.textContent = text; stagingState.className = 'admin-crawler-state ' + cls; }
-            };
-            const setMessage = (text, cls) => {
-                if (stagingMessage) { stagingMessage.textContent = text; stagingMessage.className = 'admin-crawler-message ' + (cls || ''); }
+            const fbTime = (iso) => {
+                if (!iso) return '—';
+                const d = new Date(iso);
+                if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16);
+                const p = (n) => String(n).padStart(2, '0');
+                return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
             };
 
-            const drawFilters = () => {
-                if (!stagingFilters) return;
-                stagingFilters.innerHTML = ['pending', 'approved', 'failed', 'imported', 'rejected', ''].map(value => {
-                    const label = value ? STATUS_ZH[value] : '全部';
-                    return `<button type="button" class="admin-staging-filter${filter === value ? ' active' : ''}" data-staging-filter="${value}">${label}</button>`;
+            // 這一批回饋的原始資料。留著才能在切換「只看待覆核」或改完某一筆之後
+            // 重畫，而不必再打一次 API——重打會讓剛按下的那一筆閃一下才更新。
+            let fbItems = [];
+            const fbSelected = new Set();
+
+            const FB_REVIEW_LABEL = {
+                accepted: '已採用',
+                rejected: '已退回',
+                partial: '部分採用',
+                pending: '待覆核',
+            };
+
+            const fbApprovedFields = (it) => {
+                const decisions = it.reviewDecisions || {};
+                const changes = Array.isArray(it.changes) ? it.changes : [];
+                return changes.filter(c => decisions[c.field] === 'accepted'
+                    || (decisions[c.field] === 'corrected' && (it.reviewLabels || {})[c.field]))
+                    .map(c => c.field);
+            };
+
+            // 採用過、有影像、而且還沒進過任何批次的那些。
+            //
+            // 「採用」跟「送去訓練」本來就是同一件事——採用的意思就是「這個標註可以拿去
+            // 訓練」。所以按鈕預設就對準這一堆，不必再勾一次；勾選只是想單獨送某幾筆時
+            // 才用得到。已經有 trainingRunId 的不再列入，否則每按一次就重送一遍舊資料。
+            const fbTrainable = () => fbItems.filter(it =>
+                fbBucket(it) === 'accepted' && it.hasSample
+                && !it.trainingRunId && fbApprovedFields(it).length);
+
+            const fbTrainTargets = () => (fbSelected.size
+                ? [...fbSelected]
+                : fbTrainable().map(it => it.feedbackId || it.jobId));
+
+            // 全選框的三態：全勾打勾、全空清掉、勾一部分顯示 indeterminate。
+            // 少了中間那個狀態，勾兩筆時全選框看起來像「沒勾」，
+            // 直覺會再按一下想全選，實際上那一下是取消——按了反而更少。
+            const fbSyncPickAll = () => {
+                if (!fbPickAll) return;
+                const all = fbTrainable().map(it => it.feedbackId || it.jobId);
+                const picked = all.filter(id => fbSelected.has(id)).length;
+                fbPickAll.disabled = all.length === 0;
+                fbPickAll.checked = all.length > 0 && picked === all.length;
+                fbPickAll.indeterminate = picked > 0 && picked < all.length;
+            };
+
+            const fbUpdateTrainButton = () => {
+                // 掛在這裡而不是逐一去補呼叫點：按鈕文字與全選框說的是同一件事
+                // （現在會送出哪幾筆），兩者分開更新遲早會有一邊忘了跟上。
+                fbSyncPickAll();
+                if (!fbTrain) return;
+                const n = fbTrainTargets().length;
+                fbTrain.textContent = fbSelected.size
+                    ? `送去訓練（已選 ${n}）`
+                    : `送去訓練（已採用未送訓 ${n}）`;
+                fbTrain.disabled = n === 0;
+                fbTrain.title = fbSelected.size
+                    ? '只送出你勾選的這幾筆'
+                    : '把所有已採用、有影像、還沒送過訓練的修正送出成一個批次';
+            };
+
+            // 覆核的單位是「一筆回饋」，不是單一部位：後端的 reviewStatus 寫在文件層級，
+            // 一筆修正裡的三個部位是同一次送出的，沒有辦法只採用其中一個。
+            //
+            // 2026-08-24 從表格改成卡片：一筆一張卡，那個人的所有修正、樣本影像、
+            // 覆核按鈕都在同一張裡。表格把一筆攤成好幾列，覆核的人得先在腦中把它們
+            // 拼回同一次分析才有辦法判斷，而判斷本來就該一次看完再決定。
+            //
+            // 影像點開才載：ROI 雖小，108 筆一次全帶仍是幾 MB，而一次只看一筆。
+            const fbSamples = {};   // feedbackId -> 'loading' | 陣列 | {error}
+
+            // 管理員改判：使用者說的也不對時，給第三個答案。
+            // 這是雙重驗證的關鍵——管理員看得到影像，使用者是憑印象改的，
+            // 少了這個選項遇到兩邊都錯就只能整筆退回，等於丟掉一張最貴的樣本
+            //（有影像、有人看過）。
+            const fbOptions = (field, id, current) => {
+                const opts = (typeof AnalysisFeedback !== 'undefined'
+                    && AnalysisFeedback.OPTIONS[field]) || [];
+                if (!opts.length) return '';
+                return `<select class="fb-mini fb-fix" data-fb-id="${escapeHtml(id)}"
+                    data-fb-field="${escapeHtml(field)}" title="兩邊都不對？改成正確的類別"
+                    aria-label="${escapeHtml(field)}改判">
+                  <option value="">改判…</option>
+                  ${opts.map(o => `<option value="${escapeHtml(o)}"${
+                    o === current ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('')}
+                </select>`;
+            };
+
+            // 影像的內容。狀態有四種：還沒抓、抓取中、抓到了、抓失敗。
+            const sampleInner = (id) => {
+                const st = fbSamples[id];
+                if (st === undefined) return '<div class="fb-shots is-loading">影像準備中…</div>';
+                if (st === 'loading') return '<div class="fb-shots is-loading">載入樣本影像…</div>';
+                if (st && st.error) return `<div class="fb-shots is-error">${escapeHtml(st.error)}</div>`;
+                if (!st.length) return '<div class="fb-shots is-empty">這一筆沒有影像（使用者沒有勾選同意提供）。</div>';
+                return `<div class="fb-shots">${st.map(sp => sp.dataUrl
+                    ? `<figure><img src="${sp.dataUrl}" alt="${escapeHtml(sp.part)} 樣本" loading="lazy">
+                         <figcaption>${escapeHtml(sp.part)}<br><b>${escapeHtml(sp.label)}</b></figcaption></figure>`
+                    : `<figure class="is-skipped"><div class="fb-skip">${escapeHtml(sp.skipped || '未載入')}</div>
+                         <figcaption>${escapeHtml(sp.part)}</figcaption></figure>`).join('')}</div>`;
+            };
+
+            // 影像一律顯示，不必按開。要判斷眉型、唇型改得對不對，本來就得看到形狀；
+            // 每一筆都先點一次「看樣本影像」，等於在每一筆上多收一次過路費。
+            //
+            // 但也不能一進畫面就把 100 多筆的圖全抓下來——那是好幾 MB，而且多數還沒捲到。
+            // 折衷是捲到哪抓到哪：卡片進入視窗（含前方 300px）才去抓那一筆。
+            const sampleHtml = (id, hasSample) => {
+                if (!hasSample) return '';
+                return `<div class="fb-shots-slot" data-fb-slot="${escapeHtml(id)}">${sampleInner(id)}</div>`;
+            };
+
+            // 抓到之後只換那一張卡片裡的影像區，不重畫整份清單：
+            // 每抓到一筆就整份重畫的話，正在捲動的畫面會不斷跳掉。
+            const paintSamples = (id) => {
+                const slot = feedbackBody.querySelector(`[data-fb-slot="${CSS.escape(id)}"]`);
+                if (slot) slot.innerHTML = sampleInner(id);
+            };
+
+            // 同時最多抓三筆。不限制的話，一次捲過去會同時送出十幾個請求，
+            // 每個都可能回幾百 KB 的 data URL，反而讓最該先看到的那一筆最慢到。
+            const sampleQueue = [];
+            let sampleActive = 0;
+            const pumpSamples = () => {
+                while (sampleActive < 3 && sampleQueue.length) {
+                    const id = sampleQueue.shift();
+                    sampleActive += 1;
+                    fbSamples[id] = 'loading';
+                    paintSamples(id);
+                    Api.fetchFaceFeedbackSamples(id).then((res) => {
+                        fbSamples[id] = res.ok ? res.samples : { error: res.error || '讀取失敗' };
+                    }).catch((err) => {
+                        fbSamples[id] = { error: (err && err.message) || '讀取失敗' };
+                    }).then(() => {
+                        paintSamples(id);
+                        sampleActive -= 1;
+                        pumpSamples();
+                    });
+                }
+            };
+
+            let sampleObserver = null;
+            const watchSamples = () => {
+                if (sampleObserver) sampleObserver.disconnect();
+                if (typeof IntersectionObserver !== 'function') {
+                    // 舊瀏覽器沒有這個 API：那就全部排隊抓，慢一點但看得到。
+                    feedbackBody.querySelectorAll('[data-fb-slot]').forEach((el) => {
+                        if (fbSamples[el.dataset.fbSlot] === undefined) sampleQueue.push(el.dataset.fbSlot);
+                    });
+                    pumpSamples();
+                    return;
+                }
+                sampleObserver = new IntersectionObserver((entries) => {
+                    entries.forEach((entry) => {
+                        if (!entry.isIntersecting) return;
+                        const id = entry.target.dataset.fbSlot;
+                        sampleObserver.unobserve(entry.target);
+                        if (fbSamples[id] === undefined && !sampleQueue.includes(id)) {
+                            sampleQueue.push(id);
+                            pumpSamples();
+                        }
+                    });
+                }, { rootMargin: '300px 0px' });
+                feedbackBody.querySelectorAll('[data-fb-slot]').forEach(el => sampleObserver.observe(el));
+            };
+
+            const fbRender = (items) => {
+                if (!items.length) {
+                    // 三個分頁的「空」代表三件不同的事，訊息要跟著分頁走，
+                    // 否則在「已退回」看到「都看過了」會讓人以為自己站錯頁。
+                    const emptyText = {
+                        pending: '沒有待覆核的紀錄——都看過了。',
+                        accepted: '還沒有採用過任何修正。採用之後它們會出現在這裡，並成為下一次訓練的標籤。',
+                        rejected: '沒有退回的紀錄。退回的修正不會進訓練集，樣本影像也會一併刪除。',
+                    };
+                    feedbackBody.innerHTML = `<div class="admin-empty">${escapeHtml(emptyText[fbTab] || '目前沒有使用者修正紀錄。')}</div>`;
+                    fbUpdateTrainButton();
+                    return 0;
+                }
+                feedbackBody.innerHTML = items.map(it => {
+                    const changes = Array.isArray(it.changes) ? it.changes : [];
+                    const status = it.reviewStatus || 'pending';
+                    const id = it.feedbackId || it.jobId || '';
+                    const decisions = it.reviewDecisions || {};
+                    const decided = changes.filter(c => decisions[c.field]).length;
+                    const approvedFields = fbApprovedFields(it);
+                    const selectable = Boolean(it.hasSample && approvedFields.length);
+                    return `
+                    <article class="fb-card ${escapeHtml(status)}" data-fb-row="${escapeHtml(id)}">
+                      <header class="fb-card-head">
+                        <div>
+                          <!-- 勾選框只出現在「可以送訓」的卡片上（已採用、有影像、
+                               還沒進過批次）。不能送的不給勾，是為了讓「勾了 N 筆」
+                               跟「會送出 N 筆」永遠是同一個數字——勾得到卻送不出去，
+                               按鈕上的數字就開始說謊。 -->
+                          ${selectable ? `<label class="fb-pick" title="選進這次的訓練批次">
+                            <input type="checkbox" data-fb-pick="${escapeHtml(id)}"${fbSelected.has(id) ? ' checked' : ''}>
+                          </label>` : ''}
+                          <span class="fb-when">${escapeHtml(fbTime(it.createdAt))}</span>
+                          <span class="fb-mode">${escapeHtml(String(it.mode || '—').toUpperCase())}</span>
+                          <span class="fb-job">${escapeHtml(it.jobId || '—')}</span>
+                        </div>
+                        <span class="fb-review-state">${escapeHtml(FB_REVIEW_LABEL[status] || status)}${
+                          changes.length ? ` <em>${decided}/${changes.length}</em>` : ''}</span>
+                      </header>
+                      <!-- 兩個結果要在卡片上看得到，否則管理員無從確認自己按下去的事真的發生了：
+                           送過訓練的要顯示是哪一批，退回的要顯示影像已經真的刪掉。 -->
+                      ${it.trainingRunId ? `<div class="fb-trace fb-trace-run">已進訓練批次 <code>${escapeHtml(it.trainingRunId)}</code></div>` : ''}
+                      ${it.samplesDeletedAt ? `<div class="fb-trace fb-trace-del">樣本影像已於 ${escapeHtml(fbTime(it.samplesDeletedAt))} 從儲存空間刪除</div>` : ''}
+                      <div class="fb-changes">${changes.length ? changes.map(c => {
+                        // 每個部位各自決定：管理員可能覺得嘴型改得對、眼型改錯了。
+                        // 整筆一個狀態等於逼人在「全收一個錯的」與「連對的一起丟掉」之間選。
+                        const fd = decisions[c.field] || '';
+                        // 這裡曾經每一列都印「ConvNeXt 信心」。它幾乎永遠是「—」
+                        // （predictionConfidence 多數紀錄根本沒有這個欄位），
+                        // 而覆核靠的是看影像，不是看模型有多有把握——
+                        // 一個常態顯示「沒有值」的欄位，只是在每一列上收一次視線。
+                        return `
+                        <div class="fb-change ${fd ? 'decided ' + escapeHtml(fd) : ''}">
+                          <span class="fb-field">${escapeHtml(c.field || '—')}</span>
+                          <span class="fb-was">${escapeHtml(c.predicted ?? '—')}</span>
+                          <span class="fb-arrow" aria-hidden="true">→</span>
+                          <span class="fb-now">${escapeHtml(c.corrected ?? '—')}</span>
+                          <span class="fb-one">
+                            <button type="button" class="fb-mini fb-accept" data-fb-id="${escapeHtml(id)}"
+                              data-fb-field="${escapeHtml(c.field)}" data-fb-decision="accepted"
+                              ${fd === 'accepted' ? 'disabled' : ''} title="使用者說的對，這個部位收進下一次訓練">送訓</button>
+                            <!-- 這裡沒有「退回」：使用者說錯了就直接從右邊的選單改成正確答案，
+                                 那比退回有用——退回只是丟掉一張圖，改判會留下一個正確的標籤。 -->
+                            ${fbOptions(c.field, id, decisions[c.field] === 'corrected'
+                              ? (it.reviewLabels || {})[c.field] : '')}
+                          </span>
+                        </div>`;
+                      }).join('') : '<div class="fb-change fb-none">這一筆沒有修正內容</div>'}
+                      </div>
+                      ${sampleHtml(id, it.hasSample)}
+                      <footer class="fb-card-foot">
+                        <span class="fb-foot-left">
+                          ${it.hasSample ? '' : '<span class="fb-no-sample">沒有影像可看</span>'}
+                          ${it.reviewedAt ? `<span class="fb-reviewed-at">覆核於 ${escapeHtml(fbTime(it.reviewedAt))}</span>` : ''}
+                        </span>
+                        <span class="fb-review-buttons">
+                          <button type="button" class="fb-accept" data-fb-id="${escapeHtml(id)}"
+                            data-fb-decision="accepted" ${status === 'accepted' ? 'disabled' : ''}>全部送訓</button>
+                          <!-- 排除這張 = 整筆 rejected。留著它不是為了否定使用者的判斷（那用改判），
+                               而是為了**照片本身不能用**的情況：沒對到臉、戴口罩、糊掉。
+                               那種照片改判也救不回來，而它是唯一會把影像從 GCS 真的刪掉的動作。 -->
+                          <button type="button" class="fb-reject" data-fb-id="${escapeHtml(id)}"
+                            data-fb-decision="rejected" ${status === 'rejected' ? 'disabled' : ''}
+                            title="照片不能用（沒對到臉、戴口罩、糊掉）。影像會從儲存空間刪除">排除這張</button>
+                        </span>
+                      </footer>
+                    </article>`;
                 }).join('');
-                stagingFilters.querySelectorAll('[data-staging-filter]').forEach(btn => {
-                    btn.onclick = () => { filter = btn.dataset.stagingFilter; page = 1; load(); };
+                // 每次重畫都要重新掛觀察器：舊的那些節點已經被 innerHTML 換掉了。
+                watchSamples();
+                fbUpdateTrainButton();
+                return items.length;
+            };
+
+            // 分頁歸屬。partial（只採用了部分部位）歸在「已送訓」而不是待覆核：
+            // 它已經有東西進了訓練批次，再放回待辦會讓人以為那些部位還沒處理。
+            const fbBucket = (item) => {
+                const status = item.reviewStatus || 'pending';
+                if (status === 'accepted' || status === 'partial') return 'accepted';
+                if (status === 'rejected') return 'rejected';
+                return 'pending';
+            };
+            // 剛剛在這個分頁上處理過的那幾筆。
+            //
+            // 沒有它的話，按下「送訓」的瞬間卡片就會跳到「已送訓」分頁——
+            // 從待覆核清單上消失。連續處理十筆的時候，畫面每按一次就重排一次，
+            // 手指還停在原地，下一張卡已經捲上來了，很容易誤按。
+            //
+            // 所以處理過的留在原地（狀態標籤會變），直到切換分頁或重新載入才歸位。
+            const fbJustDecided = new Set();
+
+            const fbVisible = () => fbItems.filter(it =>
+                fbBucket(it) === fbTab || fbJustDecided.has(it.feedbackId || it.jobId));
+
+            const fbRepaint = () => {
+                [...fbSelected].forEach(id => {
+                    const item = fbItems.find(it => (it.feedbackId || it.jobId) === id);
+                    if (!item || !item.hasSample || !fbApprovedFields(item).length) fbSelected.delete(id);
                 });
-            };
-
-            const money = (price, currency) => {
-                if (price == null || price === '') return '未取得價格';
-                const n = Number(price);
-                return `${currency || ''} ${Number.isFinite(n) ? n.toLocaleString('zh-TW') : price}`.trim();
-            };
-
-            // 清單縮圖優先用 640 的變體，省流量；沒有變體才退回原圖。
-            // 只接受 https。規格書 §2.4 要求全部 HTTPS，但那是「請對方遵守」；
-            // 混合內容會被瀏覽器擋掉、http 圖片也可能是被竄改的來源，所以這裡自己再擋一次。
-            const httpsOnly = (url) => (/^https:\/\//i.test(String(url || '')) ? String(url) : '');
-            const thumbOf = (item) => {
-                const v = item.imageVariants || {};
-                return httpsOnly(v['640']) || httpsOnly(v['320'])
-                    || httpsOnly(Array.isArray(item.imageUrls) ? item.imageUrls[0] : '') || '';
-            };
-
-            const cardHtml = (item) => {
-                const status = String(item.status || '').toLowerCase();
-                const thumb = thumbOf(item);
-                // 來源網址是爬蟲抓回來的外部內容，直接塞 href 等於讓對方決定點下去會執行什麼。
-                const sourceLink = safeExternalUrl(item.sourceUrl);
-                return `<article class="admin-staging-card" data-staging-id="${escapeHtml(item.id)}">
-                    <div class="admin-staging-thumb">${thumb
-                        ? `<img src="${escapeHtml(thumb)}" alt="${escapeHtml(item.name || '商品圖片')}" loading="lazy">`
-                        : '<span>無圖片</span>'}</div>
-                    <div class="admin-staging-body">
-                        <div class="admin-staging-head">
-                            <b>${escapeHtml(item.name || '未取得名稱')}</b>
-                            <span class="admin-staging-badge ${escapeHtml(status)}">${escapeHtml(STATUS_ZH[status] || status || '未知')}</span>
-                        </div>
-                        <p class="admin-staging-meta">${escapeHtml(item.brand || '未取得品牌')} · ${escapeHtml(money(item.price, item.currency))}</p>
-                        <p class="admin-staging-meta">${escapeHtml(item.sourceSite || '')} ${escapeHtml(item.sourceProductId || '')} · ${escapeHtml(item.category || '未分類')}</p>
-                        ${sourceLink ? `<p class="admin-staging-meta"><a href="${sourceLink}" target="_blank" rel="noopener noreferrer">看原始商品頁 ↗</a></p>` : ''}
-                        ${item.failedReason ? `<p class="admin-staging-fail">${escapeHtml(item.failedReason)}</p>` : ''}
-                        ${status === 'rejected' && item.reviewReason ? `<p class="admin-staging-meta">退回原因：${escapeHtml(item.reviewReason)}</p>` : ''}
-                        ${item.importedProductId ? `<p class="admin-staging-meta">已匯入商品 id：${escapeHtml(item.importedProductId)}</p>` : ''}
-                        <div class="admin-staging-actions">
-                            ${status === 'pending' ? `
-                                <button class="admin-primary-button" type="button" data-staging-act="approved">核准</button>
-                                <button class="admin-secondary-button" type="button" data-staging-act="rejected">退回</button>` : ''}
-                            ${status === 'approved' ? `
-                                <button class="admin-primary-button" type="button" data-staging-act="import">匯入正式商品</button>` : ''}
-                        </div>
-                    </div>
-                </article>`;
-            };
-
-            const act = async (id, action, card) => {
-                card.querySelectorAll('button').forEach(b => { b.disabled = true; });
-                let result;
-                if (action === 'import') {
-                    result = await Api.importStagingProduct(id);
-                } else if (action === 'rejected') {
-                    // 退回原因會顯示在清單上，但允許留空。
-                    const reason = window.prompt('退回原因（可留空）：');
-                    result = await Api.reviewStagingProduct(id, 'rejected', String(reason || '').trim());
-                } else {
-                    result = await Api.reviewStagingProduct(id, 'approved');
+                const n = fbRender(fbVisible());
+                const pending = fbItems.filter(it => fbBucket(it) === 'pending').length;
+                const accepted = fbItems.filter(it => fbBucket(it) === 'accepted').length;
+                const rejected = fbItems.filter(it => fbBucket(it) === 'rejected').length;
+                const bucketCounts = { pending, accepted, rejected };
+                fbCounts.forEach((el) => { el.textContent = String(bucketCounts[el.dataset.fbCount] ?? 0); });
+                fbTabButtons.forEach((btn) => {
+                    btn.setAttribute('aria-selected', String(btn.dataset.fbTab === fbTab));
+                });
+                fbSetState(pending ? `${pending} 筆待覆核` : (fbItems.length ? '全部已覆核' : '沒有資料'),
+                    pending ? 'loading' : (fbItems.length ? 'success' : 'idle'));
+                if (fbSummary) {
+                    fbSummary.textContent = fbItems.length
+                        // 講清楚採用的那些會怎麼被用掉：這是唯一會改到訓練集的動作。
+                        ? `${FB_HINT}（共 ${fbItems.length} 筆／待覆核 ${pending}、已採用 ${accepted}、已退回 ${rejected}；`
+                          + `已採用的會被 training/import_feedback_samples.py 收進下一次重訓）`
+                        : '目前沒有使用者修正紀錄。等有人按過「這判斷不準」之後，紀錄會出現在這裡。';
                 }
-                if (!result || !result.ok) {
-                    setMessage(Api._stagingError(result), 'error');
-                    card.querySelectorAll('button').forEach(b => { b.disabled = false; });
-                    return;
-                }
-                // 重畫之後這一筆會從目前的篩選消失（狀態變了），沒有訊息的話使用者
-                // 只看到它憑空不見，不確定是成功還是壞掉。
-                const done = { approved: '已核准', rejected: '已退回', import: '已匯入正式商品' };
-                setMessage(done[action] || '已更新', 'success');
-                Router._stagingLoaded = false;
-                load();
+                return n;
             };
 
-            const load = async () => {
-                setState('載入中', 'loading');
-                setMessage('');
-                stagingList.innerHTML = '<div class="admin-crawler-empty">讀取中…</div>';
-                const result = await Api.listStagingProducts({ status: filter, page, pageSize: PAGE_SIZE });
-                if (!result.ok) {
-                    setState('讀取失敗', 'error');
-                    setMessage(Api._stagingError(result), 'error');
-                    // 端點還沒上線時這裡會是 404。講清楚是「還沒接上」而不是「壞掉」。
-                    stagingList.innerHTML = `<div class="admin-crawler-empty">${escapeHtml(result.error || '讀取失敗')}<br><small>商品後端的暫存商品 API 若尚未上線，這裡會是 404。</small></div>`;
-                    if (stagingPager) stagingPager.hidden = true;
-                    return;
-                }
-                setState(`共 ${result.total} 筆`, result.total ? 'success' : 'idle');
-                stagingList.innerHTML = result.items.length
-                    ? result.items.map(cardHtml).join('')
-                    : '<div class="admin-crawler-empty">這個狀態底下沒有資料</div>';
-                stagingList.querySelectorAll('[data-staging-id]').forEach(card => {
-                    card.querySelectorAll('[data-staging-act]').forEach(btn => {
-                        btn.onclick = () => act(card.dataset.stagingId, btn.dataset.stagingAct, card);
+            const TRAIN_PART_ZH = {
+                face_shape: '臉型', brow_shape: '眉型', eye_shape: '眼型',
+                nose_shape: '鼻型', lip_shape: '唇型',
+            };
+            const TRAIN_STATUS_ZH = {
+                queued: '已登記', running: '訓練中', done: '已完成', failed: '失敗',
+            };
+
+            // read_model_metrics() 回的是 { architecture, parts: { 部位: {...} } }，
+            // 但更早的紀錄是把部位直接攤在最上層。兩種都要讀得出來，否則舊批次會
+            // 顯示成「沒有指標」——那不是事實，而且正好是最該拿來對照的那幾筆。
+            const trainParts = (metrics) => {
+                if (!metrics || typeof metrics !== 'object') return {};
+                const parts = metrics.parts && typeof metrics.parts === 'object' ? metrics.parts : metrics;
+                return Object.fromEntries(Object.entries(parts).filter(([key, value]) =>
+                    TRAIN_PART_ZH[key] && value && typeof value === 'object'));
+            };
+            const trainMacro = (entry) => {
+                const raw = Number(entry?.macroAccuracy ?? entry?.accuracy);
+                return Number.isFinite(raw) ? raw : null;
+            };
+            const trainPct = (value) => `${(value * 100).toFixed(1)}%`;
+
+            // 訓練前後對照。只列出兩邊都有數字的部位——單邊有值算不出差距，
+            // 硬是把缺的那邊當 0 會憑空生出一個 +65% 的假進步。
+            const trainDeltaHtml = (before, after) => {
+                const b = trainParts(before);
+                const a = trainParts(after);
+                const rows = Object.keys(TRAIN_PART_ZH).map((part) => {
+                    const mb = trainMacro(b[part]);
+                    const ma = trainMacro(a[part]);
+                    if (mb == null && ma == null) return '';
+                    if (mb == null || ma == null) {
+                        const only = ma == null ? mb : ma;
+                        return `<div class="atb-delta-row"><span>${escapeHtml(TRAIN_PART_ZH[part])}</span>`
+                            + `<span class="atb-delta-only">${escapeHtml(trainPct(only))}（僅單邊有紀錄）</span></div>`;
+                    }
+                    const diff = ma - mb;
+                    const dir = diff > 0.0005 ? 'up' : (diff < -0.0005 ? 'down' : 'flat');
+                    const arrow = dir === 'up' ? '↑' : (dir === 'down' ? '↓' : '→');
+                    return `<div class="atb-delta-row"><span>${escapeHtml(TRAIN_PART_ZH[part])}</span>`
+                        + `<span class="atb-delta-nums">${escapeHtml(trainPct(mb))} <i>${arrow}</i> ${escapeHtml(trainPct(ma))}`
+                        + `<b class="atb-${dir}">${diff >= 0 ? '+' : ''}${(diff * 100).toFixed(1)}</b></span></div>`;
+                }).filter(Boolean).join('');
+                return rows || '';
+            };
+
+            // 這個批次送了哪些部位、各幾張。selections 的形狀是
+            // { "FB-xxx": { "眉型": "落尾眉", ... } }，中文欄位名就是使用者改的那一項。
+            const trainFieldChips = (run) => {
+                const counts = {};
+                Object.values(run?.selections || {}).forEach((fields) => {
+                    Object.keys(fields || {}).forEach((field) => {
+                        counts[field] = (counts[field] || 0) + 1;
                     });
                 });
-                const pages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
-                if (stagingPager) {
-                    stagingPager.hidden = pages <= 1;
-                    if (stagingPageInfo) stagingPageInfo.textContent = `第 ${result.page} / ${pages} 頁`;
-                    const prev = document.getElementById('adminStagingPrev');
-                    const next = document.getElementById('adminStagingNext');
-                    if (prev) { prev.disabled = result.page <= 1; prev.onclick = () => { page = result.page - 1; load(); }; }
-                    if (next) { next.disabled = result.page >= pages; next.onclick = () => { page = result.page + 1; load(); }; }
+                const chips = Object.entries(counts).sort((x, y) => y[1] - x[1]);
+                return chips.length
+                    ? chips.map(([field, n]) => `<span class="atb-chip">${escapeHtml(field)} ${n}</span>`).join('')
+                    : '';
+            };
+
+            const trainDuration = (run) => {
+                if (!run?.startedAt || !run?.finishedAt) return '';
+                const ms = new Date(run.finishedAt) - new Date(run.startedAt);
+                if (!Number.isFinite(ms) || ms <= 0) return '';
+                const min = Math.floor(ms / 60000);
+                const sec = Math.round((ms % 60000) / 1000);
+                return min ? `${min} 分 ${sec} 秒` : `${sec} 秒`;
+            };
+
+            const renderTrainingRuns = (data) => {
+                if (fbTrainingPanel) fbTrainingPanel.hidden = false;
+                const currentParts = trainParts(data?.currentMetrics);
+                const currentEntries = Object.entries(currentParts)
+                    .map(([part, value]) => [part, trainMacro(value)])
+                    .filter(([, macro]) => macro != null);
+                if (fbCurrentScore) {
+                    fbCurrentScore.textContent = currentEntries.length
+                        ? `線上模型：${currentEntries.map(([part, macro]) => `${TRAIN_PART_ZH[part]} ${trainPct(macro)}`).join('／')}`
+                        : '尚無已登記的線上模型指標';
+                }
+                const runs = Array.isArray(data?.runs) ? data.runs : [];
+                if (!fbRuns) return;
+                // 訓練機狀態放在批次清單的最前面：所有「為什麼還沒開始」的問題，
+                // 答案都在這一行。
+                const worker = trainWorkerInfo(data?.worker);
+                const workerHtml = `<div class="atb-worker atb-worker-${worker.online ? 'on' : 'off'}">`
+                    + `<i></i>${escapeHtml(worker.text)}</div>`;
+                if (!runs.length) {
+                    fbRuns.innerHTML = workerHtml + '<div class="atb-empty">還沒有任何訓練批次。'
+                        + '在下面的清單勾選已採用的修正，按「送去訓練」就會建立第一筆。</div>';
+                    return;
+                }
+                // 委派到容器上，重畫之後不必重掛。鍵盤也要能開——卡片是 role="button"，
+                // 只認滑鼠的話那個角色就是在說謊。
+                if (!fbRuns.dataset.bound) {
+                    fbRuns.dataset.bound = '1';
+                    const openFromEvent = (ev) => {
+                        const card = ev.target.closest('[data-atb-run]');
+                        if (card && card.dataset.atbRun) openTrainingProgress(card.dataset.atbRun);
+                    };
+                    fbRuns.addEventListener('click', openFromEvent);
+                    fbRuns.addEventListener('keydown', (ev) => {
+                        if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openFromEvent(ev); }
+                    });
+                }
+                fbRuns.innerHTML = workerHtml + runs.map((run) => {
+                    const status = String(run.status || 'queued');
+                    const statusZh = TRAIN_STATUS_ZH[status] || status;
+                    const delta = trainDeltaHtml(run.modelBefore, run.modelAfter);
+                    const chips = trainFieldChips(run);
+                    const excluded = Array.isArray(run.excluded) ? run.excluded : [];
+                    const duration = trainDuration(run);
+                    // 時間鏈刻意分三格顯示：建立是後台寫的，開始與完成是訓練腳本寫的。
+                    // 一個只有「建立」有時間的批次，就是還沒有人真的去訓練——這件事要一眼看得出來。
+                    // 整張卡可以點開進度視窗。訓練跑好幾分鐘，人會想中途回來看一眼，
+                    // 而批次編號本身就是那個視窗要追的東西。
+                    return `
+                        <article class="atb-run atb-${escapeHtml(status)}" role="button" tabindex="0"
+                                 data-atb-run="${escapeHtml(run.runId || '')}"
+                                 title="點開看這個批次的進度">
+                            <header class="atb-run-head">
+                                <b>${escapeHtml(run.runId || '—')}</b>
+                                <span class="atb-badge atb-badge-${escapeHtml(status)}">${escapeHtml(statusZh)}</span>
+                                <span class="atb-model">${escapeHtml(run.model || 'ConvNeXt-Tiny')}</span>
+                            </header>
+                            <div class="atb-steps">
+                                <div class="atb-step"><span>建立（後台）</span><b>${escapeHtml(fbTime(run.createdAt))}</b></div>
+                                <div class="atb-step ${run.startedAt ? '' : 'atb-step-wait'}"><span>開始訓練（腳本）</span><b>${escapeHtml(fbTime(run.startedAt))}</b></div>
+                                <div class="atb-step ${run.finishedAt ? '' : 'atb-step-wait'}"><span>訓練完成（腳本）</span><b>${escapeHtml(fbTime(run.finishedAt))}${duration ? `　${escapeHtml(duration)}` : ''}</b></div>
+                            </div>
+                            <div class="atb-samples">
+                                <span>送出 <b>${escapeHtml(String(run.sampleCount ?? 0))}</b> 個部位標註，來自
+                                    <b>${escapeHtml(String((run.feedbackIds || []).length))}</b> 筆使用者修正</span>
+                                ${chips ? `<div class="atb-chips">${chips}</div>` : ''}
+                            </div>
+                            ${delta ? `<div class="atb-delta"><span class="atb-delta-title">訓練前 → 訓練後（按人切分 macro）</span>${delta}</div>`
+                                : `<div class="atb-pending">${escapeHtml(status === 'done'
+                                    ? '這次沒有回寫指標'
+                                    : '尚未有訓練前後指標——要等本機訓練腳本帶著這個批次編號跑完才會出現。')}</div>`}
+                            ${excluded.length ? `<details class="atb-excluded"><summary>${excluded.length} 筆未納入</summary><ul>`
+                                + excluded.map(item => `<li>${escapeHtml(item.feedbackId || '—')}：${escapeHtml(item.reason || '未說明')}</li>`).join('')
+                                + '</ul></details>' : ''}
+                        </article>`;
+                }).join('');
+            };
+
+            const loadTrainingRuns = async () => {
+                const res = await Api.fetchFaceTrainingRuns();
+                if (res.ok) renderTrainingRuns(res);
+                else if (fbRuns) fbRuns.textContent = `訓練批次讀取失敗：${res.error || '未知錯誤'}`;
+            };
+
+            // 訓練機在不在線。這是「批次還在排隊」唯一有意義的解釋來源：
+            // 沒有這個資訊，管理員按下按鈕看到「已排隊」會以為系統壞了，
+            // 但實際上只是他的電腦沒開——那兩件事的處理方式完全不同。
+            const WORKER_ONLINE_MS = 90 * 1000;
+            const trainWorkerInfo = (worker) => {
+                const seen = worker?.lastSeenAt ? new Date(worker.lastSeenAt).getTime() : 0;
+                const age = seen ? Date.now() - seen : Infinity;
+                const online = Number.isFinite(age) && age < WORKER_ONLINE_MS;
+                const ago = !Number.isFinite(age) ? ''
+                    : age < 60000 ? '剛剛' : `${Math.floor(age / 60000)} 分鐘前`;
+                const state = { idle: '待命中', training: '訓練中', offline: '已停止' }[worker?.state] || worker?.state || '';
+                return {
+                    online,
+                    text: !seen
+                        ? '訓練機從未回報過——請在你的電腦上執行 tools/training_worker.py'
+                        : `訓練機 ${worker.workerId || 'local'}：${ago}回報${state ? `（${state}）` : ''}`,
+                };
+            };
+
+            // 按下「送去訓練」之後的追蹤對話框。
+            //
+            // 為什麼要輪詢而不是直接回報結果：訓練發生在另一台機器上，需要好幾分鐘，
+            // HTTP 回應不可能等那麼久。所以按鈕只能回「已登記」，真正的結論要追。
+            //
+            // 三種結局都要說得出口——完成、失敗（附原因）、以及**還沒開始**（訓練機沒開）。
+            // 少了第三種，沒開電腦就會被顯示成一直轉圈，看起來像壞掉。
+            let trainingPollTimer = null;
+            const openTrainingProgress = (runId) => {
+                if (!runId) return;
+                document.getElementById('trainingProgressOverlay')?.remove();
+                const overlay = document.createElement('div');
+                overlay.id = 'trainingProgressOverlay';
+                overlay.className = 'tp-overlay';
+                overlay.innerHTML = `
+                    <div class="tp-dialog" role="dialog" aria-modal="true" aria-labelledby="tpTitle">
+                        <div class="tp-head">
+                            <h3 id="tpTitle">送去訓練</h3>
+                            <button class="tp-close" type="button" aria-label="關閉">×</button>
+                        </div>
+                        <div class="tp-body" id="tpBody"><div class="tp-line">建立中…</div></div>
+                        <div class="tp-foot"><code>${escapeHtml(runId)}</code></div>
+                    </div>`;
+                document.body.appendChild(overlay);
+
+                const stop = () => {
+                    if (trainingPollTimer) { clearTimeout(trainingPollTimer); trainingPollTimer = null; }
+                };
+                const close = () => { stop(); overlay.remove(); loadTrainingRuns(); };
+                overlay.querySelector('.tp-close').onclick = close;
+                overlay.onclick = (e) => { if (e.target === overlay) close(); };
+
+                const body = overlay.querySelector('#tpBody');
+                const started = Date.now();
+                const poll = async () => {
+                    const res = await Api.fetchFaceTrainingRuns();
+                    if (!res.ok) {
+                        body.innerHTML = `<div class="tp-line tp-bad">讀不到訓練狀態：${escapeHtml(res.error || '未知錯誤')}</div>`
+                            + '<div class="tp-hint">批次已經建立，不會因為這個畫面關掉而消失。稍後可以在上方的批次紀錄看結果。</div>';
+                        return;
+                    }
+                    renderTrainingRuns(res);
+                    const run = (res.runs || []).find(r => r.runId === runId);
+                    const worker = trainWorkerInfo(res.worker);
+                    if (!run) {
+                        body.innerHTML = `<div class="tp-line">批次已建立，正在等待紀錄同步…</div>`;
+                        trainingPollTimer = setTimeout(poll, 4000);
+                        return;
+                    }
+                    const status = String(run.status || 'queued');
+                    if (status === 'done') {
+                        const delta = trainDeltaHtml(run.modelBefore, run.modelAfter);
+                        body.innerHTML = '<div class="tp-line tp-good">訓練完成</div>'
+                            + `<div class="tp-hint">共 ${escapeHtml(String(run.sampleCount ?? 0))} 個部位標註，`
+                            + `耗時 ${escapeHtml(trainDuration(run) || '—')}。</div>`
+                            + (delta ? `<div class="tp-delta">${delta}</div>` : '')
+                            + '<div class="tp-hint">模型已產出在訓練機上，<b>還沒有換上線</b>——要不要換是另一個決定。</div>';
+                        stop();
+                        return;
+                    }
+                    if (status === 'failed') {
+                        body.innerHTML = '<div class="tp-line tp-bad">訓練失敗</div>'
+                            + `<pre class="tp-error">${escapeHtml(run.error || '沒有取得錯誤訊息')}</pre>`
+                            + '<div class="tp-hint">修正之後可以重新勾選同一批資料再送一次。</div>';
+                        stop();
+                        return;
+                    }
+                    if (status === 'running') {
+                        const mins = Math.floor((Date.now() - new Date(run.startedAt || started).getTime()) / 60000);
+                        body.innerHTML = '<div class="tp-line tp-busy">訓練中…</div>'
+                            + `<div class="tp-hint">${escapeHtml(worker.text)}${mins ? `　已經 ${mins} 分鐘` : ''}。`
+                            + '關掉這個視窗不會中斷訓練。</div>';
+                    } else {
+                        body.innerHTML = '<div class="tp-line tp-busy">已排入佇列</div>'
+                            + `<div class="tp-hint tp-${worker.online ? 'good' : 'warn'}">${escapeHtml(worker.text)}</div>`
+                            + `<div class="tp-hint">${worker.online
+                                ? '訓練機在線，通常幾秒內就會開始。'
+                                : '訓練機目前沒有在跑。<b>批次不會消失</b>——等你的電腦開機並執行 <code>python tools/training_worker.py</code>，它就會自動接手。'}</div>`;
+                    }
+                    trainingPollTimer = setTimeout(poll, 4000);
+                };
+                poll();
+            };
+
+            const loadAdminFeedback = async () => {
+                if (fbRefresh) fbRefresh.disabled = true;
+                fbSetState('載入中', 'loading');
+                feedbackBody.innerHTML = '<div class="admin-empty">載入中…</div>';
+                try {
+                    const res = await Api.fetchFaceFeedback(100);
+                    if (!res.ok) {
+                        fbSetState('讀取失敗', 'error');
+                        // 401/403 要講「重新登入」，其他錯誤講原因——兩者的下一步完全不同
+                        const needLogin = res.status === 401 || res.status === 403;
+                        if (fbSummary) {
+                            fbSummary.textContent = needLogin
+                                ? '需要管理員身分才能檢視，請重新登入後再試。'
+                                : `讀取失敗：${res.error || '未知錯誤'}`;
+                        }
+                        feedbackBody.innerHTML =
+                            `<div class="admin-empty">${escapeHtml(needLogin ? '未取得管理員權限' : (res.error || '讀取失敗'))}</div>`;
+                        return;
+                    }
+                    fbItems = Array.isArray(res.items) ? res.items : [];
+                    fbRepaint();
+                    loadTrainingRuns();
+                } finally {
+                    if (fbRefresh) fbRefresh.disabled = false;
                 }
             };
 
-            drawFilters();
-            const refreshBtn = document.getElementById('adminStagingRefresh');
-            if (refreshBtn) refreshBtn.onclick = () => load();
+            // 採用／退回。用事件委派而不是逐列綁定：每次重畫都會換掉整個 tbody，
+            // 逐列綁的處理器會跟著沒掉，得在每次 render 之後再綁一次——那正是這種
+            // 表格最容易漏掉的一步。
+            // 改判的下拉走 change。跟按鈕共用同一條送出路徑，
+            // 差別只在多帶一個 labels——兩套送出邏輯遲早會分岔。
+            feedbackBody.addEventListener('change', async (ev) => {
+                // 勾選：只改本地的集合與按鈕文字，不打任何 API。
+                // 勾選不是一個決定，是在「挑這次要送誰」——真正的決定是按下送去訓練。
+                const pick = ev.target.closest('[data-fb-pick]');
+                if (pick) {
+                    const pid = pick.dataset.fbPick;
+                    if (pick.checked) fbSelected.add(pid); else fbSelected.delete(pid);
+                    fbUpdateTrainButton();
+                    return;
+                }
+                const sel = ev.target.closest('.fb-fix');
+                if (!sel || !sel.value) return;
+                const id = sel.dataset.fbId, field = sel.dataset.fbField, label = sel.value;
+                const card = sel.closest('.fb-card');
+                const controls = card ? [...card.querySelectorAll('button[data-fb-decision], .fb-fix')] : [sel];
+                controls.forEach(b => { b.dataset.wasDisabled = b.disabled ? '1' : ''; b.disabled = true; });
+                const res = await Api.reviewFaceFeedback(id, { [field]: 'corrected' }, '', { [field]: label });
+                if (!res.ok) {
+                    controls.forEach(b => { b.disabled = b.dataset.wasDisabled === '1'; });
+                    sel.value = '';
+                    if (fbSummary) {
+                        fbSummary.textContent = (res.status === 401 || res.status === 403)
+                            ? '需要管理員身分才能覆核，請重新登入後再試。'
+                            : `改判沒有寫進去：${res.error || '未知錯誤'}`;
+                    }
+                    return;
+                }
+                const hit = fbItems.find(it => (it.feedbackId || it.jobId) === id);
+                if (hit) {
+                    hit.reviewStatus = res.reviewStatus;
+                    hit.reviewDecisions = res.reviewDecisions;
+                    hit.reviewLabels = res.reviewLabels || {};
+                    hit.reviewedAt = new Date().toISOString();
+                }
+                fbJustDecided.add(id);   // 留在原地，不要從清單上消失
+                fbRepaint();
+            });
 
-            // 只有真的切到這一節才載入。掛在 PageInit.admin 頂層的話，管理員每次進
-            // 管理中台——不管是要看會員還是商品——都會對暫存商品端點打一次請求，
-            // 而那個端點還沒上線，等於每次都保證一筆 404。
-            Router._loadStagingOnce = () => {
-                if (Router._stagingLoaded) return;
-                Router._stagingLoaded = true;
-                load();
+            feedbackBody.addEventListener('click', async (ev) => {
+                // 影像不再需要按開：卡片捲進畫面時 watchSamples() 會自己去抓。
+                // 抓過的留在 fbSamples 裡，重畫時直接沿用——影像不會變，
+                // 而且每次重打都要等 face-basic 冷啟動。
+                const btn = ev.target.closest('[data-fb-decision]');
+                if (!btn || btn.disabled) return;
+                const id = btn.dataset.fbId;
+                const decision = btn.dataset.fbDecision;
+                const field = btn.dataset.fbField || '';   // 有這個就是只決定一個部位
+                if (!id) return;
+
+                const card = btn.closest('.fb-card');
+                // 送出時把整張卡的按鈕都鎖住：連按兩顆不同的會讓後面那次覆蓋前面那次，
+                // 而畫面上看不出發生了什麼。
+                const buttons = card ? [...card.querySelectorAll('button[data-fb-decision]')] : [btn];
+                buttons.forEach(b => { b.dataset.wasDisabled = b.disabled ? '1' : ''; b.disabled = true; });
+                const stateEl = card?.querySelector('.fb-review-state');
+                const before = stateEl?.innerHTML;
+                if (stateEl) stateEl.textContent = '送出中…';
+
+                const payload = field ? { [field]: decision } : decision;
+                const res = await Api.reviewFaceFeedback(id, payload);
+                if (!res.ok) {
+                    // 失敗要把畫面改回去。留著「送出中」會讓人以為還在跑，
+                    // 直接顯示新狀態則是騙人——後端根本沒收到。
+                    if (stateEl && before != null) stateEl.innerHTML = before;
+                    buttons.forEach(b => { b.disabled = b.dataset.wasDisabled === '1'; });
+                    const needLogin = res.status === 401 || res.status === 403;
+                    if (fbSummary) {
+                        fbSummary.textContent = needLogin
+                            ? '需要管理員身分才能覆核，請重新登入後再試。'
+                            : `覆核沒有寫進去：${res.error || '未知錯誤'}`;
+                    }
+                    return;
+                }
+                // 本機同步同一筆的狀態再重畫，不重打 API。後端回的 reviewDecisions
+                // 是合併過的完整結果，直接用它，不要自己在前端拼——拼錯的話畫面會
+                // 顯示成功但下次載入又變回去。
+                const hit = fbItems.find(it => (it.feedbackId || it.jobId) === id);
+                if (hit) {
+                    hit.reviewStatus = res.reviewStatus;
+                    hit.reviewDecisions = res.reviewDecisions;
+                    hit.reviewedAt = new Date().toISOString();
+                }
+                fbJustDecided.add(id);   // 留在原地，不要從清單上消失
+                fbRepaint();
+            });
+
+            if (fbPickAll) fbPickAll.onchange = () => {
+                const all = fbTrainable().map(it => it.feedbackId || it.jobId);
+                if (fbPickAll.checked) all.forEach(id => fbSelected.add(id));
+                else all.forEach(id => fbSelected.delete(id));
+                fbRepaint();
             };
-            if (document.querySelector('[data-admin-view="crawler"]:not([hidden])')) Router._loadStagingOnce();
+
+            const fbSubmitTraining = async (ids) => {
+                fbTrain.disabled = true;
+                fbTrain.textContent = '登記中…';
+                const res = await Api.queueFaceTraining(ids);
+                if (!res.ok) {
+                    fbTrain.textContent = `送訓失敗：${res.error || '未知錯誤'}`;
+                    setTimeout(fbUpdateTrainButton, 2200);
+                    return;
+                }
+                fbSelected.clear();
+                fbRepaint();
+                loadTrainingRuns();
+                // 建立批次只是開始。真正要讓人知道的是「這次訓練成功了沒有」，
+                // 所以按下去之後開一個對話框，把後續狀態追到有結論為止。
+                openTrainingProgress(res.runId);
+            };
+
+            if (fbTrain) fbTrain.onclick = () => {
+                const ids = fbTrainTargets();
+                if (!ids.length) return;
+                // 送訓不可逆：批次一建立訓練機就會撈走，而每一批都是**從頭重訓一次**
+                // ——上一批只有一個部位也跑了 112 分鐘。按錯的代價不是多按一次，
+                // 是佔住訓練機兩小時。所以問一次，並且把筆數講出來：
+                // 勾選狀態可能早就捲出視野了，按鈕上的數字是唯一的線索。
+                showConfirm(
+                    `要把 ${ids.length} 筆修正送去訓練嗎？`
+                    + (fbSelected.size ? '（你勾選的那幾筆）' : '（所有已採用、有影像、還沒送過的）')
+                    + ' 送出後會建立一個訓練批次，訓練機會從頭重訓一次，需要數十分鐘到數小時。',
+                    {
+                        title: '確認送出訓練',
+                        okText: `送出 ${ids.length} 筆`,
+                        cancelText: '再看看',
+                        onOk: () => fbSubmitTraining(ids),
+                    });
+            };
+
+            // 切分頁時把勾選清空：勾選是為了「送去訓練」，而那個動作只對待覆核／
+            // 已採用的資料有意義。留著看不見的勾選，按鈕上的數字就會對不上畫面。
+            fbTabButtons.forEach((btn) => {
+                btn.onclick = () => {
+                    if (fbTab === btn.dataset.fbTab) return;
+                    fbTab = btn.dataset.fbTab;
+                    fbSelected.clear();
+                    fbRepaint();
+                };
+            });
+            if (fbRefresh) fbRefresh.onclick = loadAdminFeedback;
+            // 切到這個區塊才載入，而且只自動載一次；之後要更新按「重新載入」。
+            Router._loadFeedbackOnce = () => {
+                if (Router._feedbackLoaded) return;
+                Router._feedbackLoaded = true;
+                loadAdminFeedback();
+            };
+            if (document.querySelector('[data-admin-view="feedback"]:not([hidden])')) {
+                Router._loadFeedbackOnce();
+            }
+        }
+
+        // ═══ 商品操作紀錄 ═══
+        // 與模型修正複核同一種情況：畫面、表格、API 方法全都在，就是沒有人把它們接起來，
+        // 按「重新載入」完全沒反應。既然是同一個模式，一起補完。
+        const auditRows = document.getElementById('adminProductAuditRows');
+        if (auditRows) {
+            const auditBtn = document.getElementById('adminProductAuditReload');
+            const auditTime = (iso) => {
+                if (!iso) return '—';
+                const d = new Date(iso);
+                if (Number.isNaN(d.getTime())) return String(iso).slice(0, 16);
+                const p = (n) => String(n).padStart(2, '0');
+                return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+            };
+            const loadProductAudit = async () => {
+                if (auditBtn) auditBtn.disabled = true;
+                auditRows.innerHTML = '<tr><td colspan="4" class="admin-empty">載入中…</td></tr>';
+                try {
+                    const res = await Api.listProductAuditLogs(100);
+                    if (!res.ok) {
+                        const needLogin = res.status === 401 || res.status === 403;
+                        auditRows.innerHTML =
+                            `<tr><td colspan="4" class="admin-empty">${escapeHtml(needLogin ? '需要管理員身分才能檢視，請重新登入。' : (res.error || '讀取失敗'))}</td></tr>`;
+                        return;
+                    }
+                    const logs = res.logs || [];
+                    if (!logs.length) {
+                        auditRows.innerHTML = '<tr><td colspan="4" class="admin-empty">目前沒有商品操作紀錄。</td></tr>';
+                        return;
+                    }
+                    auditRows.innerHTML = logs.map(l => `
+                        <tr>
+                            <td>${escapeHtml(auditTime(l.createdAt || l.created_at || l.timestamp))}</td>
+                            <td>${escapeHtml(l.action || l.operation || '—')}</td>
+                            <td class="fb-job">${escapeHtml(String(l.productId ?? l.product_id ?? '—'))}</td>
+                            <td>${escapeHtml(l.actor || l.operator || l.adminEmail || '—')}</td>
+                        </tr>`).join('');
+                } finally {
+                    if (auditBtn) auditBtn.disabled = false;
+                }
+            };
+            if (auditBtn) auditBtn.onclick = loadProductAudit;
+            // 跟著商品管理區塊一起載入：使用者切到那一頁就是要看商品相關的東西。
+            Router._loadProductAuditOnce = () => {
+                if (Router._productAuditLoaded) return;
+                Router._productAuditLoaded = true;
+                loadProductAudit();
+            };
         }
 
         const refreshAllBtn = document.getElementById('adminRefreshAllBtn');
