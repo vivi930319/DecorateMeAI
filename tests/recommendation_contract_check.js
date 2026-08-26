@@ -36,8 +36,8 @@ const sandbox = {
 vm.createContext(sandbox);
 vm.runInContext(
   cut('function recommendationCardHtml(p) {') + '\n'
-  + cut('function recommendationDetailHtml(p) {') + '\n'
-  // recommendationDetailHtml 現在會呼叫色差入口，抽了前者沒抽相依，
+  + cut('function recommendationPanelHtml(p) {') + '\n'
+  // recommendationPanelHtml 會呼叫色差入口，抽了前者沒抽相依，
   // 測試會在執行時炸 ReferenceError——那是測試的問題，不是程式的。
   + cut('function colorDiffInfo(p) {') + '\n'
   + cut('function colorDiffEntryHtml(p) {') + '\n'
@@ -47,7 +47,7 @@ vm.runInContext(
   + cut('function hasMatch(node) {') + '\n'
   + cut('function shadeRecommendationHtml(p) {') + '\n'
   + 'globalThis.__card = recommendationCardHtml;'
-  + 'globalThis.__detail = recommendationDetailHtml;'
+  + 'globalThis.__detail = recommendationPanelHtml;'
   + 'globalThis.__link = productSourceLinkHtml;'
   + 'globalThis.__shade = shadeRecommendationHtml;', sandbox);
 
@@ -98,12 +98,19 @@ check('router.js 沒有任何地方把技術證據畫進畫面',
   !/\$\{recommendationEvidenceHtml\(/.test(src));
 
 console.log('\n=== 3. 詳情頁的完整文案 ===');
-out = detail({ recommendationPresentation: presentation });
+out = detail({ id: 'p1', recommendationPresentation: presentation });
 check('顯示 summary', out.includes('這款底妝的明暗'));
 // 契約規定 reasonTexts 最多三項
 check('reasonTexts 最多三項', out.includes('理由三') && !out.includes('理由四'));
 check('顯示 disclaimer', out.includes('不代表實際上妝效果'));
 check('沒有 presentation 時回空字串', detail({}) === '');
+// 先前詳情頁是兩個鬆散的 div 疊在商品說明下面，整段推薦理由讀起來就是幾行灰字，
+// 跟商品描述分不開——而它正是「為什麼推這個給你」，是整個功能要講的話。
+check('是一個面板不是散落的 div', out.includes('class="rec-panel"'));
+check('匹配度是主角', /class="rec-bigmatch"/.test(out));
+check('有演算法推薦的標示', out.includes('根據系統演算法推薦'));
+// 「推薦匹配度」四個字是契約要求的：少了它，74% 會被讀成「74% 準確」
+check('保留「推薦匹配度」', out.includes('推薦匹配度'));
 check('沒有 presentation 時卡片也回空字串', card({}) === '');
 
 console.log('\n=== 4. 外部連結的安全屬性 ===');
@@ -119,8 +126,8 @@ const anchorProduct = { id: 'api-foundations-1', name: '測試粉底' };
 const official = {
   method: 'official_depth_index', official: true,
   anchor: { label: '主推薦色號', shadeCode: 'N20', product: anchorProduct, matchPercent: 95 },
-  lighter: { label: '淺一階', shadeCode: 'N10', product: {} },
-  darker: { label: '深一階', shadeCode: 'N30', product: {} },
+  lighter: { label: '淺一階', shadeCode: 'N10', product: { id: 'api-foundations-2' } },
+  darker: { label: '深一階', shadeCode: 'N30', product: { id: 'api-foundations-3' } },
   disclaimer: '色階依同品牌同系列的正式深淺順序提供。',
 };
 sandbox.Router.shadeRecommendation = official;
@@ -134,11 +141,17 @@ check('顯示 disclaimer', out.includes('色階依同品牌同系列'));
 check('有演算法推薦的標示', out.includes('根據系統演算法推薦'));
 check('主推薦有大字匹配度', /sr-bigmatch">95% MATCH/.test(out));
 check('有「想比較不同妝效？」', out.includes('想比較不同妝效？'));
-check('有完整比較按鈕', out.includes('data-shade-compare')
-  && out.includes('查看三個色號的完整比較'));
-// 上下階用 sr-alt 小列，不是跟主推薦一樣的卡片
-check('替代色是小列不是等大卡片',
-  out.includes('sr-alt') && !/class="sr-card sr-anchor"/.test(out));
+// 三欄並排，直接看得到。先前替代色藏在 Modal 後面——而替代色的用途是**比較**，
+// 比較要看得到才成立。要求使用者先相信「裡面有東西值得看」才會點，
+// 多數人不會點，那兩支色號就等於不存在。
+check('三欄並排而不是要按開', out.includes('sc2-row') && !out.includes('data-shade-compare'));
+check('替代色的色號直接顯示', out.includes('sc2-code'));
+check('每一欄都能跳到那支商品', out.includes('data-shade-go'));
+// 三欄不能等重：那會讓人以為三個都是推薦，但只有中間那個是。
+// 主推薦那一欄要有自己的類別，樣式才抬得起來。
+check('主推薦那一欄有獨立類別', out.includes('sc2-anchor'));
+check('替代色欄不帶 anchor 類別',
+  (out.match(/sc2-anchor/g) || []).length === 1);
 
 // 匹配度的形容詞要跟著數字走。寫死「高度匹配」的話，62% 時畫面會用
 // 很有把握的語氣說一件沒把握的事，而使用者是照這句話決定要不要買。
@@ -187,7 +200,10 @@ check('lighter 是 null → 只少那一格，其餘照常', !out.includes('淺�
 sandbox.Router.shadeRecommendation = { ...official, lighter: null, darker: null };
 out = shade({ id: 'api-foundations-1' });
 // 只有主推薦時不給比較按鈕：按開一個只有一欄的比較視窗是空動作
-check('沒有替代色 → 不出現比較按鈕', !out.includes('data-shade-compare'));
+check('沒有替代色 → 不出現並排區塊', !out.includes('sc2-row'));
+// 沒有可比的時候，主推薦的色號要改由上方那塊印出來，
+// 否則整段只剩一個百分比，看不出是哪一支
+check('沒有替代色 → 主推薦色號仍然看得到', out.includes('sr-anchor-code'));
 check('沒有替代色 → 主推薦照常顯示', out.includes('N20'));
 sandbox.Router.shadeRecommendation = { ...official, darker: null };
 out = shade({ id: 'api-foundations-1' });
@@ -196,10 +212,12 @@ sandbox.Router.shadeRecommendation = official;
 check('不是主推薦那件商品時不顯示', shade({ id: 'api-lipsticks-9' }) === '');
 
 console.log('\n=== 7. 接線與樣式 ===');
-check('色號卡可以點開 Modal', /data-shade-kind=/.test(src) && /openShadeModal\(/.test(src));
-check('Modal 有關閉按鈕', /class="sr-close"/.test(src));
-check('Modal 支援 Escape 關閉', /e\.key === 'Escape'/.test(src));
-check('Modal 有焦點鎖（Tab 不會跑到浮層後面）', /e\.key !== 'Tab'/.test(src));
+// 色號的 Modal 已經移除：三欄並排之後要比較的東西全部看得到，
+// 留著一個沒有入口的浮層只是死碼。色差說明的 Modal 仍然在，見 color_diff_qa_check。
+check('沒有殘留無入口的色號 Modal',
+  !/function openShadeModal\(/.test(src) && !/function openShadeCompareModal\(/.test(src));
+check('也沒有殘留指向它的綁定',
+  !/data-shade-kind/.test(src) && !/data-shade-compare/.test(src));
 check('關閉後把焦點還回去', /previouslyFocused/.test(src));
 check('api.js 依 method 決定標籤，不讓畫面層自己拼', /_normalizeShadeRecommendation/.test(api));
 check('api.js 對推薦商品去重', /seenIds/.test(api));

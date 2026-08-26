@@ -1684,6 +1684,42 @@ body.admin-mode .main-content * { letter-spacing:0; }
     color:var(--mid); font-size:10.5px; }
 .rec-detail { margin-top:14px; padding-top:12px; border-top:1px solid var(--line-gold); }
 
+/* 詳情頁的推薦面板。
+   先前這一段是兩個鬆散的 div 疊在商品說明下面，讀起來就是幾行灰字，
+   跟上面的商品描述分不開——而它正是「為什麼推這個給你」，是整個功能要講的話。
+   視覺語彙跟粉底色號那塊（.sr-hero）一致：同一個系統講同一件事，
+   不該長成兩種樣子。 */
+.rec-panel { position:relative; overflow:hidden; margin-top:20px;
+    border:1px solid var(--line-gold); border-radius:14px;
+    background:var(--glass-surface-solid);
+    box-shadow:inset 0 1px 0 var(--sheen), 0 10px 30px rgba(150,88,78,.10); }
+.rec-panel::before { content:''; position:absolute; inset:0 0 auto; height:3px;
+    background:var(--gold-grad); }
+.rec-panel-head { padding:22px 20px 18px; text-align:center;
+    border-bottom:1px solid var(--line-gold); }
+.rec-eyebrow { display:inline-block; padding:3px 12px; border-radius:999px;
+    border:1px solid var(--line-gold); background:var(--blush-panel);
+    color:var(--gold-deep); font-size:10.5px; letter-spacing:.1em; }
+/* 匹配度是這一段的主角。先前是 14px 的粗體，跟旁邊的內文一樣重，
+   等於沒有主角。 */
+.rec-bigmatch { margin-top:12px; font-size:34px; line-height:1.05; font-weight:600;
+    color:var(--gold-deep); font-variant-numeric:tabular-nums; letter-spacing:.01em; }
+/* 「推薦匹配度」四個字是契約要求的，不能省：少了它，74% 會被讀成
+   「74% 準確」或「74% 會適合」，而那兩個都不是它的意思。 */
+.rec-bigmatch-sub { margin-top:1px; color:var(--mid); font-size:11px; letter-spacing:.04em; }
+.rec-panel-headline { margin-top:14px; color:var(--ink-soft); font-size:15px;
+    line-height:1.6; font-weight:600; }
+.rec-panel-head .rec-traits { justify-content:center; margin-top:10px; }
+.rec-panel-body { padding:18px 20px 20px; }
+.rec-panel-body .rec-summary { margin:0; }
+.rec-panel-body .rec-reasons { margin-top:12px; }
+
+@media (max-width:520px) {
+    .rec-bigmatch { font-size:28px; }
+    .rec-panel-head { padding:18px 15px 15px; }
+    .rec-panel-body { padding:15px; }
+}
+
 /* 色差說明入口。做成文字按鈕而不是問號圖示：一個 (?) 要先猜它是什麼，
    「色差是什麼？」本身就是使用者心裡那句話。 */
 .cd-entry { margin-top:10px; padding:4px 12px; border:1px solid var(--line-gold);
@@ -1765,22 +1801,38 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .sr-anchor-desc { margin:10px auto 0; max-width:32em; color:var(--ink-soft);
     font-size:13px; line-height:1.85; }
 
-.sr-alts { margin-top:20px; }
-.sr-alts-head { color:var(--ink-soft); font-size:13px; font-weight:600; }
-.sr-alt { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px; width:100%;
-    margin-top:10px; padding:13px 15px; text-align:left; cursor:pointer;
-    border:1px solid var(--line); border-radius:11px; background:var(--glass);
-    transition:border-color .18s, transform .18s, box-shadow .18s; }
-.sr-alt:hover { border-color:var(--gold-soft); transform:translateY(-1px);
-    box-shadow:0 6px 16px rgba(150,88,78,0.10); }
-.sr-alt:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; }
-.sr-alt-code { font-size:17px; font-weight:600; color:var(--ink-soft); }
-.sr-alt-sep { color:var(--lt); }
-.sr-alt-label { color:var(--mid); font-size:12px; }
-.sr-alt-desc { flex:1 1 100%; margin-top:5px; color:var(--mid); font-size:12px; line-height:1.75; }
-.sr-alt-match { margin-left:auto; color:var(--gold-deep); font-size:11px;
-    font-variant-numeric:tabular-nums; }
-.sr-compare { width:100%; margin-top:16px; }
+/* 三欄並排，直接看得到。
+   先前是「主推薦 ＋ 兩列小字 ＋ 一顆要按的按鈕」，替代色藏在 Modal 後面——
+   而替代色的用途是**比較**，比較要看得到才成立。要求使用者先相信
+   「裡面有東西值得看」才會點，多數人不會點，那兩支色號就等於不存在。 */
+.sc2-wrap { margin-top:18px; }
+.sc2-head { color:var(--ink-soft); font-size:13px; font-weight:600; margin-bottom:10px; }
+.sc2-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(148px,1fr)); gap:10px;
+    align-items:stretch; }
+.sc2-col { display:flex; flex-direction:column; align-items:center; gap:5px;
+    padding:16px 12px; text-align:center;
+    border:1px solid var(--line); border-radius:11px; background:var(--glass); }
+/* 主推薦那一欄要看得出來是主角：三欄等重會讓人以為三個都是推薦，
+   但只有中間那個是。用底色與陰影抬起來，不只換邊框顏色——
+   邊框在小螢幕上幾乎看不出來。 */
+.sc2-anchor { border-color:var(--gold-deep); background:var(--blush-panel);
+    box-shadow:0 8px 20px rgba(150,88,78,.16); }
+.sc2-label { color:var(--mid); font-size:10.5px; letter-spacing:.08em; }
+.sc2-anchor .sc2-label { color:var(--gold-deep); font-weight:600; }
+.sc2-code { font-size:22px; font-weight:600; color:var(--ink-soft); letter-spacing:.02em; }
+.sc2-match { color:var(--gold-deep); font-size:11px; font-variant-numeric:tabular-nums; }
+.sc2-desc { margin:4px 0 0; color:var(--mid); font-size:11.5px; line-height:1.65; }
+.sc2-go { margin-top:auto; padding:5px 12px; border:1px solid var(--line-gold);
+    border-radius:999px; background:var(--paper); color:var(--gold-deep);
+    font-size:11px; cursor:pointer; font-family:inherit; }
+.sc2-go:hover { background:var(--blush-panel); }
+.sc2-go:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; }
+
+/* 手機：三欄擠成一排會看不清色號，改成單欄堆疊，主推薦排最前面 */
+@media (max-width:520px) {
+    .sc2-row { grid-template-columns:1fr; }
+    .sc2-anchor { order:-1; }
+}
 
 /* 三色比較視窗 */
 .sc-dialog { position:relative; width:min(560px,100%); max-height:90vh; overflow:auto;

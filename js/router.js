@@ -719,21 +719,6 @@ function recommendationCardHtml(p) {
     return parts.join('');
 }
 
-// 詳情頁用的完整版：卡片放不下的 summary 與推薦理由放這裡。
-// reasonTexts 契約規定**最多三項**——超過就變成技術報告，沒有人會讀完。
-function recommendationDetailHtml(p) {
-    const pr = p?.recommendationPresentation;
-    if (!pr || typeof pr !== 'object') return '';
-    const reasons = Array.isArray(pr.reasonTexts) ? pr.reasonTexts.filter(Boolean).slice(0, 3) : [];
-    return `<div class="rec-detail">
-        ${pr.summary ? `<p class="rec-summary">${escapeHtml(pr.summary)}</p>` : ''}
-        ${reasons.length ? `<ul class="rec-reasons">${reasons
-            .map(r => `<li>${escapeHtml(String(r))}</li>`).join('')}</ul>` : ''}
-        ${colorDiffEntryHtml(p)}
-        ${pr.disclaimer ? `<p class="rec-disclaimer">${escapeHtml(pr.disclaimer)}</p>` : ''}
-    </div>`;
-}
-
 // 色差解釋的入口（契約 2026-08-26）。
 //
 // 只有粉底（比膚色）與唇彩（比自然唇色）會有；眼影、腮紅、修容、打亮、眉彩
@@ -817,6 +802,44 @@ function openColorDiffModal(product) {
     ov.addEventListener('click', (ev) => { if (ev.target === ov) close(); });
 }
 
+// 詳情頁的推薦面板：把卡片版與詳情版收進一個容器。
+//
+// 為什麼要這一層：先前詳情頁是把 recommendationCardHtml 與 recommendationDetailHtml
+// 兩個鬆散的 div 直接疊在商品說明下面，沒有任何容器。結果整段推薦理由讀起來
+// 就是幾行灰字，跟上面的商品描述分不開——而這一段正是「為什麼推這個給你」，
+// 是整個推薦功能要講的話。
+//
+// 用跟粉底色號那塊（.sr-hero）同一套視覺語彙：頂端一道流光金線、實心底、
+// 匹配度放大。同一個系統講同一件事，不該長成兩種樣子。
+function recommendationPanelHtml(p) {
+    const pr = p?.recommendationPresentation;
+    if (!pr || typeof pr !== 'object') return '';
+
+    const pct = (pr.matchPercent == null || pr.matchPercent === '') ? NaN : Number(pr.matchPercent);
+    const hasPct = Number.isFinite(pct);
+    const label = pr.matchLabel || (hasPct ? `${Math.round(pct)}% MATCH` : '');
+    const traits = Array.isArray(pr.suitedTraits) ? pr.suitedTraits.filter(Boolean).slice(0, 4) : [];
+    const reasons = Array.isArray(pr.reasonTexts) ? pr.reasonTexts.filter(Boolean).slice(0, 3) : [];
+
+    return `<section class="rec-panel">
+        <div class="rec-panel-head">
+            <span class="rec-eyebrow">✦ ${escapeHtml(pr.systemLabel || '根據系統演算法推薦')}</span>
+            ${label ? `<div class="rec-bigmatch">${escapeHtml(label)}</div>` : ''}
+            <div class="rec-bigmatch-sub">推薦匹配度</div>
+            ${pr.headline ? `<div class="rec-panel-headline">${escapeHtml(pr.headline)}</div>` : ''}
+            ${traits.length ? `<div class="rec-traits">${traits
+                .map(t => `<span>${escapeHtml(String(t))}</span>`).join('')}</div>` : ''}
+        </div>
+        <div class="rec-panel-body">
+            ${pr.summary ? `<p class="rec-summary">${escapeHtml(pr.summary)}</p>` : ''}
+            ${reasons.length ? `<ul class="rec-reasons">${reasons
+                .map(r => `<li>${escapeHtml(String(r))}</li>`).join('')}</ul>` : ''}
+            ${colorDiffEntryHtml(p)}
+            ${pr.disclaimer ? `<p class="rec-disclaimer">${escapeHtml(pr.disclaimer)}</p>` : ''}
+        </div>
+    </section>`;
+}
+
 // 外部商品連結。契約 §8.1 要求 rel="noopener noreferrer"。
 //
 // 那不是形式：沒有 noopener 的話，被開啟的那一頁可以用 window.opener 把我們這一頁
@@ -857,12 +880,7 @@ function shadeRecommendationHtml(p) {
     if (anchorId && String(p?.id ?? '') !== anchorId) return '';
 
     const a = sr.anchor;
-    // Number(null) 是 0，而 isFinite(0) 為真——直接丟給 Number 的話，
-    // 「沒有分數」會被畫成「0% MATCH」，那等於告訴使用者這個色號完全不合。
-    // Api._normalizeShadeRecommendation 那層已經擋過一次，這裡再擋一次：
-    // 這個函式是實際上色的地方，而測試與其他呼叫端可能不經過正規化。
-    const pct = (a.matchPercent == null || a.matchPercent === '')
-        ? NaN : Number(a.matchPercent);
+    const pct = (a.matchPercent == null || a.matchPercent === '') ? NaN : Number(a.matchPercent);
     const hasPct = Number.isFinite(pct);
 
     // 匹配度的形容詞跟著數字走。寫死「與你的膚色高度匹配」的話，
@@ -874,158 +892,62 @@ function shadeRecommendationHtml(p) {
         : pct >= 60 ? '與你的膚色大致相符'
         : '色調方向接近，建議先試色';
 
-    // 上下階用小列，不用等大的卡片：三張一樣大會讓人以為三個都是推薦，
-    // 但只有中間那個是。主推薦要看得出來是主角。
-    const variantRow = (node, kind) => node ? `
-        <button type="button" class="sr-alt" data-shade-kind="${kind}">
-            <span class="sr-alt-code">${escapeHtml(String(node.shadeCode || '—'))}</span>
-            <span class="sr-alt-sep">｜</span>
-            <span class="sr-alt-label">${escapeHtml(node.label)}</span>
-            ${node.description ? `<span class="sr-alt-desc">${escapeHtml(node.description)}</span>` : ''}
-            ${hasMatch(node)
-                ? `<span class="sr-alt-match">${Math.round(Number(node.matchPercent))}% MATCH</span>` : ''}
-        </button>` : '';
-
+    // 三欄並排，而不是「主推薦 ＋ 兩列小字 ＋ 一顆要按的按鈕」。
+    //
+    // 替代色的用途是**比較**，而比較要看得到才成立。藏在 Modal 後面等於
+    // 要求使用者先相信「裡面有東西值得看」才會點——多數人不會點，
+    // 於是那兩支色號實際上等於不存在。
+    //
+    // 主推薦那一欄用底色與陰影抬起來：三欄等重會讓人以為三個都是推薦，
+    // 但只有中間那個是。
     const hasVariants = Boolean(sr.lighter || sr.darker);
+
+    const col = (node, kind, label) => {
+        if (!node) return '';
+        const prod = node.product || {};
+        const np = (node.matchPercent == null || node.matchPercent === '')
+            ? NaN : Number(node.matchPercent);
+        return `<div class="sc2-col sc2-${kind}">
+            <div class="sc2-label">${escapeHtml(node.label || label)}</div>
+            <div class="sc2-code">${escapeHtml(String(node.shadeCode || '—'))}</div>
+            ${Number.isFinite(np)
+                ? `<div class="sc2-match">${Math.round(np)}% MATCH</div>` : ''}
+            ${node.description ? `<p class="sc2-desc">${escapeHtml(node.description)}</p>` : ''}
+            ${prod.id && kind !== 'anchor'
+                ? `<button type="button" class="sc2-go" data-shade-go="${escapeHtml(String(prod.id))}">查看商品</button>`
+                : ''}
+        </div>`;
+    };
 
     return `<section class="shade-rec">
         <div class="sr-hero">
             <div class="sr-eyebrow">✦ 根據系統演算法推薦</div>
             ${hasPct ? `<div class="sr-bigmatch">${Math.round(pct)}% MATCH</div>` : ''}
             ${matchWord ? `<div class="sr-bigmatch-sub">${escapeHtml(matchWord)}</div>` : ''}
+            <!-- 有並排的三欄時，主推薦的色號由中間那一欄負責——
+                 上下各印一次同樣的 PO-02 只是佔位置，還會讓人以為是兩件事。
+                 沒有替代色可比時才在這裡印，否則整塊會只剩一個百分比。 -->
+            ${hasVariants ? '' : `
             <div class="sr-anchor-label">${escapeHtml(a.label)}</div>
             <div class="sr-anchor-code">${escapeHtml(String(a.shadeCode || '—'))}</div>
-            ${a.description ? `<p class="sr-anchor-desc">${escapeHtml(a.description)}</p>` : ''}
+            ${a.description ? `<p class="sr-anchor-desc">${escapeHtml(a.description)}</p>` : ''}`}
         </div>
         ${hasVariants ? `
-        <div class="sr-alts">
-            <div class="sr-alts-head">想比較不同妝效？</div>
-            ${variantRow(sr.lighter, 'lighter')}
-            ${variantRow(sr.darker, 'darker')}
-            <button type="button" class="btn-gold sr-compare" data-shade-compare>查看三個色號的完整比較</button>
+        <div class="sc2-wrap">
+            <div class="sc2-head">想比較不同妝效？</div>
+            <div class="sc2-row">
+                ${col(sr.lighter, 'lighter', '較明亮的替代色')}
+                ${col(a, 'anchor', '主推薦色號')}
+                ${col(sr.darker, 'darker', '較深的替代色')}
+            </div>
         </div>` : ''}
         ${sr.disclaimer ? `<p class="sr-disclaimer">${escapeHtml(sr.disclaimer)}</p>` : ''}
     </section>`;
 }
 
-// 三色並排比較（契約 §5.2）。跟 openShadeModal 是兩件事：
-// 這個回答「三個差在哪」，那個回答「這一個是什麼」。
-function openShadeCompareModal() {
-    const sr = Router.shadeRecommendation;
-    if (!sr || !sr.anchor) return;
-    document.getElementById('shadeModal')?.remove();
-    document.getElementById('shadeCompare')?.remove();
 
-    const col = (node, kind) => node ? `
-        <button type="button" class="sc-col sc-${kind}" data-shade-kind="${kind}">
-            <span class="sc-label">${escapeHtml(node.label)}</span>
-            <span class="sc-code">${escapeHtml(String(node.shadeCode || '—'))}</span>
-            ${hasMatch(node)
-                ? `<span class="sc-match">${Math.round(Number(node.matchPercent))}% MATCH</span>` : ''}
-        </button>` : '';
 
-    const detail = (node) => node ? `
-        <div class="sc-detail">
-            <div class="sc-detail-head">${escapeHtml(String(node.shadeCode || '—'))}｜${escapeHtml(node.label)}</div>
-            ${node.description ? `<p>${escapeHtml(node.description)}</p>` : ''}
-        </div>` : '';
 
-    const ov = document.createElement('div');
-    ov.id = 'shadeCompare';
-    ov.className = 'sr-overlay';
-    ov.innerHTML = `<div class="sc-dialog" role="dialog" aria-modal="true" aria-labelledby="scTitle">
-        <button class="sr-close" type="button" aria-label="關閉">×</button>
-        <h3 id="scTitle">選擇適合你的粉底色號</h3>
-        <p class="sc-lead">系統根據你的膚色分析，推薦
-           <strong>${escapeHtml(String(sr.anchor.shadeCode || '主色號'))}</strong> 作為主色號。
-           你也可以依照想呈現的妝效，比較${escapeHtml(sr.official ? '淺一階或深一階' : '較明亮或較深的替代色')}。</p>
-        <div class="sc-row">
-            ${col(sr.lighter, 'lighter')}
-            ${col(sr.anchor, 'anchor')}
-            ${col(sr.darker, 'darker')}
-        </div>
-        ${detail(sr.lighter)}
-        ${detail(sr.anchor)}
-        ${detail(sr.darker)}
-        <p class="sr-disclaimer">${escapeHtml(sr.disclaimer
-            || '實際顏色可能受到拍攝光線、螢幕顯色與上妝厚度影響，購買前仍建議至實體通路試色。')}</p>
-    </div>`;
-    document.body.appendChild(ov);
-
-    // 焦點處理跟 openShadeModal 一樣：只能用滑鼠關掉的浮層，
-    // 對鍵盤操作的人等於卡死整個頁面。
-    const previouslyFocused = document.activeElement;
-    const closeBtn = ov.querySelector('.sr-close');
-    closeBtn.focus();
-    const close = () => {
-        ov.remove();
-        document.removeEventListener('keydown', onKey);
-        if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
-    };
-    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
-    document.addEventListener('keydown', onKey);
-    closeBtn.onclick = close;
-    ov.addEventListener('click', (ev) => { if (ev.target === ov) close(); });
-    // 從比較視窗還能再點進單一色號的說明。
-    ov.querySelectorAll('[data-shade-kind]').forEach(b => {
-        b.onclick = () => { close(); openShadeModal(b.dataset.shadeKind); };
-    });
-}
-
-// 點色號卡片之後開的說明視窗（契約 §5.3）。
-//
-// Modal 需要關閉方式與鍵盤焦點處理——這是契約 §8.2 明列的檢查項，
-// 而它不只是規範：一個只能用滑鼠關掉的浮層，對鍵盤操作的人等於卡死整個頁面。
-function openShadeModal(kind) {
-    const sr = Router.shadeRecommendation;
-    const node = sr && sr[kind];
-    if (!node) return;
-    document.getElementById('shadeModal')?.remove();
-    const prod = node.product || {};
-    const ov = document.createElement('div');
-    ov.id = 'shadeModal';
-    ov.className = 'sr-overlay';
-    ov.innerHTML = `<div class="sr-dialog" role="dialog" aria-modal="true" aria-labelledby="srTitle">
-        <button class="sr-close" type="button" aria-label="關閉">×</button>
-        <div class="sr-tag">${escapeHtml(node.label)}</div>
-        <h3 id="srTitle">${escapeHtml(prod.name || '這個色號')}</h3>
-        ${prod.brand ? `<div class="sr-brand">${escapeHtml(prod.brand)}</div>` : ''}
-        <div class="sr-codebig">${escapeHtml(String(node.shadeCode || '—'))}</div>
-        ${Number.isFinite(Number(node.matchPercent))
-            ? `<div class="rec-match"><b>${Math.round(Number(node.matchPercent))}% MATCH</b><small>推薦匹配度</small></div>` : ''}
-        ${prod.img ? `<img class="sr-img" src="${escapeHtml(prod.img)}" alt="${escapeHtml(prod.name || '')}"
-             onerror="this.style.display='none'">` : ''}
-        ${node.description ? `<p class="sr-desc">${escapeHtml(node.description)}</p>` : ''}
-        ${prod.id ? `<button class="btn-gold sr-go" type="button" data-shade-go="${escapeHtml(prod.id)}">查看商品</button>` : ''}
-        ${sr.disclaimer ? `<p class="sr-disclaimer">${escapeHtml(sr.disclaimer)}</p>` : ''}
-    </div>`;
-    document.body.appendChild(ov);
-
-    // 焦點先移進來，關掉時再還回去——不然鍵盤使用者按 Tab 會跑到浮層後面的頁面。
-    const previouslyFocused = document.activeElement;
-    const closeBtn = ov.querySelector('.sr-close');
-    closeBtn.focus();
-    const close = () => {
-        ov.remove();
-        document.removeEventListener('keydown', onKey);
-        if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
-    };
-    const onKey = (e) => {
-        if (e.key === 'Escape') { e.preventDefault(); close(); return; }
-        if (e.key !== 'Tab') return;
-        // 焦點鎖在浮層裡：Tab 走到底就回到第一個，Shift+Tab 反之。
-        const items = [...ov.querySelectorAll('button, [href]')].filter(el => !el.disabled);
-        if (!items.length) return;
-        const first = items[0], last = items[items.length - 1];
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-    };
-    document.addEventListener('keydown', onKey);
-    closeBtn.onclick = close;
-    ov.onclick = (e) => { if (e.target === ov) close(); };
-    const go = ov.querySelector('[data-shade-go]');
-    if (go) go.onclick = () => { const id = go.dataset.shadeGo; close(); Router.go('products', { productId: id }); };
-}
 
 // ⚠️ 技術分數的展開區塊。契約 §4.2 明訂 scoreBreakdown「僅除錯／後台，不給一般使用者」，
 // 所以它**已經從三個使用者畫面移除**。函式保留是為了後台除錯時還叫得出來。
@@ -4046,27 +3968,30 @@ const PageInit = {
                         ${p.brand ? `<div class="pd-en">${escapeHtml(p.brand)}</div>` : ''}
                         <div class="pd-price-lg">${escapeHtml(p.price)}</div>
                         <div id="pdColorBox">${renderColorBox(swatchColor, p.hex || '', shadeName)}${renderSkinCompare()}</div>
+                        <!-- 鄰近色號緊接在「色號」那一格底下。
+                             先前它排在整頁最後、連「查看商品原頁」都在它上面——
+                             使用者看著自己的色號時，最想知道的就是旁邊還有哪幾支，
+                             那個問題不該要捲到頁尾才回答得到。 -->
+                        ${shadeRecommendationHtml(p)}
                         <div class="pd-actions">
                             <button class="add-bag" data-bag="${p.id}">加入購物袋</button>
                             <button class="heart-btn pd-heart ${Fav.has(p.id)?'fav':''}" data-fav-detail="${p.id}" aria-label="收藏">${HEART_SVG}</button>
                         </div>
                         <div class="pd-desc">${escapeHtml(p.desc || p.matchReason || '商品詳細說明區域。可放入完整描述、使用方式、成分說明等資訊。')}</div>
                         ${colorCompareHtml(p)}
-                        ${recommendationCardHtml(p)}
-                        ${recommendationDetailHtml(p)}
+                        ${recommendationPanelHtml(p)}
                         ${productSourceLinkHtml(p)}
                     </div>
                 </div>
-                ${shadeRecommendationHtml(p)}
                 <div id="pdRelatedBox">${renderRelatedGrid(related, '你可能也喜歡')}</div>
             `;
             // 三張色號卡都要打得開（契約 §8.2 的檢查項）。用委派：整個區塊
             // 是重新渲染出來的，逐張綁會在下一次重畫時全部失效。
-            area.querySelectorAll('[data-shade-kind]').forEach(btn => {
-                btn.onclick = () => openShadeModal(btn.dataset.shadeKind);
+            // 三欄並排之後不再需要 Modal——要比較的東西已經全部看得到了。
+            // 每一欄的「查看商品」直接跳到那支色號的商品頁。
+            area.querySelectorAll('[data-shade-go]').forEach(btn => {
+                btn.onclick = () => Router.go('products', { productId: btn.dataset.shadeGo });
             });
-            const srCompare = area.querySelector('[data-shade-compare]');
-            if (srCompare) srCompare.onclick = () => openShadeCompareModal();
             // 色差說明。找的是「正在看的這件商品」，不是任何一件——
             // 同一頁上相關商品也可能帶著色差，開錯那件會解釋到別人的數字。
             area.querySelectorAll('[data-color-diff]').forEach(btn => {
