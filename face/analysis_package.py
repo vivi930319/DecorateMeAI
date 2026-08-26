@@ -29,6 +29,12 @@ FACE_SHAPE_CODES = {
 BROW_SHAPE_CODES = {
     "一字眉": "straight",
     "彎月眉": "curved",
+    # 2026-08-24 加入的第四類。這張表當時沒跟著加，於是模型判出「挑眉」之後
+    # _code() 查不到、回 "unknown"——模型答對了，資料包把答案丟掉。
+    # 線上實測一萬張裡有 964 張（10%）被判成挑眉，那些全部變成未知。
+    # tests/analysis_package_test.py 現在會檢查這張表與 classes.json 一致，
+    # 下次加第五類會被擋下來，不會再靜靜地變成 unknown。
+    "挑眉": "arched",
     "落尾眉": "drooping_tail",
     "未知": "unknown",
 }
