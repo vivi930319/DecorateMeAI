@@ -58,6 +58,39 @@ def _call(url: str, token: str, body: dict | None = None, method: str | None = N
                          f"HTTP {exc.code}\n{detail}") from exc
 
 
+def ensure_metric_descriptor(project: str, token: str, metric_type: str,
+                             description: str, dry: bool) -> None:
+    """先把自訂指標建出來，否則指向它的告警政策會被回 404。
+
+    Cloud Monitoring 的自訂指標是**寫入第一個點的時候才誕生**的，而告警政策
+    在建立時就會去查那個指標存不存在。於是有個先有雞先有蛋的問題：訓練批次
+    失敗指標只有在真的失敗過一次之後才存在，但告警要在失敗**之前**就設好。
+
+    解法是明確建立指標描述子。這條路不需要先寫入資料點，也就不必為了讓告警
+    設得起來而先偽造一次失敗——那會在歷史裡留下一筆假的失敗紀錄。
+    """
+    url = (f"https://monitoring.googleapis.com/v3/projects/{project}"
+           f"/metricDescriptors/{metric_type}")
+    try:
+        _call(url, token)
+        print(f"  指標已存在：{metric_type.rsplit('/', 1)[-1]}")
+        return
+    except SystemExit:
+        pass  # 404：還沒有，往下建。
+    if dry:
+        print(f"  （預演）會建立自訂指標 {metric_type}")
+        return
+    _call(f"https://monitoring.googleapis.com/v3/projects/{project}/metricDescriptors", token, {
+        "type": metric_type,
+        "metricKind": "GAUGE",
+        "valueType": "DOUBLE",
+        "description": description,
+        # global：這些點是本機訓練機推的，不是任何一個 GCP 資源產生的。
+        "monitoredResourceTypes": ["global"],
+    })
+    print(f"  已建立自訂指標：{metric_type.rsplit('/', 1)[-1]}")
+
+
 def ensure_channel(project: str, token: str, email: str, dry: bool) -> str:
     base = BASE.format(project=project)
     existing = _call(f"{base}/notificationChannels", token).get("notificationChannels", [])
@@ -80,7 +113,12 @@ def ensure_channel(project: str, token: str, email: str, dry: bool) -> str:
     return created["name"]
 
 
-# 兩條政策。刻意只有兩條——告警多到會被忽略的時候，它就等於沒有。
+# 四條政策。刻意維持少——告警多到會被忽略的時候，它就等於沒有。
+#
+# 「訓練機失聯」與「訓練批次失敗」是互補的兩半，缺一邊就有盲區：
+#   斷網／關機   → 心跳指標消失 → 失聯告警。此時本機寄不了信，只能靠雲端發現。
+#   機器活著、訓練炸了 → 心跳照跳，失聯告警**不會響** → 需要失敗告警。
+# 只設前者的話，「模型失敗了但沒人告訴我」就會一直發生。
 def policies(channel: str) -> list[dict]:
     return [
         {
@@ -137,6 +175,36 @@ def policies(channel: str) -> list[dict]:
             "enabled": True,
         },
         {
+            "displayName": "訓練批次失敗",
+            "documentation": {
+                "content": "有一個訓練批次跑失敗了。去後台的「訓練」分頁看那一筆的 "
+                           "error 欄位，那裡是寫給人看的原因；完整輸出在訓練機的 "
+                           "logs/training_worker.log。\n\n"
+                           "排隊中的其他批次不受影響，會繼續跑。",
+                "mimeType": "text/markdown",
+            },
+            "conditions": [{
+                "displayName": "出現失敗的批次",
+                "conditionThreshold": {
+                    "filter": ('metric.type="custom.googleapis.com/training_worker/run_failed" '
+                               'AND resource.type="global"'),
+                    "aggregations": [{
+                        "alignmentPeriod": "300s",
+                        "perSeriesAligner": "ALIGN_COUNT",
+                    }],
+                    # 門檻 0：任何一次失敗都要知道。
+                    "comparison": "COMPARISON_GT",
+                    "thresholdValue": 0,
+                    "duration": "0s",
+                    "trigger": {"count": 1},
+                },
+            }],
+            "combiner": "OR",
+            "notificationChannels": [channel],
+            "alertStrategy": {"autoClose": "1800s"},
+            "enabled": True,
+        },
+        {
             "displayName": "訓練機失聯",
             "documentation": {
                 "content": "訓練機超過 15 分鐘沒有回報。可能是那台電腦關機、睡眠、"
@@ -184,6 +252,11 @@ def main() -> int:
     print(f"專案 {args.project}｜收件信箱 {args.email}\n")
 
     channel = ensure_channel(args.project, token, args.email, args.dry_run)
+
+    # 告警政策建立時會驗證它引用的指標存在，所以指標要先於政策。
+    ensure_metric_descriptor(args.project, token,
+                             "custom.googleapis.com/training_worker/run_failed",
+                             "訓練批次失敗時由訓練機推送一個點", args.dry_run)
 
     existing = {p.get("displayName"): p for p in
                 _call(f"{base}/alertPolicies", token).get("alertPolicies", [])}

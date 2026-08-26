@@ -336,9 +336,17 @@ def fail_run(project: str, run_id: str, message: str) -> None:
         "finishedAt": now_iso(),
         "error": (message or "訓練失敗，但沒有取得錯誤訊息").strip()[:1500],
     })
+    # 記錄先寫，再推告警指標——後台要看的原因不能因為推指標失敗而遺失。
+    #
+    # 為什麼失敗要另外推一個指標：心跳那條盯的是「訓練機不見了」。
+    # 訓練機活得好好的、只是這個批次炸了，心跳照樣在跳，那條告警不會響，
+    # 於是失敗只出現在後台畫面上——要有人主動去看才會發現。
+    # 2026-08-26 使用者說「模型失敗也沒告訴我」，講的就是這個缺口。
+    _push_failure_metric(project, run_id)
 
 
 ALIVE_METRIC = "custom.googleapis.com/training_worker/alive"
+FAILURE_METRIC = "custom.googleapis.com/training_worker/run_failed"
 _LAST_METRIC_PUSH = {"at": 0.0}
 
 
@@ -364,9 +372,14 @@ def push_alive_metric(project: str, worker_id: str) -> None:
     if now - float(_LAST_METRIC_PUSH["at"]) < 60:
         return
     _LAST_METRIC_PUSH["at"] = now
+    _write_time_series(project, ALIVE_METRIC, {"worker_id": worker_id})
+
+
+def _write_time_series(project: str, metric_type: str, labels: dict) -> None:
+    """往 Cloud Monitoring 寫一個點。失敗安靜忽略。"""
     stamp = datetime.now(timezone.utc).isoformat()
     body = {"timeSeries": [{
-        "metric": {"type": ALIVE_METRIC, "labels": {"worker_id": worker_id}},
+        "metric": {"type": metric_type, "labels": labels},
         # global 資源：這台機器不是 GCP 的資源，沒有 instance id 可以填。
         "resource": {"type": "global", "labels": {"project_id": project}},
         "points": [{"interval": {"endTime": stamp}, "value": {"doubleValue": 1.0}}],
@@ -382,6 +395,18 @@ def push_alive_metric(project: str, worker_id: str) -> None:
             pass
     except Exception:
         pass
+
+
+def _push_failure_metric(project: str, run_id: str) -> None:
+    """批次失敗時推一個點，讓 Cloud Monitoring 寄信。
+
+    刻意**不**節流——心跳每分鐘一點所以要節流，失敗很少見而且每一次都要知道。
+
+    run_id 不當成指標標籤：每個批次的 id 都不一樣，當標籤會讓時間序列
+    無限增生（Monitoring 對每條序列計費，而且基數爆掉之後查詢會變慢）。
+    要知道是哪一個批次，去後台看——告警只需要說「有一個炸了」。
+    """
+    _write_time_series(project, FAILURE_METRIC, {})
 
 
 def heartbeat(project: str, worker_id: str, state: str, detail: str = "") -> None:
