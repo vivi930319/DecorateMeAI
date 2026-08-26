@@ -82,6 +82,10 @@
 !face_contributions_test.py
 # 去識別化彙總：這支產的檔案會離開這棟樓，該沒有的東西真的要沒有。
 !export_feedback_aggregate_test.py
+# 修正快取：舊分類名稱沒正規化會一路流到 prompt 而且不報錯。
+!face_corrections_test.py
+# 眼型幾何：旋正與比例不變性。壞掉的樣子是分類悄悄變差，不會報錯。
+!eye_features_test.py
 # 使用者同意提供的訓練樣本（只存部位 ROI，不存原圖）。face_feedback 會 import。
 !face_contributions.py
 !replicate_render.py
