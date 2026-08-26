@@ -1,297 +1,32 @@
 {% extends "base.html" %}
-{% block title %}試妝色彩推薦{% endblock %}
+{% block title %}你的專屬彩妝推薦{% endblock %}
 {% block extra_css %}
 <style>
-.recommend-shell { display: grid; grid-template-columns: minmax(300px, 420px) 1fr; gap: 1.5rem; align-items: start; }
-.tool-panel { position: sticky; top: 120px; }
-.section-title { font-size: 1.6rem; font-weight: 600; margin-bottom: 0.5rem; }
-.section-subtitle { color: var(--text-muted); margin-bottom: 1.25rem; }
-.metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
-.metric { border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; background: #fff; }
-.metric-label { color: var(--text-muted); font-size: 0.75rem; }
-.metric-value { font-size: 0.95rem; font-weight: 600; overflow-wrap: anywhere; }
-.swatch { width: 100%; aspect-ratio: 5 / 2; border-radius: 8px; border: 1px solid var(--border); background: #e8a0b4; }
-.result-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; }
-.result-card { height: 100%; overflow: hidden; }
-.result-image { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: #fafafa; border-radius: 8px; }
-.score-badge { background: var(--primary-pink); color: white; border-radius: 999px; padding: 0.25rem 0.6rem; font-weight: 600; font-size: 0.8rem; }
-.score-row { display: grid; grid-template-columns: 60px 1fr 46px; align-items: center; gap: 0.5rem; font-size: 0.75rem; margin-top: 0.35rem; }
-.score-bar { height: 6px; background: #f1f1f1; border-radius: 999px; overflow: hidden; }
-.score-fill { height: 100%; background: var(--primary-pink); }
-.json-box { min-height: 140px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.82rem; }
-@media (max-width: 992px) {
-  .recommend-shell { grid-template-columns: 1fr; }
-  .tool-panel { position: static; }
-}
+.recommend-hero{padding:1.5rem;border-radius:20px;background:linear-gradient(135deg,#fff7fa,#fff);border:1px solid #f1dce4}.analysis-chips,.trait-list{display:flex;flex-wrap:wrap;gap:.5rem}.analysis-chip,.trait{padding:.4rem .75rem;border-radius:999px;background:#fff;border:1px solid #ead7df;font-size:.88rem}.recommend-layout{display:grid;grid-template-columns:minmax(260px,340px) 1fr;gap:1.5rem;align-items:start}.analysis-panel{position:sticky;top:100px}.product-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1rem}.product-card{border:1px solid #eadfe3;border-radius:18px;overflow:hidden;background:#fff;box-shadow:0 8px 24px rgba(70,35,49,.06)}.product-image{width:100%;aspect-ratio:1/1;object-fit:cover;background:#f7f4f5}.product-body{padding:1rem}.system-label{font-size:.8rem;color:#805365;font-weight:700;letter-spacing:.03em}.match-number{font:700 1.35rem/1.1 Georgia,serif;color:#9d4165}.match-caption{font-size:.72rem;color:#806f76}.match-headline{font-size:1.08rem;font-weight:700;margin:.55rem 0}.reason-list{margin:.8rem 0 0;padding:0;list-style:none}.reason-list li{margin:.4rem 0;padding-left:1.35rem;position:relative;font-size:.9rem}.reason-list li:before{content:'✓';position:absolute;left:0;color:#a23f68;font-weight:700}.shade-summary{border-radius:18px;padding:1rem;background:#fff9f4;border:1px solid #eedfce}.shade-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.8rem}.shade-card{padding:1rem;border:1px solid #e5d7cf;border-radius:16px;background:#fff}.shade-card.anchor{border:2px solid #a23f68;box-shadow:0 6px 18px rgba(162,63,104,.12)}.shade-code{font:700 1.4rem Georgia,serif}.shade-label{font-weight:700;color:#7f4c5f}.shade-desc{font-size:.86rem;color:#685c61}.modal-panel{border:0;border-radius:20px;max-width:900px;width:calc(100% - 2rem);padding:0;box-shadow:0 24px 70px rgba(35,20,26,.25)}.modal-panel::backdrop{background:rgba(30,18,23,.52)}.modal-content-inner{padding:1.4rem}.empty-state{padding:2rem;text-align:center;border:1px dashed #d8c8ce;border-radius:16px;color:#72656a}.disclaimer{font-size:.78rem;color:#776b70;margin-top:.75rem}.loading{opacity:.6;pointer-events:none}
+@media(max-width:900px){.recommend-layout{grid-template-columns:1fr}.analysis-panel{position:static}.shade-grid{display:flex;overflow-x:auto;scroll-snap-type:x mandatory}.shade-card{min-width:78%;scroll-snap-align:center}}
 </style>
 {% endblock %}
 {% block content %}
-<div class="mb-4">
-    <div class="section-title">試妝色彩推薦</div>
-    <div class="section-subtitle">用 Hex、HSV、CIELAB 與 12 維向量計算最接近的彩妝商品，並顯示每項匹配分數。</div>
-</div>
-
-<div class="recommend-shell">
-    <div class="card tool-panel">
-        <div class="card-body">
-            <form id="recommend-form">
-                <div class="mb-3">
-                    <label class="form-label" for="hex-input">Hex</label>
-                    <input id="hex-input" class="form-control" value="#D9827A" placeholder="#D9827A">
-                </div>
-                <div class="row g-2 mb-3">
-                    <div class="col-4">
-                        <label class="form-label" for="h-input">H</label>
-                        <input id="h-input" class="form-control" type="number" step="0.01" value="6">
-                    </div>
-                    <div class="col-4">
-                        <label class="form-label" for="s-input">S</label>
-                        <input id="s-input" class="form-control" type="number" step="0.01" value="0.43">
-                    </div>
-                    <div class="col-4">
-                        <label class="form-label" for="v-input">V</label>
-                        <input id="v-input" class="form-control" type="number" step="0.01" value="0.85">
-                    </div>
-                </div>
-                <div class="row g-2 mb-3">
-                    <div class="col-4">
-                        <label class="form-label" for="l-input">L</label>
-                        <input id="l-input" class="form-control" type="number" step="0.01" value="62.4">
-                    </div>
-                    <div class="col-4">
-                        <label class="form-label" for="a-input">a</label>
-                        <input id="a-input" class="form-control" type="number" step="0.01" value="31.2">
-                    </div>
-                    <div class="col-4">
-                        <label class="form-label" for="b-input">b</label>
-                        <input id="b-input" class="form-control" type="number" step="0.01" value="18.7">
-                    </div>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label" for="vector-input">12 維向量</label>
-                    <textarea id="vector-input" class="form-control json-box" placeholder="[0.1, 0.2, ...]">[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.2, 0.3, 0.4]</textarea>
-                </div>
-                <div class="row g-2 mb-3">
-                    <div class="col-7">
-                        <label class="form-label" for="style-input">風格</label>
-                        <select id="style-input" class="form-control">
-                            <option value="">不指定</option>
-                            <option value="港風">港風</option>
-                            <option value="韓系乾淨">韓系乾淨</option>
-                            <option value="glam">Glam</option>
-                            <option value="party">Party</option>
-                        </select>
-                    </div>
-                    <div class="col-5">
-                        <label class="form-label" for="category-input">分類</label>
-                        <select id="category-input" class="form-control">
-                            <option value="">全部</option>
-                            <option value="lipsticks">唇彩</option>
-                            <option value="blushes">腮紅</option>
-                            <option value="eyeshadows">眼影</option>
-                            <option value="foundations">底妝</option>
-                            <option value="highlighters">打亮</option>
-                            <option value="contouring">修容</option>
-                            <option value="eyebrows">眉彩</option>
-                            <option value="eyeliner_mascara">眼線/睫毛</option>
-                        </select>
-                    </div>
-                </div>
-                <button id="submit-button" class="btn btn-primary w-100" type="submit">計算推薦</button>
-                <button id="load-local-button" class="btn btn-link w-100 mt-2" type="button">載入 lastTryonData</button>
-            </form>
-        </div>
-    </div>
-
-    <div>
-        <div class="card mb-3">
-            <div class="card-body">
-                <div class="d-flex align-items-center justify-content-between gap-3 flex-wrap">
-                    <div>
-                        <h5 class="mb-1">目標色彩</h5>
-                        <div class="text-muted small" id="target-summary">尚未計算</div>
-                    </div>
-                    <div style="width: 180px; max-width: 100%;">
-                        <div id="target-swatch" class="swatch"></div>
-                    </div>
-                </div>
-                <div class="metric-grid mt-3" id="target-metrics"></div>
-            </div>
-        </div>
-        <div id="status-message" class="alert d-none"></div>
-        <div id="results" class="result-grid"></div>
-    </div>
-</div>
+<section class="recommend-hero mb-4"><div class="system-label">✦ 根據系統演算法推薦</div><h1 class="h3 mt-2">根據你的臉部分析，挑選更適合的彩妝</h1><p class="text-muted mb-3">系統會將膚色、臉型、眼型、唇型與妝容風格，和商品的色調與特質進行搭配，再計算推薦匹配度。</p><div id="analysis-summary" class="analysis-chips" aria-live="polite"></div></section>
+<div class="recommend-layout"><aside class="card analysis-panel"><div class="card-body"><h2 class="h5">臉部分析資料</h2><form id="recommend-form">
+<label class="form-label mt-2" for="style">妝容風格</label><select class="form-control" id="style"><option value="richGirl">千金妝</option><option value="softBaddie">Soft Baddie</option><option value="hongKong">港風</option><option value="koreanClean">韓系亞裔</option><option value="japaneseClear">日雜清透</option><option value="yandere">病嬌</option><option value="mensPlain">男士白開水</option></select>
+<div class="row g-2 mt-1"><div class="col-4"><label class="form-label" for="lab-l">L*</label><input class="form-control" id="lab-l" type="number" min="0" max="100" step=".1" value="65.2"></div><div class="col-4"><label class="form-label" for="lab-a">a*</label><input class="form-control" id="lab-a" type="number" min="-128" max="128" step=".1" value="8.1"></div><div class="col-4"><label class="form-label" for="lab-b">b*</label><input class="form-control" id="lab-b" type="number" min="-128" max="128" step=".1" value="18.4"></div></div>
+<label class="form-label mt-2" for="season">膚色色調</label><select class="form-control" id="season"><option value="warm">暖色調</option><option value="neutral">中性色調</option><option value="cool">冷色調</option></select><label class="form-label mt-2" for="level">膚色明度</label><select class="form-control" id="level"><option value="淺色">淺色</option><option value="中等" selected>中等</option><option value="深色">深色</option></select>
+<label class="form-label mt-2" for="face-shape">臉型</label><select class="form-control" id="face-shape"><option value="oval">鵝蛋臉</option><option value="round">圓臉</option><option value="square">方臉</option><option value="heart">心形臉</option><option value="diamond">鑽石臉</option></select><label class="form-label mt-2" for="eye-shape">眼型</label><select class="form-control" id="eye-shape"><option value="almond">杏眼</option><option value="peach_blossom">桃花眼</option><option value="phoenix">丹鳳眼</option></select><label class="form-label mt-2" for="lip-shape">唇型</label><select class="form-control" id="lip-shape"><option value="full">豐唇</option><option value="m_shape">M 字唇</option><option value="petal">花瓣唇</option></select>
+<label class="form-label mt-2" for="preferred-colors">偏好色系（逗號分隔）</label><input class="form-control" id="preferred-colors" value="champagne,玫瑰"><label class="form-label mt-2" for="avoid-tags">想避開的特質（逗號分隔）</label><input class="form-control" id="avoid-tags" placeholder="例如：明顯亮片"><button class="btn btn-primary w-100 mt-3" id="submit-button" type="submit">查看我的推薦</button></form></div></aside>
+<main><div id="status-message" class="alert d-none" role="status"></div><section id="shade-section" class="shade-summary mb-4 d-none"><div class="d-flex justify-content-between align-items-start gap-3 flex-wrap"><div><div class="system-label">粉底色號推薦</div><h2 class="h4 mb-1">主推薦、淺一階與深一階</h2><p class="text-muted mb-0">比較不同明度，選擇你想呈現的底妝效果。</p></div><button class="btn btn-outline-primary" id="open-shade-dialog" type="button">查看完整色號比較</button></div><div id="shade-preview" class="shade-grid mt-3"></div><p id="shade-disclaimer" class="disclaimer"></p></section><div id="results" class="product-grid"></div></main></div>
+<dialog id="shade-dialog" class="modal-panel" aria-labelledby="shade-dialog-title"><div class="modal-content-inner"><div class="system-label">✦ 根據系統演算法推薦</div><h2 id="shade-dialog-title" class="h4 mt-2">選擇適合你的粉底色號</h2><p class="text-muted">主推薦最接近目前分析結果；也可以依想呈現的妝效比較淺一階或深一階。</p><div id="shade-dialog-grid" class="shade-grid"></div><p id="shade-dialog-disclaimer" class="disclaimer"></p><div class="text-end mt-3"><button class="btn btn-secondary" id="close-shade-dialog" type="button">關閉</button></div></div></dialog>
 {% endblock %}
 {% block extra_js %}
 <script>
-(function () {
-    const form = document.getElementById('recommend-form');
-    const results = document.getElementById('results');
-    const statusMessage = document.getElementById('status-message');
-    const submitButton = document.getElementById('submit-button');
-    const targetSwatch = document.getElementById('target-swatch');
-    const targetSummary = document.getElementById('target-summary');
-    const targetMetrics = document.getElementById('target-metrics');
-
-    function parseVector() {
-        const raw = document.getElementById('vector-input').value.trim();
-        if (!raw) return [];
-        const parsed = JSON.parse(raw);
-        if (!Array.isArray(parsed)) throw new Error('12 維向量必須是陣列');
-        return parsed.map(Number);
-    }
-
-    function getPayload() {
-        const hex = document.getElementById('hex-input').value.trim();
-        return {
-            hex,
-            hsv: [
-                Number(document.getElementById('h-input').value),
-                Number(document.getElementById('s-input').value),
-                Number(document.getElementById('v-input').value)
-            ],
-            lab: {
-                L: Number(document.getElementById('l-input').value),
-                a: Number(document.getElementById('a-input').value),
-                b: Number(document.getElementById('b-input').value)
-            },
-            vector_12d: parseVector(),
-            style: document.getElementById('style-input').value,
-            category: document.getElementById('category-input').value,
-            top_n: 12
-        };
-    }
-
-    function showStatus(type, message) {
-        statusMessage.className = `alert alert-${type}`;
-        statusMessage.textContent = message;
-        statusMessage.classList.remove('d-none');
-    }
-
-    function metric(label, value) {
-        return `<div class="metric"><div class="metric-label">${label}</div><div class="metric-value">${value}</div></div>`;
-    }
-
-    function scoreRow(label, value) {
-        if (value === null || value === undefined) return '';
-        const safeValue = Math.max(0, Math.min(100, Number(value)));
-        return `
-            <div class="score-row">
-                <span>${label}</span>
-                <div class="score-bar"><div class="score-fill" style="width:${safeValue}%"></div></div>
-                <strong>${safeValue.toFixed(1)}%</strong>
-            </div>`;
-    }
-
-    function renderTarget(target) {
-        targetSwatch.style.background = target.hex || '#E8A0B4';
-        targetSummary.textContent = `${target.hex || '-'} · ${target.vectorDimensions || 0}D vector`;
-        targetMetrics.innerHTML = [
-            metric('Hex', target.hex || '-'),
-            metric('HSV', target.hsv ? `H ${target.hsv.h.toFixed(1)} / S ${target.hsv.s.toFixed(2)} / V ${target.hsv.v.toFixed(2)}` : '-'),
-            metric('CIELAB', target.lab ? `L ${target.lab.L.toFixed(1)} / a ${target.lab.a.toFixed(1)} / b ${target.lab.b.toFixed(1)}` : '-'),
-            metric('12 維向量', `${target.vectorDimensions || 0} 維`)
-        ].join('');
-    }
-
-    function renderResults(recommendations) {
-        if (!recommendations.length) {
-            results.innerHTML = '<div class="text-muted">目前沒有符合條件的商品。</div>';
-            return;
-        }
-        results.innerHTML = recommendations.map(rec => {
-            const match = rec.match || {};
-            return `
-                <div class="card result-card">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between align-items-start mb-2 gap-2">
-                            <div>
-                                <div class="fw-bold">${rec.name}</div>
-                                <div class="text-muted small">${rec.brand || rec.type}</div>
-                            </div>
-                            <span class="score-badge">${rec.similarity}%</span>
-                        </div>
-                        <img class="result-image mb-3" src="${rec.image_url || 'https://via.placeholder.com/300x300.png?text=No+Image'}" alt="${rec.name}">
-                        <div class="d-flex align-items-center gap-2 mb-2">
-                            <span style="display:inline-block;width:28px;height:28px;border-radius:50%;border:1px solid #ddd;background:${rec.hex || '#E8A0B4'}"></span>
-                            <span class="small">${rec.hex || '-'}</span>
-                            <span class="ms-auto fw-bold">${rec.price || ''}</span>
-                        </div>
-                        <div class="text-muted small mb-2">${rec.match_reason || ''}</div>
-                        <div class="small mb-2">ΔE ${rec.delta_e ?? '-'}</div>
-                        ${scoreRow('Lab', match.lab)}
-                        ${scoreRow('HSV', match.hsv)}
-                        ${scoreRow('12D', match.vector)}
-                        ${scoreRow('Hue', match.hue)}
-                    </div>
-                </div>`;
-        }).join('');
-    }
-
-    async function runRecommendation(payload) {
-        submitButton.disabled = true;
-        showStatus('info', '正在計算最接近的商品...');
-        results.innerHTML = '';
-        try {
-            const response = await fetch('/recommend-products', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            const data = await response.json();
-            if (!response.ok || !data.success) {
-                showStatus('danger', data.message || '推薦計算失敗');
-                return;
-            }
-            renderTarget(data.target || payload);
-            renderResults(data.recommendations || []);
-            showStatus('success', `已找到 ${data.count || 0} 個推薦商品`);
-        } catch (error) {
-            showStatus('danger', error.message || '推薦服務暫時無法使用');
-        } finally {
-            submitButton.disabled = false;
-        }
-    }
-
-    form.addEventListener('submit', function (event) {
-        event.preventDefault();
-        try {
-            runRecommendation(getPayload());
-        } catch (error) {
-            showStatus('danger', error.message);
-        }
-    });
-
-    document.getElementById('load-local-button').addEventListener('click', function () {
-        const raw = localStorage.getItem('lastTryonData');
-        if (!raw) {
-            showStatus('warning', '找不到 localStorage.lastTryonData');
-            return;
-        }
-        const data = JSON.parse(raw);
-        if (data.hex) document.getElementById('hex-input').value = data.hex;
-        const hsv = data.hsv || [];
-        if (hsv.length >= 3) {
-            document.getElementById('h-input').value = hsv[0];
-            document.getElementById('s-input').value = hsv[1];
-            document.getElementById('v-input').value = hsv[2];
-        }
-        const lab = data.lab || {};
-        if (Array.isArray(lab)) {
-            document.getElementById('l-input').value = lab[0] ?? '';
-            document.getElementById('a-input').value = lab[1] ?? '';
-            document.getElementById('b-input').value = lab[2] ?? '';
-        } else {
-            document.getElementById('l-input').value = lab.L ?? lab.l ?? '';
-            document.getElementById('a-input').value = lab.a ?? lab.A ?? '';
-            document.getElementById('b-input').value = lab.b ?? lab.B ?? '';
-        }
-        document.getElementById('vector-input').value = JSON.stringify(data.vector_12d || data.qdrant_vector_12d || data.vector || [], null, 2);
-        runRecommendation(getPayload());
-    });
-
-    renderTarget({ hex: document.getElementById('hex-input').value, vectorDimensions: 12 });
-})();
+(()=>{'use strict';const $=id=>document.getElementById(id),form=$('recommend-form'),results=$('results'),submit=$('submit-button'),status=$('status-message');let currentShade=null;const labels={style:{richGirl:'千金妝',softBaddie:'Soft Baddie',hongKong:'港風',koreanClean:'韓系亞裔',japaneseClear:'日雜清透',yandere:'病嬌',mensPlain:'男士白開水'},season:{warm:'暖色調膚色',neutral:'中性膚色',cool:'冷色調膚色'},face:{oval:'鵝蛋臉',round:'圓臉',square:'方臉',heart:'心形臉',diamond:'鑽石臉'},eye:{almond:'杏眼',peach_blossom:'桃花眼',phoenix:'丹鳳眼'},lip:{full:'豐唇',m_shape:'M 字唇',petal:'花瓣唇'}};
+function esc(v){const d=document.createElement('div');d.textContent=v??'';return d.innerHTML}function list(v){return v.split(',').map(x=>x.trim()).filter(Boolean)}function safeUrl(v){try{const u=new URL(v,location.origin);return ['http:','https:'].includes(u.protocol)?u.href:''}catch{return ''}}
+function payload(){const lab=[$('lab-l'),$('lab-a'),$('lab-b')].map(x=>Number(x.value));if(!lab.every(Number.isFinite)||lab[0]<0||lab[0]>100||Math.abs(lab[1])>128||Math.abs(lab[2])>128)throw new Error('請確認膚色 LAB 三軸都在合法範圍內');return{analysisPackage:{id:`WEB-${Date.now()}`,schemaVersion:'2026-08-v2',style:$('style').value,faceAnalysis:{faceShape:$('face-shape').value,eyeShape:$('eye-shape').value,lipShape:$('lip-shape').value,skinTone:{lab,season:$('season').value,level:$('level').value,labReliable:true}},generativeText:{styleTags:[],preferredColors:list($('preferred-colors').value),avoidTags:list($('avoid-tags').value)}},limit:12}}
+function show(type,msg){status.className=`alert alert-${type}`;status.textContent=msg}function summary(p){const f=p.analysisPackage.faceAnalysis;$('analysis-summary').innerHTML=[labels.season[f.skinTone.season],f.skinTone.level,labels.face[f.faceShape],labels.eye[f.eyeShape],labels.lip[f.lipShape],labels.style[p.analysisPackage.style]].map(x=>`<span class="analysis-chip">${esc(x)}</span>`).join('')}
+function productCard(item){const ui=item.recommendationPresentation||{},reasons=(ui.reasonTexts||item.matchReasons?.map(x=>x.text)||[item.matchReason]).filter(Boolean).slice(0,3),image=safeUrl(item.imageUrl);return `<article class="product-card"><img class="product-image" src="${esc(image||'https://via.placeholder.com/400x400.png?text=No+Image')}" alt="${esc(item.name)}"><div class="product-body"><div class="d-flex justify-content-between gap-2"><div class="system-label">✦ ${esc(ui.systemLabel||'根據系統演算法推薦')}</div><div class="text-end"><div class="match-number">${esc(ui.matchLabel||`${Math.round((item.matchScore||0)*100)}% MATCH`)}</div><div class="match-caption">推薦匹配度</div></div></div><h3 class="h5 mt-2 mb-0">${esc(item.name)}</h3><div class="text-muted small">${esc(item.brand||item.type)} · ${esc(item.price||'')}</div><div class="match-headline">${esc(ui.headline||item.matchReason)}</div><p class="small">${esc(ui.summary||'這款商品符合你的臉部分析與妝容風格。')}</p><div class="trait-list">${(ui.suitedTraits||[]).map(x=>`<span class="trait">${esc(x)}</span>`).join('')}</div><ul class="reason-list">${reasons.map(x=>`<li>${esc(x)}</li>`).join('')}</ul><p class="disclaimer">${esc(ui.disclaimer||'推薦匹配度用於商品排序，不代表實際上妝效果保證。')}</p>${item.productUrl?`<a class="btn btn-primary w-100" href="${esc(safeUrl(item.productUrl))}" target="_blank" rel="noopener noreferrer">查看商品</a>`:''}</div></article>`}
+function shadeCard(choice,kind){if(!choice)return `<div class="shade-card"><div class="shade-label">暫無相鄰色號</div><p class="shade-desc mt-2">目前沒有符合條件且有庫存的商品。</p></div>`;const p=choice.product||{},isAnchor=kind==='anchor';return `<article class="shade-card ${isAnchor?'anchor':''}"><div class="shade-label">${esc(choice.label)}</div><div class="shade-code mt-1">${esc(choice.shadeCode||p.shadeCode||p.shadeName||p.name)}</div><div class="match-number mt-2">${esc(choice.matchPercent??Math.round((p.matchScore||0)*100))}% MATCH</div><p class="shade-desc mt-2">${esc(choice.description)}</p><div class="small text-muted">${esc(p.brand||'')} ${esc(p.name||'')}</div></article>`}
+function renderShade(shade){currentShade=shade;const section=$('shade-section');if(!shade||!shade.anchor){section.classList.add('d-none');return}section.classList.remove('d-none');const cards=shadeCard(shade.lighter,'lighter')+shadeCard(shade.anchor,'anchor')+shadeCard(shade.darker,'darker');$('shade-preview').innerHTML=cards;$('shade-dialog-grid').innerHTML=cards;$('shade-disclaimer').textContent=shade.disclaimer||'';$('shade-dialog-disclaimer').textContent=shade.disclaimer||'';section.querySelector('h2').textContent=shade.method==='official_depth_index'?'主推薦、淺一階與深一階':'主推薦與明暗替代色'}
+async function run(){const body=payload();summary(body);submit.disabled=true;form.classList.add('loading');show('info','正在依臉部分析與商品資料計算推薦…');results.innerHTML='';try{const response=await fetch('/recommend-products',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),data=await response.json();if(!response.ok)throw new Error(`${data.error?.message||'推薦失敗'}${data.error?.requestId?`（${data.error.requestId}）`:''}`);const rec=data.analysisPackage?.recommendations||{},products=rec.products||data.products||[];results.innerHTML=products.length?products.map(productCard).join(''):'<div class="empty-state">目前沒有符合條件的商品，請稍後再試。</div>';renderShade(rec.shadeRecommendation);show('success',`已找到 ${products.length} 個符合分析結果的商品`)}catch(e){show('danger',e.message);results.innerHTML='<div class="empty-state">推薦服務暫時無法使用。</div>'}finally{submit.disabled=false;form.classList.remove('loading')}}
+form.addEventListener('submit',e=>{e.preventDefault();run()});$('open-shade-dialog').addEventListener('click',()=>currentShade&&$('shade-dialog').showModal());$('close-shade-dialog').addEventListener('click',()=>$('shade-dialog').close());summary(payload());})();
 </script>
 {% endblock %}

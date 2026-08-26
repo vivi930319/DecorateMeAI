@@ -41,9 +41,8 @@ GATEWAY_KEY_LOOSE_MODE=false
 ### 3. Docker 部署（推薦）
 
 ```powershell
-docker compose up -d --build
+docker compose up -d db redis
 docker compose ps
-Invoke-WebRequest http://127.0.0.1:5000/health
 ```
 
 預設服務埠：Flask API `5000`、PostgreSQL `5432`、Redis `6379`。
@@ -52,13 +51,18 @@ Invoke-WebRequest http://127.0.0.1:5000/health
 
 ### 4. 首次初始化資料庫
 
-Docker Compose 會建立 PostgreSQL 18 容器與資料卷，但**不會自動匯入** `postgre.sql`。新資料卷需要先確認 SQL 檔版本後再初始化：
+Docker Compose 不會自動匯入資料庫。專案中的 `postgre.sql` 雖然使用 `.sql` 副檔名，實際上是以 `PGDMP` 開頭的 PostgreSQL **custom-format 備份檔**，必須使用 `pg_restore`，不可用 `psql` 或 `Get-Content` 匯入。
+
+只應對全新空白資料庫執行：
 
 ```powershell
-Get-Content .\postgre.sql -Raw | docker compose exec -T db psql -U postgres -d empower_beauty
+docker cp .\postgre.sql empower-beauty-db:/tmp/decorate-me.dump
+docker compose exec -T db sh -lc 'pg_restore --verbose --no-owner --no-privileges -U "$POSTGRES_USER" -d "$POSTGRES_DB" /tmp/decorate-me.dump'
+docker compose up -d --build app
+Invoke-WebRequest http://127.0.0.1:5000/health
 ```
 
-若 `.env` 使用不同帳號或資料庫名稱，請同步修改命令。既有正式資料庫不可直接重複匯入 dump；請先備份並使用 Migration 或經審核的 SQL。
+命令會直接使用容器中的 `POSTGRES_USER` 與 `POSTGRES_DB`，不需把帳密寫進終端。既有資料庫不可重複還原整份備份；應先備份，再另外製作並審核 migration。現行備份已包含粉底 `series_id`、`depth_index`、非負限制及相鄰色階索引，但欄位內容仍須由品牌正式資料回填，不得從色號文字猜測。
 
 ### 5. 不使用 Docker 的本機啟動
 
@@ -72,7 +76,25 @@ Copy-Item .env.example .env
 python run_local_5000.py
 ```
 
-本機模式必須自行準備 PostgreSQL、Redis 與資料庫 Schema。`.env.example` 的 `DATABASE_URL`／`DB_*`、Redis 和 SMTP 設定需依實際環境修改。
+本機模式必須自行準備 PostgreSQL、Redis 與資料庫 Schema。`.env.example` 的 `DATABASE_URL`／`DB_*`、Redis 和 SMTP 設定需依實際環境修改。`run_local_5000.py` 會執行 `db.create_all()`，但只能建立 ORM 已宣告的表，不會完整建立 dump 中的 Function、Trigger、View 與全部索引，因此不能取代正式資料庫還原流程。
+
+### 6. 重要環境變數
+
+| 變數 | 必要性 | 用途 |
+|---|---|---|
+| `DATABASE_URL` 或 `DB_USER`／`DB_PASSWORD`／`DB_HOST`／`DB_PORT`／`DB_NAME` | 必填 | PostgreSQL 連線；`DATABASE_URL` 優先。 |
+| `SECRET_KEY` | 必填 | Flask Session 與安全功能；正式環境不可使用預設值。 |
+| `JWT_SECRET`、`JWT_ISSUER`、`JWT_EXPIRES_IN` | 建議設定 | Bearer Token 簽章、簽發者與期限；未設定 `JWT_SECRET` 時沿用 `SECRET_KEY`。 |
+| `REDIS_URL` 或 `REDIS_HOST`／`REDIS_PORT`／`REDIS_PASSWORD` | 必填 | OTP、TTL、寄送與驗證嘗試限制。 |
+| `SMTP_USER`、`SMTP_PASS`、`SMTP_HOST`、`SMTP_PORT` | Email 功能必填 | OTP 郵件寄送；預設 Gmail SMTP 587。 |
+| `OTP_EXPIRE_SECONDS`、`OTP_SEND_WINDOW_SECONDS`、`OTP_SEND_MAX_ATTEMPTS` | 選填 | OTP 到期與限流參數。 |
+| `PENDING_REGISTRATION_EXPIRE_SECONDS`、`OTP_VERIFIED_WINDOW_SECONDS` | 選填 | 待驗證註冊及驗證完成狀態期限。 |
+| `CORS_ALLOWED_ORIGINS` | 正式環境必填 | 逗號分隔的允許前端來源。 |
+| `UPSTREAM_MEMBER_API_KEY`、`GATEWAY_KEY_LOOSE_MODE` | 正式環境必填 | Gateway 驗證；正式環境應關閉 loose mode。 |
+| `PRODUCT_ADMIN_API_KEY` | 商品管理建議設定 | 商品寫入及管理端 API 金鑰。 |
+| `CRAWLER_*` | 選填 | 商品預覽連線逾時、大小、重新導向與限流。 |
+| `OTP_DEV_MODE` | 僅本機開發 | 開啟時可略過正式寄信流程，正式環境不得啟用。 |
+| `PORT`、`FLASK_DEBUG` | 選填 | 服務埠與除錯模式。 |
 
 ---
 
@@ -101,8 +123,8 @@ python run_local_5000.py
 - **新商品自動納入**：新商品通過商品契約且進入 `product_catalog` 後，會成為推薦候選；未知分類採預設權重，不會因未寫死分類被忽略。
 - **資料庫檢索欄位與狀態**：以商品 `name`、`brand`、`description`、`specs`、`styleTags`／`tags` 與分類比對；只納入 `active`、`approved`、`in_stock`、`recommendation_ready` 全部成立的商品。
 - **可重跑排序**：移除隨機微擾；相同分析資料與相同候選商品會得到相同排序，能重跑 Precision@K。
-- **可解釋輸出**：每筆商品包含 `matchScore`、八項 `scoreBreakdown`、`matchedKeywords`、相容用文字 `matchReason`，以及含 `reasonCode`／`evidence` 的結構化 `matchReasons`。
-- **粉底替代色**：`shadeRecommendation` 提供主推薦、較明亮與較深的替代色。資料庫尚無品牌正式 `depthIndex` 時使用 LAB 的 L* 近似，回應會附上說明，不宣稱是品牌定義的「淺一階／深一階」。
+- **可解釋輸出**：每筆商品包含 `matchScore`、八項 `scoreBreakdown`、結構化 `matchReasons`，以及供前端直接呈現的 `recommendationPresentation`；畫面固定標示「根據系統演算法推薦」，並把臉部分析、妝容風格與主要理由翻譯成自然語句。
+- **粉底相鄰色號**：同品牌同系列具備 `seriesId` 與正式 `depthIndex` 時，`shadeRecommendation` 提供主推薦、淺一階與深一階；舊資料則使用 LAB 的 L* 近似並明確標成較明亮／較深替代色，不冒充品牌正式色階。
 - **降級與覆蓋資訊**：回應提供 `fallbackReasons`、`skinToneLabReliable`、品類 `coverage`、每類一件的 `primary`、80 分以上的 `alternates` 與 `threshold: 0.80`。
 
 #### 推薦流程圖
@@ -170,27 +192,33 @@ flowchart TD
 
 ### 商品、互動與稽核
 
-`postgre.sql` 目前定義 **34 張資料表**，包括 `products`、`product_catalog`、八個商品分類表、`crawler_staging_products`、收藏、購物車、簽到、點數、任務、推薦碼、妝容／分析歷史與各類稽核表。
+目前 PostgreSQL Schema 有 **34 張資料表**，包括 `products`、`product_catalog`、八個商品分類表、`crawler_staging_products`、收藏、購物車、簽到、點數、任務、推薦碼、妝容／分析歷史與各類稽核表。
 
-- **Function**：`enforce_product_contract`、`register_product_catalog_item`、`product_hex_to_lab`、簽到／收藏／會員等級相關函式。
-- **Trigger**：商品契約檢查、新商品登錄全域商品目錄、簽到重複防護、收藏與會員等級歷程。
+- **專案 Function（11 個）**：`enforce_product_contract`、`register_product_catalog_item`、`product_hex_to_lab`、`daily_member_stats`、簽到／收藏／會員等級與 `sp_*` 查詢函式；此外 `pgcrypto` extension 會提供自己的函式。
+- **Trigger（21 個，不含 PostgreSQL 內部 Trigger）**：商品契約檢查、新商品登錄全域商品目錄、簽到重複防護、收藏與會員等級歷程。
 - **View**：`view_member_activity`、`view_member_dashboard`、`view_product_list`、`view_product_popularity`。
-- **Index**：針對商品推薦狀態、爬蟲審核、會員 Session/OTP、稽核、點數、任務等高頻查詢建立索引。
+- **Index**：目前資料庫共 98 個索引（包含主鍵及唯一限制自動建立者），涵蓋商品推薦狀態、正式粉底色階、爬蟲審核、會員 Session/OTP、稽核、點數與任務查詢。
 
 ---
 
 ## API 概覽
 
-`app.py` 目前有 72 個 `@app.route` 宣告；部分路徑支援多個 HTTP 方法，提供超過 70 項操作。
+Flask 實際載入後目前有 **81 條 URL 規則**（包含 Flask 內建 static route），合計 **87 個 HTTP 操作**；同一路徑可能依 HTTP method 對應不同處理函式。
 
 | 類別 | 代表端點 |
 |---|---|
 | 健康 | `GET /health`、`GET /healthz` |
-| 認證 | `POST /api/register`、`/api/send-otp`、`/api/verify-otp`、`/api/login`、`/api/logout`、`GET /api/me` |
-| 會員 | `GET/PATCH/DELETE /api/members/<email>`、點數、任務、主題、推薦碼、稽核、統計 |
-| 收藏/購物車 | 收藏 CRUD/toggle、歷史、`GET/PUT /cart`、購物車品項 CRUD |
-| 商品/爬蟲 | 商品 CRUD、`GET /api/products` 篩選、`GET /api/products/<id>/similar`、色票、預覽、爬蟲暫存查詢/核准/拒絕、產品稽核 |
-| 推薦/試妝 | `POST /recommend-products`、`POST /api/tryon/save` |
+| 認證 | `POST /api/register`、`POST /api/send-otp`、`POST /api/verify-otp`、`POST /api/login`、`POST /api/logout`、`GET /api/me` |
+| 會員管理 | `GET /api/members`、`GET/PATCH/DELETE /api/members/<email>`、`GET /api/members/<email>/audit-log`、`GET /api/members/<phone>/stats` |
+| 點數與會員活動 | `GET /points`、`POST /points/adjust`、每日簽到 GET/POST、任務 GET/claim、主題 GET/redeem、推薦碼 GET |
+| 收藏與購物車 | 收藏列表、toggle、單筆刪除；購物車 GET/PUT、品項 POST/PATCH/DELETE |
+| 妝容資料 | 保存妝容 GET/POST/DELETE、分析歷史 GET/POST、`POST /api/tryon/save` |
+| 商品目錄 | 商品 GET/POST、單筆 GET/PATCH/DELETE、全分類、八個分類 GET、色票及相似商品 |
+| 爬蟲與稽核 | 商品預覽、爬蟲暫存列表／核准／拒絕、產品稽核紀錄 |
+| 推薦 | `POST /recommend-products`、`GET /tryon-recommendations` |
+| Jinja 頁面 | 首頁、註冊、登入、忘記／重設／變更密碼、收藏、歷史、個人資料、商品及管理頁 |
+
+> `GET/POST /api/members/<email>/referral` 是保留給舊前端的相容路徑，目前固定回傳 HTTP 501；正式推薦碼功能請使用 `GET /api/members/<email>/referral-code`。
 
 ### 商品列表與相似商品
 
@@ -269,9 +297,10 @@ flowchart TD
 |---|---|
 | `matchReason` | 相容既有前端的中文推薦理由字串。 |
 | `matchReasons` | 結構化理由陣列，包含 `priority`、`reasonCode`、`personalized`、`text` 與 `evidence`。 |
+| `recommendationPresentation` | 前端呈現模型：系統演算法標籤、MATCH 顯示值、自然語句、適用特徵與非準確率聲明。 |
 | `skinToneLabReliable` | 後端依 LAB 型別、三軸完整性及合法值域重新判定的可信狀態。 |
 | `fallbackReasons` | 降級原因；壞或缺少膚色 LAB 且涉及底妝時包含 `SKIN_TONE_LAB_UNRELIABLE`。 |
-| `shadeRecommendation` | 粉底主推薦及較明亮／較深替代色；無可用粉底 LAB 時為 `null`。 |
+| `shadeRecommendation` | 粉底主推薦與相鄰色；`official_depth_index` 才顯示淺／深一階，`lab_lightness_approximation` 僅顯示明暗替代色。 |
 
 > `matchScore` 是排序分數，不是「商品適合度百分比」或模型準確率。準確率應以人工金標資料、Precision@K 等離線評估另行計算。
 
@@ -297,23 +326,41 @@ flowchart TD
 
 ```text
 Backend database/
-├── app.py                    # Flask 路由、驗證、會員/商品/推薦整合
-├── models.py                 # SQLAlchemy ORM 模型
-├── recommendation.py         # CIEDE2000、偏好分數、理由、粉底替代色與排序
-├── makeup_keywords.py        # 七種風格關鍵字與別名
-├── postgre.sql               # PostgreSQL 18 schema、Function、Trigger、View、Index
-├── otp_utils.py / OTP.py     # OTP、Redis、SMTP 輔助
-├── static/brand/              # OTP Email 內嵌 Decorate Me Logo
-├── crawler_preview.py        # 商品預覽與 SSRF 防護
-├── config.py / forms.py      # 設定與表單驗證
-├── docker-compose.yml        # Flask + PostgreSQL 18 + Redis
-├── Dockerfile                # API 映像建置
-├── wait_for_services.py      # 容器啟動等待 DB / Redis
-├── templates/                # Jinja 網頁模板
-├── tests/recommendation/     # Precision@K 評估與 13 項推薦契約測試
-├── backups/                  # 升級前資料庫備份
-└── test_*.py、*_test.py      # 開發診斷腳本，非正式服務核心
+├── app.py                     # Flask app、81 條 URL 規則、驗證與各模組整合
+├── models.py                  # SQLAlchemy ORM 模型
+├── extensions.py              # 共用 db、bcrypt、login_manager 實例
+├── config.py                  # .env 載入與 PostgreSQL SQLAlchemy URI 組裝
+├── forms.py                   # 註冊、登入、密碼等 WTForms 驗證
+├── recommendation.py          # CIEDE2000、動態權重、個人化、理由與粉底相鄰色
+├── makeup_keywords.py         # 七種妝容風格定義、別名及關鍵字
+├── crawler_preview.py         # 商品頁解析、URL/SSRF 防護與爬蟲限流
+├── otp_utils.py               # OTP 產生、雜湊、Redis 與 SMTP/CID 郵件
+├── OTP.py                     # 舊啟動相容入口；實際 OTP 路由仍由 app.py 提供
+├── sql.py                     # 舊式 CSV／測試資料批次匯入工具
+├── seed_data.py               # 呼叫 sql.py 執行開發測試資料匯入
+├── postgre.sql                # PostgreSQL 18 custom-format 完整備份，使用 pg_restore
+├── run_local_5000.py          # 無 reloader 的本機開發啟動器
+├── wait_for_services.py       # 容器啟動前等待 PostgreSQL 與 Redis
+├── Dockerfile                 # Linux API 映像及 Gunicorn 啟動設定
+├── docker-compose.yml         # Flask、PostgreSQL 18、Redis 服務與資料卷
+├── .env.example               # 非 Docker 本機環境變數範本
+├── .env.docker.example        # Docker Compose 環境變數範本
+├── requirements.txt           # 鎖定版 Python 相依套件
+├── Procfile                   # 支援 Procfile 平台的 Gunicorn 啟動命令
+├── DOCKER.md                  # Docker 常用操作的精簡補充
+├── templates/                 # Jinja 頁面：會員、商品、推薦、後台等
+├── static/brand/              # OTP Email 使用的 Decorate Me Logo
+├── static/uploads/            # 使用者上傳或試妝產生的執行期檔案
+├── tests/recommendation/      # 15 項契約測試與 Precision@K 評估工具
+├── 推薦演算法技術內容詳細版_2026-08-26.md # 推薦公式、契約、限制與文獻
+├── backups/                   # PostgreSQL 升級／變更前備份，不納入部署映像
+├── catch_errors.py、check_login.py、full_diagnostic.py
+│                                # 問題排查腳本
+└── *_test.py、test_*.py、quick_test.py 等
+                                 # 歷史手動 smoke test；正式測試以 tests/ 為準
 ```
+
+`Redis.msi` 是 Windows 本機安裝檔，不是應用程式執行時相依項；Docker 使用者不需要執行它。`OTP.env` 是舊式 OTP 設定樣板，現行程式以根目錄 `.env` 與作業系統環境變數為準。README 不建議把這兩個檔案納入正式部署產物。
 
 ---
 
@@ -321,12 +368,13 @@ Backend database/
 
 ```powershell
 python -m py_compile app.py recommendation.py
-python -m unittest tests.recommendation.test_recommendation_contract -v
+$env:PYTHONPATH='.'
+python tests/recommendation/test_recommendation_contract.py
 python tests\recommendation\evaluate_precision_at_k.py gold.json predictions.json
 docker compose ps
 ```
 
-- `test_recommendation_contract.py` 現有 13 項測試，涵蓋 styleId／顯示名稱相容、未知風格、停用商品排除、結果確定性、眉彩正常路徑、預算／品牌／行為分數、壞 LAB 降級、品牌硬排除、避雷詞差異、偏好約束及巢狀敏感欄位阻擋。
+- `test_recommendation_contract.py` 現有 15 項測試，另涵蓋使用者呈現文字、官方相鄰色階與 LAB 明度降級不得混用。
 - 路由層還應在可連線的 PostgreSQL／Redis 環境驗證商品過濾、相似商品、502 `PRODUCT_DB_UNAVAILABLE` 與 504 `PRODUCT_DB_TIMEOUT`。純演算法單元測試不會模擬資料庫離線。
 - 評估工具可計算 Precision@5/10、重複率、停用商品率與幻覺商品率；尚未建立人工金標集前，不宣稱準確率數字。
 - 不可提交 `.env`、SMTP 密碼、Gateway/Bearer Key、真實個資、正式資料庫 dump 或 Docker Volume。

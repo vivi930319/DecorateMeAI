@@ -2157,15 +2157,30 @@ def _catalog_rows():
                 SELECT c.id AS global_id, c.product_type, p.id AS source_id, p.name, ''::text AS brand,
                        p.price, p.description, p.image_url AS image_url, NULL::text AS source_url,
                        NULL::text AS sale_page_id, p.category, p.shades, NULL::text[] AS season_tags,
-                       NULL::text AS undertone, 1 AS version, NULL::text AS hex_primary, NULL::jsonb AS lab,
+                       NULL::text AS undertone, NULL::text AS shade_code, NULL::text AS shade_name,
+                       NULL::text AS series_id, NULL::integer AS depth_index,
+                       1 AS version, NULL::text AS hex_primary, NULL::jsonb AS lab,
                        TRUE AS in_stock, 'active'::text AS status, 'approved'::text AS review_status, TRUE AS recommendation_ready
                 FROM public.product_catalog c JOIN public.products p ON c.product_type='products' AND c.source_id=p.id
+            """)
+        elif product_type == "foundations":
+            selects.append(f"""
+                SELECT c.id AS global_id, c.product_type, p.id AS source_id, p.name, COALESCE(p.brand,'') AS brand,
+                       p.price, p.description, p.image_webp_url AS image_url, p.source_url,
+                       p.sale_page_id, p.category, NULL::jsonb AS shades, p.season_tags, p.undertone,
+                       p.shade_code, p.shade_name, p.series_id, p.depth_index,
+                       COALESCE(p.version, 1) AS version, p.hex_primary, p.lab,
+                       COALESCE(p.in_stock,FALSE) AS in_stock, COALESCE(p.status,'inactive') AS status,
+                       COALESCE(p.review_status,'pending') AS review_status, COALESCE(p.recommendation_ready,FALSE) AS recommendation_ready
+                FROM public.product_catalog c JOIN public.{table} p ON c.product_type='{product_type}' AND c.source_id=p.id
             """)
         else:
             selects.append(f"""
                 SELECT c.id AS global_id, c.product_type, p.id AS source_id, p.name, COALESCE(p.brand,'') AS brand,
                        p.price, p.description, p.image_webp_url AS image_url, p.source_url,
                        p.sale_page_id, p.category, NULL::jsonb AS shades, p.season_tags, p.undertone,
+                       NULL::text AS shade_code, NULL::text AS shade_name,
+                       NULL::text AS series_id, NULL::integer AS depth_index,
                        COALESCE(p.version, 1) AS version, p.hex_primary, p.lab,
                        COALESCE(p.in_stock,FALSE) AS in_stock, COALESCE(p.status,'inactive') AS status,
                        COALESCE(p.review_status,'pending') AS review_status, COALESCE(p.recommendation_ready,FALSE) AS recommendation_ready
@@ -2187,6 +2202,9 @@ def _catalog_payload(row):
         "salePageId": row["sale_page_id"] or None, "sale_page_id": row["sale_page_id"] or None,
         "category": row["category"] or "", "shades": row["shades"] or [],
         "seasonTags": row["season_tags"] or [], "undertone": row["undertone"] or "",
+        "shadeCode": row["shade_code"] or None, "shadeName": row["shade_name"] or "",
+        "seriesId": row["series_id"] or None,
+        "depthIndex": int(row["depth_index"]) if row["depth_index"] is not None else None,
         "version": int(row["version"] or 1), "hex_primary": row["hex_primary"], "lab": row["lab"] or None,
         "inStock": bool(row["in_stock"]), "status": row["status"], "reviewStatus": row["review_status"],
         "recommendationReady": bool(row["recommendation_ready"]),
@@ -2323,9 +2341,21 @@ def _catalog_update_response(product_id, data):
         column_map.update({"image_url": "image_url", "category": "category", "shades": "shades"})
     else:
         column_map.update({"image_url": "image_webp_url", "source_url": "source_url"})
+    if item["type"] == "foundations":
+        column_map.update({
+            "shadeCode": "shade_code", "shade_code": "shade_code",
+            "shadeName": "shade_name", "shade_name": "shade_name",
+            "seriesId": "series_id", "series_id": "series_id",
+            "depthIndex": "depth_index", "depth_index": "depth_index",
+            "undertone": "undertone",
+        })
     updates = {column_map[key]: value for key, value in data.items() if key in column_map}
     if not updates:
         return error_response("NO_UPDATABLE_FIELDS", "沒有可更新欄位", 400)
+    if "depth_index" in updates:
+        value = updates["depth_index"]
+        if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+            return error_response("INVALID_DEPTH_INDEX", "depthIndex 必須是大於或等於 0 的整數", 400)
     assignments = ", ".join(f"{column} = :{column}" for column in updates)
     params = {**updates, "source_id": item["sourceId"]}
     if item["type"] != "products":
@@ -2368,6 +2398,8 @@ def recommendation_candidates(categories=None):
                 "productUrl": catalog_item["sourceUrl"] or "",
                 "sourceUrl": catalog_item["sourceUrl"], "salePageId": catalog_item["salePageId"],
                 "seasonTags": catalog_item["seasonTags"], "undertone": catalog_item["undertone"],
+                "shadeCode": catalog_item["shadeCode"], "shadeName": catalog_item["shadeName"],
+                "seriesId": catalog_item["seriesId"], "depthIndex": catalog_item["depthIndex"],
                 "coverageCategory": cat["type"],
                 "currency": "TWD",
                 "hex_primary": getattr(item, "hex_primary", None), "lab": getattr(item, "lab", None),

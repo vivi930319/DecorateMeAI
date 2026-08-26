@@ -571,6 +571,9 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
             "brand": prod.get("brand", ""),
             "name": prod.get("name", ""),
             "shadeName": prod.get("shadeName") or prod.get("shade_name", ""),
+            "shadeCode": prod.get("shadeCode") or prod.get("shade_code"),
+            "seriesId": prod.get("seriesId") or prod.get("series_id"),
+            "depthIndex": prod.get("depthIndex") if prod.get("depthIndex") is not None else prod.get("depth_index"),
             "imageUrl": prod.get("imageUrl") or prod.get("image_url", ""),
             "productUrl": prod.get("productUrl") or prod.get("product_url", "") or prod.get("sale_page_id", ""),
             "sourceUrl": prod.get("sourceUrl") or "",
@@ -601,6 +604,9 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
             "matchReason": reason_text,
             "matchReasons": reason_evidence,
         })
+        scored[-1]["recommendationPresentation"] = _build_user_presentation(
+            scored[-1], style, face_analysis, skin_tone
+        )
 
     # 排序：先比總分，總分一樣比色彩準確度
     scored.sort(key=lambda x: (x["score"], -(x["scoreBreakdown"]["colorScore"])), reverse=True)
@@ -719,24 +725,110 @@ def _build_match_reason(category: str, style: str, color_score: float, style_sco
     return "、".join(reason["text"] for reason in reasons), reasons
 
 
+def _build_user_presentation(product: dict, style: str, face_analysis: dict,
+                             skin_tone: dict) -> dict:
+    """Translate ranking evidence into warm, user-facing copy without exposing formulas."""
+    category = product.get("category") or ""
+    percent = max(0, min(100, round(float(product.get("matchScore") or 0) * 100)))
+    if percent >= 90:
+        tier = "高度匹配"
+    elif percent >= 80:
+        tier = "很適合你的整體妝容"
+    elif percent >= 70:
+        tier = "適合你的妝容風格"
+    elif percent >= 60:
+        tier = "可以參考的搭配選擇"
+    else:
+        tier = "其他搭配選擇"
+
+    category_copy = {
+        "base": ("與你的膚色高度匹配", "這款底妝的明暗與色調和你的膚色協調，適合呈現自然貼合的底妝效果。"),
+        "lip": ("與你的自然唇色高度協調", f"這款唇色能融入你的自然唇色，也符合{style}妝的整體感受。"),
+        "eye": ("符合你的眼型與妝容風格", f"這款眼妝商品能配合你的眼部特徵，也符合{style}妝的風格。"),
+        "blush": ("讓氣色自然融入整體妝容", f"這款腮紅能與你的膚色協調，也符合{style}妝的妝容特質。"),
+        "contour": ("適合你的臉部輪廓", "這款修容適合配合你的臉部特徵，自然加強輪廓與立體感。"),
+        "highlight": ("符合你的整體妝感", f"這款打亮能增添細緻光澤，讓{style}妝的五官輪廓更完整。"),
+        "brow": ("符合你的整體妝容風格", f"這款眉彩適合打造與{style}妝協調的眉妝，讓整體妝容更完整。"),
+    }
+    headline, summary = category_copy.get(
+        category, (tier, f"這款商品符合你的{style}妝風格與個人偏好。")
+    )
+    if category == "base" and product.get("colorMethod") == "season_level":
+        headline = "符合你的膚色特徵與妝容風格"
+        summary = "這次的照片可能受到光線影響，因此系統改用膚色明暗、季型與妝容風格提供建議。"
+    elif category == "base" and percent < 90:
+        headline = tier
+
+    season_labels = {"warm": "暖色調膚色", "cool": "冷色調膚色", "neutral": "中性膚色"}
+    face_labels = {"oval": "鵝蛋臉", "round": "圓臉", "square": "方臉", "heart": "心形臉", "diamond": "鑽石臉"}
+    eye_labels = {"almond": "杏眼", "peach_blossom": "桃花眼", "phoenix": "丹鳳眼"}
+    lip_labels = {"full": "豐唇", "m_shape": "M 字唇", "petal": "花瓣唇"}
+    traits = []
+    season = str(skin_tone.get("season") or "").casefold()
+    level = str(skin_tone.get("level") or "").strip()
+    if category in {"base", "blush", "highlight"} and season and season != "unknown":
+        traits.append(season_labels.get(season, str(skin_tone.get("season"))))
+    if category == "base" and level:
+        traits.append(level)
+    if category in {"blush", "contour", "brow"} and face_analysis.get("faceShape"):
+        raw = str(face_analysis["faceShape"])
+        traits.append(face_labels.get(raw.casefold(), raw))
+    if category == "eye" and face_analysis.get("eyeShape"):
+        raw = str(face_analysis["eyeShape"])
+        traits.append(eye_labels.get(raw.casefold(), raw))
+    if category == "lip" and face_analysis.get("lipShape"):
+        raw = str(face_analysis["lipShape"])
+        traits.append(lip_labels.get(raw.casefold(), raw))
+    traits.append(f"{style}妝")
+    return {
+        "systemLabel": "根據系統演算法推薦",
+        "matchPercent": percent,
+        "matchLabel": f"{percent}% MATCH",
+        "matchTier": tier,
+        "headline": headline,
+        "summary": summary,
+        "suitedTraits": list(dict.fromkeys(traits)),
+        "reasonTexts": [reason.get("text") for reason in product.get("matchReasons", []) if reason.get("text")][:4],
+        "disclaimer": "推薦匹配度是系統用於商品排序的綜合結果，不代表實際上妝效果或準確率保證。",
+    }
+
+
 def _foundation_shade_recommendation(scored: List[dict]) -> Optional[dict]:
     foundations = [item for item in scored if item.get("category") == "base" and item.get("lab")]
     if not foundations:
         return None
     anchor = max(foundations, key=lambda item: item["score"])
-    anchor_l = anchor["lab"][0]
-    lighter = min((item for item in foundations if item is not anchor and item["lab"][0] > anchor_l),
-                  key=lambda item: item["lab"][0] - anchor_l, default=None)
-    darker = min((item for item in foundations if item is not anchor and item["lab"][0] < anchor_l),
-                 key=lambda item: anchor_l - item["lab"][0], default=None)
-    def choice(item, relation, text):
-        return None if item is None else {"relation": relation, "label": text, "product": item}
+    series_id, depth_index = anchor.get("seriesId"), anchor.get("depthIndex")
+    official = series_id and depth_index is not None
+    if official:
+        same_series = [item for item in foundations if item is not anchor
+                       and item.get("seriesId") == series_id and item.get("depthIndex") is not None]
+        lighter = max((item for item in same_series if item["depthIndex"] < depth_index),
+                      key=lambda item: item["depthIndex"], default=None)
+        darker = min((item for item in same_series if item["depthIndex"] > depth_index),
+                     key=lambda item: item["depthIndex"], default=None)
+    else:
+        anchor_l = anchor["lab"][0]
+        lighter = min((item for item in foundations if item is not anchor and item["lab"][0] > anchor_l),
+                      key=lambda item: item["lab"][0] - anchor_l, default=None)
+        darker = min((item for item in foundations if item is not anchor and item["lab"][0] < anchor_l),
+                     key=lambda item: anchor_l - item["lab"][0], default=None)
+    def choice(item, relation, label, description):
+        return None if item is None else {
+            "relation": relation, "label": label, "description": description,
+            "shadeCode": item.get("shadeCode") or item.get("shadeName") or item.get("name"),
+            "matchPercent": round(float(item.get("matchScore") or 0) * 100), "product": item,
+        }
     return {
-        "method": "lab_lightness_approximation",
-        "anchor": choice(anchor, "anchor", "最接近的主推薦"),
-        "lighter": choice(lighter, "lighter_variant", "較明亮的替代色"),
-        "darker": choice(darker, "darker_variant", "較深的替代色"),
-        "disclaimer": "缺少品牌 depthIndex 時以 L* 明度近似，不代表品牌定義的相鄰一階。",
+        "method": "official_depth_index" if official else "lab_lightness_approximation",
+        "seriesId": series_id if official else None,
+        "anchor": choice(anchor, "anchor", "主推薦色號", "目前最接近你的膚色明暗與色調。"),
+        "lighter": choice(lighter, "lighter_variant", "淺一階" if official else "較明亮的替代色",
+                           "適合希望提亮膚色或呈現較明亮妝效時比較。"),
+        "darker": choice(darker, "darker_variant", "深一階" if official else "較深的替代色",
+                          "適合近期有日曬或偏好自然健康妝效時比較。"),
+        "disclaimer": ("色階依同品牌同系列的正式深淺順序提供；實際顏色仍可能受到光線、螢幕與上妝方式影響。"
+                       if official else "目前缺少品牌正式色階順序，以下依 L* 明度提供相近替代色，不代表品牌定義的淺一階或深一階。"),
     }
 
 def _diversify_categories(scored: List[dict], limit: int) -> List[dict]:

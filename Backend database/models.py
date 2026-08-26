@@ -189,7 +189,7 @@ class SavedLook(db.Model):
     created_at = db.Column(db.DateTime, server_default=db.func.now())
 
 
-# ==========  OTP 驗證碼 (待辦 §1) ==========
+# ========== 🔴 OTP 驗證碼 (待辦 §1) ==========
 class OTPCode(db.Model):
     __tablename__ = 'otp_codes'
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
@@ -428,6 +428,11 @@ class Foundations(db.Model):
     qdrant_vector_12d = db.Column(JSONB)
     hex_primary = db.Column(db.String(10))
     source_type = db.Column(db.String(50))
+    shade_code = db.Column(db.String(30))
+    shade_name = db.Column(db.Text)
+    series_id = db.Column(db.String(120))
+    depth_index = db.Column(db.Integer)
+    undertone = db.Column(db.String(20))
     created_at = db.Column(db.DateTime)
 
 

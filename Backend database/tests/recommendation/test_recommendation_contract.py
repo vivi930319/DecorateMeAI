@@ -34,6 +34,10 @@ class RecommendationContractTests(unittest.TestCase):
         item = first["products"][0]
         self.assertIn("matchedKeywords", item)
         self.assertIn("matchScore", item)
+        presentation = item["recommendationPresentation"]
+        self.assertEqual(presentation["systemLabel"], "根據系統演算法推薦")
+        self.assertNotIn("AI", presentation["systemLabel"])
+        self.assertEqual(presentation["matchPercent"], round(item["matchScore"] * 100))
 
     def test_brow_without_brow_lab_is_normal_style_ranking(self):
         brow = {"id": 7, "type": "eyebrows", "category": "brow", "name": "淺棕眉彩", "inStock": True,
@@ -119,6 +123,51 @@ class RecommendationContractTests(unittest.TestCase):
         with self.assertRaisesRegex(AnalysisContractError, "IDENTITY_DATA_NOT_ALLOWED"):
             recommend_products({"style": "richGirl", "faceAnalysis": {}}, [self.candidate],
                                recommendation_options={"token": "secret"})
+
+    def test_official_foundation_depth_returns_adjacent_shades_in_same_series(self):
+        foundations = [
+            {"id": 201, "type": "foundations", "category": "base", "name": "F10",
+             "shadeCode": "10", "seriesId": "brand-a-foundation", "depthIndex": 10,
+             "lab": [75, 8, 14], "inStock": True},
+            {"id": 202, "type": "foundations", "category": "base", "name": "F20",
+             "shadeCode": "20", "seriesId": "brand-a-foundation", "depthIndex": 20,
+             "lab": [65, 8, 14], "inStock": True},
+            {"id": 203, "type": "foundations", "category": "base", "name": "F30",
+             "shadeCode": "30", "seriesId": "brand-a-foundation", "depthIndex": 30,
+             "lab": [55, 8, 14], "inStock": True},
+            {"id": 204, "type": "foundations", "category": "base", "name": "Other",
+             "shadeCode": "X", "seriesId": "other-series", "depthIndex": 15,
+             "lab": [64, 8, 14], "inStock": True},
+        ]
+        result = recommend_products(
+            {"style": "richGirl", "faceAnalysis": {"skinTone": {"lab": [65, 8, 14]}}},
+            foundations,
+        )
+        shades = result["shadeRecommendation"]
+        self.assertEqual(shades["method"], "official_depth_index")
+        self.assertEqual(shades["anchor"]["shadeCode"], "20")
+        self.assertEqual(shades["lighter"]["label"], "淺一階")
+        self.assertEqual(shades["lighter"]["shadeCode"], "10")
+        self.assertEqual(shades["darker"]["label"], "深一階")
+        self.assertEqual(shades["darker"]["shadeCode"], "30")
+
+    def test_lab_fallback_does_not_claim_official_adjacent_shade(self):
+        foundations = [
+            {"id": 211, "type": "foundations", "category": "base", "name": "Light",
+             "lab": [75, 8, 14], "inStock": True},
+            {"id": 212, "type": "foundations", "category": "base", "name": "Main",
+             "lab": [65, 8, 14], "inStock": True},
+            {"id": 213, "type": "foundations", "category": "base", "name": "Deep",
+             "lab": [55, 8, 14], "inStock": True},
+        ]
+        result = recommend_products(
+            {"style": "richGirl", "faceAnalysis": {"skinTone": {"lab": [65, 8, 14]}}},
+            foundations,
+        )
+        shades = result["shadeRecommendation"]
+        self.assertEqual(shades["method"], "lab_lightness_approximation")
+        self.assertEqual(shades["lighter"]["label"], "較明亮的替代色")
+        self.assertEqual(shades["darker"]["label"], "較深的替代色")
 
 
 if __name__ == "__main__":
