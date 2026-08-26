@@ -14,6 +14,7 @@
 )
 
 $ErrorActionPreference = "Stop"
+. "$PSScriptRoot\tools\deploy_helpers.ps1"
 $registry = "$Region-docker.pkg.dev/$ProjectId/$Repository"
 $image = "$registry/backend:$Tag"
 
@@ -25,7 +26,7 @@ Write-Host "Building $image..."
 # `builds submit --tag` 只會去找根目錄那一個，所以改成跟 gateway／render 一樣用
 # cloudbuild 設定明確指定 -f face/Dockerfile。三個服務現在是同一套做法。
 & gcloud.cmd builds submit --project $ProjectId --config cloudbuild.face.yaml --substitutions "_IMAGE=$image" .
-if ($LASTEXITCODE -ne 0) { throw "Cloud Build failed" }
+if ($LASTEXITCODE -ne 0) { Show-BuildFailure $ProjectId "face" }
 
 $common = @(
     "--project", $ProjectId,

@@ -198,9 +198,18 @@ def main() -> int:
     current: str | None = None
     try:
         while True:
+            # 整輪都包起來，不是只包讀取。
+            #
+            # 2026-08-26 實測：一次 DNS 解析失敗（getaddrinfo failed）讓訓練腳本掛掉，
+            # worker 想寫「失敗」回 Firestore，那個寫入**也**因為同一個網路問題拋例外，
+            # 而那個例外沒有人接——worker 整支死掉，批次留在 running。
+            # 後台於是顯示了十一個小時的「訓練中」，實際上什麼都沒在跑。
+            #
+            # 這是最糟的一種壞：畫面看起來正常，只是永遠不會結束。守候型的程式
+            # 不能因為任何單一例外而離開迴圈——網路會斷，而它應該等網路回來。
             try:
                 queued = list_runs(args.project, status="queued", limit=10)
-            except Exception as exc:  # 網路或憑證問題不該讓守候中的 worker 直接死掉
+            except Exception as exc:
                 _log(f"讀取批次失敗（{exc}），{args.interval} 秒後重試")
                 time.sleep(args.interval)
                 continue
@@ -209,7 +218,12 @@ def main() -> int:
                 # 沒有現成的批次，就自己把「已送訓、還沒訓練過」的修正收成一批。
                 # 後台的「送訓」按在單一部位上，成批留到這裡做——那時候累積了哪些
                 # 才是確定的，也才不會為了一個新樣本跑完整整一輪訓練。
-                made = None if args.dry_run else create_run_from_accepted(args.project, args.worker_id)
+                try:
+                    made = None if args.dry_run else create_run_from_accepted(args.project, args.worker_id)
+                except Exception as exc:
+                    _log(f"收集批次失敗（{exc}），{args.interval} 秒後重試")
+                    time.sleep(args.interval)
+                    continue
                 if made:
                     _log(f"收集到新批次 {made['runId']}：{made['sampleCount']} 個部位標註、"
                          f"{len(made['feedbackIds'])} 筆回饋")
@@ -224,12 +238,24 @@ def main() -> int:
 
             for run in queued:
                 run_id = str(run.get("runId") or "")
-                claimed = claim_run(args.project, run_id, args.worker_id) if not args.dry_run else run
-                if not claimed:
-                    continue
-                current = run_id
-                process_run(claimed, args, args.project)
-                current = None
+                try:
+                    claimed = claim_run(args.project, run_id, args.worker_id) if not args.dry_run else run
+                    if not claimed:
+                        continue
+                    current = run_id
+                    process_run(claimed, args, args.project)
+                except Exception as exc:
+                    # 到這裡代表連「把失敗寫回去」都失敗了（多半是網路斷在同一段時間）。
+                    # 那一筆會留在 running，但下次啟動時的撿回機制會把它放回排隊——
+                    # 前提是 worker 還活著，所以這裡絕對不能讓例外逃出迴圈。
+                    _log(f"{run_id} 處理時發生未預期的錯誤：{exc}")
+                    try:
+                        fail_run(args.project, run_id, f"訓練機遇到未預期的錯誤：{exc}")
+                    except Exception:
+                        _log(f"  連錯誤都寫不回去，{run_id} 會留在 running，"
+                             f"下次啟動時會被撿回排隊")
+                finally:
+                    current = None
 
             if args.once:
                 _log("排隊中的批次都處理完了，結束。")

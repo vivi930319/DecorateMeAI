@@ -8,6 +8,7 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+. "$PSScriptRoot\tools\deploy_helpers.ps1"
 $python = if (Test-Path ".venv\Scripts\python.exe") { ".venv\Scripts\python.exe" } else { "python" }
 
 if (-not $SkipTests) {
@@ -25,7 +26,7 @@ $image = "{0}-docker.pkg.dev/{1}/{2}/ai-gateway:{3}" -f $Region, $ProjectId, $Re
     --ignore-file .gcloudignore.gateway `
     --substitutions "_IMAGE=$image" `
     .
-if ($LASTEXITCODE -ne 0) { throw "Gateway image build failed." }
+if ($LASTEXITCODE -ne 0) { Show-BuildFailure $ProjectId "gateway" }
 
 & gcloud.cmd run deploy $ServiceName `
     --project $ProjectId `
