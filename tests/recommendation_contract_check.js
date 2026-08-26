@@ -45,6 +45,9 @@ vm.runInContext(
   // hasMatch 是 shadeRecommendationHtml 的相依，抽了後者沒抽它，
   // 測試會在執行時炸 ReferenceError——那是測試的問題，不是程式的。
   + cut('function hasMatch(node) {') + '\n'
+  // shadeRecommendationHtml 現在透過 currentShadeRecommendation 讀，
+  // 才有草稿 fallback。抽了前者沒抽相依會炸 ReferenceError。
+  + cut('function currentShadeRecommendation() {') + ';\n'
   + cut('function shadeRecommendationHtml(p) {') + '\n'
   + 'globalThis.__card = recommendationCardHtml;'
   + 'globalThis.__detail = recommendationPanelHtml;'
@@ -201,6 +204,33 @@ sandbox.Router.shadeRecommendation = { ...official, lighter: null, darker: null 
 out = shade({ id: 'api-foundations-1' });
 // 只有主推薦時不給比較按鈕：按開一個只有一欄的比較視窗是空動作
 check('沒有替代色 → 不出現並排區塊', !out.includes('sc2-row'));
+
+// 重新整理之後不能消失。
+//
+// Router.shadeRecommendation 只在「套用妝容風格 → 抓推薦」那一次流程裡設定，
+// 而且只活在記憶體裡；重新整理之後沒有任何地方還原 Router.analysisPackage
+// （router.js 3424 附近的註解早就寫了這件事）。於是使用者重載一次，
+// 整個色號區塊就從商品頁上消失，看起來像功能壞掉。
+// 商品清單早就有草稿 fallback（getRecommendedProductCatalog），色號照同一個模式。
+check('色階會存進資料包（草稿才帶得走）',
+  src.includes('shadeRecommendation: rec.shadeRecommendation || null,'));
+check('讀取時有草稿 fallback',
+  /function currentShadeRecommendation/.test(src)
+  && /AnalysisDraft\.load\(\)[\s\S]{0,160}shadeRecommendation/.test(src));
+check('畫面讀的是 fallback 而不是直接讀記憶體變數',
+  /const sr = currentShadeRecommendation\(\)/.test(src));
+// 三個來源存的都已經正規化過。再跑一次 _normalizeShadeRecommendation 的話，
+// product 會被二次加工，id 從 api-foundations-942 變成 api-底妝-api-foundations-942，
+// 那個「只在主推薦那件商品頁顯示」的比對就永遠不成立。
+// 掃的是函式**本體**，不是連註解一起——那段註解正好在解釋
+// 「為什麼不能再跑一次 _normalizeShadeRecommendation」，連註解掃的話
+// 這條解釋自己會把測試弄紅（css_tokens_check 踩過同一個坑）。
+const shadeFallbackBody = (cut('function currentShadeRecommendation() {') || '')
+  .split(String.fromCharCode(10))
+  .filter(line => !line.trim().startsWith('//'))
+  .join(' ');
+check('fallback 不會二次正規化',
+  !shadeFallbackBody.includes('_normalizeShadeRecommendation('));
 // 沒有可比的時候，主推薦的色號要改由上方那塊印出來，
 // 否則整段只剩一個百分比，看不出是哪一支
 check('沒有替代色 → 主推薦色號仍然看得到', out.includes('sr-anchor-code'));

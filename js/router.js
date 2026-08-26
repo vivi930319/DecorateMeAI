@@ -872,8 +872,24 @@ function hasMatch(node) {
     return v != null && v !== '' && Number.isFinite(Number(v));
 }
 
+// 這一次推薦的粉底相鄰色階。記憶體裡沒有就回草稿——重新整理之後
+// Router.analysisPackage 不會被還原（見 3424 附近的說明），
+// 而商品清單早就靠 AnalysisDraft.load() 撐過重載，色號沒有理由不一樣。
+function currentShadeRecommendation() {
+    // ⚠️ 三個來源存的都**已經是正規化過的**（Api.recommendProducts 就正規化了）。
+    // 這裡再跑一次 _normalizeShadeRecommendation 的話，product 會被 _normalizeProduct
+    // 二次加工，id 從 api-foundations-942 變成 api-底妝-api-foundations-942，
+    // 於是那個「只在主推薦那件商品頁顯示」的比對永遠不成立——
+    // 修好一個消失問題卻換來另一個。所以原樣回傳，不要再處理一次。
+    if (Router.shadeRecommendation) return Router.shadeRecommendation;
+    const fromPackage = Router?.analysisPackage?.recommendations?.shadeRecommendation;
+    if (fromPackage) return fromPackage;
+    const draft = typeof AnalysisDraft !== 'undefined' ? AnalysisDraft.load() : null;
+    return draft?.recommendations?.shadeRecommendation || null;
+}
+
 function shadeRecommendationHtml(p) {
-    const sr = Router.shadeRecommendation;
+    const sr = currentShadeRecommendation();
     if (!sr || !sr.anchor) return '';
     // 只在看的就是主推薦那件商品時顯示，否則會出現在不相干的商品頁上。
     const anchorId = String(sr.anchor.product?.id ?? '');
@@ -2325,7 +2341,15 @@ async function runMakeupSuggestion(onProgress) {
             RecommendationNotice.record(rec);
             if (!rec?.products?.length) return;
             Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
-                recommendations: { ...Router.analysisPackage.recommendations, products: rec.products }
+                recommendations: {
+                    ...Router.analysisPackage.recommendations,
+                    products: rec.products,
+                    // 粉底相鄰色階也要跟著存。先前它只活在 Router.shadeRecommendation
+                    // 這個記憶體變數裡，而重新整理之後沒有任何地方還原它——
+                    // 於是使用者重載一次，整個色號區塊就從商品頁上消失，
+                    // 看起來像功能壞掉。商品清單早就有草稿 fallback，這裡照同一個模式。
+                    shadeRecommendation: rec.shadeRecommendation || null,
+                }
             });
             AnalysisDraft.save(Router.analysisPackage);
         }).catch(() => RecommendationNotice.record(null));
