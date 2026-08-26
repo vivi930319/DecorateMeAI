@@ -22,7 +22,11 @@ def landmark_xy(landmarks, index, width, height):
 
 
 def assess_basic_usable(image_path, face_mesh):
-    image = cv2.imread(str(image_path))
+    # imdecode 而不是 imread：訓練資料的類別資料夾是中文（圓形臉／一字眉…），
+    # 而 Windows 的 imread 對非 ASCII 路徑一律回 None。這支腳本會把那種情況
+    # 記成 "read_failed"——看起來像檔案損毀，實際上是路徑編碼，
+    # 而兩者的處理方式完全不同。
+    image = cv2.imdecode(np.fromfile(str(image_path), dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         return False, "read_failed"
 

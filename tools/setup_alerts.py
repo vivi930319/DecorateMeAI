@@ -223,7 +223,7 @@ def main() -> int:
                       f"{(ch.get('labels') or {}).get('email_address')}")
 
     if not args.dry_run:
-        print("\n⚠ Google 會寄一封驗證信到這個信箱。**沒有點下驗證連結之前，"
+        print("\n[注意] Google 會寄一封驗證信到這個信箱。**沒有點下驗證連結之前，"
               "這個管道不會收到任何告警**——那正是最容易以為設好了、其實沒有的一步。")
     return 0
 

@@ -40,3 +40,26 @@ for _name in ("face", "shared", "gateway", "render", "suggestion", "training"):
 _root_s = str(_ROOT)
 if _root_s not in sys.path:
     sys.path.insert(0, _root_s)
+
+
+# 印不出來的字元不該讓整支腳本死掉。
+#
+# Windows 主控台預設 cp950，而這些腳本的訊息裡有 ≥ ≈ ↔ ✓ ✗ − 這類符號
+# （光是 tools/ 與 training/ 就有 19 處）。cp950 編不出來時 print 會拋
+# UnicodeEncodeError，**而且往往是在工作做完之後才炸在最後一行說明上**——
+# 2026-08-26 就發生過兩次：一次是訓練腳本死在「警告使用者」那一行，什麼都沒跑；
+# 一次是告警政策都建好了、卻死在「記得去點驗證信」那句話上。
+#
+# 逐一把符號換掉是打地鼠：下一個人寫訊息時還是會用。改成 errors="replace"——
+# 編碼維持主控台原本的設定（中文照樣正確顯示），只有真的編不出來的字元變成 "?"。
+# 少一個符號，比整支腳本消失好。
+#
+# argparse 的 RawDescriptionHelpFormatter 會把 docstring 原樣印出來，
+# 所以 `--help` 也走這條路——那正是好幾支腳本的符號所在的地方。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if _stream is not None and hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(errors="replace")
+    except Exception:
+        # 重導到檔案或管線時可能沒有這個能力。印不出來也不該讓 import 失敗。
+        pass

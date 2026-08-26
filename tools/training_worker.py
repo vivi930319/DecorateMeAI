@@ -254,8 +254,17 @@ def main() -> int:
                     except Exception:
                         _log(f"  連錯誤都寫不回去，{run_id} 會留在 running，"
                              f"下次啟動時會被撿回排隊")
-                finally:
-                    current = None
+                # ⚠️ 這裡**不能**用 finally 清掉 current。
+                #
+                # KeyboardInterrupt 是 BaseException，不會被上面的 except Exception 接住，
+                # 但 finally 照樣會先跑一遍——等外層的 except KeyboardInterrupt 拿到控制權時，
+                # current 已經是 None，那段「把批次放回排隊」就被跳過了。
+                # 結果是 Ctrl+C 之後批次永遠停在 running，正好是那段程式要防的事。
+                # 而且啟動器把結束碼 130 當成「使用者明確要停」，不會重啟，
+                # 所以連撿回機制也救不了。
+                #
+                # 改成只在**正常走完**時清掉。
+                current = None
 
             if args.once:
                 _log("排隊中的批次都處理完了，結束。")

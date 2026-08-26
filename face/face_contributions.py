@@ -229,19 +229,26 @@ def load_for_job(job_id: str, *, max_bytes: int = 2_000_000) -> list[dict]:
     （見 store 的 whole_image_parts），單張可能到幾百 KB。超過就跳過那一張
     並在結果裡註明，不要讓一次覆核請求拖著幾 MB 回應。
     """
-    # 空字串一定要先擋掉。`want` 會變成 ".png"，而 endswith(".png") 命中
-    # user_contributed/ 底下的**每一個**物件——覆核的人會看到別人的臉部影像，
-    # 還以為那是這一筆的樣本，然後照著它判標籤。/feedback/FB-/samples 就會踩到
-    # 這條路徑（feedback_id[3:] 是空字串）。delete_for_job 有這道防護，這裡漏了。
+    # 比對必須帶上路徑分隔線。
+    #
+    # 只用 endswith(f"{job_id}.png") 的話，任何**後綴相同**的 job 都會命中：
+    # job_id="1" 會撈到 user_contributed/ 底下每一個檔名以 1.png 結尾的物件——
+    # 也就是別人的臉部 ROI，而且會被當成這一筆的樣本呈現給覆核的人，
+    # 他再照著那張臉去判標籤。空字串是這個問題最極端的形式（撈到全部），
+    # 但一個字元的 id 一樣危險。加上 "/" 之後，比對的是完整的檔名。
     if not job_id:
         return []
-    client = _client()
-    if client is None:
-        return []
-    want = f"{job_id}.png"
+    want = f"/{job_id}.png"
     out: list[dict] = []
     total = 0
     try:
+        # _client() 放進 try 裡：它只會回 client 或**拋例外**（見該函式），
+        # 所以放在外面等於這個 except 接不到它——少了 google-cloud-storage
+        # 或憑證有問題時，例外會直接穿出去讓 /samples 回 500，
+        # 而前端被告知要區分的正是「空清單」與「錯誤」這兩件事。
+        client = _client()
+        if client is None:
+            return []
         # 用前綴掃描而不是猜路徑：路徑裡有 ROI 規格版本（見 store），
         # 那個版本會隨裁切規格改變，寫死在這裡遲早對不上。
         for blob in client.list_blobs(BUCKET, prefix=f"{PREFIX}/"):
@@ -282,12 +289,14 @@ def delete_for_job(job_id: str) -> int:
     """
     if not job_id:
         return 0
-    client = _client()
-    if client is None:
-        return 0
-    want = f"{job_id}.png"
+    # 帶上分隔線，理由同 load_for_job——只是這裡的後果更嚴重：
+    # 比對到後綴相同的 job 就是**刪掉別人的臉部影像**，而刪除不可逆。
+    want = f"/{job_id}.png"
     removed = 0
     try:
+        client = _client()
+        if client is None:
+            return 0
         for blob in client.list_blobs(BUCKET, prefix=f"{PREFIX}/"):
             if blob.name.endswith(want):
                 blob.delete()

@@ -486,6 +486,17 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
                 detail={"error": {"code": "ADMIN_REQUIRED", "message": "只有管理員可以檢視樣本影像"}},
             )
         job_id = feedback_id[3:] if feedback_id.startswith("FB-") else feedback_id
+        # 先確認這一筆回饋真的存在，再去拿圖。
+        #
+        # job_id 直接來自網址，是外部輸入。少了這道檢查，任何一個字串都會被拿去
+        # 掃 bucket——而覆核的人看到的東西會被標成「這一筆的樣本」。
+        # 檔名比對本身已經加了分隔線（見 load_for_job），這裡是第二道：
+        # 兩道都在，才是「只有存在的紀錄才拿得到它自己的圖」。
+        if not job_store.get(FEEDBACK_COL, job_id):
+            raise HTTPException(
+                status_code=404,
+                detail={"error": {"code": "FEEDBACK_NOT_FOUND", "message": "找不到這筆修正紀錄"}},
+            )
         samples = face_contributions.load_for_job(job_id)
         return {"status": "ok", "jobId": job_id, "count": len(samples), "samples": samples}
 
@@ -619,10 +630,27 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
                 merged = {f: decision for f in fields} or {"_all": decision}
                 labels = {}
 
+        # 每一個被修正的部位都判過了嗎。這個判斷要在算 status 之前做——
+        #
+        # merged 只含**已經判過**的那些。改了眉型與眼型、管理員只先退回眉型時，
+        # merged == {眉型: rejected}，值的集合是 {rejected}，整筆就被記成 rejected。
+        # 而 tools/purge_orphan_contributions.py 是直接讀 reviewStatus 的：它看到
+        # rejected 就認定「影像早該刪了」，--apply 會把這個 job 的**每一個**物件刪掉，
+        # 包含還沒有人看過的眼型 ROI。那是不可逆的，而且跟那支腳本自己的說明
+        # （「partial 不刪」）正好相反。
+        #
+        # 後台清單也一樣：顯示成整筆退回，眼型就再也不會被人看到。
+        all_fields = set(doc.get("corrections") or {})
+        fully_decided = bool(all_fields) and all_fields.issubset(set(merged))
+
         values = set(merged.values())
-        status = ("accepted" if values == {"accepted"}
-                  else "rejected" if values == {"rejected"}
-                  else "partial")
+        if not fully_decided:
+            # 還有部位沒判過，就還不是最終狀態。partial 的意思正是「處理到一半」。
+            status = "partial"
+        else:
+            status = ("accepted" if values == {"accepted"}
+                      else "rejected" if values == {"rejected"}
+                      else "partial")
         note = str((body or {}).get("note") or "").strip()[:500]
         updates = {
             "reviewDecisions": merged,
@@ -645,8 +673,8 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
         # 只看 merged 是不夠的：merged 只含**已經判過**的那些。改了眉型與眼型、
         # 管理員只先退回眉型的時候，merged == {眉型: rejected}，值的集合就是 {rejected}，
         # 於是整筆被當成退回，連還沒有人看過的眼型影像也一起刪掉——而刪除是不可逆的。
-        all_fields = set(doc.get("corrections") or {})
-        fully_decided = all_fields and all_fields.issubset(set(merged))
+        # fully_decided 在上面算 status 時就求好了，這裡直接用同一個值——
+        # 算兩次的風險是兩邊哪天走鐘，而「刪不刪圖」與「狀態怎麼寫」必須一致。
         deleted = None
         if status == "rejected" and fully_decided and doc.get("contributed"):
             try:

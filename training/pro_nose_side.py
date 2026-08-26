@@ -94,7 +94,13 @@ def load_images() -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str]]:
     # 這比不分組安全，但仍不如臉部 embedding 叢集——要更嚴謹請跑 tools/build_identity_map.py。
     prefix_to_id: dict[str, int] = defaultdict(lambda: len(prefix_to_id))
     for path, label in by_digest.values():
-        raw = cv2.imread(str(path))
+        # 用 imdecode 而不是 imread：這個資料集的類別資料夾是中文
+        # （塌鼻／直挺鼻／翹鼻／蒜頭鼻／駝峰鼻／朝天鼻），而 Windows 上的
+        # cv2.imread 對非 ASCII 路徑一律回 None——每一張都會走到下面的 continue，
+        # 腳本最後報「0 張」或在空陣列上炸掉，而且**完全看不出原因**。
+        # 這個檔案裡其餘的載入器（build_review_sheet、score_against_manual、
+        # brow_geometry_probe）都已經改過，只有這一支漏掉。
+        raw = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
         if raw is None:
             continue
         resized = cv2.resize(raw, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_AREA)

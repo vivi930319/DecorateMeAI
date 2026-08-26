@@ -65,6 +65,11 @@ ALLOW_EXTERNAL_TEXT_UPSTREAM = os.getenv("GATEWAY_ALLOW_EXTERNAL_TEXT_UPSTREAM",
 # 為了一個常數多一個共用檔不划算，但值得在這裡指出關聯。
 FACE_FEEDBACK_COL = "face_feedback"
 FACE_TRAINING_RUNS_COL = "face_training_runs"
+# BASIC 五官分類的訓練集只吃這五個部位。側臉鼻型是 PRO 的模型，不在這裡。
+# 這份清單必須跟 training/training_run_store.py 的 _TRAINABLE_FIELDS 一致——
+# 兩邊不一致的症狀是「批次建得起來但訓練一定失敗」，而那筆回饋會被蓋上
+# trainingRunId 之後永遠不再被收。
+BASIC_TRAINABLE_FIELDS = frozenset({"臉型", "眉型", "眼型", "鼻型", "嘴型"})
 # 訓練機的心跳。後台需要它才能分辨「批次還在排隊是因為訓練機沒開」與
 # 「訓練失敗了」——兩者在畫面上長得一樣，處理方式卻完全不同。
 FACE_TRAINING_WORKERS_COL = "face_training_workers"
@@ -2383,13 +2388,21 @@ async def admin_create_face_training_run(request: Request):
         for field, decision in decisions.items():
             if decision not in {"accepted", "corrected"} or field not in corrections:
                 continue
+            # 只收 BASIC 那五個部位。側臉鼻型走的是 PRO 那條線，訓練腳本的
+            # FIELD_TO_PART 裡沒有它——收進來的話批次建得起來、feedback 也被蓋上
+            # trainingRunId，但訓練機對應不到任何部位而讓整批失敗，
+            # 而那筆 PRO 標註從此被視為「已經送過」，**永遠不會再進任何訓練集**。
+            # 這份清單要跟 training_run_store._TRAINABLE_FIELDS 一致。
+            if field not in BASIC_TRAINABLE_FIELDS:
+                continue
             label = labels.get(field) if decision == "corrected" else corrections.get(field)
             if isinstance(label, str) and label.strip():
                 fields[field] = label.strip()
         if fields:
             selections[row.get("feedbackId") or f"FB-{job_id}"] = fields
         else:
-            excluded.append({"feedbackId": row.get("feedbackId") or feedback_id, "reason": "尚無任何部位被採用"})
+            excluded.append({"feedbackId": row.get("feedbackId") or feedback_id,
+                             "reason": "沒有可訓練的部位（側臉鼻型屬於 PRO，不在這個訓練集裡）"})
 
     if not selections:
         raise HTTPException(status_code=422, detail={"error": {"code": "NO_TRAINABLE_SAMPLES", "message": "選取項目沒有可訓練的已採用影像部位"}, "excluded": excluded})

@@ -412,6 +412,32 @@ class ReviewRouteTest(unittest.TestCase):
         self.deleted = []
         ff.face_contributions.delete_for_job = lambda job_id: (self.deleted.append(job_id) or 1)
 
+    def test_one_rejection_is_recorded_as_partial_not_rejected(self):
+        # reviewStatus 是 tools/purge_orphan_contributions.py 唯一的判斷依據：
+        # 它看到 rejected 就認定影像早該刪了，--apply 會刪掉這個 job 的**全部**物件。
+        # 所以「只判了一個部位」絕對不能被記成整筆退回——那會讓清理工具刪掉
+        # 還沒有人看過的那些，而刪除不可逆。
+        self._two_part_job()
+        r = self._patch_review("FB-JOB-2", {"decisions": {"眉型": "rejected"}})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.store.docs[(ff.FEEDBACK_COL, "JOB-2")]["reviewStatus"], "partial")
+
+    def test_one_acceptance_is_also_partial(self):
+        self._two_part_job()
+        self._patch_review("FB-JOB-2", {"decisions": {"眉型": "accepted"}})
+        self.assertEqual(self.store.docs[(ff.FEEDBACK_COL, "JOB-2")]["reviewStatus"], "partial")
+        # 兩個都判過之後才是最終狀態
+        self._patch_review("FB-JOB-2", {"decisions": {"眼型": "accepted"}})
+        self.assertEqual(self.store.docs[(ff.FEEDBACK_COL, "JOB-2")]["reviewStatus"], "accepted")
+
+    def test_samples_of_a_missing_record_is_404_not_someone_elses_photos(self):
+        # job_id 直接來自網址。少了存在性檢查，任何字串都會被拿去掃 bucket，
+        # 而檔名比對若只看後綴，"1" 會命中每一個 ...1.png——別人的臉。
+        r = self.client.get("/v1/face/feedback/FB-NOT-A-REAL-JOB/samples",
+                            headers={"X-Admin-Request": "1"})
+        self.assertEqual(r.status_code, 404, r.text)
+        self.assertEqual(r.json()["detail"]["error"]["code"], "FEEDBACK_NOT_FOUND")
+
     def test_rejecting_one_part_keeps_the_other_parts_images(self):
         # 同一次分析的五個部位共用一個 job_id、存在同一組物件裡，刪除是整筆的。
         # 所以只退回其中一個部位時**絕對不能刪**——另一個部位還沒有人看過，

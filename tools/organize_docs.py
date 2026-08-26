@@ -141,7 +141,7 @@ def main() -> int:
         new_ref = f"docs/{folder}/{doc}"
         if doc in text and new_ref not in text:
             source.write_text(text.replace(doc, new_ref), encoding="utf-8")
-            print(f"  更新引用：{rel} → {new_ref}")
+            print(f"  更新引用：{rel} -> {new_ref}")
 
     write_index(plan)
     print(f"\n完成：搬了 {moved} 份，索引寫在 docs/README.md")
