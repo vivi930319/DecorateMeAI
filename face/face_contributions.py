@@ -33,8 +33,6 @@
 """
 import base64
 import binascii
-import io
-import json
 import logging
 import os
 from datetime import datetime, timezone

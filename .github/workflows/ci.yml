@@ -1,7 +1,14 @@
 name: CI
 
 # 最小 CI：每次 push / PR 都跑後端測試與一次秘密掃描，擋掉資安修補被改回去的回歸。
-# 前端（web_frontend / dev_makeup）是另一個 repo，其 node 檢查與 smoke test 在該 repo 自跑。
+# 前端在同一個 repo 的 dev_makeup 分支，其 node 檢查與 smoke test 在該分支自跑。
+#
+# 2026-08-23 的重構把原始碼分進 face/ gateway/ render/ shared/ suggestion/，
+# 但這份設定還在找根目錄的 ai_gateway.py 與 requirements.gateway.txt，於是
+# 五個 job 全部在幾秒內死掉，一路紅到 08-26 才被看見。教訓寫在下面兩處：
+# 相依清單指到各服務資料夾，lint 改成掃**資料夾**而不是逐檔列名——
+# 逐檔列名的清單每次搬檔都會壞，而且壞掉的樣子是「找不到檔案」，
+# 看起來像設定錯誤而不是程式有問題，很容易被當成雜訊略過。
 on:
   push:
     branches: ["**"]
@@ -21,14 +28,19 @@ jobs:
       - name: Install pinned dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.gateway.txt -r requirements.render.txt
+          pip install pytest
+          pip install -r gateway/requirements.txt -r render/requirements.txt
 
       - name: Run backend tests
         env:
           GATEWAY_SESSION_SECRET: ci-session-secret-that-is-at-least-32-bytes
           GATEWAY_FACE_API_KEY: ci-face-key
           GATEWAY_RENDER_API_KEY: ci-render-key
-        run: python -m unittest ai_gateway_test.py render_api_test.py image_safety_test.py
+        # 用 pytest 而不是 unittest：容器內的命名空間是扁平的
+        # （Dockerfile 用 COPY gateway/x.py .），所以程式裡寫的是 `import job_store`。
+        # pytest.ini 的 pythonpath 那行就是在重現那個扁平命名空間，
+        # 而 `python -m unittest` 不會讀 pytest.ini，換句話說它根本組不出正確的 sys.path。
+        run: python -m pytest tests/ai_gateway_test.py tests/render_api_test.py tests/image_safety_test.py
 
   lint:
     runs-on: ubuntu-latest
@@ -45,11 +57,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip ruff
           ruff check --select E9,F63,F7,F82,F401,F841 --output-format concise \
-            ai_gateway.py replicate_render.py replicate_render_api.py \
-            api_errors.py admin_audit.py image_safety.py job_store.py \
-            analysis_package.py dev_server_utils.py cloud_start.py \
-            Face_analyzer_BASIC.py Face_analyzer_PRO.py Ollama_suggestion.py \
-            ai_gateway_test.py render_api_test.py image_safety_test.py
+            face gateway render shared suggestion tests
 
       # 型別檢查是諮詢性的：這份程式從來沒有標註過型別，一次要求全綠等於要求
       # 停下所有功能開發。先讓它跑起來、看得到報告，之後再逐檔收斂。
@@ -57,8 +65,7 @@ jobs:
         continue-on-error: true
         run: |
           pip install mypy
-          mypy --ignore-missing-imports --no-strict-optional \
-            api_errors.py admin_audit.py image_safety.py job_store.py || true
+          mypy --ignore-missing-imports --no-strict-optional shared gateway || true
 
   docker-image-scan:
     runs-on: ubuntu-latest
@@ -68,7 +75,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build gateway image
-        run: docker build -f Dockerfile.gateway -t dm-gateway:ci .
+        # 建置脈絡是 repo 根目錄：Dockerfile 裡是 `COPY gateway/ai_gateway.py .`，
+        # 從 gateway/ 底下建會找不到 shared/ 的那幾個檔。
+        run: docker build -f gateway/Dockerfile -t dm-gateway:ci .
       - name: Scan gateway image
         # 直接用官方安裝腳本裝 Trivy，不走 marketplace action——那個 action 會在內部
         # 引用一個已被移除的 setup-trivy tag，版本解析每隔一陣子就壞一次。
@@ -89,8 +98,8 @@ jobs:
       - name: Audit pinned dependencies for known CVEs
         run: |
           python -m pip install --upgrade pip pip-audit
-          pip-audit -r requirements.gateway.txt -r requirements.render.txt || true
-          pip-audit -r requirements.gateway.txt -r requirements.render.txt --strict
+          pip-audit -r gateway/requirements.txt -r render/requirements.txt || true
+          pip-audit -r gateway/requirements.txt -r render/requirements.txt --strict
 
   secret-scan:
     runs-on: ubuntu-latest
