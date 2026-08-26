@@ -74,6 +74,9 @@
 # 訓練批次寫回的測試：釘住「批次失敗會推出告警指標」。這行要是被拿掉，
 # 症狀是失敗時**沒有任何人收到通知**——沉默不會讓任何測試變紅，所以要測。
 !training_run_store_test.py
+# 訓練機的睡眠抑制：重點是**有沒有還原**。忘了還原的話這支常駐程式活著的期間
+# 電腦永遠睡不著，而那是沒有人會發現、只會覺得電池很快沒電的壞法。
+!training_worker_test.py
 # 使用者同意提供的訓練樣本（只存部位 ROI，不存原圖）。face_feedback 會 import。
 !face_contributions.py
 !replicate_render.py

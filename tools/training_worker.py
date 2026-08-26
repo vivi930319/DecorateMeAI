@@ -32,6 +32,8 @@ ConvNeXt 訓練是好幾分鐘的 CPU 工作。所以那顆按鈕**註定**只�
 from __future__ import annotations
 
 import argparse
+import contextlib
+import ctypes
 import os
 import subprocess
 import sys
@@ -76,6 +78,45 @@ def _parts_of(run: dict) -> list[str]:
             if part and part not in parts:
                 parts.append(part)
     return parts
+
+
+# Windows 的閒置計時器看的是**使用者輸入**，不是 CPU 忙不忙。這台機器設定成
+# 插電 5 分鐘、電池 3 分鐘就睡，而一次訓練要跑一兩個小時——按下送訓之後走開，
+# 五分鐘後機器就睡了，訓練停在半路，十五分鐘後你收到「訓練機失聯」。
+#
+# 所以訓練期間明確跟系統說「別睡」，訓練一結束就放掉。只在跑的時候擋，
+# 不是一直擋著：讓一台筆電永遠不能睡，代價比偶爾重跑一次訓練大得多。
+#
+# 只要求 ES_SYSTEM_REQUIRED，不要 ES_DISPLAY_REQUIRED——螢幕該關就關，
+# 要的是機器別睡，不是把螢幕一直點著。
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+
+
+@contextlib.contextmanager
+def _keep_awake(label: str = ""):
+    """訓練期間阻止系統睡眠。非 Windows 或呼叫失敗就照常跑，不要因此不訓練。"""
+    held = False
+    if sys.platform == "win32":
+        try:
+            if ctypes.windll.kernel32.SetThreadExecutionState(
+                    ES_CONTINUOUS | ES_SYSTEM_REQUIRED) != 0:
+                held = True
+                _log(f"已阻止系統睡眠{('（' + label + '）') if label else ''}")
+            else:
+                _log("[注意] 無法阻止系統睡眠，訓練期間電腦若閒置可能會睡著")
+        except Exception as exc:
+            _log(f"[注意] 阻止睡眠失敗（{exc}），訓練期間電腦若閒置可能會睡著")
+    try:
+        yield
+    finally:
+        # 一定要還原，否則這支程式活著的期間電腦永遠睡不著。
+        if held:
+            try:
+                ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+                _log("已恢復系統的睡眠設定")
+            except Exception:
+                pass
 
 
 def _run_step(cmd: list[str], env: dict, tail: deque) -> int:
@@ -132,7 +173,8 @@ def process_run(run: dict, args, project: str) -> bool:
 
     heartbeat(project, args.worker_id, "training", f"{run_id}：{'、'.join(parts)}")
     for index, cmd in enumerate(steps):
-        code = _run_step(cmd, env, tail)
+        with _keep_awake(run_id):
+            code = _run_step(cmd, env, tail)
         if code != 0:
             reason = "\n".join(list(tail)[-8:]) or f"步驟結束碼 {code}"
             fail_run(project, run_id, f"{Path(cmd[1]).name} 失敗（結束碼 {code}）：\n{reason}")
