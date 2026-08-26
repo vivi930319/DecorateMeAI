@@ -156,6 +156,66 @@ function getProductPopularity(product) {
     return Number(product?.popularity || product?.sales || product?.views || product?.reviews || product?.score || 0);
 }
 
+
+// ═══ 登入狀態監看 ═══
+//
+// 問題：後台的清單是**透過 gateway 代理**讀資料庫的，gateway 用它自己的憑證去問，
+// 所以你的 session 過期時清單照樣讀得出來。但寫入前的守衛檢查的是**你的** session。
+// 於是畫面看起來一切正常，直到按下儲存才九筆全部失敗——而那時你已經改完九列了。
+//
+// 所以要主動看，不能等按鈕。三個時機：
+//   進頁面      —— 一開始就知道能不能存
+//   切回這個分頁 —— 離開一陣子回來，正是最可能已經過期的時候
+//   每 90 秒    —— 改到一半過期也接得住
+//
+// 為什麼是 90 秒不是 10 秒：這支請求只為了問「還在嗎」，問太密是白花往返；
+// 而使用者從發現到重新登入本來就要好幾十秒，更快知道並不會更早修好。
+//
+// 只回報**狀態改變**，不是每次檢查都喊。一直好著就安靜，
+// 壞了說一次，修好了再說一次——每次都提醒的東西會被當成背景噪音。
+const SessionWatch = (() => {
+    const PERIOD_MS = 90000;
+    let timer = null, onChange = null, last = null, checking = false;
+
+    async function check() {
+        if (checking) return;          // 分頁切換與計時器可能同時觸發
+        checking = true;
+        try {
+            const session = await Api.validateSession();
+            const ok = Boolean(session.ok && session.actorId);
+            const state = ok ? 'ok' : (session.status === 401 ? 'expired' : 'unknown');
+            if (state !== last) {
+                last = state;
+                if (onChange) onChange(state, session);
+            }
+        } finally {
+            checking = false;
+        }
+    }
+
+    function onVisible() {
+        if (document.visibilityState === 'visible') check();
+    }
+
+    return {
+        start(handler) {
+            this.stop();
+            onChange = handler;
+            last = null;               // 重新開始時要重新回報一次目前狀態
+            check();
+            timer = setInterval(check, PERIOD_MS);
+            document.addEventListener('visibilitychange', onVisible);
+        },
+        stop() {
+            if (timer) { clearInterval(timer); timer = null; }
+            document.removeEventListener('visibilitychange', onVisible);
+            onChange = null; last = null;
+        },
+        // 按下儲存之前可以再問一次，不必等下一次輪詢
+        check,
+    };
+})();
+
 const POINT_REASON_LABELS = {
     check_in: '每日打卡',
     daily_checkin: '每日打卡',
@@ -2540,6 +2600,8 @@ const Router = {
         // 換頁前先收掉五官圖鑑的浮層。它是掛在 body 上的，不跟著頁面內容換掉——
         // 留著的話會浮在下一頁上，而且 body 的 overflow:hidden 也解不開，整頁捲不動。
         if (typeof FeatureAtlas !== 'undefined') FeatureAtlas.close();
+        // 離開後台就不用再看了，留著會在每個頁面持續打 /auth/session
+        if (typeof SessionWatch !== 'undefined') SessionWatch.stop();
         // 分析完成後，選擇風格會開啟彈窗並直接前往妝容建議。
         if (page === 'style' && hasStartedJourney()) { openMakeupStyleModal(opts.styleId); return; }
         const adminSession = typeof AdminStore !== 'undefined' && Auth.isLoggedIn() && AdminStore.isAdmin();
@@ -5081,6 +5143,35 @@ const PageInit = {
             }
             return '請確認 admin session、CORS 與 cookie 設定';
         };
+        // 進頁面就先確認自己的登入還有效。
+        //
+        // 為什麼不能只靠讀取的 401：會員清單是**透過 gateway 代理**讀資料庫的，
+        // gateway 用它自己的憑證去問，所以你的 session 過期時清單照樣讀得出來。
+        // 但寫入前的守衛檢查的是**你的** session——於是畫面看起來一切正常，
+        // 直到按下儲存才九筆全部失敗。
+        //
+        // 使用者已經改完九列才知道要重新登入，那些改動也沒地方留。
+        // 早三十秒講，成本是一次往返；晚三十秒講，成本是重做一遍。
+        // 交給 SessionWatch 持續看，不是只在進頁面看一次——
+        // 使用者可能是改到一半才過期的，那時清單早就讀完了。
+        const watchAdminSession = () => {
+            SessionWatch.start((state) => {
+                const save = document.getElementById('adminSaveBtn');
+                if (state === 'ok') {
+                    if (save) { save.disabled = false; save.title = ''; }
+                    setDbStatus('', true);
+                    return;
+                }
+                const why = state === 'expired'
+                    ? '登入已過期。清單還讀得到是因為它由伺服器代為查詢，但現在存不進去。'
+                    : '目前連不上登入驗證，存檔可能會失敗。';
+                setDbStatus(`${why} 請重新登入後再修改權限。`, false);
+                // 把儲存鎖起來，而不是讓它按下去再一次失敗九筆。
+                // 按得下去卻註定失敗的按鈕，等於在浪費使用者的時間兩次。
+                if (save) { save.disabled = true; save.title = why; }
+            });
+        };
+
         const loadAdminMembers = () => {
             dbMembersLoading = true;
             dbMembersError = '';
@@ -5094,6 +5185,8 @@ const PageInit = {
                 dbMembersError = '';
                 setDbStatus('', true);
                 loadAllSavedLooks();
+                // 清單讀到了不代表你還登著。這一步才會發現。
+                watchAdminSession();
             } else {
                 dbMembers = null;
                 dbMembersError = result?.error || '未知錯誤';
@@ -5403,6 +5496,17 @@ const PageInit = {
             });
 
             if (!dbMembers) { showAlert(`會員資料庫無法讀取，無法儲存：${dbMembersError || '請確認 admin session、CORS 與 cookie 設定'}`, { type: 'error' }); return; }
+            // 送出前再確認一次。輪詢是每 90 秒，剛好卡在兩次之間過期的話，
+            // 這裡是最後一道——而且成本只有一次往返，換掉的是九筆全錯。
+            const fresh = await Api.validateSession();
+            if (!fresh.ok || !fresh.actorId) {
+                showAlert(fresh.status === 401
+                    ? '登入已過期，這次沒有任何一筆被寫入。請重新登入後再儲存一次。'
+                    : '目前無法確認登入狀態，這次沒有任何一筆被寫入，請稍後再試。',
+                    { title: '尚未儲存', type: 'error' });
+                SessionWatch.check();
+                return;
+            }
             // 逐筆 PATCH 進資料庫；前端不再自行核發權限，只在成功後同步顯示資料庫回傳結果
             saveBtn.disabled = true;
             const failures = [];

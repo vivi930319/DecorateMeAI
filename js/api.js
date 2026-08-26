@@ -97,7 +97,11 @@ const WRITE_BLOCKED_ZH = Object.freeze({
     NO_LOCAL_IDENTITY: '請先登入後再執行這項操作。',
     // 只停止本次寫入，保留本機資料並提示重新登入。
     NO_SESSION_PIN: '這個分頁的登入狀態已失效，請重新登入後再執行這項操作。',
+    // 這一條要分兩種情況。先前不論原因都寫「請稍後再試」，
+    // 但 401 是**登入已經過期**——等下去只會更糟，正確的動作是重新登入。
+    // 給錯的下一步比不給更糟：使用者會照著做，然後再失敗一次。
     SESSION_UNAVAILABLE: '目前無法確認登入狀態，為避免寫錯帳號已中止這次操作，請稍後再試。',
+    SESSION_EXPIRED: '登入已過期，這次操作已中止（沒有任何一筆被寫入）。請重新登入後再試一次。',
     OWNER_MISMATCH: '登入身分已切換成其他帳號，為避免寫錯帳號已中止這次操作，請重新整理後再試。',
     DEFAULT: '無法確認目前的登入身分，這次操作已中止。'
 });
@@ -1557,7 +1561,12 @@ const Api = {
             return { ok: false, reason: 'SESSION_UNAVAILABLE' };
         }
         const session = await this.validateSession();
-        if (!session.ok) return { ok: false, reason: 'SESSION_UNAVAILABLE', status: session.status };
+        if (!session.ok) {
+            // 401 = 伺服器明確說這個 cookie 不算數，也就是登入過期。
+            // 其他狀況（逾時、網路失敗）才是「稍後再試」。
+            return { ok: false, status: session.status,
+                     reason: session.status === 401 ? 'SESSION_EXPIRED' : 'SESSION_UNAVAILABLE' };
+        }
         if (!session.sub || !session.actorId) return { ok: false, reason: 'SESSION_UNAVAILABLE', status: session.status };
         if (String(session.sub).trim().toLowerCase() !== expected || session.actorId !== pinnedActor) {
             this._cancelSessionRequests();
