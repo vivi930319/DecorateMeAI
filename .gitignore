@@ -77,6 +77,11 @@
 # 訓練機的睡眠抑制：重點是**有沒有還原**。忘了還原的話這支常駐程式活著的期間
 # 電腦永遠睡不著，而那是沒有人會發現、只會覺得電池很快沒電的壞法。
 !training_worker_test.py
+# 貢獻樣本的讀取與刪除：動的是真的臉部影像，而且刪除不可逆。
+# 比對規則錯一個字元就是刪掉別人的臉。
+!face_contributions_test.py
+# 去識別化彙總：這支產的檔案會離開這棟樓，該沒有的東西真的要沒有。
+!export_feedback_aggregate_test.py
 # 使用者同意提供的訓練樣本（只存部位 ROI，不存原圖）。face_feedback 會 import。
 !face_contributions.py
 !replicate_render.py

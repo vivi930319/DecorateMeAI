@@ -10,7 +10,6 @@
 有效，其實是預設排序剛好都是唇膏。
 """
 import json
-import sys
 import urllib.error
 import urllib.parse
 import urllib.request

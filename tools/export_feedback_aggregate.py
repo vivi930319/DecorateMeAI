@@ -40,6 +40,13 @@ from collections import Counter, defaultdict
 EVAL_COL = "face_eval_events"
 FEEDBACK_COL = "face_feedback"
 
+# 五官是這五個。第六個 側臉鼻型 只在部分事件出現（正臉照片拍不到側臉鼻型），
+# 它是造成「總數比 事件數 x 5 多出幾筆」的原因——不是重複列，也不是母體不同。
+BASIC_PARTS = ("臉型", "眉型", "眼型", "鼻型", "嘴型")
+
+# 交出去之前要掃的字串。這份檔案會離開這棟樓，「應該沒有」不夠。
+LEAK_MARKERS = ("email", "@", "ownerId", "dataUrl", "base64", "jobId", "JOB-")
+
 
 def _gcloud(*args: str) -> str:
     exe = shutil.which("gcloud") or shutil.which("gcloud.cmd")
@@ -87,20 +94,11 @@ def _val(doc: dict, key: str):
     return None
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", required=True, help="輸出的 JSON")
-    ap.add_argument("--project", default="decorate-me")
-    ap.add_argument("--min-count", type=int, default=3,
-                    help="低於這個筆數的組合會被併成「其他」（預設 3；設 1 等於不抑制）")
-    args = ap.parse_args()
+def build_payload(events: list[dict], feedback: dict, min_count: int) -> dict:
+    """把原始文件整理成要交出去的彙總。不碰網路，方便單獨測。
 
-    token = _gcloud("auth", "print-access-token")
-    events = _fetch(args.project, token, EVAL_COL)
-    feedback = {d["name"].rsplit("/", 1)[-1]: d for d in _fetch(args.project, token, FEEDBACK_COL)}
-    print(f"讀到 {len(events)} 筆評估事件、{len(feedback)} 筆回饋紀錄")
-
+    這是整支腳本唯一需要被守住的邏輯：它決定交出去的檔案裡**有什麼、沒有什麼**。
+    """
     # 日期區間只取整份的頭尾。逐筆時間戳不輸出——那是「可回推個人」的那一項。
     stamps = sorted(s for s in (_val(d, "createdAt") for d in events) if s)
     date_range = {"from": stamps[0][:10], "to": stamps[-1][:10]} if stamps else None
@@ -134,7 +132,7 @@ def main() -> int:
 
     rows, suppressed_cells, suppressed_count = [], 0, 0
     for (version, part, before, after, agreed_flag), n in sorted(cells.items(), key=lambda kv: -kv[1]):
-        if n < args.min_count:
+        if n < min_count:
             suppressed_cells += 1
             suppressed_count += n
             per_part[part]["suppressed"] += n
@@ -151,25 +149,34 @@ def main() -> int:
         rows.append({
             "modelVersion": None, "part": None, "predicted": None, "corrected": None,
             "agreed": None, "count": suppressed_count,
-            "note": f"其他（{suppressed_cells} 種組合，每種少於 {args.min_count} 筆，已合併）",
+            "note": f"其他（{suppressed_cells} 種組合，每種少於 {min_count} 筆，已合併）",
         })
 
-    # 五官是這五個。第六個 側臉鼻型 只在部分事件出現（正臉照片拍不到側臉鼻型），
-    # 它是造成「總數比 事件數 x 5 多出幾筆」的原因——不是重複列，也不是母體不同。
-    BASIC_PARTS = ("臉型", "眉型", "眼型", "鼻型", "嘴型")
     part_records = sum(c["total"] for c in per_part.values())
     basic_records = sum(per_part[p]["total"] for p in BASIC_PARTS)
-    extra_parts = {p: dict(c) for p, c in per_part.items() if p not in BASIC_PARTS}
+    extra_parts = {p: {k: c.get(k, 0)
+                       for k in ("total", "agreed", "corrected", "suppressed")}
+                   for p, c in per_part.items() if p not in BASIC_PARTS}
 
     payload = {
         "generatedFor": "演算法端（Decorate Me 商品推薦）",
         "dateRange": date_range,
         "modelVersions": dict(versions),
-        "minCount": args.min_count,
+        "minCount": min_count,
+        # 被合併掉幾種組合。少了它，讀的人不知道「其他」那一列背後有多少種。
+        "suppressedCells": suppressed_cells,
+        # 五官那五項的小計。main 與一致性檢查都要用，算一次就好——
+        # 同一個數字在兩個地方各算一次，遲早有一邊會落後。
+        "basicPartRecordCount": basic_records,
         "eventCount": len(events),
         "partRecordCount": part_records,
         "expectedPartsPerEvent": len(BASIC_PARTS),
-        "countsByPart": {p: dict(c) for p, c in sorted(per_part.items())},
+        # 四個鍵一律補齊。dict(Counter) 只會保留被加過的鍵，
+        # 於是「這個部位沒有被抑制」與「這個欄位不存在」長得一樣，
+        # 而讀的人拿 ["suppressed"] 就會 KeyError。
+        "countsByPart": {p: {k: c.get(k, 0)
+                             for k in ("total", "agreed", "corrected", "suppressed")}
+                         for p, c in sorted(per_part.items())},
         # 額外部位單獨列出來，讓「多出來的那幾筆」有名有姓，不用回頭問來源端。
         "extraParts": extra_parts,
         "consistencyChecks": {
@@ -197,12 +204,50 @@ def main() -> int:
                           "不是重複計數。要只看五官就用 countsByPart 的那五項。",
         },
     }
+    return payload
+
+
+def find_leaks(payload: dict) -> list[str]:
+    """回傳 payload 裡出現的可疑字串。空的代表乾淨。
+
+    掃的是序列化之後的整份文字，不是逐欄位檢查——夾帶通常發生在
+    「某個欄位被順手多帶了一層物件」，而那種情況逐欄位是看不到的。
+    """
+    text = json.dumps(payload, ensure_ascii=False)
+    return [w for w in LEAK_MARKERS if w in text]
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--out", required=True, help="輸出的 JSON")
+    ap.add_argument("--project", default="decorate-me")
+    ap.add_argument("--min-count", type=int, default=3,
+                    help="低於這個筆數的組合會被併成「其他」（預設 3；設 1 等於不抑制）")
+    args = ap.parse_args()
+
+    token = _gcloud("auth", "print-access-token")
+    events = _fetch(args.project, token, EVAL_COL)
+    feedback = {d["name"].rsplit("/", 1)[-1]: d for d in _fetch(args.project, token, FEEDBACK_COL)}
+    print(f"讀到 {len(events)} 筆評估事件、{len(feedback)} 筆回饋紀錄")
+
+    payload = build_payload(events, feedback, args.min_count)
+    rows = payload["rows"]
+    date_range = payload["dateRange"]
+    versions = payload["modelVersions"]
+    part_records = payload["partRecordCount"]
+    basic_records = payload["basicPartRecordCount"]
+    extra_parts = payload["extraParts"]
+    suppressed_cells = payload["suppressedCells"]
 
     with open(args.out, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
 
     print(f"\n日期區間 {date_range}")
-    print("模型版本：" + "、".join(f"{k} {v} 筆" for k, v in versions.most_common()))
+    # payload 裡的 modelVersions 是普通 dict（要序列化成 JSON），不是 Counter，
+    # 所以這裡自己排序，不要呼叫 most_common。
+    print("模型版本：" + "、".join(
+        f"{k} {v} 筆" for k, v in sorted(versions.items(), key=lambda kv: -kv[1])))
     checks = payload["consistencyChecks"]
     extra_note = ""
     if extra_parts:
@@ -217,8 +262,7 @@ def main() -> int:
 
     # 最後自己檢查一次沒有夾帶身分或影像欄位。這份是要交出去的，
     # 「應該沒有」不夠——要在交出去之前確認過。
-    text = json.dumps(payload, ensure_ascii=False)
-    leaks = [w for w in ("email", "@", "ownerId", "dataUrl", "base64", "jobId", "JOB-") if w in text]
+    leaks = find_leaks(payload)
     print("夾帶檢查：" + ("乾淨" if not leaks else f"[注意] 發現可疑字串 {leaks}"))
     return 0 if not leaks else 1
 
