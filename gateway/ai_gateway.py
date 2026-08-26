@@ -1978,6 +1978,17 @@ async def proxy_admin_request(request: Request, upstream_path: str):
             target_ref=upstream_path,
             status_code=response.status_code,
             request_id=headers["X-Request-ID"],
+            # 失敗時把上游的錯誤**代碼**一併記下來。
+            #
+            # 2026-08-26：稽核裡出現一筆 `product.create → 400 failure`，但只有狀態碼，
+            # 查不出是哪個欄位不合格——只好回頭問管理員「你看到什麼訊息」。
+            # 一筆記錄不下去原因的失敗紀錄，等於把診斷工作丟回給人做。
+            #
+            # 只記代碼不記訊息與 body：body 很可能就是商品資料，而 message 是給人看的
+            # 自由文字，兩者都不該落進稽核表（見 record_admin_action 對 extra 的限制）。
+            # 成功時不記——稽核已經有狀態碼，多一個空欄位只是雜訊。
+            upstream_error=(_upstream_error_code(response)
+                            if response.status_code >= 400 else ""),
         )
     return Response(content=response.content, status_code=response.status_code, headers=response_headers)
 
