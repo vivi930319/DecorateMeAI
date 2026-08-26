@@ -669,8 +669,92 @@ function recommendationDetailHtml(p) {
         ${pr.summary ? `<p class="rec-summary">${escapeHtml(pr.summary)}</p>` : ''}
         ${reasons.length ? `<ul class="rec-reasons">${reasons
             .map(r => `<li>${escapeHtml(String(r))}</li>`).join('')}</ul>` : ''}
+        ${colorDiffEntryHtml(p)}
         ${pr.disclaimer ? `<p class="rec-disclaimer">${escapeHtml(pr.disclaimer)}</p>` : ''}
     </div>`;
+}
+
+// 色差解釋的入口（契約 2026-08-26）。
+//
+// 只有粉底（比膚色）與唇彩（比自然唇色）會有；眼影、腮紅、修容、打亮、眉彩
+// 主要依妝容風格推薦，後端一律回 null，前端**不得**顯示色差 QA——
+// 對一個不是靠顏色排出來的商品講色差，等於憑空給一個不存在的依據。
+function colorDiffInfo(p) {
+    const info = p?.recommendationPresentation?.colorDifferenceExplanation;
+    if (!info || typeof info !== 'object') return null;
+    // ⚠️ 不能用 truthy 判斷 value：色差 0 是「完全相同」，是最好的結果，
+    // 而 `if (info.value)` 會把它當成沒有值而整個藏起來。
+    return (typeof info.value === 'number' && Number.isFinite(info.value)) ? info : null;
+}
+
+function colorDiffEntryHtml(p) {
+    const info = colorDiffInfo(p);
+    if (!info) return '';
+    return `<button type="button" class="cd-entry" data-color-diff="${escapeHtml(String(p.id))}">
+        色差是什麼？</button>`;
+}
+
+// 色差說明視窗。內容**全部**來自後端，前端不重算等級也不換算成準確率。
+//
+// 為什麼不自己算 level：後端有 ranges，前端若照著自己判一次，兩邊的區間
+// 遲早會不一致——而不一致的樣子是「同一個 4.6，卡片說相近、視窗說有可見差異」。
+// 只有一份判斷來源，就不會有這種事。
+//
+// 也不把色差換算成百分比或「保證適合」：ΔE 是**視覺距離**，不是命中率。
+// 說成準確率是在給一個這個數字撐不起的承諾。
+function openColorDiffModal(product) {
+    const info = colorDiffInfo(product);
+    if (!info) return;
+    document.getElementById('colorDiffModal')?.remove();
+
+    const qa = Array.isArray(info.qa) ? info.qa.filter(x => x && x.question && x.answer) : [];
+    const ranges = Array.isArray(info.ranges) ? info.ranges : [];
+
+    const ov = document.createElement('div');
+    ov.id = 'colorDiffModal';
+    ov.className = 'sr-overlay';
+    ov.innerHTML = `<div class="cd-dialog" role="dialog" aria-modal="true" aria-labelledby="cdTitle">
+        <button class="sr-close" type="button" aria-label="關閉">×</button>
+        <h3 id="cdTitle">${escapeHtml(String(info.displayValue || ''))}｜${escapeHtml(String(info.level || ''))}</h3>
+        ${info.comparisonTarget
+            ? `<div class="cd-target">比較對象：${escapeHtml(String(info.comparisonTarget))}</div>` : ''}
+        ${info.summary ? `<p class="cd-summary">${escapeHtml(String(info.summary))}</p>` : ''}
+        ${info.shortExplanation
+            ? `<p class="cd-short">${escapeHtml(String(info.shortExplanation))}</p>` : ''}
+        ${ranges.length ? `<table class="cd-ranges"><tbody>${ranges.map(r => {
+            // min/max 的表示法有兩種（min 與 minExclusive），照後端給的畫，不自己補。
+            const lo = (r.minExclusive != null) ? `大於 ${r.minExclusive}` : `${r.min ?? 0}`;
+            const hi = (r.max == null) ? '以上' : `～${r.max}`;
+            const cur = String(r.label || '') === String(info.level || '');
+            return `<tr${cur ? ' class="cd-here"' : ''}>
+                <td class="cd-range">${escapeHtml(lo + hi)}</td>
+                <td class="cd-level">${escapeHtml(String(r.label || ''))}</td>
+                <td class="cd-note">${escapeHtml(String(r.description || ''))}</td></tr>`;
+        }).join('')}</tbody></table>` : ''}
+        ${qa.length ? `<div class="cd-qa">${qa.map((x, i) => `
+            <details${i === 0 ? ' open' : ''}>
+                <summary>${escapeHtml(String(x.question))}</summary>
+                <p>${escapeHtml(String(x.answer))}</p>
+            </details>`).join('')}</div>` : ''}
+        ${info.fullExplanation
+            ? `<p class="cd-full">${escapeHtml(String(info.fullExplanation))}</p>` : ''}
+    </div>`;
+    document.body.appendChild(ov);
+
+    // 焦點：移進來、關掉時還回去。只能用滑鼠關掉的浮層，
+    // 對鍵盤操作的人等於卡死整個頁面。
+    const previouslyFocused = document.activeElement;
+    const closeBtn = ov.querySelector('.sr-close');
+    closeBtn.focus();
+    const close = () => {
+        ov.remove();
+        document.removeEventListener('keydown', onKey);
+        if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    closeBtn.onclick = close;
+    ov.addEventListener('click', (ev) => { if (ev.target === ov) close(); });
 }
 
 // 外部商品連結。契約 §8.1 要求 rel="noopener noreferrer"。
@@ -3921,6 +4005,11 @@ const PageInit = {
             });
             const srCompare = area.querySelector('[data-shade-compare]');
             if (srCompare) srCompare.onclick = () => openShadeCompareModal();
+            // 色差說明。找的是「正在看的這件商品」，不是任何一件——
+            // 同一頁上相關商品也可能帶著色差，開錯那件會解釋到別人的數字。
+            area.querySelectorAll('[data-color-diff]').forEach(btn => {
+                btn.onclick = () => openColorDiffModal(p);
+            });
             const bag = area.querySelector('[data-bag]');
             if (bag) bag.onclick = () => {
                 Cart.add(p.id);
@@ -6283,7 +6372,9 @@ const PageInit = {
                 // 答案都在這一行。
                 const worker = trainWorkerInfo(data?.worker);
                 const workerHtml = `<div class="atb-worker atb-worker-${worker.online ? 'on' : 'off'}">`
-                    + `<i></i>${escapeHtml(worker.text)}</div>`;
+                    + `<i></i><span>${escapeHtml(worker.text)}</span>`
+                    + `<button type="button" class="atb-recheck" data-worker-recheck>重新檢查</button></div>`
+                    + (worker.hint ? `<div class="atb-worker-hint">${escapeHtml(worker.hint)}</div>` : '');
                 if (!runs.length) {
                     fbRuns.innerHTML = workerHtml + '<div class="atb-empty">還沒有任何訓練批次。'
                         + '在下面的清單勾選已採用的修正，按「送去訓練」就會建立第一筆。</div>';
@@ -6294,6 +6385,15 @@ const PageInit = {
                 if (!fbRuns.dataset.bound) {
                     fbRuns.dataset.bound = '1';
                     const openFromEvent = (ev) => {
+                        // 「重新檢查」要先攔下來：它長在同一個容器裡，
+                        // 不擋的話點它會順便去開下面那張卡片的進度視窗。
+                        const recheck = ev.target.closest('[data-worker-recheck]');
+                        if (recheck) {
+                            recheck.disabled = true;
+                            recheck.textContent = '檢查中…';
+                            loadTrainingRuns();
+                            return;
+                        }
                         const card = ev.target.closest('[data-atb-run]');
                         if (card && card.dataset.atbRun) openTrainingProgress(card.dataset.atbRun);
                     };
@@ -6360,11 +6460,28 @@ const PageInit = {
                 const ago = !Number.isFinite(age) ? ''
                     : age < 60000 ? '剛剛' : `${Math.floor(age / 60000)} 分鐘前`;
                 const state = { idle: '待命中', training: '訓練中', offline: '已停止' }[worker?.state] || worker?.state || '';
+                // 離線時要寫出「該做什麼」，不是只說「已停止」。
+                //
+                // 這個面板不能啟動訓練機——後台在瀏覽器裡、講話對象是 Cloud Run，
+                // 而 Cloud Run 打不進本機網路。做一顆按不動的「啟動」按鈕比沒有更糟：
+                // 出事時你會按它，然後以為自己處理過了。
+                //
+                // 所以這裡給的是「可以自己做的三件事」。看門狗每 5 分鐘會拉一次，
+                // 所以「程式死掉」這個原因已經不需要人管；剩下的都是機器層面的，
+                // 只有坐在那台電腦前面的人能處理。
+                const hint = !seen
+                    ? '訓練機從未回報過。請在那台電腦上執行 tools/setup_training_task.ps1 建立排程。'
+                    : '訓練機超過 15 分鐘沒有回報。看門狗每 5 分鐘會自動拉一次，'
+                      + '所以多半不是程式死掉，而是那台電腦關機、睡著或沒有登入。'
+                      + '請確認它開著並且已登入；批次不會遺失，會等訓練機回來。';
                 return {
                     online,
                     text: !seen
-                        ? '訓練機從未回報過——請在你的電腦上執行 tools/training_worker.py'
+                        ? '訓練機從未回報過'
                         : `訓練機 ${worker.workerId || 'local'}：${ago}回報${state ? `（${state}）` : ''}`,
+                    hint: online ? '' : hint,
+                    // 排隊中的批次在訓練機離線時最需要被看到：那才是「現在有東西卡住」。
+                    queued: 0,
                 };
             };
 

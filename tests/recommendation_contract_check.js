@@ -37,6 +37,10 @@ vm.createContext(sandbox);
 vm.runInContext(
   cut('function recommendationCardHtml(p) {') + '\n'
   + cut('function recommendationDetailHtml(p) {') + '\n'
+  // recommendationDetailHtml 現在會呼叫色差入口，抽了前者沒抽相依，
+  // 測試會在執行時炸 ReferenceError——那是測試的問題，不是程式的。
+  + cut('function colorDiffInfo(p) {') + '\n'
+  + cut('function colorDiffEntryHtml(p) {') + '\n'
   + cut('function productSourceLinkHtml(p) {') + '\n'
   // hasMatch 是 shadeRecommendationHtml 的相依，抽了後者沒抽它，
   // 測試會在執行時炸 ReferenceError——那是測試的問題，不是程式的。
