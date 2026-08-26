@@ -1,0 +1,44 @@
+name: Frontend CI
+
+# GitHub Actions 從**被推送的那個分支**讀 workflow。後端的 ci.yml 在 Isa 上，
+# 所以它只管 Isa——這個分支的 12 支測試（330 多條斷言）在這個檔案出現之前
+# 從來沒有在 CI 跑過，30 次 workflow run 全部是 Isa 的。
+#
+# 「有寫測試」跟「測試會被跑」是兩件事。只有前者的話，測試會在某一次改動之後
+# 安靜地開始失敗，而沒有人知道——直到有人手動跑，或直到使用者發現。
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # 逐支跑而不是 `node tests/*.js`：一支失敗要看得出來是哪一支。
+      # 全部塞進一行的話，輸出會混在一起，而且第一支失敗就停了。
+      #
+      # 傳 `.` 是必要的：測試用 process.argv[2] 當前端根目錄，
+      # 其中 recommend_body_check.js 沒有預設值，不傳會 path.join(undefined)。
+      - name: Run frontend checks
+        run: |
+          fail=0
+          for t in tests/*.js; do
+            echo "── $t"
+            if node "$t" .; then :; else fail=1; fi
+          done
+          echo "── frontend_smoke_check.js"
+          node frontend_smoke_check.js || fail=1
+          exit $fail
+
+      # 語法錯誤要在部署前擋下來。這幾個檔案是直接被瀏覽器載入的，
+      # 沒有打包步驟會幫忙發現——壞掉的樣子是線上整頁空白。
+      - name: Syntax check the shipped scripts
+        run: |
+          for f in js/*.js; do node --check "$f"; done
