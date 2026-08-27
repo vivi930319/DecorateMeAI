@@ -1531,10 +1531,19 @@ function openLookModal(item){
     +(tags?'<div class="analysis-tags" style="margin-top:14px;">'+tags+'</div>':'')
     +'<div class="lm-summary"><span><em>臉型</em>'+escapeHtml(r['臉型']||'—')+'</span><span><em>眼型</em>'+escapeHtml(r['眼型']||'—')+'</span><span><em>鼻型</em>'+escapeHtml(r['鼻型']||'—')+'</span><span><em>膚色</em>'+escapeHtml(skin['四季型']||skin['膚色分級']||'—')+'</span></div>'
     +(rows?'<div class="lm-advice-grid">'+rows+'</div>':'')
+    // 進 compare 頁看同一套長按對比。
+    //
+    // 浮層裡這兩張是靜態並排的小圖，而剛渲染完時使用者看到的是全尺寸長按對比——
+    // 同一份妝前妝後，兩個地方長得不一樣，會被當成兩個不同的東西。
+    // 這裡不把長按互動複製一份進浮層：那等於同一套互動維護兩份，
+    // 改一邊忘另一邊。改成把這筆資料交給既有的那一頁。
+    +((beforeSrc&&afterSrc)?'<button type="button" class="btn-gold lm-open-compare">查看完整對比</button>':'')
     +'</div></div>';
   document.body.appendChild(ov); void ov.offsetWidth; ov.classList.add('show');
   function close(){ ov.classList.remove('show'); setTimeout(function(){ ov.remove(); },350); }
   ov.querySelector('.lm-close').onclick=close;
+  var openCompare=ov.querySelector('.lm-open-compare');
+  if(openCompare) openCompare.onclick=function(){ close(); Router.go('compare',{ look:item }); };
   ov.onclick=function(e){ if(e.target===ov) close(); };
   document.addEventListener('keydown', function esc(e){ if(e.key==='Escape'){ close(); document.removeEventListener('keydown',esc); } });
 }
@@ -3870,6 +3879,11 @@ const PageInit = {
                             <div class="pc-imgwrap">${phBox('', p.name, p.img)}</div>
                             <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}${p.brand ? ` · ${escapeHtml(p.brand)}` : ''}</div>
                             <div class="pc-name">${escapeHtml(p.name)}</div>
+                            <!-- 色號單獨拉出來。它是使用者實際要記住、要拿去櫃上問的那個字串，
+                                 而在名稱裡它只是結尾的四個字元（「…SPF 48/ PA++ - PO-02」）。
+                                 詳情頁早就有「色號 Shade」那一格，卡片沒有——但看清單的時候
+                                 才是最需要它的時候：要比較好幾支。 -->
+                            ${p.shadeCode ? `<div class="pc-shade"><span>色號</span><b>${escapeHtml(String(p.shadeCode))}</b></div>` : ''}
                             ${(!p.recommendationPresentation?.headline && p.matchReason) ? `<div class="pc-reason">${escapeHtml(p.matchReason)}</div>` : ''}
                             ${colorCompareHtml(p)}
                             ${recommendationCardHtml(p)}
@@ -4003,6 +4017,32 @@ const PageInit = {
                 bindMore();
             }, 360);
         }
+
+        // 色階資料掉了就自己補回來，不要要求使用者重跑一次流程。
+        //
+        // shadeRecommendation 只在「套用妝容風格 → 抓推薦」那一次流程裡拿到。
+        // 重新整理之後記憶體沒了；而在「把它存進資料包」這個修正上線之前建立的
+        // session，草稿裡也沒有那個欄位——那些分頁會一直看不到色階比較，
+        // 直到使用者自己重新走一次流程，而他不會知道要那樣做。
+        //
+        // 有分析資料就能重新問一次。只補一次（_shadeRefetched 這個旗標），
+        // 失敗也安靜收掉：這是補救，不是主要路徑，不該讓商品頁因此出錯。
+        let _shadeRefetching = false;
+        const refetchShadeIfMissing = (onDone) => {
+            if (_shadeRefetching || Router._shadeRefetched) return false;
+            if (currentShadeRecommendation()) return false;
+            const pkg = Router.analysisPackage;
+            if (!pkg?.faceAnalysis || !Router.selectedStyleId) return false;
+            _shadeRefetching = true;
+            Router._shadeRefetched = true;
+            Api.recommendProducts(pkg, Router.selectedStyleId).then(rec => {
+                if (rec?.shadeRecommendation) {
+                    RecommendationNotice.record(rec);
+                    onDone();
+                }
+            }).catch(() => {}).finally(() => { _shadeRefetching = false; });
+            return true;
+        };
 
         function renderProductDetail(id) {
             const recommended = getRecommendedProductCatalog();
@@ -4140,6 +4180,13 @@ const PageInit = {
             area.querySelectorAll('[data-shade-go]').forEach(btn => {
                 btn.onclick = () => Router.go('products', { productId: btn.dataset.shadeGo });
             });
+            // 這件是粉底、通過了膚色門檻，卻沒有色階區塊——那多半是資料掉了，
+            // 不是後端沒給。補一次再重畫。
+            if (p.foundationSkinMatch?.accepted === true) {
+                refetchShadeIfMissing(() => {
+                    if (Router.currentPage === 'products') renderProductDetail(id);
+                });
+            }
             // 色差說明。找的是「正在看的這件商品」，不是任何一件——
             // 同一頁上相關商品也可能帶著色差，開錯那件會解釋到別人的數字。
             area.querySelectorAll('[data-color-diff]').forEach(btn => {
@@ -4248,17 +4295,31 @@ const PageInit = {
         bindRetry();
     },
 
-    compare() {
-        if (!hasStartedJourney()) { renderAnalysisGate("妝容對比圖"); return; }
-        const style = STYLES.find(s => s.id === Router.selectedStyleId);
+    compare(opts) {
+        // 帶著一筆歷史收藏進來（從會員中心的「查看完整對比」）。
+        //
+        // ⚠️ 這一筆**只用於顯示**，不寫進 Router.analysisPackage。
+        // 使用者可能正在做一次新的分析，看一眼舊收藏不該把那次洗掉——
+        // 而 analysisPackage 是渲染、推薦、回饋共用的那份，覆寫它會一路影響到
+        // 「這次的推薦」與「這張臉的回饋」，症狀不會出現在這一頁。
+        const look = (opts && opts.look && typeof opts.look === 'object') ? opts.look : null;
+        Router.viewingLook = look;
+        // 看歷史收藏不需要做過分析——那筆資料本身就完整。
+        if (!look && !hasStartedJourney()) { renderAnalysisGate("妝容對比圖"); return; }
+        const style = look
+            ? (STYLES.find(x => x.name === look.style) || null)
+            : STYLES.find(s => s.id === Router.selectedStyleId);
         const nameEl = document.getElementById('compareStyleName');
         const tagsEl = document.getElementById('compareStyleTags');
         const stage = document.getElementById('compareStage');
         const holdBtn = document.getElementById('compareHoldBtn');
-        Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
-        Router.pendingLookSaved = false;
+        if (!look) {
+            Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();
+            Router.pendingLookSaved = false;
+        }
 
-        nameEl.textContent = style ? style.name : '尚未選擇風格';
+        nameEl.textContent = look ? (look.style || '妝容建議')
+            : (style ? style.name : '尚未選擇風格');
         tagsEl.innerHTML = style ? style.tags.map(t => `<span class="analysis-tag">${t}</span>`).join('') : '';
 
         const showAfter = () => {
@@ -4311,6 +4372,24 @@ const PageInit = {
         if (saveBtn) saveBtn.onclick = openSaveLookModal;
 
         function setCompareImage(kind) {
+            // 看歷史收藏時用那一筆的圖，不要去讀當前分析——
+            // 兩者可能是不同的臉，混起來會顯示成別人的妝前配自己的妝後。
+            const viewing = Router.viewingLook;
+            if (viewing) {
+                const image = kind === 'after'
+                    ? lookImageSrc(viewing.renderedImage)
+                    : lookImageSrc(viewing.beforeImage);
+                stage.classList.toggle('has-render', !!image);
+                if (image) {
+                    stage.style.backgroundImage = `url("${image}")`;
+                    stage.style.backgroundSize = 'contain';
+                    stage.style.backgroundPosition = 'center';
+                    stage.style.backgroundRepeat = 'no-repeat';
+                } else {
+                    stage.style.backgroundImage = '';
+                }
+                return;
+            }
             const pkg = Router.analysisPackage || {};
             const render = pkg.render || {};
             const beforeImage = pkg.images?.front?.compressedDataUrl

@@ -3293,6 +3293,11 @@ html.intro-off #brand-intro{display:none}
 .render-dialog-shell{max-width:1240px}.render-dialog-shell .compare-layout{margin:0}/* 推薦彈窗沿用商品卡片，只調整欄數與間距。 */
 .recommendation-modal-grid{grid-template-columns:repeat(3,1fr);gap:20px 16px;max-height:58vh;overflow-y:auto}
 /* 推薦彈窗額外顯示推薦原因。 */
+/* 卡片上的色號。使用者要拿去櫃上問的就是這個字串，
+   在商品名稱裡它只是結尾四個字元，看清單比較好幾支時最需要它。 */
+.pc-shade{display:inline-flex;align-items:baseline;gap:6px;margin-top:6px;padding:2px 9px;border:1px solid var(--line-gold);border-radius:999px;background:var(--glass)}
+.pc-shade span{color:var(--mid);font-size:10px;letter-spacing:.08em}
+.pc-shade b{color:var(--ink-soft);font-size:13px;font-weight:600;letter-spacing:.02em}
 .pc-reason{margin-top:6px;font-size:12px;line-height:1.5;color:var(--mid);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .product-recommendation-dialog{max-width:980px}@media(max-width:700px){.recommendation-modal-grid{grid-template-columns:repeat(2,1fr)}}
 

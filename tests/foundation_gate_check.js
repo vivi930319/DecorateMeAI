@@ -156,6 +156,20 @@ const normalOut = cardFn({ id: 'p9',
 check('一般商品照常顯示 MATCH', normalOut.includes('82% MATCH'));
 
 console.log('');
+console.log('=== 4c. 色號要出現在卡片上 ===');
+// 色號是使用者實際要記住、要拿去櫃上問的那個字串。先前它只存在於商品名稱
+// 結尾（「…SPF 48/ PA++ - PO-02」），要自己從一長串裡找。詳情頁早就有
+// 「色號 Shade」那一格，卡片沒有——但看清單比較好幾支時才是最需要它的時候。
+check('api 保留 shadeCode', api.includes('shadeCode: product.shadeCode'));
+// 後端沒給 shadeCode 時退回 shadeName，兩個都沒有才不顯示
+check('shadeCode 缺少時退回 shadeName',
+  /shadeCode: product\.shadeCode[\s\S]{0,140}shadeName/.test(api));
+check('卡片會畫色號', src.includes('class="pc-shade"'));
+// 眼影腮紅那些後端沒給色號，不能因此留一個空欄位
+check('沒有色號就整格不出現', /\$\{p\.shadeCode \? /.test(src));
+check('色號樣式存在', css.includes('.pc-shade'));
+
+console.log('');
 console.log('=== 5. api 層要把新欄位帶過來 ===');
 check('帶 anchorDeltaE', api.includes('anchorDeltaE:'));
 check('帶 foundationSkinMatch', api.includes('foundationSkinMatch:'));

@@ -1168,6 +1168,11 @@ const Api = {
             tags: product.tags || [],
             sku: product.sku || null,
             shadeName: product.shadeName || product.shade_name || null,
+            // 色號代碼。先前只留 shadeName，而卡片要顯示的是這個——
+            // 沒有它的話色號只存在於商品名稱字串裡（「…SPF 48/ PA++ - PO-02」），
+            // 使用者得自己從一長串名稱的尾巴去找。
+            shadeCode: product.shadeCode || product.shade_code || product.shadeName
+                || product.shade_name || null,
             imageUrls: Array.isArray(product.imageUrls) ? product.imageUrls : [],
             status: product.status || 'active',
             reviewStatus: product.reviewStatus ?? product.review_status ?? null,

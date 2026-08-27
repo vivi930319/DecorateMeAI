@@ -156,20 +156,30 @@ check('主推薦那一欄有獨立類別', out.includes('sc2-anchor'));
 check('替代色欄不帶 anchor 類別',
   (out.match(/sc2-anchor/g) || []).length === 1);
 
-// 匹配度的形容詞要跟著數字走。寫死「高度匹配」的話，62% 時畫面會用
-// 很有把握的語氣說一件沒把握的事，而使用者是照這句話決定要不要買。
-sandbox.Router.shadeRecommendation = {
-  ...official, anchor: { ...official.anchor, matchPercent: 95 } };
-check('95% → 高度匹配', shade({ id: 'api-foundations-1' }).includes('高度匹配'));
-sandbox.Router.shadeRecommendation = {
-  ...official, anchor: { ...official.anchor, matchPercent: 62 } };
+// 主推薦的形容詞改用**膚色色差**，不是綜合排序分數（契約 2026-08-27 §7）。
+// matchPercent 混了風格、關鍵字與行為分；拿它說「與你的膚色多接近」
+// 是用一個數字回答另一個問題。
+const withSkin = (deltaE, accepted) => ({
+  ...official,
+  anchor: { ...official.anchor,
+            product: { id: 'api-foundations-1',
+                       foundationSkinMatch: { deltaE, accepted,
+                                              minInclusive: 0, maxInclusive: 2 } } },
+});
+sandbox.Router.shadeRecommendation = withSkin(0.6, true);
 out = shade({ id: 'api-foundations-1' });
-check('62% → 不說高度匹配', !out.includes('高度匹配'));
-check('62% → 說大致相符', out.includes('大致相符'));
-sandbox.Router.shadeRecommendation = {
-  ...official, anchor: { ...official.anchor, matchPercent: 41 } };
+check('色差 0.6 → 非常接近', out.includes('與您的膚色非常接近（色差 0.6）'));
+check('通過門檻要寫出來', out.includes('膚色色差 0～2 推薦門檻'));
+sandbox.Router.shadeRecommendation = withSkin(1.8, true);
 out = shade({ id: 'api-foundations-1' });
-check('41% → 建議先試色', out.includes('建議先試色'));
+check('色差 1.8 → 只說接近，不說非常接近',
+  out.includes('與您的膚色接近（色差 1.8）') && !out.includes('非常接近'));
+// 沒有膚色色差就不要用排序分數硬湊一句形容
+sandbox.Router.shadeRecommendation = {
+  ...official, anchor: { ...official.anchor, matchPercent: 95, product: { id: 'api-foundations-1' } } };
+out = shade({ id: 'api-foundations-1' });
+check('沒有膚色色差 → 不寫任何接近程度',
+  !out.includes('與您的膚色') && !out.includes('高度匹配'));
 // 沒有分數就整段不出現，不要自己編一個
 sandbox.Router.shadeRecommendation = {
   ...official, anchor: { ...official.anchor, matchPercent: null } };
@@ -229,6 +239,17 @@ const shadeFallbackBody = (cut('function currentShadeRecommendation() {') || '')
   .split(String.fromCharCode(10))
   .filter(line => !line.trim().startsWith('//'))
   .join(' ');
+// 資料掉了要自己補回來，不能要求使用者重跑流程——他不會知道要那樣做。
+// 在「把色階存進資料包」上線之前建立的 session，草稿裡沒有那個欄位，
+// 那些分頁會一直看不到色階比較。
+check('缺資料時會重新抓一次', src.includes('refetchShadeIfMissing'));
+check('只補一次不會無限重抓', src.includes('Router._shadeRefetched'));
+// 補救失敗不該讓商品頁跟著壞
+check('補救失敗安靜收掉', src.includes('.catch(() => {}).finally('));
+// 只有通過門檻的粉底才補：closest_available 本來就不該有色階
+check('只對通過門檻的粉底補',
+  /foundationSkinMatch\?\.accepted === true[\s\S]{0,120}refetchShadeIfMissing/.test(src));
+
 check('fallback 不會二次正規化',
   !shadeFallbackBody.includes('_normalizeShadeRecommendation('));
 // 沒有可比的時候，主推薦的色號要改由上方那塊印出來，
