@@ -195,9 +195,14 @@
         // 但按不下去，而且**成功時根本用不到**——完成會直接開下一個視窗。
         // 它只有在失敗時才會變成「重新產生」。
         // 一顆等在那裡卻不能按的主按鈕，只會讓人一直去試它。
+        // 這裡只留「上一步」。
+        //
+        // 先前等待時是一顆 disabled 的「請稍候」，失敗時變成「重新產生」。
+        // 兩個都不該在：進到這一步就代表建議已經在跑了，再給一顆「重新產生」
+        // 等於把同一件事再問一次；而失敗時真正有用的動作是回上一步換個風格
+        // 或重新分析，那顆按鈕本來就在旁邊。
         const modal = journeyShell('MAKEUP SUGGESTION', '正在產生妝容建議', body,
-            '<button class="btn-outline" type="button" data-back>上一步</button>'
-            + '<button class="btn-gold" type="button" data-next hidden>重新產生</button>');
+            '<button class="btn-outline" type="button" data-back>上一步</button>');
         modal.querySelector('[data-back]').onclick = () => {
             removeJourneyModal();
             openMakeupStyleModal(Router.selectedStyleId);
@@ -212,11 +217,7 @@
             clearInterval(timer);
             if (!document.getElementById('journeyModal')) return;
             if (!result.ok) {
-                const next = modal.querySelector('[data-next]');
-                next.hidden = false;          // 失敗才把它拿出來
-                next.disabled = false;
-                next.textContent = '重新產生';
-                next.onclick = openSuggestionJourneyModal;
+                // 失敗就把原因寫在說明那一行，出口是旁邊的「上一步」。
                 const note = modal.querySelector('.journey-wait-note');
                 note.textContent = result.missingAnalysis
                     ? '目前沒有臉部分析結果，請先回到臉部分析。'
@@ -239,8 +240,18 @@
         const body = `<div id="renderJourneyProgress">${progressTimeline(steps, active)}</div>
             <div class="render-estimate"><span class="render-spinner" aria-hidden="true"></span><div><b>正在生成妝容圖片</b><small>一般需要 60–150 秒，請保持此頁開啟。</small></div><strong id="renderJourneyPct">1%</strong></div>`;
         const modal = journeyShell('MAKEUP RENDER', '妝容渲染中', body,
-            '<button class="btn-outline" type="button" data-back>上一步</button>'
-            + '<button class="btn-gold" type="button" data-result hidden>重新生成</button>');
+        // 這裡也只留「上一步」。
+        //
+        // 渲染走 Replicate，一次要 60–150 秒而且按次計費。一顆放在失敗訊息旁邊的
+        // 「重新生成」，最容易被連按——而失敗多半不是按一次就會好的原因
+        // （服務忙碌、額度、上游逾時），連按只是把同一個錯誤重打好幾次。
+        // 真的要再試，從「上一步」走回去——那要多按兩下，而多按兩下正是重點：
+        // 重試應該是一個決定，不是一個反射動作。
+        //
+        // 額度本身由 runMakeupRender 裡的 UsageQuota 擋（訪客每天 2 次、會員 4 次，
+        // 與妝容建議分開計算），那是每一次渲染都會走到的地方，不分入口。
+        // 所以拿掉這顆按鈕不是在補額度的漏洞，是在減少「按了也沒用的重試」。
+            '<button class="btn-outline" type="button" data-back>上一步</button>');
         modal.querySelector('[data-back]').onclick = openAdviceReadyModal;
         const painter = modal.querySelector('#renderJourneyProgress');
         const pct = modal.querySelector('#renderJourneyPct');
@@ -260,11 +271,7 @@
                 return;
             }
             if (!outcome.ok) {
-                const resultButton = modal.querySelector('[data-result]');
-                resultButton.hidden = false;   // 失敗才需要按鈕
-                resultButton.disabled = false;
-                resultButton.textContent = '重新生成';
-                resultButton.onclick = openRenderJourneyModal;
+                // 失敗就把原因寫在進度那一行，出口是旁邊的「上一步」。
                 const estimate = modal.querySelector('.render-estimate b');
                 if (estimate) estimate.textContent = `生成失敗：${outcome.error?.message || '服務暫時無法使用'}`;
                 return;
@@ -279,11 +286,10 @@
             // 只是把「完成」這件事重複講兩遍。停 600ms 讓「渲染完成」與 100%
             // 看得到，然後走。
             //
-            // 去 compare（妝容對比圖）而不是 suggestion：妝前妝後與收藏都在那裡，
-            // 跟另一條渲染路徑的終點一致，不要同一件事有兩個結果頁。
+            // 回妝容建議：那裡有妝前妝後、五個部位的做法與收藏，是這次結果的完整樣貌。
             setTimeout(() => {
                 removeJourneyModal();
-                Router.go('compare');
+                Router.go('suggestion');
             }, 600);
         });
     }

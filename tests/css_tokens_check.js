@@ -45,8 +45,11 @@ check('沒有用到未定義的變數', missing.length === 0,
 // 粉底色號那一區是這次出事的地方，單獨再確認一次它有底色。
 const heroBlock = /\.sr-hero\s*\{[^}]*\}/.exec(code);
 check('.sr-hero 有 background', Boolean(heroBlock) && /background\s*:/.test(heroBlock[0]));
-const scAnchor = /\.sc-anchor\s*\{[^}]*\}/.exec(code);
-check('.sc-anchor 有 background', Boolean(scAnchor) && /background\s*:/.test(scAnchor[0]));
+// 三欄比較裡的主推薦那一欄。等重會讓人以為三個都是推薦，
+// 但只有中間那個是——要靠底色抬起來，只有邊框在小螢幕上看不出來。
+// （舊的 .sc-anchor 是已移除的 Modal 用的，2026-08-28 一併清掉。）
+const scAnchor = /\.sc2-anchor\s*\{[^}]*\}/.exec(code);
+check('.sc2-anchor 有 background', Boolean(scAnchor) && /background\s*:/.test(scAnchor[0]));
 
 console.log('');
 console.log(`${pass}/${pass + fail} passed`);

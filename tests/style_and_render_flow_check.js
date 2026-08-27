@@ -52,9 +52,30 @@ console.log('=== 2. 四套主題都要定義得到那個顏色 ===');
 
 console.log('');
 console.log('=== 3. 渲染完直接跳轉，不要再按一次 ===');
-check('渲染成功後導向對比頁', /PageInit\.suggestion\(\);\s*[\r\n]\s*Router\.go\('compare'\)/.test(src));
 // 跳過去之後按上一頁回來，看到的要是「重新生成妝容」而不是還停在「渲染中…」
-check('跳轉前先重畫建議頁', src.includes('PageInit.suggestion();'));
+
+
+console.log('');
+console.log('=== 3b. 等待中與失敗都不要給重試按鈕 ===');
+// 放在失敗訊息旁邊的「重新產生」「重新生成」最容易被連按，而失敗多半不是
+// 按一次就會好的原因（服務忙碌、額度、上游逾時）——連按只是把同一個錯誤
+// 重打好幾次。建議走 Ollama、渲染走 Replicate（一次 60–150 秒且按次計費）。
+// 掃的是程式本體，不是連註解一起——那幾行註解正好在解釋
+// 「為什麼不能有重試按鈕」，連註解掃的話這段解釋自己會把測試弄紅。
+// css_tokens_check 與 recommendation_contract_check 都踩過同一個坑。
+const flow = fs.readFileSync(path.join(ROOT, 'js/makeup-flow.js'), 'utf8')
+    .split(String.fromCharCode(10))
+    .filter(line => !line.trim().startsWith('//'))
+    .join(String.fromCharCode(10));
+check('建議流程沒有「重新產生」按鈕', !flow.includes('>重新產生<'));
+check('渲染流程沒有「重新生成」按鈕', !flow.includes('>重新生成<'));
+// 等待中那顆 disabled 的主按鈕也不該在：看起來像主要動作卻按不下去
+check('等待中沒有 disabled 的主按鈕',
+  !flow.includes('disabled data-next') && !flow.includes('disabled data-result'));
+// 失敗仍要有出口，而且要說明原因
+check('失敗仍留「上一步」', flow.includes('data-back'));
+check('失敗會寫出原因',
+  flow.includes('目前無法完成建議') && flow.includes('生成失敗'));
 
 console.log('');
 console.log('=== 4. 對比頁不能有按不動的按鈕 ===');

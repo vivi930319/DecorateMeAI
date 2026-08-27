@@ -966,7 +966,22 @@ function currentShadeRecommendation() {
 
 function shadeRecommendationHtml(p) {
     const sr = currentShadeRecommendation();
-    if (!sr || !sr.anchor) return '';
+    if (!sr || !sr.anchor) {
+        // 這件是通過膚色門檻的粉底，卻沒有相鄰色號可畫——多半是**這台裝置上
+        // 沒有這次的分析資料**。色階跟著「套用妝容風格 → 抓推薦」那一次流程來，
+        // 而 session 是每台裝置各自獨立的：在電腦做過分析，換手機看同一件商品，
+        // 手機這邊什麼都沒有。
+        //
+        // 默默不顯示是最糟的處理：使用者會以為功能壞了或這支沒有其他色號，
+        // 而真正的原因（要先在這台裝置做一次分析）他無從得知。
+        if (p?.foundationSkinMatch?.accepted === true) {
+            return `<section class="shade-rec shade-rec-empty">
+                <p>這台裝置上還沒有這次的臉部分析資料，所以無法比較相鄰色號。
+                   完成一次臉部分析並選擇妝容風格之後，這裡會顯示同系列的較亮／較深色號。</p>
+            </section>`;
+        }
+        return '';
+    }
     // 只在看的就是主推薦那件商品時顯示，否則會出現在不相干的商品頁上。
     const anchorId = String(sr.anchor.product?.id ?? '');
     if (anchorId && String(p?.id ?? '') !== anchorId) return '';
@@ -1537,13 +1552,13 @@ function openLookModal(item){
     // 同一份妝前妝後，兩個地方長得不一樣，會被當成兩個不同的東西。
     // 這裡不把長按互動複製一份進浮層：那等於同一套互動維護兩份，
     // 改一邊忘另一邊。改成把這筆資料交給既有的那一頁。
-    +((beforeSrc&&afterSrc)?'<button type="button" class="btn-gold lm-open-compare">查看完整對比</button>':'')
+    +((beforeSrc&&afterSrc)?'<button type="button" class="btn-gold lm-open-compare">查看妝容建議</button>':'')
     +'</div></div>';
   document.body.appendChild(ov); void ov.offsetWidth; ov.classList.add('show');
   function close(){ ov.classList.remove('show'); setTimeout(function(){ ov.remove(); },350); }
   ov.querySelector('.lm-close').onclick=close;
   var openCompare=ov.querySelector('.lm-open-compare');
-  if(openCompare) openCompare.onclick=function(){ close(); Router.go('compare',{ look:item }); };
+  if(openCompare) openCompare.onclick=function(){ close(); Router.go('suggestion',{ look:item }); };
   ov.onclick=function(e){ if(e.target===ov) close(); };
   document.addEventListener('keydown', function esc(e){ if(e.key==='Escape'){ close(); document.removeEventListener('keydown',esc); } });
 }
@@ -4414,9 +4429,18 @@ const PageInit = {
         setCompareImage('before');
     },
 
-    suggestion() {
+    suggestion(opts) {
         if (!hasStartedJourney()) { renderAnalysisGate("妝容建議"); return; }
-        const style = STYLES.find(s => s.id === Router.selectedStyleId) || STYLES[0];
+        // 從會員中心點一筆收藏進來時，顯示那一筆而不是當前這次分析。
+        //
+        // ⚠️ 只用於顯示，不寫回 Router.analysisPackage——那份是渲染、推薦、
+        // 回饋共用的，覆寫它會讓「看一眼舊收藏」把使用者正在做的新分析洗掉，
+        // 而症狀會出現在別的頁面上。
+        const viewLook = (opts && opts.look && typeof opts.look === 'object') ? opts.look : null;
+        Router.viewingLook = viewLook;
+        const style = viewLook
+            ? (STYLES.find(x => x.name === viewLook.style) || STYLES[0])
+            : (STYLES.find(s => s.id === Router.selectedStyleId) || STYLES[0]);
         const r = getLatestAnalysisResult() || {};
         const skin = r['膚色'] || {};
         const pkg = Router.analysisPackage || {};
@@ -4528,6 +4552,13 @@ const PageInit = {
         const quotaEl = document.getElementById('suggestionRenderQuota');
 
         const photoSources = () => {
+            // 看歷史收藏時用那一筆的圖。混用會顯示成別人的妝前配自己的妝後。
+            if (viewLook) {
+                return {
+                    before: lookImageSrc(viewLook.beforeImage) || '',
+                    after: lookImageSrc(viewLook.renderedImage) || '',
+                };
+            }
             const p = Router.analysisPackage || {};
             const rd = p.render || {};
             const mo = rd.makeupOutput || {};
@@ -4605,16 +4636,12 @@ const PageInit = {
                 showToast(outcome.result?.promptSource === 'style_allowlist'
                     ? '妝容渲染完成（本次使用通用指令，未取得個人化建議）'
                     : '妝容渲染完成');
-                // 渲染完直接跳到妝容對比圖，不要留在建議頁等使用者自己找。
-                //
-                // 先前是重畫建議頁再捲到成果圖。那已經比什麼都不做好，但使用者要的
-                // 東西——妝前妝後對比、收藏——在另一頁，他得先發現有那一頁才過得去。
-                // 剛渲染完是最想看結果的那一刻，中間不該再隔一個動作。
-                //
-                // 建議頁的狀態仍然先重畫一次：跳過去之後按上一頁回來，
-                // 看到的要是「重新生成妝容」而不是還停在「渲染中…」。
+                // 重畫整頁再捲到成果圖。收藏鍵與「重新生成妝容」是建樣板當下依
+                // renderedImage 決定要不要輸出的，只換照片的話它們要等下次進頁才出現——
+                // 使用者剛渲染完，最想按的那顆卻不在。
                 PageInit.suggestion();
-                Router.go('compare');
+                document.getElementById('suggestionStage')
+                    ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             } finally {
                 clearInterval(tick);
                 renderBtn.disabled = false;

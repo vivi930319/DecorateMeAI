@@ -1818,6 +1818,12 @@ body.admin-mode .main-content * { letter-spacing:0; }
    先前是「主推薦 ＋ 兩列小字 ＋ 一顆要按的按鈕」，替代色藏在 Modal 後面——
    而替代色的用途是**比較**，比較要看得到才成立。要求使用者先相信
    「裡面有東西值得看」才會點，多數人不會點，那兩支色號就等於不存在。 */
+/* 缺資料時的說明。默默不顯示會讓使用者以為功能壞了，
+   而真正的原因（要先在這台裝置做一次分析）他無從得知。 */
+.shade-rec-empty { margin-top:14px; padding:12px 14px; border:1px dashed var(--line-gold);
+    border-radius:10px; background:var(--glass); }
+.shade-rec-empty p { margin:0; color:var(--mid); font-size:12px; line-height:1.75; }
+
 .sc2-wrap { margin-top:18px; }
 .sc2-head { color:var(--ink-soft); font-size:13px; font-weight:600; margin-bottom:10px; }
 /* 固定三欄。auto-fit + minmax(148px) 在詳情頁會換行——那一欄實際只有約 433px
@@ -1860,29 +1866,23 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
 }
 
 /* 三色比較視窗 */
-.sc-dialog { position:relative; width:min(560px,100%); max-height:90vh; overflow:auto;
-    padding:26px 22px; border-radius:14px; background:var(--paper);
-    box-shadow:0 24px 60px rgba(70,42,42,0.28); }
-.sc-dialog h3 { margin:0 0 8px; font-size:17px; color:var(--ink-soft); }
-.sc-lead { margin:0; color:var(--mid); font-size:12.5px; line-height:1.8; }
-.sc-row { display:flex; gap:10px; margin:18px 0 4px; align-items:stretch; }
-.sc-col { flex:1 1 0; display:flex; flex-direction:column; gap:6px; align-items:center;
-    justify-content:center; padding:16px 8px; cursor:pointer;
-    border:1px solid var(--line); border-radius:11px; background:var(--glass);
-    transition:border-color .18s, transform .18s; }
-.sc-col:hover { border-color:var(--gold-soft); transform:translateY(-2px); }
-.sc-col:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; }
+
+
+
+
+
+
+
 /* 主推薦那一欄要比左右明顯：等大等於說三個一樣好。用底色與陰影抬起來，
    而不是只有邊框顏色不同——邊框在小螢幕上幾乎看不出來。 */
-.sc-anchor { border-color:var(--gold-deep); background:var(--blush-panel);
-    box-shadow:0 8px 20px rgba(150,88,78,0.16); }
-.sc-label { color:var(--mid); font-size:10.5px; letter-spacing:.08em; }
-.sc-anchor .sc-label { color:var(--gold-deep); }
-.sc-code { font-size:21px; font-weight:600; color:var(--ink-soft); }
-.sc-match { color:var(--gold-deep); font-size:11px; font-variant-numeric:tabular-nums; }
-.sc-detail { margin-top:16px; padding-top:14px; border-top:1px solid var(--line); }
+
+
+
+
+
+
 .sc-detail-head { font-size:13px; font-weight:600; color:var(--ink-soft); }
-.sc-detail p { margin:5px 0 0; color:var(--mid); font-size:12.5px; line-height:1.8; }
+
 
 /* 手機：三欄並排會擠到看不清色號，改成橫向滑動 */
 @media (max-width:520px) {
@@ -1907,14 +1907,14 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
     padding:26px 24px; border-radius:14px; background:var(--white); text-align:center; }
 .sr-close { position:absolute; top:10px; right:12px; border:0; background:none;
     color:var(--mid); font-size:22px; line-height:1; cursor:pointer; }
-.sr-tag { color:var(--gold-deep); font-size:11px; letter-spacing:.1em; }
+
 .sr-dialog h3 { margin:6px 0 2px; font-size:16px; color:var(--ink-soft); }
-.sr-brand { color:var(--mid); font-size:12px; }
-.sr-codebig { margin:10px 0 4px; font-size:26px; font-weight:600; color:var(--ink-soft); }
+
+
 .sr-dialog .rec-match { justify-content:center; }
-.sr-img { display:block; width:150px; max-width:100%; margin:14px auto 0; border-radius:8px; }
-.sr-desc { margin:14px 0 0; color:var(--ink-soft); font-size:13px; line-height:1.8; }
-.sr-go { margin-top:16px; }
+
+
+
 
 /* 購物車裡已下架的商品。留著讓使用者自己移除，但不能結帳、不能加減數量。 */
 .cart-item.is-gone { opacity:.66; }
