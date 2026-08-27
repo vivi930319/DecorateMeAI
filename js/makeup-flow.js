@@ -189,8 +189,15 @@
         ];
         let active = 0;
         const body = `<div id="journeyProgress">${progressTimeline(steps, active)}</div><p class="journey-wait-note">建議正在整理中，完成後就能進行妝容渲染。</p>`;
+        // 等待中不顯示右邊那顆按鈕。
+        //
+        // 先前是一顆 disabled、寫著「請稍候」的金色按鈕。它看起來像主要動作，
+        // 但按不下去，而且**成功時根本用不到**——完成會直接開下一個視窗。
+        // 它只有在失敗時才會變成「重新產生」。
+        // 一顆等在那裡卻不能按的主按鈕，只會讓人一直去試它。
         const modal = journeyShell('MAKEUP SUGGESTION', '正在產生妝容建議', body,
-            '<button class="btn-outline" type="button" data-back>上一步</button><button class="btn-gold" type="button" disabled data-next>請稍候</button>');
+            '<button class="btn-outline" type="button" data-back>上一步</button>'
+            + '<button class="btn-gold" type="button" data-next hidden>重新產生</button>');
         modal.querySelector('[data-back]').onclick = () => {
             removeJourneyModal();
             openMakeupStyleModal(Router.selectedStyleId);
@@ -206,6 +213,7 @@
             if (!document.getElementById('journeyModal')) return;
             if (!result.ok) {
                 const next = modal.querySelector('[data-next]');
+                next.hidden = false;          // 失敗才把它拿出來
                 next.disabled = false;
                 next.textContent = '重新產生';
                 next.onclick = openSuggestionJourneyModal;
@@ -231,7 +239,8 @@
         const body = `<div id="renderJourneyProgress">${progressTimeline(steps, active)}</div>
             <div class="render-estimate"><span class="render-spinner" aria-hidden="true"></span><div><b>正在生成妝容圖片</b><small>一般需要 60–150 秒，請保持此頁開啟。</small></div><strong id="renderJourneyPct">1%</strong></div>`;
         const modal = journeyShell('MAKEUP RENDER', '妝容渲染中', body,
-            '<button class="btn-outline" type="button" data-back>上一步</button><button class="btn-gold" type="button" disabled data-result>生成中</button>');
+            '<button class="btn-outline" type="button" data-back>上一步</button>'
+            + '<button class="btn-gold" type="button" data-result hidden>重新生成</button>');
         modal.querySelector('[data-back]').onclick = openAdviceReadyModal;
         const painter = modal.querySelector('#renderJourneyProgress');
         const pct = modal.querySelector('#renderJourneyPct');
@@ -252,6 +261,7 @@
             }
             if (!outcome.ok) {
                 const resultButton = modal.querySelector('[data-result]');
+                resultButton.hidden = false;   // 失敗才需要按鈕
                 resultButton.disabled = false;
                 resultButton.textContent = '重新生成';
                 resultButton.onclick = openRenderJourneyModal;
@@ -263,13 +273,18 @@
             if (pct) pct.textContent = '100%';
             const title = modal.querySelector('.makeup-style-head h2');
             if (title) title.textContent = '妝容渲染完成';
-            const resultButton = modal.querySelector('[data-result]');
-            resultButton.disabled = false;
-            resultButton.textContent = '查看妝容結果 →';
-            resultButton.onclick = () => {
+            // 成功就直接帶過去，不要再要求按一次「查看妝容結果」。
+            //
+            // 使用者剛等了一兩分鐘，那一刻他要的就是看結果——中間再隔一個動作，
+            // 只是把「完成」這件事重複講兩遍。停 600ms 讓「渲染完成」與 100%
+            // 看得到，然後走。
+            //
+            // 去 compare（妝容對比圖）而不是 suggestion：妝前妝後與收藏都在那裡，
+            // 跟另一條渲染路徑的終點一致，不要同一件事有兩個結果頁。
+            setTimeout(() => {
                 removeJourneyModal();
-                Router.go('suggestion');
-            };
+                Router.go('compare');
+            }, 600);
         });
     }
 

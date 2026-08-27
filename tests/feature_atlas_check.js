@@ -97,5 +97,38 @@ console.log('\n=== 10. HTML 逃脫 ===');
 check('分類名稱有逃脫', /esc\(name\)/.test(atlas));
 check('說明文字有逃脫', /esc\(def\.how\)/.test(atlas));
 
+
+console.log('');
+console.log('=== QA 與混淆比較要真的被畫出來 ===');
+// 2026-08-28：confusedHtml 定義了卻從來沒被呼叫過——寫好的功能沒有入口，
+// 跟沒寫一樣，而且更難發現，因為程式碼看起來是完整的。
+const cutFn = (sig) => {
+    const i = atlas.indexOf(sig);
+    if (i < 0) return '';
+    let d = 0;
+    for (let k = atlas.indexOf('{', i); k < atlas.length; k++) {
+        if (atlas[k] === '{') d++;
+        else if (atlas[k] === '}') { d--; if (!d) return atlas.slice(i, k + 1); }
+    }
+    return '';
+};
+check('混淆比較有被呼叫', /confusedHtml\(field, current, options\)/.test(atlas)
+  && atlas.indexOf('confusedHtml(field, current, options)') !== atlas.lastIndexOf('confusedHtml(field, current, options)'));
+check('QA 有被呼叫', atlas.includes('${qaHtml(field)}'));
+// 格式跟商品推薦那邊的色差 QA 一致：同一個系統回答「這是什麼、準不準」，
+// 不該長成兩種樣子
+check('QA 用摺疊清單', cutFn('function qaHtml(field) {').includes('<details'));
+check('QA 樣式存在', css.includes('.fa-qa'));
+check('混淆比較樣式存在', css.includes('.fa-cmp'));
+
+// 準確率直接顯示給使用者，包含難看的那幾個。蓋掉不會讓模型變好，
+// 只會讓人以為系統比實際上更有把握，然後照著不可靠的結論去買東西。
+check('有各部位的真實準確率', atlas.includes('const ACC = {'));
+check('臉型 0.454 沒有被美化', atlas.includes("'臉型': 0.454"));
+check('準確率低時明講只能參考', atlas.includes('只能當參考'));
+// 改判之後會發生什麼要說清楚，否則使用者不知道自己按下去的意義
+check('說明改判後會經人工覆核', atlas.includes('人工覆核'));
+check('說明沒勾同意就不留照片', atlas.includes('照片不會'));
+
 console.log(`\n${pass}/${pass + fail} passed`);
 process.exit(fail ? 1 : 0);
