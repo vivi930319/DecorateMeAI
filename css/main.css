@@ -522,10 +522,12 @@ body {
 }
 
 /* ═══ 為你精選 · Rare Beauty 上下錯落雙欄 ═══ */
-.glow-row { display:grid; grid-template-columns:1fr 1fr; gap:36px 46px; margin-bottom:72px; }
+/* 2026-08-28：首頁精選改成跟商品頁一樣的尺寸。
+   原本是兩欄錯落的大圖，一張佔掉將近半個畫面寬——那個排版適合形象照，
+   不適合「這幾件推薦給你」：使用者要的是掃過去比較，不是一張一張看。 */
+.glow-row { display:grid; grid-template-columns:repeat(4,1fr); gap:26px 22px; margin-bottom:56px; }
 .glow-card { cursor:pointer; }
-.glow-card:nth-child(even) { margin-top:60px; }
-.gc-img { position:relative; width:100%; aspect-ratio:4/5; overflow:hidden; margin-bottom:18px; }
+.gc-img { position:relative; width:100%; aspect-ratio:1; overflow:hidden; margin-bottom:11px; }
 .gc-img .ph { position:absolute; inset:0; transition:box-shadow .5s var(--ease); }
 .gc-img .ph img { transition:transform 1s var(--ease), opacity .7s var(--ease); }
 .glow-card:hover .gc-img .ph { box-shadow:0 22px 48px rgba(80,48,24,0.16); }
@@ -1850,6 +1852,21 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
     box-shadow:0 8px 20px rgba(150,88,78,.16); }
 .sc2-label { color:var(--mid); font-size:10.5px; letter-spacing:.08em; }
 .sc2-anchor .sc2-label { color:var(--gold-deep); font-weight:600; }
+/* 色塊。比較色號本來就是比顏色——只給 PO-03 這種代碼，
+   等於要人憑三個字元想像那是什麼顏色。 */
+.sc2-swatch { display:inline-block; width:14px; height:14px; margin-right:6px;
+    border-radius:50%; border:1px solid rgba(0,0,0,.14);
+    box-shadow:inset 0 1px 2px rgba(255,255,255,.35); vertical-align:-2px; }
+/* 使用者自己的膚色，擺在三欄上面當基準。
+   沒有它，三個色塊只能互相比——但要回答的問題是「哪一支比較像我」。 */
+.sc2-mine { display:flex; flex-wrap:wrap; align-items:center; gap:6px;
+    margin-bottom:10px; padding:8px 12px; border-radius:9px;
+    border:1px solid var(--line-gold); background:var(--blush-panel); }
+.sc2-mine .sc2-swatch { width:20px; height:20px; margin-right:2px; }
+.sc2-mine-label { color:var(--ink-soft); font-size:12px; }
+.sc2-mine-label em { margin-left:6px; font-style:normal; color:var(--mid); font-size:11px; }
+.sc2-mine-warn { flex:1 1 100%; color:var(--danger); font-size:11px; line-height:1.6; }
+.sc2-mine.is-unreliable { border-color:var(--danger); }
 .sc2-code { font-size:22px; font-weight:600; color:var(--ink-soft); letter-spacing:.02em; }
 .sc2-match { color:var(--gold-deep); font-size:11px; font-variant-numeric:tabular-nums; }
 .sc2-desc { margin:4px 0 0; color:var(--mid); font-size:11.5px; line-height:1.65; }
@@ -2192,6 +2209,8 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
 }
 @media (max-width:980px) {
     .analyze-grid, .dash-grid, .pd-wrap, .feat-grid { grid-template-columns:1fr; }
+    /* 精選卡跟商品頁一樣，寬度不夠就減欄，不要放大 */
+    .glow-row { grid-template-columns:repeat(2,1fr); gap:18px 14px; }
     .cat-grid, .style-grid, .prod-grid { grid-template-columns:repeat(2,1fr); }
     .main-content { padding:32px 22px 54px; }
     .dash-hero { height:auto; min-height:300px; } .dash-hero .hero-body { max-width:88%; left:30px; right:30px; bottom:32px; }

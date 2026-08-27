@@ -33,6 +33,9 @@ const sb = { Router: {}, escapeHtml: (s) => String(s), console,
 vm.createContext(sb);
 vm.runInContext(cut(src, 'function hasMatch(node) {') + '\n'
     + cut(src, 'function currentShadeRecommendation() {') + '\n'
+    // shadeRecommendationHtml 會呼叫 userSkinRow（把使用者膚色擺在三欄上面）。
+    // 抽了前者沒抽相依，測試會在執行時炸 ReferenceError。
+    + cut(src, 'function userSkinRow() {') + ';\n'
     + cut(src, 'function shadeRecommendationHtml(p) {') + '\n'
     + cut(src, 'function colorDiffInfo(p) {') + '\n'
     + cut(src, 'function colorDiffEntryHtml(p) {') + '\n'
@@ -168,6 +171,21 @@ check('卡片會畫色號', src.includes('class="pc-shade"'));
 // 眼影腮紅那些後端沒給色號，不能因此留一個空欄位
 check('沒有色號就整格不出現', /\$\{p\.shadeCode \? /.test(src));
 check('色號樣式存在', css.includes('.pc-shade'));
+
+console.log('');
+console.log('=== 4d. 比較色號要看得到顏色 ===');
+// 只給 PO-03 這種代碼，等於要人憑三個字元想像那是什麼顏色。
+// 而使用者要回答的問題不是「這三支差多少」，是「哪一支比較像我」——
+// 基準不在畫面上，那個問題就答不了。
+const shadeSrc = cut(src, 'function shadeRecommendationHtml(p) {');
+check('每一欄都畫色塊', shadeSrc.includes('sc2-swatch') && shadeSrc.includes('labToRgb'));
+check('沒有 lab 就不畫色塊，不用預設色', /const lab = Array\.isArray\(prod\.lab\)/.test(shadeSrc));
+const skinRow = cut(src, 'function userSkinRow() {');
+check('三欄上面有使用者自己的膚色', Boolean(skinRow) && shadeSrc.includes('userSkinRow()'));
+check('膚色缺 lab 時整列不出現', /if \(!Array\.isArray\(lab\) \|\| lab\.length !== 3\) return ''/.test(skinRow));
+// 拿一個不可信的膚色去比色，比不比還糟——使用者會以為自己比對過了
+check('取樣不可信要講出來', skinRow.includes('labReliable === false') && skinRow.includes('僅供參考'));
+check('色塊樣式存在', css.includes('.sc2-swatch') && css.includes('.sc2-mine'));
 
 console.log('');
 console.log('=== 5. api 層要把新欄位帶過來 ===');

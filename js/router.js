@@ -964,6 +964,28 @@ function currentShadeRecommendation() {
     return draft?.recommendations?.shadeRecommendation || null;
 }
 
+// 使用者自己的膚色，擺在三欄上面當比較基準。
+//
+// 沒有它的話，三個色塊只能互相比——但使用者要回答的問題不是「這三支差多少」，
+// 是「哪一支比較像我」。基準不在畫面上，那個問題就答不了。
+//
+// 取樣被判定不可信時要講出來（頭髮或陰影蓋住臉頰）：拿一個不可信的膚色去比色，
+// 比不比還糟，因為使用者會以為自己比對過了。
+function userSkinRow() {
+    const skin = Router.analysisPackage?.faceAnalysis?.skinTone;
+    const lab = skin?.lab;
+    if (!Array.isArray(lab) || lab.length !== 3) return '';
+    const color = Api.labToRgb(Number(lab[0]), Number(lab[1]), Number(lab[2]));
+    if (!color) return '';
+    const meta = [skin.season, skin.level].filter(Boolean).join(' · ');
+    const bad = skin.labReliable === false;
+    return `<div class="sc2-mine${bad ? ' is-unreliable' : ''}">
+        <span class="sc2-swatch" aria-hidden="true" style="background:${escapeHtml(String(color))}"></span>
+        <span class="sc2-mine-label">你的膚色${meta ? `<em>${escapeHtml(meta)}</em>` : ''}</span>
+        ${bad ? '<span class="sc2-mine-warn">這次取樣可能不準（臉頰被遮住），色塊僅供參考</span>' : ''}
+    </div>`;
+}
+
 function shadeRecommendationHtml(p) {
     const sr = currentShadeRecommendation();
     if (!sr || !sr.anchor) {
@@ -1059,10 +1081,17 @@ function shadeRecommendationHtml(p) {
                  alt="${escapeHtml(String(prod.name || node.shadeCode || ''))}" loading="lazy"
                  onerror="this.style.display='none'">`
             : '<div class="sc2-img sc2-img-none" aria-hidden="true"></div>';
+        // 色塊。比較色號本來就是比顏色——只給 PO-03 這種代碼，等於要人憑三個
+        // 字元想像那是什麼顏色。商品的 LAB 後端有給，轉成 RGB 直接畫出來。
+        const lab = Array.isArray(prod.lab) && prod.lab.length === 3 ? prod.lab : null;
+        const swatch = lab
+            ? `<span class="sc2-swatch" aria-hidden="true"
+                 style="background:${escapeHtml(String(Api.labToRgb(Number(lab[0]), Number(lab[1]), Number(lab[2]))))}"></span>`
+            : '';
         const inner = `
             <div class="sc2-label">${escapeHtml(node.label || label)}</div>
             ${thumb}
-            <div class="sc2-code">${escapeHtml(String(node.shadeCode || '—'))}</div>
+            <div class="sc2-code">${swatch}${escapeHtml(String(node.shadeCode || '—'))}</div>
             ${metric ? `<div class="sc2-match">${escapeHtml(metric)}</div>` : ''}
             ${node.description ? `<p class="sc2-desc">${escapeHtml(node.description)}</p>` : ''}`;
         return (prod.id && kind !== 'anchor')
@@ -1089,6 +1118,7 @@ function shadeRecommendationHtml(p) {
         ${hasVariants ? `
         <div class="sc2-wrap">
             <div class="sc2-head">想比較不同妝效？</div>
+            ${userSkinRow()}
             <div class="sc2-row">
                 ${col(sr.lighter, 'lighter', '較明亮的替代色')}
                 ${col(a, 'anchor', '主推薦色號')}
@@ -1536,13 +1566,13 @@ function openLookModal(item){
   var photo = (beforeSrc && afterSrc)
     ? '<div class="lm-compare-photo"><figure><img src="'+beforeSrc+'" alt="渲染前照片" onerror="markLookImageUnavailable(this)"><figcaption>Before</figcaption></figure><figure><img src="'+afterSrc+'" alt="渲染後照片" onerror="markLookImageUnavailable(this)"><figcaption>After</figcaption></figure></div>'
     : (afterSrc ? '<img src="'+afterSrc+'" alt="" onerror="markLookImageUnavailable(this)">' : '<span>'+escapeHtml(item.style||'Saved Look')+'</span>');
-  var ts = item.timestamp ? formatAnalysisTime(item.timestamp) : '';
+
   var ov=document.createElement('div'); ov.id='lookModal'; ov.className='look-modal';
   ov.innerHTML='<div class="lm-card" role="dialog" aria-modal="true">'
     +'<button class="lm-close" aria-label="關閉">×</button>'
     +'<div class="lm-photo">'+photo+'</div>'
     +'<div class="lm-body"><div class="lm-kicker">'+escapeHtml(item.title||'Saved Look')+'</div>'
-    +'<h2>'+escapeHtml(item.style||'妝容建議')+'</h2><time>'+escapeHtml(ts)+'</time>'
+    +'<h2>'+escapeHtml(item.style||'妝容建議')+'</h2>'
     +(tags?'<div class="analysis-tags" style="margin-top:14px;">'+tags+'</div>':'')
     +'<div class="lm-summary"><span><em>臉型</em>'+escapeHtml(r['臉型']||'—')+'</span><span><em>眼型</em>'+escapeHtml(r['眼型']||'—')+'</span><span><em>鼻型</em>'+escapeHtml(r['鼻型']||'—')+'</span><span><em>膚色</em>'+escapeHtml(skin['四季型']||skin['膚色分級']||'—')+'</span></div>'
     +(rows?'<div class="lm-advice-grid">'+rows+'</div>':'')
@@ -1952,15 +1982,15 @@ dashboard: `
     <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">❧</span><h2>猜你喜歡</h2></div></div>
     <div class="glow-row" id="dashPersonal"></div>
 </section>
-<div class="dash-sec-head"><div class="sh-l"><span class="sh-no">01</span><h2>風格靈感</h2></div><span class="sh-link" data-nav="style">瀏覽全部風格</span></div>
+<div class="dash-sec-head"><div class="sh-l"><span class="sh-no">01</span><h2>風格靈感</h2></div></div>
 <div class="insp-row" id="dashInsp"></div>
-<div class="dash-sec-head"><div class="sh-l"><span class="sh-no">02</span><h2>為你精選</h2></div><span class="sh-link" data-nav="products">查看全部商品</span></div>
+<div class="dash-sec-head"><div class="sh-l"><span class="sh-no">02</span><h2>為你精選</h2></div></div>
 <div class="glow-row" id="dashGlow"></div>
 <section class="about-sys">
     <div class="as-head">
         <div class="about-headrow"><span class="as-eyebrow-it">About the Atelier</span><h2 class="about-title">OUR BEAUTY<span class="l2">SYSTEM</span></h2></div>
         <span class="bs-link" data-nav="analysis">開始你的美學旅程　→</span>
-        <p class="bs-desc">「裝識你的美」是一套以科技與美學打造的個人美妝系統。從臉部分析解讀你的五官與膚色，到為你量身推薦的妝容風格與美妝逸品，我們相信，最美的樣子，是更認識自己的你。</p>
+        <p class="bs-desc"><b>美，不是成為另一個人。</b><br>而是更了解適合自己的樣子。</p>
     </div>
     <div class="as-photo"><img class="as-photo-img" src="assets/brand/decorate-me-home.jpg" alt="Decorate Me 品牌識別" onload="this.classList.add('loaded')"><div class="as-photo-ph"><div class="demo-mark">❧</div><div class="demo-cap">商品形象照 · Demo</div></div></div>
 </section>`,
@@ -2227,7 +2257,8 @@ profile: `
     </div>
 </div>
 <section class="member-tier"><div class="member-section-head"><span>Membership</span><h2>會員等級</h2></div><div id="profileTierCard"></div></section>
-<section class="member-tier"><div class="member-section-head"><span>Check-in</span><h2>每日打卡</h2></div><div id="profileCheckinCard"></div></section>
+<!-- 2026-08-28 拿掉每日打卡。點數機制與這個專案要展示的東西無關，
+     而它佔著會員中心最上面那塊，把真正該看的（分析紀錄、妝容收藏）擠下去。 -->
 <section class="member-tier"><div class="member-section-head"><span>Theme Shop</span><h2>點數商店</h2></div><div id="profileThemeShop"></div></section>
 <section class="member-tier"><div class="member-section-head"><span>Ledger</span><h2>點數紀錄</h2></div><div id="profilePointLedger"></div></section>
 <section class="member-suggestions"><div class="member-section-head"><span>Saved Looks</span><h2>已收藏的妝容對比圖</h2></div><div id="profileSuggestionArea"></div></section>`
@@ -4157,10 +4188,18 @@ const PageInit = {
             // 還原成 '，在行內事件處理器仍會跳出字串執行。分類本來就是英數 key，這裡先
             // 收斂成安全字元集，斷掉這條 JS 注入面；顯示文字另外走 escapeHtml。
             const catToken = String(p.cat || '').replace(/[^a-zA-Z0-9_-]/g, '');
+            // 從色階比較點進來的話，返回要回到那支主推薦粉底。
+            // 只認一次：回去之後就清掉，否則之後從別處進到同一件商品，
+            // 返回還是會跳到那支粉底——那時候使用者早就不在比較的脈絡裡了。
+            const backToShade = (Router.shadeReturnTo && Router.shadeReturnTo !== id)
+                ? Router.shadeReturnTo : '';
             area.innerHTML = `
                 <div class="pd-top">
-                    <a href="#" class="back-link" onclick="PageInit.products({category:'${catToken}'});return false;">← ${escapeHtml(p.cat)}</a>
-                    <button class="pd-close" aria-label="關閉" onclick="PageInit.products({category:'${catToken}'});return false;">×</button>
+                    ${backToShade
+                        ? `<a href="#" class="back-link" data-back-shade="${escapeHtml(backToShade)}">← 回到粉底色號比較</a>
+                           <button class="pd-close" aria-label="關閉" data-back-shade="${escapeHtml(backToShade)}">×</button>`
+                        : `<a href="#" class="back-link" onclick="PageInit.products({category:'${catToken}'});return false;">← ${escapeHtml(p.cat)}</a>
+                           <button class="pd-close" aria-label="關閉" onclick="PageInit.products({category:'${catToken}'});return false;">×</button>`}
                 </div>
                 <div class="pd-wrap">
                     <!-- 詳情頁是唯一要看清楚商品的地方，用原圖；清單一律用 img 的縮圖版本。 -->
@@ -4192,8 +4231,23 @@ const PageInit = {
             // 是重新渲染出來的，逐張綁會在下一次重畫時全部失效。
             // 三欄並排之後不再需要 Modal——要比較的東西已經全部看得到了。
             // 每一欄的「查看商品」直接跳到那支色號的商品頁。
+            area.querySelectorAll('[data-back-shade]').forEach(el => {
+                el.onclick = (ev) => {
+                    ev.preventDefault();
+                    const target = el.dataset.backShade;
+                    Router.shadeReturnTo = '';   // 用過就清掉，只認這一次
+                    window.scrollTo(0, 0);
+                    renderProductDetail(target);
+                };
+            });
             area.querySelectorAll('[data-shade-go]').forEach(btn => {
-                btn.onclick = () => Router.go('products', { productId: btn.dataset.shadeGo });
+                // 記住是從哪一支粉底的色階比較點進來的。
+                // 返回應該回到那支粉底，而不是回到整個分類清單——
+                // 使用者是在「比較三個色號」這件事情中間，回到清單等於把他丟出這個脈絡。
+                btn.onclick = () => {
+                    Router.shadeReturnTo = id;
+                    Router.go('products', { productId: btn.dataset.shadeGo });
+                };
             });
             // 這件是粉底、通過了膚色門檻，卻沒有色階區塊——那多半是資料掉了，
             // 不是後端沒給。補一次再重畫。
@@ -4668,7 +4722,7 @@ const PageInit = {
                         <span><em>嘴型</em>${escapeHtml(r['嘴型']||'—')}</span>
                         <span><em>膚色</em>${escapeHtml([r['膚色分級'], r['四季型']].filter(Boolean).join(' / ') || '—')}</span>
                     </div>
-                    <div class="hist-date">${r.timestamp ? escapeHtml(formatAnalysisTime(r.timestamp)) : ''}${r.mode ? ` · ${escapeHtml(String(r.mode).toUpperCase())}` : ''}</div>
+                    <div class="hist-date">${r.mode ? escapeHtml(String(r.mode).toUpperCase()) : ''}</div>
                 </div>
             </div>
         `).join('') + '</div>';
@@ -4807,7 +4861,7 @@ const PageInit = {
                     <div>
                         <b>${status.checkedToday ? '今天已完成打卡' : '今天還沒打卡'}</b>
                         <p>每日打卡可獲得 10 點；連續簽到 3 / 7 / 14 / 30 天另有加碼獎勵。</p>
-                        <p class="checkin-streak">${streakLine}${source === 'remote' ? '（資料庫同步）' : '（尚未取得資料庫紀錄）'}</p>
+                        <p class="checkin-streak">${streakLine}</p>
                     </div>
                     <button class="btn-gold btn-sm" id="dailyCheckinBtn" ${status.checkedToday || isGuest() ? 'disabled' : ''}>${status.checkedToday ? '已打卡' : '打卡 +10'}</button>
                 </div>`;
@@ -5047,7 +5101,7 @@ const PageInit = {
                     const createdAt = row.created_at || row.createdAt || row.time || row.timestamp;
                     return `<div>
                         <span>${escapeHtml(pointReasonLabel(row.reason || row.description))}</span>
-                        <time>${createdAt ? new Date(createdAt).toLocaleString('zh-TW') : ''}</time>
+
                         <b class="${Number(row.delta) >= 0 ? 'plus' : 'minus'}">${Number(row.delta) >= 0 ? '+' : ''}${Number(row.delta) || 0}</b>
                     </div>`;
                 }).join('')}</div>` : '<div class="empty-state compact">尚無點數紀錄</div>';
@@ -5073,7 +5127,7 @@ const PageInit = {
                 const imageSrc = lookImageSrc(item.renderedImage);
                 const styleLabel = escapeHtml(item.style || '妝容對比圖');
                 const summary = escapeHtml(formatSavedAdvice(item));
-                const timestamp = escapeHtml(item.timestamp ? formatAnalysisTime(item.timestamp) : '');
+
                 const expired = String(item.renderedImage || '').includes('replicate.delivery')
                     ? '<span class="saved-look-expire">此圖為舊版臨時網址，可能已失效</span>' : '';
                 return `
@@ -5089,7 +5143,7 @@ const PageInit = {
                         <div class="saved-look-kicker">${item.remoteId != null ? 'Saved Look · DB' : 'Saved Look · 本機快取'}</div>
                         <h3>${styleLabel}</h3>
                         <p>${summary}</p>
-                        <time>${timestamp}</time>
+
                     </div>
                 </article>`;
             }).join('')}</div>`;
@@ -5222,7 +5276,11 @@ const PageInit = {
             const failed = states.includes('error');
             const ready = states.every(state => state === 'ok');
             el.className = `admin-sync-status ${failed ? 'error' : (ready ? 'ok' : 'pending')}`;
-            el.innerHTML = `<i></i>${failed ? '部分服務異常' : (ready ? '資料已同步' : '資料同步中')}`;
+            // 正常時不說話：「資料已同步」對使用者不構成任何資訊，
+            // 他既不能因此做什麼，也不會因為看不到它而困擾。
+            // 有問題才出聲——那時候那行字才真的在講一件事。
+            el.innerHTML = failed ? '<i></i>部分服務異常' : '';
+            el.style.display = failed ? '' : 'none';
             if (ready) {
                 const sync = document.getElementById('adminLastSync');
                 if (sync) sync.textContent = `最近同步 ${new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}`;

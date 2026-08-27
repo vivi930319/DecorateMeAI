@@ -48,6 +48,8 @@ vm.runInContext(
   // shadeRecommendationHtml 現在透過 currentShadeRecommendation 讀，
   // 才有草稿 fallback。抽了前者沒抽相依會炸 ReferenceError。
   + cut('function currentShadeRecommendation() {') + ';\n'
+  // shadeRecommendationHtml 會呼叫 userSkinRow（使用者膚色色塊）。
+  + cut('function userSkinRow() {') + ';\n'
   + cut('function shadeRecommendationHtml(p) {') + '\n'
   + 'globalThis.__card = recommendationCardHtml;'
   + 'globalThis.__detail = recommendationPanelHtml;'
