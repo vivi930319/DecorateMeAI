@@ -1202,6 +1202,12 @@ const Api = {
             recommendationPresentation: (product.recommendationPresentation
                 && typeof product.recommendationPresentation === 'object')
                 ? product.recommendationPresentation : null,
+            // 後端說這件不該顯示匹配度（契約 2026-08-27 §5）。
+            // closest_available 的粉底就是這種：它會出現在清單上，但它**沒有通過**
+            // 膚色門檻，印一個 MATCH 百分比等於幫它背書。
+            // 只有明確寫 false 才當作要隱藏——欄位不存在的商品維持原本行為。
+            showMatchPercent: (product.recommendationPresentation
+                && product.recommendationPresentation.showMatchPercent === false) ? false : true,
             matchScore: Number.isFinite(Number(product.matchScore ?? product.score))
                 ? Number(product.matchScore ?? product.score) : null,
             scoreBreakdown: (product.scoreBreakdown && typeof product.scoreBreakdown === 'object')

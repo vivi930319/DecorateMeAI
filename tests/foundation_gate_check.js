@@ -34,8 +34,14 @@ vm.createContext(sb);
 vm.runInContext(cut(src, 'function hasMatch(node) {') + '\n'
     + cut(src, 'function currentShadeRecommendation() {') + '\n'
     + cut(src, 'function shadeRecommendationHtml(p) {') + '\n'
-    + 'globalThis.__shade = shadeRecommendationHtml;', sb);
-const shade = sb.__shade;
+    + cut(src, 'function colorDiffInfo(p) {') + '\n'
+    + cut(src, 'function colorDiffEntryHtml(p) {') + '\n'
+    + cut(src, 'function recommendationCardHtml(p) {') + '\n'
+    + cut(src, 'function recommendationPanelHtml(p) {') + '\n'
+    + 'globalThis.__shade = shadeRecommendationHtml;'
+    + 'globalThis.__card = recommendationCardHtml;'
+    + 'globalThis.__panel = recommendationPanelHtml;', sb);
+const shade = sb.__shade, cardFn = sb.__card, panelFn = sb.__panel;
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail) => {
@@ -117,11 +123,48 @@ check('沒有給購買或查看商品的入口',
 check('樣式存在', css.includes('.rec-foundation-note'));
 
 console.log('');
+console.log('=== 4b. closest_available：可以顯示，但不能背書（§5、§7）===');
+// 2 < ΔE ≤ 5 的那一件會出現在清單上，但它**沒有通過**膚色門檻。
+// 「根據系統演算法推薦」與 MATCH 都是背書，而使用者分不出
+// 「系統推薦的」與「系統找到最接近的」差在哪，除非畫面自己講清楚。
+const closestProduct = {
+    id: 'api-foundations-968',
+    showMatchPercent: false,
+    foundationSkinMatch: { deltaE: 2.54, accepted: false, displayEligible: true,
+                           displayStatus: 'closest_available', displayMaxInclusive: 5 },
+    recommendationPresentation: { systemLabel: '根據系統演算法推薦', matchLabel: '78% MATCH',
+                                  matchPercent: 78, headline: '很適合你的整體妝容',
+                                  summary: '這款底妝…', showMatchPercent: false,
+                                  // 真實 API 的粉底都有這一包；沒有它色差入口本來就不該出現
+                                  colorDifferenceExplanation: { value: 2.54, displayValue: '色差 2.5',
+                                                                level: '整體相近', qa: [], ranges: [] } },
+};
+const cardOut = cardFn(closestProduct);
+const panelOut = panelFn(closestProduct);
+check('卡片標成「目前最接近的可比較色號」', cardOut.includes('目前最接近的可比較色號'));
+check('卡片不寫「根據系統演算法推薦」', !cardOut.includes('根據系統演算法推薦'));
+check('卡片不印 MATCH', !cardOut.includes('MATCH'));
+check('卡片說明未達門檻', cardOut.includes('未達正式匹配門檻'));
+check('卡片標明比較對象是膚色', cardOut.includes('與您的膚色的色差 2.5'));
+check('詳情面板同樣不背書',
+  !panelOut.includes('根據系統演算法推薦') && !panelOut.includes('MATCH'));
+check('詳情面板仍給色差說明入口', panelOut.includes('data-color-diff'));
+// showMatchPercent 只在後端明確給 false 時才隱藏，其他商品維持原本行為
+const normalOut = cardFn({ id: 'p9',
+    recommendationPresentation: { systemLabel: '根據系統演算法推薦',
+                                  matchLabel: '82% MATCH', matchPercent: 82 } });
+check('一般商品照常顯示 MATCH', normalOut.includes('82% MATCH'));
+
+console.log('');
 console.log('=== 5. api 層要把新欄位帶過來 ===');
 check('帶 anchorDeltaE', api.includes('anchorDeltaE:'));
 check('帶 foundationSkinMatch', api.includes('foundationSkinMatch:'));
 check('帶 colorDifferencePolicy', api.includes('colorDifferencePolicy:'));
 check('帶 foundationMatchStatus', api.includes('foundationMatchStatus:'));
+check('帶 showMatchPercent', api.includes('showMatchPercent:'));
+// 欄位不存在的商品要維持原本行為，只有明確 false 才隱藏
+check('showMatchPercent 只認明確的 false',
+  api.includes("showMatchPercent === false) ? false : true"));
 // 門檻一律以後端為準，前端不自己算也不自己放寬
 check('前端不自己寫死門檻數字',
   !/deltaE\s*[<>]=?\s*2(\.0)?\b/.test(src));

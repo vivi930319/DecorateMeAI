@@ -15,9 +15,10 @@
         <p id="compareStyleName">尚未選擇風格</p>
         <div class="analysis-tags" id="compareStyleTags"></div>
         <button class="btn-outline" id="compareGoStyleBtn">選擇風格</button>
-        <button class="btn-gold" id="compareRenderBtn" style="margin-top:12px;">生成妝容</button>
-        <div id="compareRenderQuota" style="font-size:11px;color:#a8876f;margin-top:6px;"></div>
-        <div id="compareRenderStatus" style="font-size:12px;color:#888;margin-top:6px;display:none;"></div>
+        <!-- 2026-08-28 拿掉「生成妝容」與它的兩個狀態列：JS 從來沒有接過這三個 id
+             （grep 全部 js 檔為 0 處），所以那顆按鈕按下去不會有任何事。
+             渲染的入口在妝容建議頁，渲染完會自動跳來這裡，這頁不需要再有一個。
+             按不動的按鈕比沒有按鈕更糟——使用者會按它，然後以為自己已經做了。 -->
         <div style="margin-top:10px;">
             <div style="font-size:11px;color:#999;margin-bottom:4px;letter-spacing:.05em;">英文渲染指令（後端實際使用）</div>
             <div id="comparePromptPreview" style="display:none;font-size:11px;color:#7a6060;background:rgba(255,248,244,0.85);border:1px solid #e8d5c8;border-radius:8px;padding:10px 12px;line-height:1.6;word-break:break-word;"></div>

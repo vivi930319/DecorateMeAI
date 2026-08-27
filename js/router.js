@@ -469,11 +469,20 @@ const RecommendationNotice = {
         if (!st || st.status === 'matched' || st.status === 'not_requested') return '';
         const msg = String(st.message || '').trim();
         if (!msg) return '';
-        return `<div class="rec-foundation-note">
+        // closest_available 與 no_match 的差別，使用者一定要看得出來：
+        //   closest_available  清單上那件是「最接近的」，可以看、可以買，但沒通過門檻
+        //   no_match           連最接近的都超過 5，清單上根本沒有粉底
+        // 兩者都用後端的訊息，只有補充那句不同——講錯的話，
+        // 「沒有相近色號」會被讀成「什麼都沒有」，或反過來。
+        const extra = st.status === 'no_match'
+            ? '建議重新確認拍攝光線，或到實體通路試色。'
+            : st.status === 'closest_available'
+                ? '下面那件是目前最接近的，仍建議實際試色。'
+                : '';
+        return `<div class="rec-foundation-note rfn-${escapeHtml(String(st.status))}">
             <span class="rfn-mark">✦</span>
             <div><p>${escapeHtml(msg)}</p>
-            ${st.status === 'no_match'
-                ? '<p class="rfn-sub">建議重新確認拍攝光線，或到實體通路試色。</p>' : ''}</div>
+            ${extra ? `<p class="rfn-sub">${escapeHtml(extra)}</p>` : ''}</div>
         </div>`;
     },
 
@@ -728,9 +737,28 @@ function colorCompareHtml(p) {
 function recommendationCardHtml(p) {
     const pr = p?.recommendationPresentation;
     if (!pr || typeof pr !== 'object') return '';
+
+    // 沒通過膚色門檻、只是「目前最接近」的粉底（契約 2026-08-27 §5）。
+    // 這種商品**不能**寫「根據系統演算法推薦」也不能印 MATCH——
+    // 它出現在清單上是因為沒有更好的，不是因為它合格。
+    // 兩句話都是背書，而使用者分不出「系統推薦的」與「系統找到最接近的」差在哪，
+    // 除非畫面自己講清楚。
+    const closest = p?.foundationSkinMatch?.displayStatus === 'closest_available';
+    if (closest) {
+        const d = p.foundationSkinMatch;
+        const de = (d.deltaE == null || !Number.isFinite(Number(d.deltaE)))
+            ? null : Number(d.deltaE);
+        return `<div class="rec-closest">
+            <div class="rec-closest-tag">目前最接近的可比較色號</div>
+            ${de != null ? `<div class="rec-closest-de">與您的膚色的色差 ${de.toFixed(1)}</div>` : ''}
+            <p class="rec-closest-note">此色號未達正式匹配門檻，實際妝效可能仍有差異，建議實際試色。</p>
+        </div>`;
+    }
+
     const parts = [];
     parts.push(`<div class="rec-sys">${escapeHtml(pr.systemLabel || '根據系統演算法推薦')}</div>`);
-    if (pr.matchLabel || Number.isFinite(Number(pr.matchPercent))) {
+    if (p?.showMatchPercent !== false
+        && (pr.matchLabel || Number.isFinite(Number(pr.matchPercent)))) {
         const label = pr.matchLabel || `${Math.round(Number(pr.matchPercent))}% MATCH`;
         // 「推薦匹配度」這四個字是契約要求的，不能省：少了它，95% MATCH
         // 會被讀成「95% 準確」或「95% 會適合」，而那兩個都不是它的意思。
@@ -841,9 +869,31 @@ function recommendationPanelHtml(p) {
     const pr = p?.recommendationPresentation;
     if (!pr || typeof pr !== 'object') return '';
 
+    // 只是「目前最接近」的粉底，詳情頁也不能給它推薦面板那一套：
+    // 大字匹配度、✦ 演算法推薦、適合特質標籤——每一項都是背書，
+    // 而它並沒有通過膚色門檻（契約 2026-08-27 §5、§7）。
+    const closest = p?.foundationSkinMatch?.displayStatus === 'closest_available';
+    if (closest) {
+        const d = p.foundationSkinMatch;
+        const de = (d.deltaE == null || !Number.isFinite(Number(d.deltaE)))
+            ? null : Number(d.deltaE);
+        return `<section class="rec-panel rec-panel-closest">
+            <div class="rec-panel-head">
+                <span class="rec-closest-tag">目前最接近的可比較色號</span>
+                ${de != null
+                    ? `<div class="rec-closest-de">與您的膚色的色差 ${de.toFixed(1)}</div>` : ''}
+            </div>
+            <div class="rec-panel-body">
+                <p class="rec-summary">此色號未達正式匹配門檻，實際妝效可能仍有明暗或冷暖差異，建議實際試色。</p>
+                ${colorDiffEntryHtml(p)}
+            </div>
+        </section>`;
+    }
+
     const pct = (pr.matchPercent == null || pr.matchPercent === '') ? NaN : Number(pr.matchPercent);
-    const hasPct = Number.isFinite(pct);
-    const label = pr.matchLabel || (hasPct ? `${Math.round(pct)}% MATCH` : '');
+    const hasPct = Number.isFinite(pct) && p?.showMatchPercent !== false;
+    const label = (p?.showMatchPercent === false) ? ''
+        : (pr.matchLabel || (hasPct ? `${Math.round(pct)}% MATCH` : ''));
     const traits = Array.isArray(pr.suitedTraits) ? pr.suitedTraits.filter(Boolean).slice(0, 4) : [];
     const reasons = Array.isArray(pr.reasonTexts) ? pr.reasonTexts.filter(Boolean).slice(0, 3) : [];
 
@@ -984,15 +1034,27 @@ function shadeRecommendationHtml(p) {
                 metric = `與主推薦色號的色差 ${anchorDeltaE.toFixed(1)}`;
             }
         }
-        return `<div class="sc2-col sc2-${kind}">
+        // 每一欄放一張小圖。色號代碼（PO-03）對使用者不構成任何畫面，
+        // 而「比較深淺」本來就是用看的——沒有圖的比較區等於要人憑代碼想像顏色。
+        //
+        // 整欄可點，不是只有底下一顆小按鈕：目標大得多，而且「點這一格看這支」
+        // 比「點那顆按鈕」少一層轉譯。主推薦那一欄不可點——你已經在它的頁面上了。
+        const thumb = prod.img
+            ? `<img class="sc2-img" src="${escapeHtml(String(prod.img))}"
+                 alt="${escapeHtml(String(prod.name || node.shadeCode || ''))}" loading="lazy"
+                 onerror="this.style.display='none'">`
+            : '<div class="sc2-img sc2-img-none" aria-hidden="true"></div>';
+        const inner = `
             <div class="sc2-label">${escapeHtml(node.label || label)}</div>
+            ${thumb}
             <div class="sc2-code">${escapeHtml(String(node.shadeCode || '—'))}</div>
             ${metric ? `<div class="sc2-match">${escapeHtml(metric)}</div>` : ''}
-            ${node.description ? `<p class="sc2-desc">${escapeHtml(node.description)}</p>` : ''}
-            ${prod.id && kind !== 'anchor'
-                ? `<button type="button" class="sc2-go" data-shade-go="${escapeHtml(String(prod.id))}">查看商品</button>`
-                : ''}
-        </div>`;
+            ${node.description ? `<p class="sc2-desc">${escapeHtml(node.description)}</p>` : ''}`;
+        return (prod.id && kind !== 'anchor')
+            ? `<button type="button" class="sc2-col sc2-${kind}"
+                 data-shade-go="${escapeHtml(String(prod.id))}"
+                 title="查看 ${escapeHtml(String(node.shadeCode || ''))} 的商品頁">${inner}</button>`
+            : `<div class="sc2-col sc2-${kind}">${inner}</div>`;
     };
 
     return `<section class="shade-rec">
@@ -4464,14 +4526,16 @@ const PageInit = {
                 showToast(outcome.result?.promptSource === 'style_allowlist'
                     ? '妝容渲染完成（本次使用通用指令，未取得個人化建議）'
                     : '妝容渲染完成');
-                // 重畫整頁，不是只換照片。收藏鍵與「重新生成妝容」是建樣板當下依
-                // renderedImage 決定要不要輸出的，只換照片的話它們要等下次進頁才出現——
-                // 使用者剛渲染完，最想按的那顆卻不在。Step 1 成功時走的也是這條。
+                // 渲染完直接跳到妝容對比圖，不要留在建議頁等使用者自己找。
+                //
+                // 先前是重畫建議頁再捲到成果圖。那已經比什麼都不做好，但使用者要的
+                // 東西——妝前妝後對比、收藏——在另一頁，他得先發現有那一頁才過得去。
+                // 剛渲染完是最想看結果的那一刻，中間不該再隔一個動作。
+                //
+                // 建議頁的狀態仍然先重畫一次：跳過去之後按上一頁回來，
+                // 看到的要是「重新生成妝容」而不是還停在「渲染中…」。
                 PageInit.suggestion();
-                // 按鈕在頁面下方，成果圖在最上面。不捲回去的話使用者按完只看到按鈕變回
-                // 「重新生成妝容」，會以為沒反應——他要的東西在他看不到的地方。
-                document.getElementById('suggestionStage')
-                    ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                Router.go('compare');
             } finally {
                 clearInterval(tick);
                 renderBtn.disabled = false;
