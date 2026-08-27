@@ -495,11 +495,11 @@ body {
 /* 四步驟併進這一區：上排維持「文字 | 圖片」，四步驟橫跨兩欄排在下面。
    併成一區是因為它們講的是同一件事——上面說為什麼，下面說怎麼走。
 
-   圖片從 1.04fr 縮到 0.72fr：原本它跟整段文字幾乎等寬，而它是一張示意圖，
-   不是這一區的主角；主角是那兩句話與四個步驟。 */
+   上排維持文字與圖片各半：四步驟移到底部橫跨兩欄之後，上排只剩兩件東西，
+   圖片撐得住原本的寬度，縮小它反而讓右邊空出一塊沒有理由的留白。 */
 .about-sys { margin:0 -48px; padding:66px 48px 60px; background:var(--ivory-2);
-    border-top:1px solid var(--line-gold); display:grid; grid-template-columns:1fr 0.72fr;
-    gap:48px; align-items:center; }
+    border-top:1px solid var(--line-gold); display:grid; grid-template-columns:1fr 1.04fr;
+    gap:56px; align-items:center; }
 .about-sys .sys-steps { grid-column:1 / -1; margin:14px 0 0; }
 .about-sys .as-head { max-width:none; }
 .about-headrow { display:flex; align-items:flex-start; gap:22px; flex-wrap:wrap; }
@@ -510,8 +510,7 @@ body {
 .about-sys .bs-link { display:inline-block; margin:36px 0 0; }
 .about-sys .bs-desc { margin-top:18px; max-width:430px; }
 /* 粉色商品展示面板（假照片 demo） */
-.as-photo { position:relative; border-radius:22px; overflow:hidden; aspect-ratio:4/5;
-    max-width:340px; justify-self:end; width:100%;
+.as-photo { position:relative; border-radius:22px; overflow:hidden; aspect-ratio:7/6;
     background:linear-gradient(158deg,#F4D4CD 0%,#ECC0B6 54%,#E2AEA3 100%);
     box-shadow:0 30px 66px rgba(188,112,104,0.22); display:flex; align-items:center; justify-content:center; }
 .as-photo::before { content:''; position:absolute; left:0; right:0; bottom:0; height:34%; z-index:1;
@@ -564,11 +563,12 @@ body {
 .greet-cta-alt { margin-left:10px; text-decoration:none; }
 .greet-cta-alt[hidden] { display:none; }
 
-.glow-row { display:grid; grid-template-columns:repeat(4,1fr); gap:26px 22px; margin-bottom:56px; }
+.glow-row { display:grid; grid-template-columns:repeat(3,1fr); gap:30px 26px; margin-bottom:56px; }
 .glow-card { cursor:pointer; }
-/* 錯落排列：偶數欄往下位移。原本兩欄大圖時是 60px，四欄小卡照比例縮到 34px——
-   位移要跟卡片一起縮，不然四欄各差 60px 會讓整排看起來像斷掉，不是錯落。 */
-.glow-card:nth-child(even) { margin-top:34px; }
+/* 錯落排列：固定把中間那欄往下推。三欄不能用 nth-child(even)——那樣第二列
+   會變成頭尾下移、中間不動，錯落方向逐列翻面，看起來像沒對齊而不是刻意錯開。
+   位移 40px 是配合三欄卡片的尺寸，原本兩欄大圖時是 60px。 */
+.glow-card:nth-child(3n+2) { margin-top:40px; }
 .gc-img { position:relative; width:100%; aspect-ratio:1; overflow:hidden; margin-bottom:11px; }
 .gc-img .ph { position:absolute; inset:0; transition:box-shadow .5s var(--ease); }
 .gc-img .ph img { transition:transform 1s var(--ease), opacity .7s var(--ease); }
@@ -582,7 +582,7 @@ body {
 .gc-rating { display:flex; align-items:center; gap:11px; margin-top:10px; }
 .gc-rating .stars { font-size:12px; letter-spacing:2px; color:var(--gold); }
 .gc-rev { font-family:var(--sans); font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--lt); border-bottom:1px solid var(--line-gold); padding-bottom:2px; }
-@media (max-width:760px){ .glow-row{ gap:20px 18px; } .glow-card:nth-child(even){ margin-top:34px; } }
+@media (max-width:760px){ .glow-row{ gap:20px 18px; } }
 
 /* About system · second screenshot-inspired */
 .about-system {
@@ -868,6 +868,29 @@ body {
 .result-cell .rvalue { font-family:var(--cjk); font-size:22px; font-weight:500; }
 
 .skin-box { margin-top:14px; padding:20px; border:1px solid var(--line-gold); background:var(--paper); }
+
+/* 結果區的兩種狀態。
+   分析還沒跑完時整區去飽和、壓平、稍微退後：那排「—」才讀得出是「還沒填」，
+   而不是「分析失敗」或「這個部位沒有結果」。灰階一起套到膚色與唇色色塊上是刻意的——
+   還沒分析出顏色的時候，那兩塊不該顯示任何有意義的顏色。
+   結果進來後才升起：加陰影與邊框、還原顏色，讓整區看起來是一件成形的東西。 */
+.result-panel { transition:filter .45s ease, opacity .45s ease; }
+.result-panel:not(.is-ready) { filter:grayscale(1) contrast(.92); opacity:.55; }
+.result-panel:not(.is-ready) .result-grid,
+.result-panel:not(.is-ready) .skin-box { box-shadow:none; }
+.result-panel .result-grid,
+.result-panel .skin-box { transition:box-shadow .45s ease, border-color .45s ease, transform .45s ease; }
+.result-panel.is-ready .result-grid {
+    border-color:var(--gold); box-shadow:0 18px 44px -18px rgba(80,48,36,.42), 0 2px 0 rgba(255,255,255,.5) inset; }
+.result-panel.is-ready .skin-box {
+    border-color:var(--gold); box-shadow:0 12px 30px -14px rgba(80,48,36,.34); }
+/* 結果格逐格浮起，讓「一格一個判斷」這件事在畫面上也是一格一格的。 */
+.result-panel.is-ready .result-cell { transition:transform .3s ease, box-shadow .3s ease; }
+.result-panel.is-ready .result-cell:hover { transform:translateY(-2px); box-shadow:0 8px 20px -10px rgba(80,48,36,.4); }
+@media (prefers-reduced-motion:reduce) {
+    .result-panel, .result-panel .result-grid, .result-panel .skin-box,
+    .result-panel.is-ready .result-cell { transition:none; }
+}
 .skin-title { font-family:var(--sans); font-size:9.5px; letter-spacing:.3em; text-transform:uppercase; color:var(--lt); margin-bottom:12px; }
 .skin-row { display:flex; align-items:center; gap:16px; }
 .skin-swatch { width:46px; height:46px; border:1px solid var(--line-gold); flex-shrink:0; }
@@ -1815,6 +1838,11 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .rec-summary { margin:0; color:var(--ink-soft); font-size:13.5px; line-height:1.8; }
 .rec-reasons { margin:10px 0 0; padding-left:18px; color:var(--mid); font-size:12.5px; line-height:1.8; }
 .rec-disclaimer { margin:12px 0 0; color:var(--mid); font-size:11px; line-height:1.7; }
+/* 膚色色差與門檻：從色號比較區搬過來的兩行。色差是結論、門檻是依據，
+   所以前者跟正文同級、後者退一階，讀起來才是「這樣判斷，因為標準是這個」。 */
+.rec-skinline { margin-top:12px; padding-top:12px; border-top:1px solid var(--line);
+    font-family:var(--cjk); font-size:13px; font-weight:500; color:var(--gold-deep); }
+.rec-gate { margin-top:5px; font-family:var(--cjk); font-size:11.5px; line-height:1.7; color:var(--mid); }
 .pd-source { display:inline-block; margin-top:14px; color:var(--gold-deep); font-size:12.5px; }
 
 /* ── 粉底相鄰色號（契約 §5）──────────────────────────────────────
@@ -1868,9 +1896,9 @@ body.admin-mode .main-content * { letter-spacing:0; }
 
 .sc2-wrap { margin-top:18px; }
 .sc2-head { color:var(--ink-soft); font-size:13px; font-weight:600; margin-bottom:10px; }
-/* 固定三欄。auto-fit + minmax(148px) 在詳情頁會換行——那一欄實際只有約 433px
-   （.pd-wrap 是 1fr 1fr、max-width 920、gap 54），而三欄要 3×148+2×10=464px，
-   差三十幾個像素就掉下去了。並排是這一區的重點，寬度不夠就縮欄，不要換行。 */
+/* 固定三欄，不用 auto-fit + minmax。並排是這一區的全部意義——三支色號要放在
+   一起才比得出深淺；一旦換行就變成三張各自獨立的卡，比較關係消失。
+   寬度不夠時縮欄，不要換行。實際寬度見底下 min-width:1100px 那一段。 */
 .sc2-row { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; align-items:stretch; }
 .sc2-col { display:flex; flex-direction:column; align-items:center; gap:5px;
     padding:12px 8px; text-align:center; font-family:inherit; width:100%;
@@ -1920,6 +1948,23 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
     .sc2-code { font-size:17px; }
     .sc2-label, .sc2-match { font-size:9.5px; }
     .sc2-desc { display:none; }
+}
+
+/* 筆電以上把詳情頁放寬。
+   .pd-wrap 原本卡在 max-width:920px，而 .main-content 有 1320px——中間那 400px
+   在筆電上就是一片空白，而三欄比較被擠在約 433px 的右欄裡，每欄只剩 140px 左右，
+   小到讓整區看起來像註腳而不是這一頁的重點。
+   資訊欄多分一點（0.9 / 1.1）：左邊是一張商品照，右邊要放色號比較、推薦面板與說明。 */
+@media (min-width:1100px) {
+    .pd-wrap { max-width:1180px; grid-template-columns:0.9fr 1.1fr; gap:64px; }
+    .sc2-wrap { margin-top:22px; }
+    .sc2-head { font-size:14px; margin-bottom:12px; }
+    .sc2-row { gap:12px; }
+    .sc2-col { padding:16px 12px; gap:7px; border-radius:14px; }
+    .sc2-code { font-size:26px; }
+    .sc2-label { font-size:11.5px; }
+    .sc2-match { font-size:12px; }
+    .sc2-desc { font-size:12.5px; line-height:1.7; }
 }
 
 /* 三色比較視窗 */
@@ -2251,6 +2296,7 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
     .analyze-grid, .dash-grid, .pd-wrap, .feat-grid { grid-template-columns:1fr; }
     /* 精選卡跟商品頁一樣，寬度不夠就減欄，不要放大 */
     .glow-row { grid-template-columns:repeat(2,1fr); gap:18px 14px; }
+    .glow-card:nth-child(3n+2) { margin-top:0; }
     .glow-card:nth-child(even) { margin-top:22px; }
     /* 四步驟改成兩欄兩列。擠成四欄會讓「Understand your features」
        斷成四五行，反而看不出是一個流程。 */
@@ -3216,7 +3262,7 @@ a:focus-visible, button:focus-visible, [data-nav]:focus-visible,
     .page-header h1 { font-size:27px; }
 
     .glow-row { grid-template-columns:1fr; gap:24px; margin-bottom:48px; }
-    .glow-card:nth-child(even){ margin-top:0; }
+    .glow-card:nth-child(even), .glow-card:nth-child(3n+2) { margin-top:0; }
     .style-grid, .cat-grid { grid-template-columns:repeat(2,1fr); gap:12px; }
     .insp-card { flex-basis:202px; }
     .insp-visual { height:204px; }

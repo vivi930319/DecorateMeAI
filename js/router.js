@@ -772,6 +772,28 @@ function recommendationCardHtml(p) {
     return parts.join('');
 }
 
+// 膚色色差與門檻這兩句只由這裡產生。
+//
+// 它們原本在推薦面板與色號比較區各寫一次，於是詳情頁上「✦ 根據系統演算法推薦 /
+// 84% MATCH / 色差 1.3」整組出現兩遍——同一件事講兩次，第二次不會更有說服力，
+// 只會讓人以為那是兩個不同的判斷。
+function foundationSkinLines(skin) {
+    if (!skin || typeof skin !== 'object') return { matchWord: '', gate: '' };
+    // ⚠️ 不能直接 Number()：null 會變成 0，「沒有資料」就成了「色差 0.0」——
+    // 那是顏色完全相同，是最有把握的一句話，卻在沒有資料時說出口。
+    const d = (skin.deltaE != null && skin.deltaE !== '' && Number.isFinite(Number(skin.deltaE)))
+        ? Number(skin.deltaE) : null;
+    return {
+        matchWord: d == null ? ''
+            : d <= 1 ? `與您的膚色非常接近（色差 ${d.toFixed(1)}）`
+            : `與您的膚色接近（色差 ${d.toFixed(1)}）`,
+        // 門檻寫出來，使用者才知道這個「接近」是照什麼標準說的。
+        gate: (skin.accepted === true && Number.isFinite(Number(skin.maxInclusive)))
+            ? `這款粉底通過系統設定的膚色色差 ${Number(skin.minInclusive ?? 0)}～${Number(skin.maxInclusive)} 推薦門檻。`
+            : ''
+    };
+}
+
 // 色差解釋的入口（契約 2026-08-26）。
 //
 // 只有粉底（比膚色）與唇彩（比自然唇色）會有；眼影、腮紅、修容、打亮、眉彩
@@ -894,7 +916,13 @@ function recommendationPanelHtml(p) {
     const label = (p?.showMatchPercent === false) ? ''
         : (pr.matchLabel || (hasPct ? `${Math.round(pct)}% MATCH` : ''));
     const traits = Array.isArray(pr.suitedTraits) ? pr.suitedTraits.filter(Boolean).slice(0, 4) : [];
-    const reasons = Array.isArray(pr.reasonTexts) ? pr.reasonTexts.filter(Boolean).slice(0, 3) : [];
+    const { matchWord, gate } = foundationSkinLines(p?.foundationSkinMatch);
+    // 後端的 reasonTexts 常有一句就是「此色號與您的膚色相近（色差 1.3）」，
+    // 而 matchWord 正要說同一件事。兩句並排讀起來像系統把同一個理由算了兩次，
+    // 所以 matchWord 在場時濾掉講色差的那幾句，由 matchWord 統一說。
+    const reasons = (Array.isArray(pr.reasonTexts) ? pr.reasonTexts.filter(Boolean) : [])
+        .filter(r => !(matchWord && String(r).includes('色差')))
+        .slice(0, 3);
 
     return `<section class="rec-panel">
         <div class="rec-panel-head">
@@ -909,6 +937,8 @@ function recommendationPanelHtml(p) {
             ${pr.summary ? `<p class="rec-summary">${escapeHtml(pr.summary)}</p>` : ''}
             ${reasons.length ? `<ul class="rec-reasons">${reasons
                 .map(r => `<li>${escapeHtml(String(r))}</li>`).join('')}</ul>` : ''}
+            ${matchWord ? `<div class="rec-skinline">${escapeHtml(matchWord)}</div>` : ''}
+            ${gate ? `<div class="rec-gate">${escapeHtml(gate)}</div>` : ''}
             ${colorDiffEntryHtml(p)}
             ${pr.disclaimer ? `<p class="rec-disclaimer">${escapeHtml(pr.disclaimer)}</p>` : ''}
         </div>
@@ -1011,22 +1041,16 @@ function shadeRecommendationHtml(p) {
     const pct = (a.matchPercent == null || a.matchPercent === '') ? NaN : Number(a.matchPercent);
     const hasPct = Number.isFinite(pct);
 
-    // 主推薦的形容詞改用**膚色色差**，不是 matchPercent。
-    //
-    // matchPercent 是綜合排序分數（含風格、關鍵字、行為），拿它說「與你的膚色多接近」
-    // 是用一個數字回答另一個問題。契約 2026-08-27 §7 要求主推薦寫的是膚色色差，
-    // 而那個數字現在後端有給（foundationSkinMatch.deltaE）。
-    const skin = a.product?.foundationSkinMatch || null;
-    // 同上：null 不能丟給 Number，否則「沒有資料」會變成「色差 0.0」。
-    const skinDelta = (skin && skin.deltaE != null && skin.deltaE !== ''
-        && Number.isFinite(Number(skin.deltaE))) ? Number(skin.deltaE) : null;
-    const matchWord = skinDelta == null ? ''
-        : skinDelta <= 1 ? `與您的膚色非常接近（色差 ${skinDelta.toFixed(1)}）`
-        : `與您的膚色接近（色差 ${skinDelta.toFixed(1)}）`;
-    // 門檻寫出來，使用者才知道這個「接近」是照什麼標準說的。
-    const gate = (skin && skin.accepted === true && Number.isFinite(Number(skin.maxInclusive)))
-        ? `這款粉底通過系統設定的膚色色差 ${Number(skin.minInclusive ?? 0)}～${Number(skin.maxInclusive)} 推薦門檻。`
-        : '';
+    // 主推薦的形容詞用**膚色色差**，不是 matchPercent：matchPercent 是綜合排序分數
+    //（含風格、關鍵字、行為），拿它說「與你的膚色多接近」是用一個數字回答另一個問題。
+    // 契約 2026-08-27 §7 要求主推薦寫的是膚色色差。
+    const { matchWord, gate } = foundationSkinLines(a.product?.foundationSkinMatch);
+
+    // 同一頁底下的推薦面板也會印「✦ 根據系統演算法推薦 / N% MATCH / 色差 / 門檻」。
+    // 兩塊都印，整組就出現兩遍。這一區的工作是**比較色號**，背書歸推薦面板，
+    // 所以推薦面板在場時這裡交出那四行；面板不在（後端沒給 recommendationPresentation）
+    // 時才自己撐起來，否則色號比較會變成一排沒有前因後果的色塊。
+    const panelCarriesHeader = Boolean(recommendationPanelHtml(p));
 
     // 三欄並排，而不是「主推薦 ＋ 兩列小字 ＋ 一顆要按的按鈕」。
     //
@@ -1100,20 +1124,24 @@ function shadeRecommendationHtml(p) {
             : `<div class="sc2-col sc2-${kind}">${inner}</div>`;
     };
 
-    return `<section class="shade-rec">
-        <div class="sr-hero">
+    // 兩段都可能被讓出去（背書歸推薦面板、色號歸中間那一欄），所以先組再判斷要不要
+    // 這個容器——直接印一個空的 sr-hero 會在畫面上留下一塊有內距卻沒東西的空白。
+    const heroInner = [
+        panelCarriesHeader ? '' : `
             <div class="sr-eyebrow">✦ 根據系統演算法推薦</div>
             ${hasPct ? `<div class="sr-bigmatch">${Math.round(pct)}% MATCH</div>` : ''}
             ${matchWord ? `<div class="sr-bigmatch-sub">${escapeHtml(matchWord)}</div>` : ''}
-            ${gate ? `<div class="sr-gate">${escapeHtml(gate)}</div>` : ''}
-            <!-- 有並排的三欄時，主推薦的色號由中間那一欄負責——
-                 上下各印一次同樣的 PO-02 只是佔位置，還會讓人以為是兩件事。
-                 沒有替代色可比時才在這裡印，否則整塊會只剩一個百分比。 -->
-            ${hasVariants ? '' : `
+            ${gate ? `<div class="sr-gate">${escapeHtml(gate)}</div>` : ''}`,
+        // 有並排的三欄時，主推薦的色號由中間那一欄負責——上下各印一次同樣的 PO-02
+        // 只是佔位置，還會讓人以為是兩件事。沒有替代色可比時才在這裡印。
+        hasVariants ? '' : `
             <div class="sr-anchor-label">${escapeHtml(a.label)}</div>
             <div class="sr-anchor-code">${escapeHtml(String(a.shadeCode || '—'))}</div>
-            ${a.description ? `<p class="sr-anchor-desc">${escapeHtml(a.description)}</p>` : ''}`}
-        </div>
+            ${a.description ? `<p class="sr-anchor-desc">${escapeHtml(a.description)}</p>` : ''}`
+    ].join('').trim();
+
+    return `<section class="shade-rec">
+        ${heroInner ? `<div class="sr-hero">${heroInner}</div>` : ''}
         ${hasVariants ? `
         <div class="sc2-wrap">
             <div class="sc2-head">想比較不同妝效？</div>
@@ -1124,7 +1152,8 @@ function shadeRecommendationHtml(p) {
                 ${col(sr.darker, 'darker', '較深的替代色')}
             </div>
         </div>` : ''}
-        ${sr.disclaimer ? `<p class="sr-disclaimer">${escapeHtml(sr.disclaimer)}</p>` : ''}
+        ${(sr.disclaimer && !panelCarriesHeader)
+            ? `<p class="sr-disclaimer">${escapeHtml(sr.disclaimer)}</p>` : ''}
     </section>`;
 }
 
@@ -1367,6 +1396,15 @@ function applyAnalysisCorrections(corrections, predicted) {
     if (typeof FeatureAtlas !== 'undefined') FeatureAtlas.refresh();
     // 已經排隊等收藏的那筆快照是修正前建的，丟掉讓它重建。
     Router.pendingLook = null;
+}
+
+// 結果區有兩種狀態，差別要看得出來：還沒分析時整區去飽和、壓平、往後退，
+// 一眼就知道那些「—」是還沒填的欄位而不是分析失敗；結果進來後才浮起來。
+// 用 class 切換而不是逐格改樣式，因為要動的是「整區」的層次，不是個別數值。
+function setResultState(ready) {
+    const panel = document.getElementById('resultPanel');
+    if (!panel) return;
+    panel.classList.toggle('is-ready', !!ready);
 }
 
 // 一律用同一條規則決定「鼻型要顯示什麼」：有 PRO 側臉結果就用它，沒有才退回 BASIC 正面。
@@ -2063,7 +2101,7 @@ analysis: `
         <div class="package-status" id="packageStatus"><b>分析進度</b><span>尚未開始</span></div>
         <button class="btn-gold btn-full" id="analyzeBtn" style="margin-top:14px;">開 始 分 析</button>
     </div>
-    <div>
+    <div class="result-panel" id="resultPanel">
         <div class="section-label"><span>NO.02</span>分 析 結 果</div>
         <div class="result-grid">
             <div class="result-cell"><div class="rlabel">臉型</div><div class="rvalue" id="r-face">—</div></div>
@@ -2974,6 +3012,9 @@ const PageInit = {
                 return r[field] || '';
             });
         }
+        // 從別頁回到分析頁時結果還在（Router.analysisResult 有值），這時不該再灰一次。
+        setResultState(!!(Router.analysisResult && Object.keys(Router.analysisResult).length));
+
         const fileInput = document.getElementById('fileInput');
         const uploadBox = document.getElementById('uploadBox');
         const preview = document.getElementById('preview');
@@ -3573,6 +3614,7 @@ const PageInit = {
         };
 
         analyzeBtn.onclick = async () => {
+            setResultState(false);
             if (Router.analyzeMode === 'basic' && !Router.selectedFile) {
                 showAlert('請先選擇照片或拍照');
                 return;
@@ -3701,6 +3743,7 @@ const PageInit = {
                 paintNoseCell(data);
                 document.getElementById('r-lip').textContent = data['嘴型'] || '—';
                 document.getElementById('r-season').textContent = data['膚色']?.['四季型'] || '—';
+                setResultState(true);
 
                 const skin = data['膚色'] || {}, lab = skin['LAB'] || {};
                 document.getElementById('skinName').textContent = skin['膚色分級'] || '—';

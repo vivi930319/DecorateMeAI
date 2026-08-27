@@ -32,6 +32,9 @@ const sb = { Router: {}, escapeHtml: (s) => String(s), console,
              AnalysisDraft: { load: () => null } };
 vm.createContext(sb);
 vm.runInContext(cut(src, 'function hasMatch(node) {') + '\n'
+  // 色差與門檻兩句由 foundationSkinLines 統一產生，推薦面板與色號比較區共用；
+  // 抽了用它的函式沒抽它，測試會在執行時炸 ReferenceError。
+    + cut(src, 'function foundationSkinLines(skin) {') + '\n'
     + cut(src, 'function currentShadeRecommendation() {') + '\n'
     // shadeRecommendationHtml 會呼叫 userSkinRow（把使用者膚色擺在三欄上面）。
     // 抽了前者沒抽相依，測試會在執行時炸 ReferenceError。
@@ -200,6 +203,59 @@ check('showMatchPercent 只認明確的 false',
 // 門檻一律以後端為準，前端不自己算也不自己放寬
 check('前端不自己寫死門檻數字',
   !/deltaE\s*[<>]=?\s*2(\.0)?\b/.test(src));
+
+console.log('');
+console.log('=== 6. 詳情頁不得把同一組背書印兩次 ===');
+// 推薦面板與色號比較區原本各印一次「✦ 根據系統演算法推薦 / N% MATCH / 色差 / 門檻」。
+// 同一件事講兩次不會更有說服力，只會讓人以為那是兩個各自算出來的判斷。
+const mergedProduct = {
+  id: 'api-foundations-968',
+  recommendationPresentation: {
+    systemLabel: '根據系統演算法推薦', matchPercent: 84,
+    headline: '很適合你的整體妝容', suitedTraits: ['春季', '白皙自然色', '千金妝'],
+    summary: '這款底妝的明暗與色調和你的膚色協調。',
+    reasonTexts: ['此色號與您的膚色相近（色差 1.3）', '色調與你的四季型一致'],
+    disclaimer: '推薦匹配度是系統用於商品排序的綜合結果。',
+  },
+  foundationSkinMatch: { deltaE: 1.3, accepted: true, minInclusive: 0, maxInclusive: 2 },
+};
+const mergedPanel = panelFn(mergedProduct);
+// 合併與否取決於**同一個商品物件**有沒有 recommendationPresentation：
+// 有，色號比較區就把表頭讓給推薦面板。用上面那個沒有 presentation 的 out 來比，
+// 測的是另一種情況。
+// 前面幾組測試把 Router.shadeRecommendation 換成各種殘缺版本試探邊界，
+// 這裡要的是完整資料，先放回原本那份，否則量到的是別人留下的狀態。
+sb.Router.shadeRecommendation = sr;
+const mergedShade = shade(mergedProduct);
+const both = mergedPanel + mergedShade;
+const times = (hay, needle) => hay.split(needle).length - 1;
+check('✦ 演算法推薦全頁只有一次', times(both, '根據系統演算法推薦') === 1,
+  `出現 ${times(both, '根據系統演算法推薦')} 次`);
+check('% MATCH 全頁只有一次', times(both, '% MATCH') === 1,
+  `出現 ${times(both, '% MATCH')} 次`);
+// 「與您的膚色」在合併後仍會出現兩次，而那兩次不是重複：
+//   推薦面板  「與您的膚色接近（色差 1.3）」——結論
+//   主推薦欄  「與您的膚色的色差 1.3」——標示這一欄的數字是跟什麼比的
+// 後者不能拿掉：三欄並排的意義就在於 1.3 / 4.7 / 4.6 放在一起看，
+// 而契約 §7 要求主推薦與替代色的比較對象在畫面上分得出來。
+// 會重複的是**結論句**，所以量的是結論句。
+check('膚色結論句只有一次', times(both, '與您的膚色接近（色差') === 1,
+  `出現 ${times(both, '與您的膚色接近（色差')} 次`);
+check('主推薦欄仍標明比較對象', mergedShade.includes('與您的膚色的色差'));
+check('替代色欄比的是主推薦色號', mergedShade.includes('與主推薦色號的色差'));
+check('門檻句只有一次', times(both, '推薦門檻') === 1);
+check('色差門檻落在推薦面板裡', mergedPanel.includes('rec-gate') && mergedPanel.includes('rec-skinline'));
+// 後端的 reasonTexts 常有一句就是在講色差，與 matchWord 同義
+check('同義的理由句被濾掉', !mergedPanel.includes('此色號與您的膚色相近'));
+check('其他理由句照留', mergedPanel.includes('色調與你的四季型一致'));
+// 推薦面板不在（後端沒給 recommendationPresentation）時，比較區要自己撐起來
+// Router.shadeRecommendation 是模組層共用的，前面測試已經設好；
+// 沒有推薦面板時（p 不帶 presentation），比較區要自己撐起表頭。
+check('沒有推薦面板時比較區自己印',
+  out.includes('根據系統演算法推薦') && out.includes('與您的膚色'));
+check('讓出表頭時不留空的 sr-hero', !/<div class="sr-hero">\s*<\/div>/.test(mergedShade));
+check('讓出表頭後三欄比較還在', mergedShade.includes('sc2-row')
+  && mergedShade.includes('主推薦色號'));
 
 console.log('');
 console.log(`${pass}/${pass + fail} passed`);

@@ -36,6 +36,9 @@ const sandbox = {
 vm.createContext(sandbox);
 vm.runInContext(
   cut('function recommendationCardHtml(p) {') + '\n'
+  // 色差與門檻兩句由 foundationSkinLines 統一產生，推薦面板與色號比較區共用；
+  // 抽了用它的函式沒抽它，測試會在執行時炸 ReferenceError。
+  + cut('function foundationSkinLines(skin) {') + '\n'
   + cut('function recommendationPanelHtml(p) {') + '\n'
   // recommendationPanelHtml 會呼叫色差入口，抽了前者沒抽相依，
   // 測試會在執行時炸 ReferenceError——那是測試的問題，不是程式的。
