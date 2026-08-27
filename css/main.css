@@ -489,8 +489,18 @@ body {
 .bsp-item:hover .bsp-tag { opacity:1; transform:none; }
 
 /* ═══ 關於我們的美妝系統 · Rare Beauty 雙欄編輯式 + demo 照 ═══ */
-.about-sys { margin:0 -48px; padding:66px 48px 74px; background:var(--ivory-2);
-    border-top:1px solid var(--line-gold); display:grid; grid-template-columns:1fr 1.04fr; gap:56px; align-items:center; }
+/* 四步驟併進這一區之後改成兩欄兩列：
+   上排維持原本的「文字 | 圖片」錯開，四步驟橫跨兩欄排在下面。
+   併成一區是因為它們講的是同一件事——上面說為什麼，下面說怎麼走。 */
+/* 四步驟併進這一區：上排維持「文字 | 圖片」，四步驟橫跨兩欄排在下面。
+   併成一區是因為它們講的是同一件事——上面說為什麼，下面說怎麼走。
+
+   圖片從 1.04fr 縮到 0.72fr：原本它跟整段文字幾乎等寬，而它是一張示意圖，
+   不是這一區的主角；主角是那兩句話與四個步驟。 */
+.about-sys { margin:0 -48px; padding:66px 48px 60px; background:var(--ivory-2);
+    border-top:1px solid var(--line-gold); display:grid; grid-template-columns:1fr 0.72fr;
+    gap:48px; align-items:center; }
+.about-sys .sys-steps { grid-column:1 / -1; margin:14px 0 0; }
 .about-sys .as-head { max-width:none; }
 .about-headrow { display:flex; align-items:flex-start; gap:22px; flex-wrap:wrap; }
 .as-eyebrow-it { font-family:var(--serif); font-style:italic; font-size:20px; color:var(--gold-deep); padding-top:14px; flex-shrink:0; }
@@ -500,7 +510,8 @@ body {
 .about-sys .bs-link { display:inline-block; margin:36px 0 0; }
 .about-sys .bs-desc { margin-top:18px; max-width:430px; }
 /* 粉色商品展示面板（假照片 demo） */
-.as-photo { position:relative; border-radius:22px; overflow:hidden; aspect-ratio:7/6;
+.as-photo { position:relative; border-radius:22px; overflow:hidden; aspect-ratio:4/5;
+    max-width:340px; justify-self:end; width:100%;
     background:linear-gradient(158deg,#F4D4CD 0%,#ECC0B6 54%,#E2AEA3 100%);
     box-shadow:0 30px 66px rgba(188,112,104,0.22); display:flex; align-items:center; justify-content:center; }
 .as-photo::before { content:''; position:absolute; left:0; right:0; bottom:0; height:34%; z-index:1;
@@ -529,8 +540,7 @@ body {
    四欄等寬、靠左對齊、數字在最上面——照著參考圖的結構，
    顏色一律走主題變數，四套主題各自的 --gold-deep 都有定義過。 */
 .sys-steps { display:grid; grid-template-columns:repeat(4,1fr); gap:0;
-    margin:0 0 56px; padding:34px 0; border-top:1px solid var(--line-gold);
-    border-bottom:1px solid var(--line-gold); }
+    margin:0; padding:30px 0 0; border-top:1px solid var(--line-gold); }
 .ss-item { display:flex; flex-direction:column; gap:7px; padding:0 24px;
     cursor:pointer; transition:transform .28s var(--ease); }
 .ss-item + .ss-item { border-left:1px solid var(--line); }
@@ -556,6 +566,9 @@ body {
 
 .glow-row { display:grid; grid-template-columns:repeat(4,1fr); gap:26px 22px; margin-bottom:56px; }
 .glow-card { cursor:pointer; }
+/* 錯落排列：偶數欄往下位移。原本兩欄大圖時是 60px，四欄小卡照比例縮到 34px——
+   位移要跟卡片一起縮，不然四欄各差 60px 會讓整排看起來像斷掉，不是錯落。 */
+.glow-card:nth-child(even) { margin-top:34px; }
 .gc-img { position:relative; width:100%; aspect-ratio:1; overflow:hidden; margin-bottom:11px; }
 .gc-img .ph { position:absolute; inset:0; transition:box-shadow .5s var(--ease); }
 .gc-img .ph img { transition:transform 1s var(--ease), opacity .7s var(--ease); }
@@ -1194,7 +1207,6 @@ body[data-member-theme="noir"] ::selection { background:var(--gold); color:var(-
    關掉不影響任何功能；要恢復只要刪掉這條規則。 */
 body[data-member-theme="noir"] .brand-watermark,
 body[data-member-theme="noir"] .signal-watermark,
-body[data-member-theme="noir"] .watermark-stamp,
 body[data-member-theme="noir"] .gold-cursor-flow,
 body[data-member-theme="noir"] .cursor-glow { display:none !important; }
 
@@ -1376,7 +1388,6 @@ body.admin-mode .brand-watermark,
 body.admin-mode .signal-watermark,
 body.admin-mode .cursor-glow,
 body.admin-mode .gold-cursor-flow,
-body.admin-mode .watermark-stamp { display:none !important; }
 body.admin-mode .app-shell { background:#f3f5f7; }
 body.admin-mode .main-content { max-width:none; min-height:100vh; margin:0; padding:0; background:#f3f5f7; }
 body.admin-mode .main-content.page-enter,
@@ -2240,6 +2251,7 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
     .analyze-grid, .dash-grid, .pd-wrap, .feat-grid { grid-template-columns:1fr; }
     /* 精選卡跟商品頁一樣，寬度不夠就減欄，不要放大 */
     .glow-row { grid-template-columns:repeat(2,1fr); gap:18px 14px; }
+    .glow-card:nth-child(even) { margin-top:22px; }
     /* 四步驟改成兩欄兩列。擠成四欄會讓「Understand your features」
        斷成四五行，反而看不出是一個流程。 */
     .sys-steps { grid-template-columns:repeat(2,1fr); gap:22px 0; padding:26px 0; }
@@ -3424,6 +3436,9 @@ html.intro-off #brand-intro{display:none}
    光暈、流標與訊號層共用同一個光源。 */
 :root { --wm-x:72vw; --wm-y:30vh; }
 
+/* 2026-08-28：右下角的識別章（圓圈加十字）已移除。它固定浮在畫面右下、
+   蓋在內容上，而那個十字看起來像可以按的加號，實際上整層 pointer-events:none。
+   看起來能按卻不能按，是最沒必要的那種困惑。 */
 .brand-watermark { position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; contain:strict; }
 .brand-watermark:before {
     content:"DECORATE.ME"; position:absolute; right:-4vw; bottom:-5vh;
@@ -3450,16 +3465,6 @@ html.intro-off #brand-intro{display:none}
         linear-gradient(rgba(255,213,112,.06) 1px, transparent 1px);
     background-size:100% 100%, 100% 46px;
 }
-.watermark-stamp {
-    position:fixed; right:22px; bottom:18px; z-index:40; pointer-events:none;
-    display:flex; align-items:center; gap:8px;
-    color:rgba(226,195,116,.5); font-family:var(--sans); font-size:8px;
-    letter-spacing:.2em; text-transform:uppercase;
-}
-.watermark-stamp i { width:18px; height:18px; border:1px solid rgba(226,195,116,.58); border-radius:50%; position:relative; box-shadow:0 0 12px rgba(226,195,116,.2); }
-.watermark-stamp i:before,.watermark-stamp i:after { content:""; position:absolute; background:rgba(226,195,116,.58); }
-.watermark-stamp i:before { width:1px; top:3px; bottom:3px; left:8px; }
-.watermark-stamp i:after { height:1px; left:3px; right:3px; top:8px; }
 
 /* 在游標光暈上疊加有方向的金色流光。 */
 .gold-cursor-flow {
@@ -3481,7 +3486,7 @@ html.intro-off #brand-intro{display:none}
 .app-shell > .main-content { position:relative; z-index:5; }
 
 @media (max-width:980px){
-    .gold-cursor-flow, .watermark-stamp { display:none; }
+    .gold-cursor-flow { display:none; }
     .brand-watermark:after { display:none; }
     .signal-watermark { opacity:.28; }
 }

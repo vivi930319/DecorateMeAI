@@ -156,7 +156,6 @@ function getProductPopularity(product) {
     return Number(product?.popularity || product?.sales || product?.views || product?.reviews || product?.score || 0);
 }
 
-
 // ═══ 登入狀態監看 ═══
 //
 // 問題：後台的清單是**透過 gateway 代理**讀資料庫的，gateway 用它自己的憑證去問，
@@ -1129,10 +1128,6 @@ function shadeRecommendationHtml(p) {
     </section>`;
 }
 
-
-
-
-
 // ⚠️ 技術分數的展開區塊。契約 §4.2 明訂 scoreBreakdown「僅除錯／後台，不給一般使用者」，
 // 所以它**已經從三個使用者畫面移除**。函式保留是為了後台除錯時還叫得出來。
 function recommendationEvidenceHtml(p) {
@@ -1989,13 +1984,16 @@ dashboard: `
 <div class="insp-row" id="dashInsp"></div>
 <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">02</span><h2>為你精選</h2></div></div>
 <div class="glow-row" id="dashGlow"></div>
-<!-- 四步驟：這套系統實際會發生的事。 品牌那兩句講的是「為什麼」，這裡講「怎麼走」——使用者看完就知道 從臉部分析開始、最後會走到商品，而不是只知道有這些功能。 --><section class="sys-steps" aria-label="系統流程"><div class="ss-item" data-nav="analysis"><span class="ss-no">01</span><span class="ss-en">ANALYZE</span><span class="ss-zh">臉部分析</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">Understand<br>your features</span></div><div class="ss-item" data-nav="style"><span class="ss-no">02</span><span class="ss-en">DISCOVER</span><span class="ss-zh">專屬推薦</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">Find your<br>perfect look</span></div><div class="ss-item" data-nav="suggestion"><span class="ss-no">03</span><span class="ss-en">TRY ON</span><span class="ss-zh">AI 試妝</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">See your<br>new look</span></div><div class="ss-item" data-nav="products"><span class="ss-no">04</span><span class="ss-en">SHOP</span><span class="ss-zh">商品搭配</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">Complete<br>the look</span></div></section><section class="about-sys">
+<!-- 四步驟：這套系統實際會發生的事。 品牌那兩句講的是「為什麼」，這裡講「怎麼走」——使用者看完就知道 從臉部分析開始、最後會走到商品，而不是只知道有這些功能。 --><section class="about-sys">
     <div class="as-head">
         <div class="about-headrow"><span class="as-eyebrow-it">About the Atelier</span><h2 class="about-title">OUR BEAUTY<span class="l2">SYSTEM</span></h2></div>
         <span class="bs-link" data-nav="analysis">開始你的美學旅程　→</span>
         <p class="bs-desc"><b>美，不是成為另一個人。</b><br>而是更了解適合自己的樣子。</p>
+
     </div>
     <div class="as-photo"><img class="as-photo-img" src="assets/brand/decorate-me-home.jpg" alt="Decorate Me 品牌識別" onload="this.classList.add('loaded')"><div class="as-photo-ph"><div class="demo-mark">❧</div><div class="demo-cap">商品形象照 · Demo</div></div></div>
+
+<div class="sys-steps" aria-label="系統流程"><div class="ss-item" data-nav="analysis"><span class="ss-no">01</span><span class="ss-en">ANALYZE</span><span class="ss-zh">臉部分析</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">Understand<br>your features</span></div><div class="ss-item" data-nav="style"><span class="ss-no">02</span><span class="ss-en">DISCOVER</span><span class="ss-zh">專屬推薦</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">Find your<br>perfect look</span></div><div class="ss-item" data-nav="suggestion"><span class="ss-no">03</span><span class="ss-en">TRY ON</span><span class="ss-zh">AI 試妝</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">See your<br>new look</span></div><div class="ss-item" data-nav="products"><span class="ss-no">04</span><span class="ss-en">SHOP</span><span class="ss-zh">商品搭配</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">Complete<br>the look</span></div></div>
 </section>`,
 analysis: `
 <div class="page-header"><h1>臉部分析</h1><div class="divider"></div><p>上傳正面照片，分析五官特徵</p></div>
@@ -2870,21 +2868,9 @@ const PageInit = {
         const greetEl = document.getElementById('dashGreet');
         // user 是會員自己設定的名稱，會員可把它設成 HTML／script，這裡一律轉義。
         if (greetEl) greetEl.innerHTML = `${hello}，<span class="accent">${escapeHtml(user)}</span>`;
-        // 已經分析過的人再看到「看看什麼適合我」是退步——他已經看過了。
-        // 有紀錄時主按鈕改成「看我的分析結果」，另給一顆次要的「重新分析」。
-        //
-        // 兩顆的層級要分開：實心的那顆帶去他已經有的東西，線框那顆才是重跑一次。
-        // 反過來的話，回訪的人每次都會被推去再做一次分析。
-        const primary = document.getElementById('dashPrimaryCta');
-        const secondary = document.getElementById('dashSecondaryCta');
-        const hasHistory = (typeof History !== 'undefined' && History.list)
-            ? History.list().length > 0 : false;
-        if (primary && hasHistory) {
-            primary.innerHTML = '<b>看我的分析結果　→</b><small>回到上一次的五官與膚色</small>';
-            primary.dataset.nav = 'history';
-            if (secondary) secondary.hidden = false;
-        }
-
+        // 回訪不換按鈕：主按鈕一律「看看什麼適合我」。
+        // 換成「看我的分析結果」會讓首頁的主要動作依狀態變成兩種東西，
+        // 而使用者記得的是「首頁那顆金色按鈕」——它每次帶去不同地方，就記不住。
         // AI 猜你喜歡：依賴組員資料庫的登入 session，訪客或沒有推薦結果時整塊保持隱藏，不影響其他版位。
         const personalSection = document.getElementById('dashPersonalSection');
         const personalArea = document.getElementById('dashPersonal');
@@ -4198,7 +4184,12 @@ const PageInit = {
             // 分類 key 進 onclick 的 JS 字串裡：escapeHtml 沒用——HTML 解析器會把 &#039;
             // 還原成 '，在行內事件處理器仍會跳出字串執行。分類本來就是英數 key，這裡先
             // 收斂成安全字元集，斷掉這條 JS 注入面；顯示文字另外走 escapeHtml。
-            const catToken = String(p.cat || '').replace(/[^a-zA-Z0-9_-]/g, '');
+            // 先前這裡把分類收斂成 [a-zA-Z0-9_-] 再塞進 onclick 字串裡。
+            // 收斂本身是對的（行內事件處理器不能放未經處理的字串），但分類是**中文**
+            // ——「底妝」被整串濾掉，變成空字串，於是返回一律掉回「全部商品」。
+            // 改成 data 屬性 ＋ 事件綁定：值不進 JS 字串，所以不必閹割它，
+            // 中文分類也留得住。
+            const catToken = String(p.cat || '').replace(/[^a-zA-Z0-9_-]/g, '');   // 仍供舊呼叫點使用
             // 從色階比較點進來的話，返回要回到那支主推薦粉底。
             // 只認一次：回去之後就清掉，否則之後從別處進到同一件商品，
             // 返回還是會跳到那支粉底——那時候使用者早就不在比較的脈絡裡了。
@@ -4209,8 +4200,8 @@ const PageInit = {
                     ${backToShade
                         ? `<a href="#" class="back-link" data-back-shade="${escapeHtml(backToShade)}">← 回到粉底色號比較</a>
                            <button class="pd-close" aria-label="關閉" data-back-shade="${escapeHtml(backToShade)}">×</button>`
-                        : `<a href="#" class="back-link" onclick="PageInit.products({category:'${catToken}'});return false;">← ${escapeHtml(p.cat)}</a>
-                           <button class="pd-close" aria-label="關閉" onclick="PageInit.products({category:'${catToken}'});return false;">×</button>`}
+                        : `<a href="#" class="back-link" data-back-cat="${escapeHtml(String(p.cat || ''))}">← ${escapeHtml(p.cat)}</a>
+                           <button class="pd-close" aria-label="關閉" data-back-cat="${escapeHtml(String(p.cat || ''))}">×</button>`}
                 </div>
                 <div class="pd-wrap">
                     <!-- 詳情頁是唯一要看清楚商品的地方，用原圖；清單一律用 img 的縮圖版本。 -->
@@ -4242,6 +4233,13 @@ const PageInit = {
             // 是重新渲染出來的，逐張綁會在下一次重畫時全部失效。
             // 三欄並排之後不再需要 Modal——要比較的東西已經全部看得到了。
             // 每一欄的「查看商品」直接跳到那支色號的商品頁。
+            area.querySelectorAll('[data-back-cat]').forEach(el => {
+                el.onclick = (ev) => {
+                    ev.preventDefault();
+                    // 回到**這個商品所屬的分類**，不是全部商品。
+                    PageInit.products({ category: el.dataset.backCat || 'all' });
+                };
+            });
             area.querySelectorAll('[data-back-shade]').forEach(el => {
                 el.onclick = (ev) => {
                     ev.preventDefault();
@@ -4444,7 +4442,6 @@ const PageInit = {
         holdBtn.onkeydown = (e) => { if (e.key === ' ' || e.key === 'Enter') pressHold(e); };
         holdBtn.onkeyup = (e) => { if (e.key === ' ' || e.key === 'Enter') releaseHold(); };
         document.getElementById('compareGoStyleBtn').onclick = () => Router.go('style');
-
 
         // 收藏一律走同一個確認視窗。臨時網址警告與 renderPrompt 預覽都在那裡，
         // 兩邊各寫一份，遲早會有一邊漏掉警告。
