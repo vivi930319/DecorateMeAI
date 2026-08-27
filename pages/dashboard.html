@@ -5,8 +5,11 @@
         <div class="arch-word-base">裝識你的美</div>
     </div>
     <div class="arch-tagline">
+        <!-- 這裡曾經也有一顆「開始臉部分析 →」。一個畫面裡同一句話說兩次不是強調，
+             是讓人停下來判斷「這兩個是同一件事嗎」——而那零點幾秒正是要省掉的。
+             行動集中到下面的問候區；這一塊維持整塊可點（data-nav="analysis"），
+             但角色是品牌畫面，不是按鈕。 -->
         <div class="at-text">為你打造的<em>美學旅程</em> · 從臉部分析開始</div>
-        <span class="at-cta">開始臉部分析　→</span>
     </div>
 </div>
 
@@ -15,7 +18,19 @@
         <span class="eyebrow">Welcome</span>
         <h1 id="dashGreet">歡迎回來，<span class="accent">訪客</span></h1>
         <div class="greet-actions">
-            <span class="btn-outline" data-nav="analysis">開始臉部分析　→</span>
+            <!-- 全頁唯一的實心按鈕。畫面上只有一個地方看起來可以按，
+                 就不需要任何文字說明「該點哪裡」。
+                 文字講結果不講步驟：「開始臉部分析」是系統要做的事，
+                 「看看什麼適合我」才是使用者要的東西——也跟品牌那句
+                 「更了解適合自己的樣子」是同一句話。
+                 副標寫**要準備什麼**，那是真正讓人猶豫的地方。
+                 刻意不寫「約 N 秒」：Cloud Run 有冷啟動，那個數字撐不住。 -->
+            <!-- 用 button 不用 <a href="#">：後者會同時觸發 hash 跳轉，
+                 跟 Router.go 的 pushState 打架；而這是一個動作不是一個位址。 -->
+            <button type="button" class="btn-gold greet-cta" data-nav="analysis" id="dashPrimaryCta">
+                <b>看看什麼適合我　→</b><small>只要一張正面照</small></button>
+            <button type="button" class="btn-outline greet-cta-alt" data-nav="analysis"
+                    id="dashSecondaryCta" hidden>重新分析</button>
             <div class="tone-scale" title="膚色比對">
                 <div class="swatches">
                     <span style="background:#F1D9C4"></span>
@@ -24,12 +39,12 @@
                     <span style="background:#A9774F"></span>
                     <span style="background:#7C5334"></span>
                 </div>
-                <em>找到你的專屬色號</em>
+                <em>五種膚色基準</em>
             </div>
         </div>
     </div>
     <div class="greet-r">
-        <div class="greet-date" id="dashDate">—</div>
+        <!-- 日期拿掉：對使用者不構成資訊，也不能因此做什麼。 -->
         <div class="greet-meta">Your Beauty Atelier</div>
     </div>
 </div>
@@ -46,6 +61,40 @@
 <div class="glow-row" id="dashGlow"></div>
 
 <!-- 關於我們的美妝系統 · Rare Beauty 雙欄編輯式簡介 -->
+<!-- 四步驟：這套系統實際會發生的事。
+     品牌那兩句講的是「為什麼」，這裡講「怎麼走」——使用者看完就知道
+     從臉部分析開始、最後會走到商品，而不是只知道有這些功能。 -->
+<section class="sys-steps" aria-label="系統流程">
+    <div class="ss-item" data-nav="analysis">
+        <span class="ss-no">01</span>
+        <span class="ss-en">ANALYZE</span>
+        <span class="ss-zh">臉部分析</span>
+        <span class="ss-rule" aria-hidden="true"></span>
+        <span class="ss-desc">Understand<br>your features</span>
+    </div>
+    <div class="ss-item" data-nav="style">
+        <span class="ss-no">02</span>
+        <span class="ss-en">DISCOVER</span>
+        <span class="ss-zh">專屬推薦</span>
+        <span class="ss-rule" aria-hidden="true"></span>
+        <span class="ss-desc">Find your<br>perfect look</span>
+    </div>
+    <div class="ss-item" data-nav="suggestion">
+        <span class="ss-no">03</span>
+        <span class="ss-en">TRY ON</span>
+        <span class="ss-zh">AI 試妝</span>
+        <span class="ss-rule" aria-hidden="true"></span>
+        <span class="ss-desc">See your<br>new look</span>
+    </div>
+    <div class="ss-item" data-nav="products">
+        <span class="ss-no">04</span>
+        <span class="ss-en">SHOP</span>
+        <span class="ss-zh">商品搭配</span>
+        <span class="ss-rule" aria-hidden="true"></span>
+        <span class="ss-desc">Complete<br>the look</span>
+    </div>
+</section>
+
 <section class="about-sys">
     <div class="as-head">
         <div class="about-headrow">

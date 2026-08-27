@@ -1965,18 +1965,21 @@ dashboard: `
     <div class="arch-corner">Maison Decorate Me</div>
     <span class="arch-eyebrow">A Platform Created for the Love of Beauty</span>
     <div class="arch-stage"><div class="arch-word-base">裝識你的美</div></div>
-    <div class="arch-tagline"><div class="at-text">為你打造的<em>美學旅程</em> · 從臉部分析開始</div><span class="at-cta">開始臉部分析　→</span></div>
+    <div class="arch-tagline"><div class="at-text">為你打造的<em>美學旅程</em> · 從臉部分析開始</div></div>
 </div>
 <div class="dash-greet">
     <div class="greet-l">
         <span class="eyebrow">Welcome</span>
         <h1 id="dashGreet">歡迎回來，<span class="accent">訪客</span></h1>
         <div class="greet-actions">
-            <span class="btn-outline" data-nav="analysis">開始臉部分析　→</span>
-            <div class="tone-scale" title="膚色比對"><div class="swatches"><span style="background:#F1D9C4"></span><span style="background:#E4BE9E"></span><span style="background:#CFA079"></span><span style="background:#A9774F"></span><span style="background:#7C5334"></span></div><em>找到你的專屬色號</em></div>
+            <button type="button" class="btn-gold greet-cta" data-nav="analysis" id="dashPrimaryCta">
+                <b>看看什麼適合我　→</b><small>只要一張正面照</small></button>
+            <button type="button" class="btn-outline greet-cta-alt" data-nav="analysis"
+                    id="dashSecondaryCta" hidden>重新分析</button>
+            <div class="tone-scale" title="膚色比對"><div class="swatches"><span style="background:#F1D9C4"></span><span style="background:#E4BE9E"></span><span style="background:#CFA079"></span><span style="background:#A9774F"></span><span style="background:#7C5334"></span></div><em>五種膚色基準</em></div>
         </div>
     </div>
-    <div class="greet-r"><div class="greet-date" id="dashDate">—</div><div class="greet-meta">Your Beauty Atelier</div></div>
+    <div class="greet-r"><div class="greet-meta">Your Beauty Atelier</div></div>
 </div>
 <section id="dashPersonalSection" style="display:none;">
     <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">❧</span><h2>猜你喜歡</h2></div></div>
@@ -1986,7 +1989,7 @@ dashboard: `
 <div class="insp-row" id="dashInsp"></div>
 <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">02</span><h2>為你精選</h2></div></div>
 <div class="glow-row" id="dashGlow"></div>
-<section class="about-sys">
+<!-- 四步驟：這套系統實際會發生的事。 品牌那兩句講的是「為什麼」，這裡講「怎麼走」——使用者看完就知道 從臉部分析開始、最後會走到商品，而不是只知道有這些功能。 --><section class="sys-steps" aria-label="系統流程"><div class="ss-item" data-nav="analysis"><span class="ss-no">01</span><span class="ss-en">ANALYZE</span><span class="ss-zh">臉部分析</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">Understand<br>your features</span></div><div class="ss-item" data-nav="style"><span class="ss-no">02</span><span class="ss-en">DISCOVER</span><span class="ss-zh">專屬推薦</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">Find your<br>perfect look</span></div><div class="ss-item" data-nav="suggestion"><span class="ss-no">03</span><span class="ss-en">TRY ON</span><span class="ss-zh">AI 試妝</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">See your<br>new look</span></div><div class="ss-item" data-nav="products"><span class="ss-no">04</span><span class="ss-en">SHOP</span><span class="ss-zh">商品搭配</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">Complete<br>the look</span></div></section><section class="about-sys">
     <div class="as-head">
         <div class="about-headrow"><span class="as-eyebrow-it">About the Atelier</span><h2 class="about-title">OUR BEAUTY<span class="l2">SYSTEM</span></h2></div>
         <span class="bs-link" data-nav="analysis">開始你的美學旅程　→</span>
@@ -2867,11 +2870,19 @@ const PageInit = {
         const greetEl = document.getElementById('dashGreet');
         // user 是會員自己設定的名稱，會員可把它設成 HTML／script，這裡一律轉義。
         if (greetEl) greetEl.innerHTML = `${hello}，<span class="accent">${escapeHtml(user)}</span>`;
-        const dEl = document.getElementById('dashDate');
-        if (dEl) {
-            const now = new Date();
-            const wd = ['日','一','二','三','四','五','六'][now.getDay()];
-            dEl.textContent = `${now.getMonth()+1}月 ${now.getDate()}日 · 週${wd}`;
+        // 已經分析過的人再看到「看看什麼適合我」是退步——他已經看過了。
+        // 有紀錄時主按鈕改成「看我的分析結果」，另給一顆次要的「重新分析」。
+        //
+        // 兩顆的層級要分開：實心的那顆帶去他已經有的東西，線框那顆才是重跑一次。
+        // 反過來的話，回訪的人每次都會被推去再做一次分析。
+        const primary = document.getElementById('dashPrimaryCta');
+        const secondary = document.getElementById('dashSecondaryCta');
+        const hasHistory = (typeof History !== 'undefined' && History.list)
+            ? History.list().length > 0 : false;
+        if (primary && hasHistory) {
+            primary.innerHTML = '<b>看我的分析結果　→</b><small>回到上一次的五官與膚色</small>';
+            primary.dataset.nav = 'history';
+            if (secondary) secondary.hidden = false;
         }
 
         // AI 猜你喜歡：依賴組員資料庫的登入 session，訪客或沒有推薦結果時整塊保持隱藏，不影響其他版位。

@@ -525,6 +525,35 @@ body {
 /* 2026-08-28：首頁精選改成跟商品頁一樣的尺寸。
    原本是兩欄錯落的大圖，一張佔掉將近半個畫面寬——那個排版適合形象照，
    不適合「這幾件推薦給你」：使用者要的是掃過去比較，不是一張一張看。 */
+/* 四步驟：這套系統實際會發生的事。
+   四欄等寬、靠左對齊、數字在最上面——照著參考圖的結構，
+   顏色一律走主題變數，四套主題各自的 --gold-deep 都有定義過。 */
+.sys-steps { display:grid; grid-template-columns:repeat(4,1fr); gap:0;
+    margin:0 0 56px; padding:34px 0; border-top:1px solid var(--line-gold);
+    border-bottom:1px solid var(--line-gold); }
+.ss-item { display:flex; flex-direction:column; gap:7px; padding:0 24px;
+    cursor:pointer; transition:transform .28s var(--ease); }
+.ss-item + .ss-item { border-left:1px solid var(--line); }
+.ss-item:hover { transform:translateY(-3px); }
+.ss-item:hover .ss-rule { width:64px; }
+.ss-no { font-family:var(--sans); font-size:15px; font-weight:600;
+    color:var(--ink-soft); font-variant-numeric:tabular-nums; }
+.ss-en { font-family:var(--sans); font-size:13px; letter-spacing:.14em;
+    color:var(--gold-deep); }
+.ss-zh { font-family:var(--cjk); font-size:15px; color:var(--ink-soft); letter-spacing:.04em; }
+.ss-rule { display:block; width:44px; height:1px; margin:9px 0 3px;
+    background:var(--gold-deep); transition:width .28s var(--ease); }
+.ss-desc { color:var(--mid); font-size:12.5px; line-height:1.65; }
+
+/* 首頁唯一的實心按鈕。/* 首頁唯一的實心按鈕。全頁只有一個地方看起來可以按，
+   就不需要任何文字說明「該點哪裡」。 */
+.greet-cta { display:inline-flex; flex-direction:column; align-items:flex-start; gap:2px;
+    padding:13px 24px; text-decoration:none; }
+.greet-cta b { font-size:15px; font-weight:600; letter-spacing:.02em; }
+.greet-cta small { font-size:11px; opacity:.78; font-weight:400; letter-spacing:.02em; }
+.greet-cta-alt { margin-left:10px; text-decoration:none; }
+.greet-cta-alt[hidden] { display:none; }
+
 .glow-row { display:grid; grid-template-columns:repeat(4,1fr); gap:26px 22px; margin-bottom:56px; }
 .glow-card { cursor:pointer; }
 .gc-img { position:relative; width:100%; aspect-ratio:1; overflow:hidden; margin-bottom:11px; }
@@ -2211,6 +2240,11 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
     .analyze-grid, .dash-grid, .pd-wrap, .feat-grid { grid-template-columns:1fr; }
     /* 精選卡跟商品頁一樣，寬度不夠就減欄，不要放大 */
     .glow-row { grid-template-columns:repeat(2,1fr); gap:18px 14px; }
+    /* 四步驟改成兩欄兩列。擠成四欄會讓「Understand your features」
+       斷成四五行，反而看不出是一個流程。 */
+    .sys-steps { grid-template-columns:repeat(2,1fr); gap:22px 0; padding:26px 0; }
+    .ss-item { padding:0 16px; }
+    .ss-item:nth-child(3) { border-left:none; }
     .cat-grid, .style-grid, .prod-grid { grid-template-columns:repeat(2,1fr); }
     .main-content { padding:32px 22px 54px; }
     .dash-hero { height:auto; min-height:300px; } .dash-hero .hero-body { max-width:88%; left:30px; right:30px; bottom:32px; }
