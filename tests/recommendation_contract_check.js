@@ -36,6 +36,11 @@ const sandbox = {
 vm.createContext(sandbox);
 vm.runInContext(
   cut('function recommendationCardHtml(p) {') + '\n'
+  // 推薦標籤由 recLabel 統一產生（契約 2026-08-28 §5 改了措辭）。
+  // 抽了用它的函式沒抽它，測試會在執行時炸 ReferenceError。
+  + cut('function recLabel(raw) {') + '\n'
+  + "const REC_LABEL = '根據臉部分析結果推薦';"
+  + "const LEGACY_REC_LABEL = '根據系統演算法推薦';\n"
   // 色差與門檻兩句由 foundationSkinLines 統一產生，推薦面板與色號比較區共用；
   // 抽了用它的函式沒抽它，測試會在執行時炸 ReferenceError。
   + cut('function foundationSkinLines(skin) {') + '\n'
@@ -82,7 +87,10 @@ const presentation = {
 
 console.log('\n=== 1. 推薦卡的措辭紅線 ===');
 let out = card({ recommendationPresentation: presentation });
-check('顯示「根據系統演算法推薦」', out.includes('根據系統演算法推薦'));
+// 契約 2026-08-28 §5 把措辭從「根據系統演算法推薦」改成「根據臉部分析結果推薦」，
+// 並要求全站不得再出現舊的那一句。後端可能還在回舊字串，前端用 recLabel 映射掉。
+check('顯示「根據臉部分析結果推薦」', out.includes('根據臉部分析結果推薦'));
+check('不再顯示舊措辭', !out.includes('根據系統演算法推薦'));
 check('整段沒有「AI 推薦」', !/AI\s*推薦/.test(out));
 check('顯示 matchLabel', out.includes('95% MATCH'));
 // 少了「推薦匹配度」這四個字，95% MATCH 會被讀成 95% 準確
@@ -116,7 +124,7 @@ check('沒有 presentation 時回空字串', detail({}) === '');
 // 跟商品描述分不開——而它正是「為什麼推這個給你」，是整個功能要講的話。
 check('是一個面板不是散落的 div', out.includes('class="rec-panel"'));
 check('匹配度是主角', /class="rec-bigmatch"/.test(out));
-check('有演算法推薦的標示', out.includes('根據系統演算法推薦'));
+check('有推薦依據的標示', out.includes('根據臉部分析結果推薦'));
 // 「推薦匹配度」四個字是契約要求的：少了它，74% 會被讀成「74% 準確」
 check('保留「推薦匹配度」', out.includes('推薦匹配度'));
 check('沒有 presentation 時卡片也回空字串', card({}) === '');
@@ -146,7 +154,7 @@ check('顯示 disclaimer', out.includes('色階依同品牌同系列'));
 
 // 版面：主推薦是主角，上下階是配角。三張等大並排會讓人以為三個都在推薦，
 // 但只有中間那個是——另外兩個是「想比較的話可以看看」。
-check('有演算法推薦的標示', out.includes('根據系統演算法推薦'));
+check('有推薦依據的標示', out.includes('根據臉部分析結果推薦'));
 check('主推薦有大字匹配度', /sr-bigmatch">95% MATCH/.test(out));
 check('有「想比較不同妝效？」', out.includes('想比較不同妝效？'));
 // 三欄並排，直接看得到。先前替代色藏在 Modal 後面——而替代色的用途是**比較**，

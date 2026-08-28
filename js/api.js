@@ -1326,7 +1326,12 @@ const Api = {
             : (typeof error.details?.field === 'string' ? error.details.field : '');
         const allowed = Array.isArray(error.allowed) ? error.allowed
             : (Array.isArray(error.details?.allowed) ? error.details.allowed : []);
-        const base = error.message || data?.message || `HTTP ${status}`;
+        // MISSING_FIELDS 會把缺的欄位放在 details.fields（契約 2026-08-28 §7）。
+        // 不讀出來的話畫面上只有一句「資料庫寫入失敗」，管理員得逐欄猜。
+        const missing = Array.isArray(error.details?.fields) ? error.details.fields
+            : (Array.isArray(error.fields) ? error.fields : []);
+        const base = (error.message || data?.message || `HTTP ${status}`)
+            + (missing.length ? `（缺少：${missing.join('、')}）` : '');
         return {
             status,
             code: error.code || `HTTP_${status}`,

@@ -742,6 +742,34 @@ function colorCompareHtml(p) {
     </div>`;
 }
 
+// 推薦標籤只有一個來源。
+//
+// 契約 2026-08-28 §5 把措辭從「根據系統演算法推薦」改成「根據臉部分析結果推薦」，
+// 並要求全站不得再出現舊的那一句。後端可能還在回舊字串（切換不會同一天完成），
+// 所以這裡把它映射掉——只認舊的那一句，其他自訂措辭照樣尊重後端。
+//
+// 為什麼要換：「系統演算法」說的是**我們怎麼算的**，「臉部分析結果」說的是
+// **這個推薦根據什麼**。使用者關心的是後者，而前者聽起來像在強調有演算法。
+const REC_LABEL = '根據臉部分析結果推薦';
+const LEGACY_REC_LABEL = '根據系統演算法推薦';
+function recLabel(raw) {
+    const text = String(raw || '').trim();
+    if (!text || text === LEGACY_REC_LABEL) return REC_LABEL;
+    return text;
+}
+
+// 唇彩永遠不顯示配對百分比、唇色色差與色差明細（契約 2026-08-28 §5.4）。
+//
+// 唇彩是依整體妝容風格與臉部特徵推薦的，**不以使用者原始唇色做色差配對**。
+// 印一個百分比或色差，等於宣稱做了一件沒做的比對；而使用者分不出那個數字
+// 是「跟你的唇色比」還是「跟你的風格比」。
+//
+// 這推翻了 2026-08-26 的色差 QA 契約（當時唇彩寫的是「比自然唇色」）。
+// 兩份契約衝突時以新的為準，舊的那條在這裡失效。
+function isLipProduct(p) {
+    return String(p?.apiType || '') === 'lipsticks' || String(p?.cat || '') === '唇彩';
+}
+
 // 推薦端整理好的使用者文案（契約 2026-08-v2 §4.3）。
 //
 // 為什麼一律以它為準，不再由前端拼：技術分數（matchScore、scoreBreakdown、ΔE）
@@ -774,7 +802,7 @@ function recommendationCardHtml(p) {
     }
 
     const parts = [];
-    parts.push(`<div class="rec-sys">${escapeHtml(pr.systemLabel || '根據系統演算法推薦')}</div>`);
+    parts.push(`<div class="rec-sys">${escapeHtml(recLabel(pr.systemLabel))}</div>`);
     if (p?.showMatchPercent !== false
         && (pr.matchLabel || Number.isFinite(Number(pr.matchPercent)))) {
         const label = pr.matchLabel || `${Math.round(Number(pr.matchPercent))}% MATCH`;
@@ -945,7 +973,7 @@ function recommendationPanelHtml(p) {
 
     return `<section class="rec-panel">
         <div class="rec-panel-head">
-            <span class="rec-eyebrow">✦ ${escapeHtml(pr.systemLabel || '根據系統演算法推薦')}</span>
+            <span class="rec-eyebrow">✦ ${escapeHtml(recLabel(pr.systemLabel))}</span>
             ${label ? `<div class="rec-bigmatch">${escapeHtml(label)}</div>` : ''}
             <div class="rec-bigmatch-sub">推薦匹配度</div>
             ${pr.headline ? `<div class="rec-panel-headline">${escapeHtml(pr.headline)}</div>` : ''}
@@ -1147,7 +1175,7 @@ function shadeRecommendationHtml(p) {
     // 這個容器——直接印一個空的 sr-hero 會在畫面上留下一塊有內距卻沒東西的空白。
     const heroInner = [
         panelCarriesHeader ? '' : `
-            <div class="sr-eyebrow">✦ 根據系統演算法推薦</div>
+            <div class="sr-eyebrow">✦ ${escapeHtml(REC_LABEL)}</div>
             ${hasPct ? `<div class="sr-bigmatch">${Math.round(pct)}% MATCH</div>` : ''}
             ${matchWord ? `<div class="sr-bigmatch-sub">${escapeHtml(matchWord)}</div>` : ''}
             ${gate ? `<div class="sr-gate">${escapeHtml(gate)}</div>` : ''}`,
@@ -4037,6 +4065,45 @@ const PageInit = {
             renderShop((opts && opts.category) || Router.shopFilter || 'all');
         }
 
+        // 一般瀏覽也要有品牌、價格與排序——使用者不是只在「推薦」那一區買東西，
+        // 一般商品頁就是逛街的地方，而逛街本來就會照價格與品牌看。
+        //
+        // 全部在本機做：`Router.generalProductCatalog` 已經是整份清單
+        //（loadGeneralProductCatalog 會翻頁到底），而線上商品服務的 `sort` 與
+        // `minPrice`/`maxPrice` 實測沒有作用（2026-08-28），送出去只會得到
+        // 一個沒有篩到的畫面。
+        const shopPriceOf = (p) => {
+            const n = Number(String(p?.price ?? '').replace(/[^0-9.]/g, ''));
+            return Number.isFinite(n) ? n : null;
+        };
+        const applyShopControls = (list) => {
+            const brand = Router.shopBrand || '';
+            const min = Router.shopMinPrice, max = Router.shopMaxPrice;
+            let rows = (list || []).filter((p) => {
+                if (brand && String(p.brand || '') !== brand) return false;
+                if (min == null && max == null) return true;
+                const price = shopPriceOf(p);
+                // 沒有價格的商品在有價格條件時排除：當成 0 會讓它永遠落在最低價以上。
+                if (price == null) return false;
+                if (min != null && price < min) return false;
+                if (max != null && price > max) return false;
+                return true;
+            });
+            const sort = Router.shopSort || 'default';
+            const byPrice = (dir) => (a, b) => {
+                const x = shopPriceOf(a), y = shopPriceOf(b);
+                if (x === null && y === null) return 0;
+                if (x === null) return 1;      // 沒價格的排最後，不要因為 NaN 跑到最前面
+                if (y === null) return -1;
+                return dir * (x - y);
+            };
+            if (sort === 'price_asc') rows = [...rows].sort(byPrice(1));
+            else if (sort === 'price_desc') rows = [...rows].sort(byPrice(-1));
+            else if (sort === 'name_asc') rows = [...rows].sort((a, b) =>
+                String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hant'));
+            return rows;
+        };
+
         function renderShop(filter) {
             Router.shopFilter = filter;
             const area = document.getElementById('productsArea');
@@ -4058,7 +4125,8 @@ const PageInit = {
                 });
             }
             const catalog = apiCatalog;
-            const list = filter === 'all' ? catalog : catalog.filter(p => p.cat === filter);
+            const byCat = filter === 'all' ? catalog : catalog.filter(p => p.cat === filter);
+            const list = applyShopControls(byCat);
             // 切換分類等於換一份清單，已展開的筆數要跟著歸零。
             if (Router.shopVisibleFilter !== filter || !Router.shopVisible) {
                 Router.shopVisibleFilter = filter;
@@ -4095,9 +4163,58 @@ const PageInit = {
                 ${RecommendationNotice.isEmpty && !recommended.length && !Router.productRecommendationLoading
                     ? RecommendationNotice.emptyHtml() : ''}
                 <div class="filter-bar">${chips}</div>
-                <div class="prod-count">${isLoadingProducts ? '商品載入中' : (Router.generalProductError && !list.length ? '商品服務暫時無法載入，請稍後再試' : `${list.length} 件商品`)}</div>`;
+                <div class="shop-controls">
+                    <label><span>品牌</span><select data-shop="brand">
+                        <option value="">全部品牌</option>
+                        ${[...new Set(byCat.map(p => String(p.brand || '')).filter(Boolean))].sort()
+                            .map(b => `<option value="${escapeHtml(b)}"${Router.shopBrand === b ? ' selected' : ''}>${escapeHtml(b)}</option>`).join('')}
+                    </select></label>
+                    <label><span>價格</span><span class="sc-range">
+                        <input type="number" min="0" step="1" placeholder="最低" inputmode="numeric"
+                            data-shop="min" value="${Router.shopMinPrice ?? ''}">
+                        <i>–</i>
+                        <input type="number" min="0" step="1" placeholder="最高" inputmode="numeric"
+                            data-shop="max" value="${Router.shopMaxPrice ?? ''}">
+                    </span></label>
+                    <label><span>排序</span><select data-shop="sort">
+                        <option value="default"${(Router.shopSort||'default') === 'default' ? ' selected' : ''}>推薦排序</option>
+                        <option value="price_asc"${Router.shopSort === 'price_asc' ? ' selected' : ''}>價格：低到高</option>
+                        <option value="price_desc"${Router.shopSort === 'price_desc' ? ' selected' : ''}>價格：高到低</option>
+                        <option value="name_asc"${Router.shopSort === 'name_asc' ? ' selected' : ''}>名稱：A 到 Z</option>
+                    </select></label>
+                    ${(Router.shopBrand || Router.shopMinPrice != null || Router.shopMaxPrice != null
+                        || (Router.shopSort && Router.shopSort !== 'default'))
+                        ? '<button type="button" class="sc-clear" data-shop="clear">清除條件</button>' : ''}
+                </div>
+                <div class="prod-count">${isLoadingProducts ? '商品載入中'
+                    : (Router.generalProductError && !list.length ? '商品服務暫時無法載入，請稍後再試'
+                    : (list.length !== byCat.length
+                        ? `${list.length} 件商品（已從 ${byCat.length} 件篩選）`
+                        : `${list.length} 件商品`))}</div>`;
             const bindChips = () => {
                 area.querySelectorAll('.chip').forEach(ch => ch.onclick = () => renderShop(ch.dataset.filter));
+                // 篩選與排序。改條件時把「已展開幾筆」歸零——不歸零的話換完條件
+                // 還停在第 60 筆，畫面看起來像沒反應。
+                const num = (v) => (v === '' || v == null || !Number.isFinite(Number(v))) ? null : Number(v);
+                area.querySelectorAll('[data-shop]').forEach((el) => {
+                    const kind = el.dataset.shop;
+                    const apply = () => {
+                        if (kind === 'brand') Router.shopBrand = el.value;
+                        else if (kind === 'sort') Router.shopSort = el.value;
+                        else if (kind === 'min') Router.shopMinPrice = num(el.value);
+                        else if (kind === 'max') Router.shopMaxPrice = num(el.value);
+                        else if (kind === 'clear') {
+                            Router.shopBrand = '';
+                            Router.shopSort = 'default';
+                            Router.shopMinPrice = null;
+                            Router.shopMaxPrice = null;
+                        }
+                        Router.shopVisible = SHOP_PAGE_SIZE;
+                        renderShop(Router.shopFilter);
+                    };
+                    if (kind === 'clear') el.onclick = apply;
+                    else el.onchange = apply;
+                });
                 // 提示列的「重試」與空狀態的兩顆按鈕。跟 chip 一起綁，因為
                 // 每次 renderShop 都會重畫 area，事件必須跟著重新掛上。
                 RecommendationNotice.bind(area);
@@ -6454,8 +6571,13 @@ const PageInit = {
             const shades = shadesInput.filter(c => /^#[0-9a-fA-F]{3,8}$/.test(c));
             // 來源網址不再是必填：手動建立的商品本來就沒有來源頁，逼人填一個等於逼人亂編。
             // 爬蟲匯入的商品仍然帶著抓到的來源（隱藏欄位），照樣會一起送出去。
-            if (!name || !brand || !cat || !priceRaw || !img) {
-                showAlert('請完整填寫商品名稱、品牌、分類、價格與圖片網址', { type:'error' });
+            // 來源網址也是必填。契約 2026-08-28 §7 的必要欄位是
+            // name / brand / type / price / imageUrl / sourceUrl，缺任何一個回 400
+            // MISSING_FIELDS。先前這裡沒驗它、payload 又送 `sourceUrl: sourceUrl || null`，
+            // 於是管理員留白時整筆新增被擋下，而畫面上只說「資料庫寫入失敗」——
+            // 沒有指出是哪一欄，也沒有任何欄位標紅。
+            if (!name || !brand || !cat || !priceRaw || !img || !sourceUrl) {
+                showAlert('請完整填寫商品名稱、品牌、分類、價格、圖片網址與來源網址', { type:'error' });
                 return;
             }
             // 無效價格在送出前顯示錯誤，避免 NaN 被轉成 null。
@@ -6473,6 +6595,14 @@ const PageInit = {
             // 編輯表單照著 cat 預選「底妝」，存檔再用 CAT_TO_TYPE[cat] || 'foundations'
             // 換回英文——一個原本是眼影的商品，只因為管理員改了價格，type 就被靜默改寫成
             // foundations。管理員沒有碰分類，我們就不該替他決定分類。
+            // 兩個網址都要是 http(s) 絕對網址。相對路徑或 `javascript:` 會被上游擋成 400，
+            // 而那個錯誤訊息不會說是哪一欄。
+            const badUrl = [['圖片網址', img], ['來源網址', sourceUrl]]
+                .find(([, v]) => !/^https?:\/\//i.test(String(v || '')));
+            if (badUrl) {
+                showAlert(`${badUrl[0]}要填完整網址，必須以 http:// 或 https:// 開頭。`, { type:'error' });
+                return;
+            }
             const editing = editingProductId
                 ? (dbProducts || []).find(p => String(p.id) === String(editingProductId))
                 : null;
@@ -6500,8 +6630,8 @@ const PageInit = {
                 description: desc || '',
                 // 沒有來源就送 null，不要送空字串——上游對 source_url 有 URL 格式驗證時，
                 // "" 會被當成格式錯誤而擋下整筆新增，null 才是「這個商品沒有來源頁」。
-                sourceUrl: sourceUrl || null,
-                source_url: sourceUrl || null,
+                sourceUrl,
+                source_url: sourceUrl,
                 sku: sku || null,
                 shadeName: shadeName || null,
                 hex: shades[0] || null,
@@ -6533,7 +6663,14 @@ const PageInit = {
                             result.field === 'category' ? 'adminProductCategory' : 'adminProductCategory');
                         showAlert(result.error, { type: 'error', onOk: () => el?.focus() });
                     } else {
-                        showAlert(`資料庫寫入失敗：${result.error}${result.status === 401 ? '（登入狀態已失效，請重新登入）' : ''}`, { type: 'error' });
+                        // 把**實際送出的分類值**一起說出來。
+                        // 「類別無效」這四個字沒有指向任何東西：管理員不知道問題出在
+                        // 中文的 category 還是英文的 type，也不知道送出去的到底是什麼。
+                        // 帶著這兩個值，這一句就能直接轉給商品後端，不必再來回問一輪。
+                        const sent = `（送出的 type=「${payload.type}」、category=「${payload.category}」）`;
+                        const needsDetail = /類別|分類|category|type/i.test(String(result.error || ''));
+                        showAlert(`資料庫寫入失敗：${result.error}${needsDetail ? sent : ''}`
+                            + `${result.status === 401 ? '（登入狀態已失效，請重新登入）' : ''}`, { type: 'error' });
                     }
                     return false;
                 }

@@ -115,5 +115,27 @@ if (fs.existsSync(livePath)) {
   console.log('  (略過：沒有 _live_recommend_sample.json)');
 }
 
+console.log('\n=== 9. 一般商品頁的品牌／價格／排序 ===');
+// 使用者不是只在「推薦」那一區買東西，一般商品頁就是逛街的地方，
+// 而逛街本來就會照價格與品牌看。
+const shopCss = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8');
+check('有品牌下拉', src.includes('data-shop="brand"'));
+check('有價格區間', src.includes('data-shop="min"') && src.includes('data-shop="max"'));
+check('有排序', src.includes('data-shop="sort"'));
+check('有清除條件', src.includes('data-shop="clear"'));
+// 線上商品服務的 sort 與 minPrice/maxPrice 實測沒有作用（2026-08-28），
+// 送出去只會得到一個沒有篩到的畫面，所以全部在本機做——
+// Router.generalProductCatalog 本來就已經是整份清單。
+check('在本機套用，不送 API', src.includes('const applyShopControls ='));
+check('沒有價格的商品不混進價格區間',
+  /applyShopControls[\s\S]{0,700}?if \(price === null\) return false;/.test(src)
+  || /applyShopControls[\s\S]{0,700}?if \(price == null\) return false;/.test(src));
+// 排序時沒價格的排最後，不要因為 NaN 跑到最前面（NaN 的比較結果不可預期）
+check('排序時沒價格的排最後', /byPrice[\s\S]{0,240}?if \(x === null\) return 1;/.test(src));
+// 換條件要把「已展開幾筆」歸零，否則畫面停在第 60 筆看起來像沒反應
+check('換條件後回到第一頁', /data-shop[\s\S]{0,1200}?Router\.shopVisible = SHOP_PAGE_SIZE;/.test(src));
+check('筆數說明有篩選過', src.includes('件商品（已從 ${byCat.length} 件篩選）'));
+check('控制列有樣式', shopCss.includes('.shop-controls'));
+
 console.log(`\n${pass}/${pass + fail} passed`);
 process.exit(fail ? 1 : 0);

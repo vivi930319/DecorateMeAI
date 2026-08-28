@@ -43,6 +43,11 @@ vm.runInContext(cut(src, 'function hasMatch(node) {') + '\n'
     + cut(src, 'function colorDiffInfo(p) {') + '\n'
     + cut(src, 'function colorDiffEntryHtml(p) {') + '\n'
     + cut(src, 'function recommendationCardHtml(p) {') + '\n'
+  // 推薦標籤由 recLabel 統一產生（契約 2026-08-28 §5 改了措辭）。
+  // 抽了用它的函式沒抽它，測試會在執行時炸 ReferenceError。
+    + cut(src, 'function recLabel(raw) {') + '\n'
+    + "const REC_LABEL = '根據臉部分析結果推薦';"
+    + "const LEGACY_REC_LABEL = '根據系統演算法推薦';\n"
     + cut(src, 'function recommendationPanelHtml(p) {') + '\n'
     + 'globalThis.__shade = shadeRecommendationHtml;'
     + 'globalThis.__card = recommendationCardHtml;'
@@ -229,8 +234,11 @@ sb.Router.shadeRecommendation = sr;
 const mergedShade = shade(mergedProduct);
 const both = mergedPanel + mergedShade;
 const times = (hay, needle) => hay.split(needle).length - 1;
-check('✦ 演算法推薦全頁只有一次', times(both, '根據系統演算法推薦') === 1,
-  `出現 ${times(both, '根據系統演算法推薦')} 次`);
+  // 契約 2026-08-28 §5 把措辭從「根據系統演算法推薦」改成「根據臉部分析結果推薦」，
+  // 並要求全站不得再出現舊的那一句。後端可能還在回舊字串，前端用 recLabel 映射掉。
+check('✦ 推薦標示全頁只有一次', times(both, '根據臉部分析結果推薦') === 1,
+  `出現 ${times(both, '根據臉部分析結果推薦')} 次`);
+check('全站不再出現舊措辭', !both.includes('根據系統演算法推薦'));
 check('% MATCH 全頁只有一次', times(both, '% MATCH') === 1,
   `出現 ${times(both, '% MATCH')} 次`);
 // 「與您的膚色」在合併後仍會出現兩次，而那兩次不是重複：
@@ -252,7 +260,7 @@ check('其他理由句照留', mergedPanel.includes('色調與你的四季型一
 // Router.shadeRecommendation 是模組層共用的，前面測試已經設好；
 // 沒有推薦面板時（p 不帶 presentation），比較區要自己撐起表頭。
 check('沒有推薦面板時比較區自己印',
-  out.includes('根據系統演算法推薦') && out.includes('與您的膚色'));
+  out.includes('根據臉部分析結果推薦') && out.includes('與您的膚色'));
 check('讓出表頭時不留空的 sr-hero', !/<div class="sr-hero">\s*<\/div>/.test(mergedShade));
 check('讓出表頭後三欄比較還在', mergedShade.includes('sc2-row')
   && mergedShade.includes('主推薦色號'));

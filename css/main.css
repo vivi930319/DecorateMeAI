@@ -983,6 +983,34 @@ body {
 .pc-shade span { width:13px; height:13px; border:1px solid var(--paper); border-radius:50%; margin-left:-3px; box-shadow:0 0 0 1px var(--line-gold); }
 .shop-more { display:flex; justify-content:center; margin:34px 0 8px; }
 .shop-more .btn-outline { min-width:min(320px,100%); }
+/* 一般商品頁的品牌／價格／排序。跟分類 chip 同一層，但視覺上退一階——
+   分類是「我要看哪一類」，這一列是「在這一類裡怎麼看」，兩者不該等重。 */
+.shop-controls { display:flex; flex-wrap:wrap; align-items:flex-end; gap:14px 18px;
+    margin:14px 0 4px; padding:14px 16px; border:1px solid var(--line);
+    border-radius:14px; background:var(--glass); }
+.shop-controls label { display:grid; gap:6px; font-family:var(--cjk); font-size:11px;
+    letter-spacing:.1em; color:var(--mid); }
+.shop-controls select, .shop-controls input {
+    min-height:38px; padding:0 10px; border:1px solid var(--line-gold); border-radius:9px;
+    background:var(--paper); color:var(--ink-soft);
+    font-family:var(--cjk); font-size:13.5px; }
+.shop-controls select { min-width:132px; padding-right:8px; }
+.shop-controls input { width:86px; text-align:center; font-variant-numeric:tabular-nums; }
+.shop-controls select:focus, .shop-controls input:focus {
+    outline:none; border-color:var(--gold); box-shadow:0 0 0 3px var(--gold-dim); }
+.sc-range { display:flex; align-items:center; gap:7px; }
+.sc-range i { font-style:normal; color:var(--lt); }
+.sc-clear { margin-left:auto; align-self:center; padding:8px 16px; border-radius:999px;
+    border:1px solid var(--line-gold); background:transparent; color:var(--gold-deep);
+    font-family:var(--cjk); font-size:12.5px; cursor:pointer; }
+.sc-clear:hover { background:var(--blush-panel); }
+.sc-clear:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; }
+@media (max-width:620px) {
+    .shop-controls { gap:10px 12px; padding:12px; }
+    .shop-controls select { min-width:0; width:100%; }
+    .shop-controls label { flex:1 1 130px; }
+    .sc-clear { margin-left:0; flex:1 1 100%; }
+}
 .prod-count { font-family:var(--sans); font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--lt); margin-bottom:22px; }
 
 .cat-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
