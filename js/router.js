@@ -1962,6 +1962,26 @@ function showConfirm(msg, opts){
     setTimeout(function(){ var b = ov.querySelector(".ga-ok"); if (b) b.focus(); }, 60);
 }
 
+// 密碼欄的顯示／隱藏（設計稿圖 1、9 的那顆眼睛）。
+//
+// 只切換 type 與按鈕文字，不碰值：改 value 會把游標推到結尾，
+// 而使用者按「顯示」多半是打到一半發現打錯，想接著改。
+function toggleReveal(inputId, btn) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    if (btn) {
+        const label = btn.querySelector('span');
+        if (label) label.textContent = show ? '隱藏' : '顯示';
+        btn.setAttribute('aria-label', show ? '隱藏密碼' : '顯示密碼');
+        btn.classList.toggle('is-on', show);
+    }
+    // 焦點還給輸入框，否則按完要再點一次才能繼續打
+    input.focus();
+}
+if (typeof window !== 'undefined') window.toggleReveal = toggleReveal;
+
 // ═══ 訪客：提示登入或註冊 ═══
 function promptGuestAuth(featureName){
     showConfirm("登入會員即可使用「" + featureName + "」功能，立即加入吧。", {
@@ -8291,11 +8311,24 @@ function showLogin() {
             <section class="auth-editorial" aria-label="Decorate Me 登入">
               <div class="auth-brand-panel"><span class="auth-kicker">DECORATE ME</span><h1>妝識<br>你的美</h1><p>從臉部分析開始，保存每一次妝容建議、收藏與專屬風格。</p></div>
               <div class="auth-form-panel"><div class="auth-card"><span class="auth-kicker">會員登入</span><h2>歡迎回來</h2><p class="auth-description">登入後同步分析紀錄、收藏商品與會員主題。</p>
-                <div class="input-group"><label>電子郵件</label><input type="email" id="loginEmail" placeholder="your@email.com"></div>
-                <div class="input-group"><label>密碼</label><input type="password" id="loginPwd" placeholder="••••••••"></div>
+                <div class="input-group"><label>電子郵件</label>
+                  <div class="ig-field">
+                    <span class="ig-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3.5 7l8.5 6 8.5-6"/></svg></span>
+                    <input type="email" id="loginEmail" placeholder="your@email.com" autocomplete="email">
+                  </div></div>
+                <div class="input-group"><label>密碼</label>
+                  <div class="ig-field">
+                    <span class="ig-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 10V7.5a4 4 0 0 1 8 0V10"/><rect x="5.5" y="10" width="13" height="9.5" rx="2"/></svg></span>
+                    <input type="password" id="loginPwd" placeholder="••••••••" autocomplete="current-password">
+                    <button type="button" class="ig-reveal" onclick="toggleReveal('loginPwd', this)" aria-label="顯示密碼">
+                      <svg viewBox="0 0 24 24"><path d="M2.5 12c2.6-4 6-6 9.5-6s6.9 2 9.5 6c-2.6 4-6 6-9.5 6s-6.9-2-9.5-6z"/><circle cx="12" cy="12" r="2.6"/></svg>
+                      <span>顯示</span>
+                    </button>
+                  </div></div>
+                <div class="ig-aside"><span class="auth-link" onclick="showForgotPassword()">忘記密碼？</span></div>
                 <button class="btn-gold btn-full" onclick="doLoginAction()" style="margin-top:8px;">登　入</button>
-                <button class="btn-outline btn-full" onclick="doGuestLogin()" style="margin-top:12px;">訪客登入</button>
-                <div style="margin-top:12px;"><span class="auth-link" onclick="showForgotPassword()">忘記密碼？</span></div>
+                <div class="auth-or"><span>或</span></div>
+                <button class="btn-outline btn-full" onclick="doGuestLogin()">訪客登入</button>
                 <div style="margin-top:16px;"><span class="auth-link" onclick="showRegister()">還沒有帳號？立即註冊</span></div>
               </div></div>
             </section>
