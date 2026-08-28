@@ -48,6 +48,10 @@ const USER_ERROR_ZH = Object.freeze({
     MEMBER_SESSION_INVALID: '登入狀態已失效，請重新登入後再繼續。',
     MEMBER_SESSION_MISSING: '會員登入狀態建立失敗，請稍後再試。',
     MEMBER_SESSION_UNUSABLE: '會員登入狀態無法建立，請稍後再試。',
+    // 登入本身有效，但這個帳號在會員資料庫裡查無此人。
+    // **不要**寫成「請重新登入」——重登不會好，而那正是 2026-08-29 管理員
+    // 每 90 秒被踢出去時看到的那句話，把人指往一個解決不了問題的動作。
+    MEMBER_NOT_PROVISIONED: '這個帳號在會員資料庫中不存在，重新登入不會解決，請聯繫資料庫端建立帳號。',
     MEMBER_SESSION_TOO_LARGE: '會員登入資料異常，請重新登入。',
     MEMBER_SERVICE_UNAVAILABLE: '會員服務目前無法連線，請稍後再試。',
     MEMBER_SERVICE_TIMEOUT: '會員服務回應逾時，請稍後再試。',
@@ -1525,7 +1529,13 @@ const Api = {
                 cache: 'no-store',
                 signal: controller?.signal
             });
-            if (!res.ok) return { ok: false, status: res.status };
+            // 帶回 error.code：呼叫端要靠它分辨「該重新登入」與「這個帳號在上游查無此人」。
+            // 兩者都是 401，但只有前者重登會好——少了這個碼，SessionWatch 只能看狀態碼，
+            // 於是把後者也當成過期，每 90 秒把管理員踢出去一次（2026-08-29）。
+            if (!res.ok) {
+                const failure = await res.json().catch(() => ({}));
+                return { ok: false, status: res.status, code: String(failure?.error?.code || '') };
+            }
             // sub 是這個 session 屬於誰。呼叫端要拿它跟本機 profile 比對——admin 與 member
             // 共用同一個 __session cookie，少了這道比對就會拿舊帳號的 email 去打會員 API。
             const data = await res.json().catch(() => ({}));
@@ -3362,7 +3372,12 @@ const AdminStore = {
         const allowed = permission.allowedPages;
         // 商品推薦是公開瀏覽頁：未登入訪客都看得到，登入會員不該因為後台沒勾「商品」
         // 這一項就被擋在門外（會員反而比訪客受限）。逛商品不需要特別權限。
-        if (page === 'products') return true;
+        //
+        // 關於我們同理，而且更純粹：它是一頁介紹，沒有任何會員資料或功能。
+        // 2026-08-29 新增這頁時漏了這裡，於是點下去跳「此帳號目前沒有使用此功能的權限，
+        // 請聯繫管理員」——一個只是在講品牌故事的頁面，說得像是被停權了。
+        // allowedPages 由後台勾選，新頁面預設不在裡面，所以**每新增一個公開頁都要回來加**。
+        if (page === 'products' || page === 'about') return true;
         if (page === 'analysis') return allowed.includes('analysisBasic') || allowed.includes('analysisPro') || this.isVip(p);
         return allowed.includes(page);
     },
