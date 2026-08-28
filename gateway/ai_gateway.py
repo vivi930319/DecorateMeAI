@@ -293,7 +293,12 @@ GUEST_WRITE_PATHS = {
 # 一次流程扣一次，中途重試不該把使用者的三次吃光。
 GUEST_QUOTA_SPEND_PATHS = {"face-basic": _patterns(r"v1/face/jobs/basic")}
 
-PUBLIC_PRODUCT_PATHS = _patterns(r"api/products", r"recommend-products")
+# 跨品牌底妝近似色號（商品後端契約 2026-08-28）。這一條沒放行的話 Gateway 會先
+# 回 404「Route not found」，而那個訊息長得跟上游沒有這個端點一模一樣——
+# 讀起來像是對方沒做，實際上是我們沒開。id 段落限制成不含斜線，避免用路徑
+# 穿越到商品服務的其他端點。
+PUBLIC_PRODUCT_PATHS = _patterns(r"api/products", r"recommend-products",
+                                 r"api/products/[^/]+/shade-matches")
 SAVED_LOOK_PATH_RE = re.compile(r"^api/members/([^/]+)/saved-looks(?:/([^/]+))?$")
 MEMBER_PATH_RE = re.compile(r"^api/members/([^/]+)$")
 MEMBER_SCOPE_RE = re.compile(r"^api/members/([^/]+)(?:/|$)")
@@ -2455,9 +2460,12 @@ async def admin_face_training_runs(request: Request):
     else:
         claims = require_admin_access(request)
         enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+    # 上限 50：後台這一區的用途是看**完整**訓練歷史，而截斷在畫面上看不出來——
+    # 少掉的批次不會留下任何痕跡，只會讓「送訓完成」的數字比實際少。
+    # 預設維持 5（其他呼叫者只想看最近幾筆），要完整歷史的自己指定。
     limit = 5
     try:
-        limit = max(1, min(20, int(request.query_params.get("limit") or 5)))
+        limit = max(1, min(50, int(request.query_params.get("limit") or 5)))
     except (TypeError, ValueError):
         limit = 5
     # Firestore 掛掉時要說「暫時讀不到」，不能讓它變成沒有處理的 500。
@@ -2504,7 +2512,7 @@ async def admin_face_training_runs(request: Request):
 async def proxy_public_product_request(request: Request, path: str):
     if not PRODUCT_DATABASE_URL or not any(pattern.fullmatch(path) for pattern in PUBLIC_PRODUCT_PATHS):
         raise HTTPException(status_code=404, detail={"error": {"code": "NOT_FOUND", "message": "Route not found."}})
-    if (path == "api/products" and request.method != "GET") or (path == "recommend-products" and request.method != "POST"):
+    if ((path == "api/products" or path.endswith("/shade-matches")) and request.method != "GET")             or (path == "recommend-products" and request.method != "POST"):
         raise HTTPException(status_code=405, detail={"error": {"code": "METHOD_NOT_ALLOWED", "message": "Method not allowed."}})
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:

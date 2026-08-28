@@ -1617,5 +1617,37 @@ class FaceTrainingRunTest(unittest.TestCase):
         self.assertIsNone(r.json()["worker"])
 
 
+class PublicProductPathTest(unittest.TestCase):
+    """公開商品代理的路徑白名單。
+
+    這裡出錯的樣子特別難查：白名單沒放行時 Gateway 自己回
+    `404 {"error":{"code":"NOT_FOUND","message":"Route not found."}}`，
+    而那跟「上游沒有這個端點」長得一模一樣。2026-08-28 就因此把商品後端剛上線的
+    跨品牌色號端點誤判成對方沒做——實際上是我們沒開。
+    """
+
+    def _allowed(self, path: str) -> bool:
+        return any(p.fullmatch(path) for p in gateway.PUBLIC_PRODUCT_PATHS)
+
+    def test_listing_and_recommendation_stay_allowed(self):
+        self.assertTrue(self._allowed("api/products"))
+        self.assertTrue(self._allowed("recommend-products"))
+
+    def test_cross_brand_shade_matches_is_allowed(self):
+        self.assertTrue(self._allowed("api/products/902/shade-matches"))
+        self.assertTrue(self._allowed("api/products/foundations:1663/shade-matches"))
+
+    def test_id_segment_cannot_carry_a_path(self):
+        # id 段落若允許斜線，`api/products/../../admin/x/shade-matches` 這種寫法
+        # 就能把請求帶到商品服務的其他端點上。
+        self.assertFalse(self._allowed("api/products/a/b/shade-matches"))
+        self.assertFalse(self._allowed("api/products/../admin/shade-matches"))
+
+    def test_other_product_routes_stay_closed(self):
+        self.assertFalse(self._allowed("api/products/902"))
+        self.assertFalse(self._allowed("api/crawler-staging/products"))
+        self.assertFalse(self._allowed("api/admin/product-audit-logs"))
+
+
 if __name__ == "__main__":
     unittest.main()
