@@ -57,6 +57,23 @@ const USER_ERROR_ZH = Object.freeze({
     LOGIN_RATE_LIMITED: '登入嘗試次數過多，請稍後再試。',
     MEMBER_SERVICE_RATE_LIMITED: '會員服務目前限制登入頻率，請稍後再試。',
     ADMIN_REQUIRED: '只有管理員可以執行這項操作。',
+    // 這兩個是唯二會把英文丟到畫面上的（2026-08-28 全表比對）：
+    // Gateway 那邊的訊息是英文，前端又沒有對照。
+    GUEST_TRIAL_DISABLED: '免費體驗目前沒有開放，請註冊或登入會員後使用。',
+    INVALID_REQUEST: '輸入的內容格式不正確，請檢查後再試一次。',
+    // 上游不接受這次管理操作。**不要**寫成「請重新登入」——
+    // Gateway 已經驗過 session 了，重登不會好（見 PRODUCT_UPSTREAM_REJECTED 的由來）。
+    PRODUCT_UPSTREAM_REJECTED: '商品服務不接受這次管理操作（你的登入是有效的），請確認商品服務的連線設定。',
+    // 送訓相關：這三個原本靠 Gateway 的中文訊息，列在這裡是為了前端改動時不會漏掉。
+    FEEDBACK_IDS_REQUIRED: '請至少選一筆已採用且有影像的回饋。',
+    TOO_MANY_FEEDBACK_IDS: '一次最多送 100 筆，請分批送訓。',
+    NO_TRAINABLE_SAMPLES: '這些回饋沒有可以拿來訓練的影像樣本。',
+    FACE_TRAINING_RUNS_UNAVAILABLE: '暫時讀不到訓練批次，請稍後再按「重新載入」。',
+    // 跨分頁登入不同帳號時會出現。講清楚是「換了帳號」而不是「壞了」。
+    ACCOUNT_NOT_AVAILABLE: '登入帳號已在其他分頁變更，請重新整理頁面後再操作。',
+    EXPECTED_ACTOR_REQUIRED: '無法確認目前分頁的登入身分，請重新整理頁面後再操作。',
+    SESSION_OWNER_CHANGED: '這個分頁的登入身分已經變更，請重新整理頁面。',
+    CSRF_TOKEN_INVALID: '這次操作的安全驗證失敗，請重新整理頁面後再試。',
     ADMIN_SUSPENDED: '管理員帳號目前已停權。',
     ADMIN_PROXY_NOT_CONFIGURED: '管理端服務尚未完成設定。',
     // 點數與兌換的錯誤碼。
