@@ -123,6 +123,15 @@ function makeElement(store) {
 // 一支永遠不會叫的檢查，比沒有檢查更糟。
 const isTdz = (e) => /before initialization/.test(String((e && e.message) || e || ''));
 
+// 語法錯誤也一定是真的壞掉，跟替身扮得像不像無關——方法體根本編譯不起來。
+//
+// 2026-08-29 補上：還原每日打卡時多貼了一份 `const checkinCard`，
+// `node --check` 擋下了，但這支檢查照樣 11/11 PASS，因為重複宣告被歸到
+// 「其他錯誤」那一類只印出來參考。會編譯失敗的東西不該只是個備註。
+const isFatal = (e) => isTdz(e)
+    || /SyntaxError|has already been declared|Unexpected (token|end of input)/
+        .test(String((e && (e.name + ': ' + e.message)) || e || ''));
+
 function runPage(page, opts) {
     const store = { written: '' };
     const byId = new Map();
@@ -218,17 +227,19 @@ const notes = [];
 console.log('=== 每個頁面都要畫得出東西（不能因為 TDZ 全白）===\n');
 
 for (const page of pages) {
-    let tdzHit = null, wroteAny = false, otherErr = null;
+    let fatal = null, wroteAny = false, otherErr = null;
     for (const [label, opts] of OPT_CASES) {
         const { error, written } = runPage(page, opts);
         if (written) wroteAny = true;
-        if (error && isTdz(error) && !tdzHit) tdzHit = { label, error };
-        if (error && !isTdz(error) && !otherErr) otherErr = { label, error };
+        if (error && isFatal(error) && !fatal) fatal = { label, error };
+        if (error && !isFatal(error) && !otherErr) otherErr = { label, error };
     }
 
-    const ok = !tdzHit;
+    const ok = !fatal;
     ok ? pass++ : fail++;
-    const why = tdzHit ? `TDZ（${tdzHit.label}）：${tdzHit.error.message}` : '';
+    const why = fatal
+        ? `${isTdz(fatal.error) ? 'TDZ' : '編譯失敗'}（${fatal.label}）：${fatal.error.message}`
+        : '';
     console.log(`  ${ok ? 'PASS' : 'FAIL'} ${page.name}()  router.js:${page.line}${why ? '\n       ' + why : ''}`);
     if (ok && !wroteAny) notes.push(`${page.name}(): 沒有寫進 innerHTML（這頁本來就不靠它渲染，僅供參考）`);
     if (ok && otherErr) notes.push(`${page.name}(): ${otherErr.error.constructor.name}: ${otherErr.error.message}`);

@@ -2429,8 +2429,11 @@ profile: `
     </div>
 </div>
 
-<!-- 2026-08-28 拿掉每日打卡。點數機制與這個專案要展示的東西無關，
-     而它佔著會員中心最上面那塊，把真正該看的（分析紀錄、妝容收藏）擠下去。 -->
+<!-- 每日打卡：2026-08-28 曾經整個拿掉（理由寫的是「點數機制與這個專案無關」），
+     但那是誤解——要清掉的是打卡**紀錄**，不是打卡功能本身。
+     checkInMember／getCheckinStatus 這些 API 從頭到尾都在，被移除的只有這塊 UI，
+     結果是使用者根本按不到打卡。2026-08-29 還原，改放在「點數與任務」分頁，
+     不再佔會員中心最上面那塊。 -->
 
 
 <!-- 分組與 pages/profile.html 一致；那邊改了這裡要跟著改。
@@ -2446,6 +2449,7 @@ profile: `
 <section class="member-tier"><div class="member-section-head"><span>Membership</span><h2>會員等級</h2></div><div id="profileTierCard"></div></section>
 </div>
 <div class="member-panel" id="mpanel-points" data-mpanel="points" role="tabpanel" aria-labelledby="mtab-points" hidden>
+<section class="member-tier"><div class="member-section-head"><span>Check-in</span><h2>每日打卡</h2></div><div id="profileCheckinCard"></div></section>
 <section class="member-tier"><div class="member-section-head"><span>Theme Shop</span><h2>點數商店</h2></div><div id="profileThemeShop"></div></section>
 <section class="member-tier"><div class="member-section-head"><span>Ledger</span><h2>點數紀錄</h2></div><div id="profilePointLedger"></div></section>
 </div>

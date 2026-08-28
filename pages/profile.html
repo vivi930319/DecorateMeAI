@@ -66,6 +66,16 @@
 </section>
 </div>
 <div class="member-panel" id="mpanel-points" data-mpanel="points" role="tabpanel" aria-labelledby="mtab-points" hidden>
+<!-- 每日打卡。2026-08-28 曾經整個拿掉，那是誤解：要清掉的是打卡「紀錄」，
+     不是打卡這個功能本身。API（checkInMember／getCheckinStatus）從頭到尾都在，
+     被移除的只有這塊 UI，所以使用者打不了卡。2026-08-29 還原。 -->
+<section class="member-tier">
+    <div class="member-section-head">
+        <span>Check-in</span>
+        <h2>每日打卡</h2>
+    </div>
+    <div id="profileCheckinCard"></div>
+</section>
 <section class="member-tier">
     <div class="member-section-head">
         <span>Tasks</span>
