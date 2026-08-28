@@ -2482,8 +2482,12 @@ profile: `
         <div class="member-name" id="profileName">訪客</div>
         <div class="member-role" id="profileRole">Decorate Me Member</div>
         <div class="member-actions">
-            <button class="btn-outline" id="changePwdBtn" style="display:none;">更改密碼</button>
-            <button class="btn-outline member-logout" onclick="Auth.logout()">登出帳號</button>
+            <button type="button" class="ma-cell" id="changePwdBtn" style="display:none;">
+                <span class="ma-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 10V7.5a4 4 0 0 1 8 0V10"/><rect x="5.5" y="10" width="13" height="9.5" rx="2"/></svg></span>
+                <span class="ma-txt">更改密碼</span></button>
+            <button type="button" class="ma-cell member-logout" onclick="Auth.logout()">
+                <span class="ma-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M15 4.5h3.5A1.5 1.5 0 0 1 20 6v12a1.5 1.5 0 0 1-1.5 1.5H15"/><path d="M10.5 15.5L14 12l-3.5-3.5M14 12H4"/></svg></span>
+                <span class="ma-txt">登出帳號</span></button>
         </div>
     </div>
     <div class="member-stats">
@@ -2491,16 +2495,16 @@ profile: `
              用 <button> 而不是掛 onclick 的 <div>——鍵盤 Tab 到得了、Enter/空白鍵有作用、
              螢幕閱讀器也唸得出「按鈕」。data-goto 換頁，data-scroll 捲動。 -->
         <button class="stat-cell" type="button" data-goto="favorites" aria-label="查看收藏商品">
-            <span class="stat-en">Wishlist</span><span class="stat-num" id="profileFavCount">0</span>
+            <span class="stat-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 20.2S4.2 15.7 4.2 9.9c0-2.7 2-4.4 4.1-4.4 1.6 0 2.9.9 3.7 2.2.8-1.3 2.1-2.2 3.7-2.2 2.1 0 4.1 1.7 4.1 4.4 0 5.8-7.8 10.3-7.8 10.3z"/></svg></span><span class="stat-en">Wishlist</span><span class="stat-num" id="profileFavCount">0</span>
             <span class="stat-label">收藏商品</span><span class="stat-go">查看 &rarr;</span></button>
         <button class="stat-cell" type="button" data-goto="history" aria-label="查看分析文字紀錄">
-            <span class="stat-en">Analysis</span><span class="stat-num" id="profileAnalyzeCount">0</span>
+            <span class="stat-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v8.5h8.5"/></svg></span><span class="stat-en">Analysis</span><span class="stat-num" id="profileAnalyzeCount">0</span>
             <span class="stat-label">分析次數</span><span class="stat-go">查看 &rarr;</span></button>
         <button class="stat-cell" type="button" data-scroll="profileSuggestionArea" aria-label="捲動到已收藏的妝容">
-            <span class="stat-en">Looks</span><span class="stat-num" id="profileSuggestionCount">0</span>
+            <span class="stat-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M17 3.5c1.4 0 2.5 1.1 2.5 2.5 0 .8-.4 1.5-1 2L8.5 18.2 4 20l1.8-4.5L16 5.1"/><path d="M14.5 6.5l3 3"/></svg></span><span class="stat-en">Looks</span><span class="stat-num" id="profileSuggestionCount">0</span>
             <span class="stat-label">收藏妝容</span><span class="stat-go">查看 &darr;</span></button>
         <button class="stat-cell" type="button" data-scroll="profilePointLedger" aria-label="捲動到點數紀錄">
-            <span class="stat-en">Points</span><span class="stat-num" id="profilePointCount">0</span>
+            <span class="stat-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.6l2.5 5.4 5.9.7-4.4 4 1.2 5.8L12 16.6 6.8 19.5 8 13.7 3.6 9.7l5.9-.7z"/></svg></span><span class="stat-en">Points</span><span class="stat-num" id="profilePointCount">0</span>
             <span class="stat-label">會員點數</span><span class="stat-go">查看 &darr;</span></button>
     </div>
 </div>

@@ -4208,3 +4208,37 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 .auth-or:before, .auth-or:after {
     content:''; flex:1 1 auto; height:1px; background:var(--line);
 }
+
+/* ═══ 會員中心：統計圖示與並排的帳戶操作（設計稿圖 11） ═══════════════ */
+.stat-cell .stat-ico { display:inline-flex; justify-content:center; margin-bottom:8px; }
+.stat-cell .stat-ico svg {
+    width:24px; height:24px; fill:none; stroke:var(--gold-deep);
+    stroke-width:1.4; stroke-linecap:round; stroke-linejoin:round;
+}
+/* 更改密碼／登出：設計稿是並排一列，中間一條分隔線，各自帶圖示。
+   原本是兩顆上下堆疊的外框按鈕，佔掉兩倍高度而資訊量相同。 */
+.member-actions {
+    display:grid; grid-template-columns:1fr 1fr; gap:0;
+    border:1px solid var(--line); border-radius:16px; overflow:hidden;
+    background:var(--paper);
+}
+.member-actions .ma-cell {
+    display:flex; align-items:center; gap:11px;
+    padding:15px 16px; border:0; background:transparent; cursor:pointer;
+    font-family:var(--cjk); font-size:14px; color:var(--ink-soft);
+    transition:background .25s var(--ease);
+}
+.member-actions .ma-cell + .ma-cell { border-left:1px solid var(--line); }
+.member-actions .ma-cell:hover { background:var(--blush-panel); }
+.member-actions .ma-cell:focus-visible { outline:2px solid var(--gold-deep); outline-offset:-2px; }
+.ma-ico { flex:0 0 auto; display:grid; place-items:center; width:34px; height:34px;
+    border-radius:50%; background:var(--gold-dim); }
+.ma-ico svg { width:17px; height:17px; fill:none; stroke:var(--gold-deep);
+    stroke-width:1.4; stroke-linecap:round; stroke-linejoin:round; }
+/* 只剩一顆時（更改密碼對訪客隱藏）不要留半格空白 */
+.member-actions:has(.ma-cell[style*="display:none"]) { grid-template-columns:1fr; }
+@media (max-width:620px) {
+    .member-actions .ma-cell { padding:13px 12px; font-size:13px; gap:9px; }
+    .ma-ico { width:30px; height:30px; }
+    .stat-cell .stat-ico svg { width:21px; height:21px; }
+}
