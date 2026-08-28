@@ -2249,7 +2249,6 @@ admin: `
     <div class="admin-actions-row">
         <button class="admin-tab active" data-admin-filter="all">全部使用者</button>
         <button class="admin-tab" data-admin-filter="active">啟用中</button>
-        <button class="admin-tab" data-admin-filter="suspended">已停權</button>
         <button class="admin-tab" data-admin-filter="admin">管理員</button>
     </div>
 
@@ -7315,6 +7314,20 @@ const PageInit = {
                     hit.reviewDecisions = res.reviewDecisions;
                     hit.reviewedAt = new Date().toISOString();
                 }
+                // 按下「送訓」就等於「這一筆我要送」——直接放進批次，不必再回頭勾一次。
+                //
+                // 先前要按兩次：卡片上按「送訓」只是把它標成已採用，還要再到上面勾一次
+                // 才會計入「送去訓練」。那兩個動作在使用者眼裡是同一件事，
+                // 而中間那一步沒有任何畫面在提醒。
+                //
+                // 只在「真的可以送」的時候加入：沒有影像、已經進過批次的不算，
+                // 否則批次裡會出現訓練機拿不到資料的項目。
+                if (res.reviewStatus === 'accepted' || res.reviewStatus === 'partial') {
+                    const now = fbItems.find(it => (it.feedbackId || it.jobId) === id);
+                    if (now && now.hasSample && !now.trainingRunId && fbApprovedFields(now).length) {
+                        fbSelected.add(id);
+                    }
+                }
                 fbJustDecided.add(id);   // 留在原地，不要從清單上消失
                 fbRepaint();
             });
@@ -7336,6 +7349,19 @@ const PageInit = {
                     return;
                 }
                 fbSelected.clear();
+                // 送進批次的那幾筆本機先掛上 runId，讓它們立刻離開「待覆核」。
+                //
+                // 不掛的話它們會留在待覆核，看起來像沒送出去——而「待覆核」的意思是
+                // **還需要你動手**，它們已經不是了。後端回的 runId 就是那一批的 id，
+                // 下次重新載入時後端會給同一個值，所以這不是在前端編故事。
+                //
+                // fbJustDecided 也要清掉：那是「剛處理過、暫時留在原地不要跳走」的名單，
+                // 批次都建好了還留著，卡片就會賴在待覆核不走。
+                if (res.runId) ids.forEach(id => {
+                    const hit = fbItems.find(it => (it.feedbackId || it.jobId) === id);
+                    if (hit && !hit.trainingRunId) hit.trainingRunId = res.runId;
+                });
+                fbJustDecided.clear();
                 fbRepaint();
                 loadTrainingRuns();
                 // 建立批次只是開始。真正要讓人知道的是「這次訓練成功了沒有」，

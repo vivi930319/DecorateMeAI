@@ -299,6 +299,27 @@ check('fbBucket 確實不會回傳 accepted',
   !/const fbBucket[\s\S]{0,900}?return 'accepted'/.test(src));
 
 console.log('');
+console.log('=== 送訓動線：按一次就好 ===');
+// 先前要按兩次：卡片上按「送訓」只把它標成已採用，還得再回到上面勾一次
+// 才會計入「送去訓練」。那兩個動作在使用者眼裡是同一件事。
+check('按送訓就直接計入批次', srcNoComment.includes('fbSelected.add(id)')
+  && /reviewStatus === 'accepted' \|\| res\.reviewStatus === 'partial'/.test(srcNoComment));
+check('沒有影像或已進批次的不自動加入',
+  /now\.hasSample && !now\.trainingRunId && fbApprovedFields\(now\)\.length/.test(srcNoComment));
+// 批次建立後，那幾筆已經不需要你動手了——留在「待覆核」是錯的分類
+check('送出後本機掛上 runId', srcNoComment.includes('hit.trainingRunId = res.runId'));
+check('送出後清掉「留在原地」的名單', srcNoComment.includes('fbJustDecided.clear()'));
+
+console.log('');
+console.log('=== 用不到的分頁不要留著 ===');
+// 停權這個動作 2026-08-27 就拿掉了，篩選分頁留著等於一個永遠篩不出東西的按鈕
+check('會員管理沒有「已停權」篩選分頁',
+  !html.includes('data-admin-filter="suspended"')
+  && !srcNoComment.includes('data-admin-filter="suspended"'));
+check('已停權的統計欄位保留（資料庫仍有 status）',
+  html.includes('id="adminSuspended"'));
+
+console.log('');
 console.log('=== 訓練批次面板不能停在佔位字 ===');
 // 只有三種合法畫面：載入中、載到了、失敗（帶原因）。
 // 「維持 admin.html 的初始文字」不是其中之一——那讓「還沒開始」「正在跑」
