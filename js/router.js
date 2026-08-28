@@ -1,3 +1,20 @@
+// 頁面 HTML（pages/*.html）的快取版本，跟著 router.js 自己的 ?v= 走。
+//
+// 原本這裡寫死成 `20260624-brightness`：deploy.ps1 只戳 index.html 裡的資源版本，
+// 戳不到藏在程式碼裡的這一個。結果是**程式是新的、頁面 HTML 是六月的**——
+// 兩邊對不起來的樣子最難查：後台的 CSS 與 JS 都更新了，畫面卻少了側邊分類與
+// 模型修正複核，因為瀏覽器拿的是那份舊 admin.html。
+//
+// 綁在 router.js 的版本上，只要程式有更新，頁面 HTML 一定跟著重新抓。
+const PAGE_ASSET_VERSION = (() => {
+    try {
+        const el = document.querySelector('script[src*="js/router.js"]');
+        const m = /[?&]v=([^&"']+)/.exec((el && el.getAttribute('src')) || '');
+        if (m) return m[1];
+    } catch (_) {}
+    return 'dev';
+})();
+
 // ═══ 共用 UI 片段 ═══
 const HEART_SVG = '<span class="pulse"></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.4S3.6 15.6 3.6 9.4C3.6 6.5 5.7 4.7 8 4.7c1.7 0 3.1 1 4 2.4 0.9-1.4 2.3-2.4 4-2.4 2.3 0 4.4 1.8 4.4 4.7 0 6.2-8.4 11-8.4 11z"/></svg>';
 const CAT_EN = { '底妝':'FOUNDATION','眼影':'EYESHADOW','眼線/睫毛':'EYES & LASH','唇彩':'LIP COLOR','腮紅':'BLUSH','眉毛彩妝':'BROW','修容':'CONTOUR','打亮':'HIGHLIGHT' };
@@ -2372,6 +2389,26 @@ profile: `
 <!-- 2026-08-28 拿掉每日打卡。點數機制與這個專案要展示的東西無關，
      而它佔著會員中心最上面那塊，把真正該看的（分析紀錄、妝容收藏）擠下去。 -->
 
+
+<!-- 分組與 pages/profile.html 一致；那邊改了這裡要跟著改。
+     這是 fetch 失敗時的備援，區塊比較少（沒有 PRO、任務中心、推薦好友），
+     但分頁的 id 與行為必須一模一樣，否則備援畫面上的分頁按鈕會按不動。 -->
+<div class="member-tabs" role="tablist" aria-label="會員中心分頁">
+    <button type="button" class="member-tab is-active" role="tab" id="mtab-account" aria-selected="true" aria-controls="mpanel-account" data-mtab="account">帳戶</button>
+    <button type="button" class="member-tab" role="tab" id="mtab-points" aria-selected="false" aria-controls="mpanel-points" data-mtab="points">點數與任務</button>
+    <button type="button" class="member-tab" role="tab" id="mtab-saved" aria-selected="false" aria-controls="mpanel-saved" data-mtab="saved">我的收藏</button>
+</div>
+
+<div class="member-panel" id="mpanel-account" data-mpanel="account" role="tabpanel" aria-labelledby="mtab-account">
+<section class="member-tier"><div class="member-section-head"><span>Membership</span><h2>會員等級</h2></div><div id="profileTierCard"></div></section>
+</div>
+<div class="member-panel" id="mpanel-points" data-mpanel="points" role="tabpanel" aria-labelledby="mtab-points" hidden>
+<section class="member-tier"><div class="member-section-head"><span>Theme Shop</span><h2>點數商店</h2></div><div id="profileThemeShop"></div></section>
+<section class="member-tier"><div class="member-section-head"><span>Ledger</span><h2>點數紀錄</h2></div><div id="profilePointLedger"></div></section>
+</div>
+<div class="member-panel" id="mpanel-saved" data-mpanel="saved" role="tabpanel" aria-labelledby="mtab-saved" hidden>
+<section class="member-suggestions"><div class="member-section-head"><span>Saved Looks</span><h2>已收藏的妝容對比圖</h2></div><div id="profileSuggestionArea"></div></section>
+</div>
 `
     };
     return fallbacks[page] || null;
@@ -2873,28 +2910,7 @@ const Router = {
             }
             const back = (NAV_ORDER.indexOf(page) > -1 && NAV_ORDER.indexOf(this.currentPage) > -1
                           && NAV_ORDER.indexOf(page) < NAV_ORDER.indexOf(this.currentPage));
-            const res = await fetch(`pages/${page}.html?v=20260624-brightness
-
-<!-- 分組與 pages/profile.html 一致；那邊改了這裡要跟著改。
-     這是 fetch 失敗時的備援，區塊比較少（沒有 PRO、任務中心、推薦好友），
-     但分頁的 id 與行為必須一模一樣，否則備援畫面上的分頁按鈕會按不動。 -->
-<div class="member-tabs" role="tablist" aria-label="會員中心分頁">
-    <button type="button" class="member-tab is-active" role="tab" id="mtab-account" aria-selected="true" aria-controls="mpanel-account" data-mtab="account">帳戶</button>
-    <button type="button" class="member-tab" role="tab" id="mtab-points" aria-selected="false" aria-controls="mpanel-points" data-mtab="points">點數與任務</button>
-    <button type="button" class="member-tab" role="tab" id="mtab-saved" aria-selected="false" aria-controls="mpanel-saved" data-mtab="saved">我的收藏</button>
-</div>
-
-<div class="member-panel" id="mpanel-account" data-mpanel="account" role="tabpanel" aria-labelledby="mtab-account">
-<section class="member-tier"><div class="member-section-head"><span>Membership</span><h2>會員等級</h2></div><div id="profileTierCard"></div></section>
-</div>
-<div class="member-panel" id="mpanel-points" data-mpanel="points" role="tabpanel" aria-labelledby="mtab-points" hidden>
-<section class="member-tier"><div class="member-section-head"><span>Theme Shop</span><h2>點數商店</h2></div><div id="profileThemeShop"></div></section>
-<section class="member-tier"><div class="member-section-head"><span>Ledger</span><h2>點數紀錄</h2></div><div id="profilePointLedger"></div></section>
-</div>
-<div class="member-panel" id="mpanel-saved" data-mpanel="saved" role="tabpanel" aria-labelledby="mtab-saved" hidden>
-<section class="member-suggestions"><div class="member-section-head"><span>Saved Looks</span><h2>已收藏的妝容對比圖</h2></div><div id="profileSuggestionArea"></div></section>
-</div>
-`, { cache: 'no-store' });
+            const res = await fetch(`pages/${page}.html?v=${PAGE_ASSET_VERSION}`, { cache: 'no-store' });
             if (!res.ok) throw new Error('Page not found');
             const html = await res.text();
             const mc = document.getElementById('mainContent');

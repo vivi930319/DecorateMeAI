@@ -290,12 +290,28 @@ for (const invariant of [
 ]) {
   if (!routerSource.includes(invariant)) throw new Error(`Admin/member shell separation missing: ${invariant}`);
 }
+// 後台不能出現前台的裝飾層。
+//
+// 光確認選擇器「存在於檔案裡」是不夠的——2026-08-28 那次壞掉時，這幾個選擇器
+// 全都還在，只是它們的宣告區塊被刪了，整串改去接下一條規則的 background：
+// 後台於是把浮水印與游標光暈畫了出來還塗成米色，而這段檢查照樣通過。
+// 所以這裡要驗的是「接到哪個宣告」，不是「有沒有出現」。
+// 完整的結構掃描在 tests/css_structure_check.js。
 for (const selector of [
   'body.admin-mode .topbar',
+  'body.admin-mode .topbar-menu-backdrop',
   'body.admin-mode .brand-watermark',
-  'body.admin-mode .watermark-stamp'
+  'body.admin-mode .signal-watermark',
+  'body.admin-mode .cursor-glow'
 ]) {
-  if (!cssSource.includes(selector)) throw new Error(`Admin mode must hide member UI: ${selector}`);
+  const at = cssSource.indexOf(selector);
+  if (at < 0) throw new Error(`Admin mode must hide member UI: ${selector}`);
+  // 從這個選擇器往後找它所屬規則的宣告區塊
+  const decl = cssSource.slice(at, cssSource.indexOf('}', at) + 1);
+  if (!/\{[^}]*display\s*:\s*none\s*!important/.test(decl)) {
+    throw new Error(`Admin mode selector is attached to the wrong rule: ${selector}`
+      + ` -> ${decl.slice(decl.indexOf('{'), decl.indexOf('{') + 60)}`);
+  }
 }
 
 // ── 收藏頁每次打開都要重新向會員資料庫同步 ──────────────────
