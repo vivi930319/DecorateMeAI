@@ -1448,11 +1448,16 @@ body[data-member-theme="noir"] :is(.dash-card,.style-card,.cat-card,.product-row
 
 /* ═══════════════ Admin console ═══════════════ */
 body.admin-mode { margin:0; overflow-y:auto; overscroll-behavior-y:auto; background:#f3f5f7; color:#20272d; font-family:"Noto Sans TC", Arial, sans-serif; }
+/* 後台一律不要美妝站的裝飾層：頂欄、抽屜遮罩、兩層浮水印、游標光暈。
+   ⚠️ 這串選擇器的宣告區塊在**最後一行**——刪任何一行前先確認 `{...}` 還在。
+   2026-08-28 移除浮水印的 `+` 時，把帶著 `{ display:none !important; }` 的那一行
+   一起刪了，整串選擇器於是接到下一條規則的 `background` 上：後台不但沒有隱藏
+   那些裝飾，還把它們一起塗成淺灰底——整個後台看起來像換了一套介面。 */
 body.admin-mode .topbar,
 body.admin-mode .topbar-menu-backdrop,
 body.admin-mode .brand-watermark,
 body.admin-mode .signal-watermark,
-body.admin-mode .cursor-glow,
+body.admin-mode .cursor-glow { display:none !important; }
 body.admin-mode .app-shell { background:#f3f5f7; }
 body.admin-mode .main-content { max-width:none; min-height:100vh; margin:0; padding:0; background:#f3f5f7; }
 body.admin-mode .main-content.page-enter,
