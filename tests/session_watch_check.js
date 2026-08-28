@@ -72,6 +72,20 @@ check('401 不叫人稍後再試',
 // 使用者最想知道的是「我剛才改的東西有沒有寫進去一半」
 check('明講沒有任何一筆被寫入', /沒有任何一筆被寫入/.test(src) || /沒有任何一筆被寫入/.test(api));
 
+
+console.log('');
+console.log('=== 並行的重複讀取要合併 ===');
+// 會員中心進頁時 getMemberPoints 被呼叫兩次：一次填餘額、一次畫明細，
+// 而同一個回應裡 balance 與 transactions 都有。第二次純粹是浪費，
+// 在對方的記錄裡看起來也像我們在重複打人家的服務。
+check('有 in-flight 去重', api.includes('_dedupe(key, run)') && api.includes('_inflight: new Map()'));
+['getMemberPoints', 'listMemberTasks', 'listSavedLooks', 'listRemoteFavorites'].forEach((n) => {
+    check(`${n} 走去重`, api.includes(`this._dedupe(`) && api.includes(`async __${n}(email) {`));
+});
+// 只合併進行中的請求，不做快取——快取會讓「按重新整理沒有變新」，那更難查
+check('結束後清掉 key，不是快取', /_inflight\.delete\(key\)/.test(api));
+check('只用在唯讀讀取，寫入不合併',
+  !/_dedupe\([^)]*\)\s*=>\s*this\.__(patch|create|delete|toggle|save)/i.test(api));
 console.log('');
 console.log(`${pass}/${pass + fail} passed`);
 process.exit(fail ? 1 : 0);

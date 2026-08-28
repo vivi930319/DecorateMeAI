@@ -1479,6 +1479,29 @@ const Api = {
     },
 
     // 保留 wrapper 名稱相容既有呼叫點；所有會員請求使用同源 HttpOnly cookie。
+    // 同一份唯讀資料在同一瞬間被要第二次時，共用第一次的結果。
+    //
+    // 會員中心進頁時 `getMemberPoints` 被呼叫兩次：一次填「會員點數」那格的餘額，
+    // 一次畫點數明細。而同一個回應裡 `balance` 與 `transactions` 都有——
+    // 兩次請求拿的是同一包資料，第二次純粹是浪費，在 Cloud Run 記錄裡看起來
+    // 也像我們在重複打人家的服務。
+    //
+    // 只合併**進行中**的請求，不做快取：拿到結果就把 key 清掉，
+    // 下一次呼叫仍然會真的去要一次新的。快取會讓「按重新整理沒有變新」，
+    // 那是另一種更難查的問題。
+    //
+    // 只用在唯讀的 GET。寫入不能合併——兩次寫入是兩個意圖。
+    _inflight: new Map(),
+    _dedupe(key, run) {
+        const hit = this._inflight.get(key);
+        if (hit) return hit;
+        const task = Promise.resolve()
+            .then(run)
+            .finally(() => { this._inflight.delete(key); });
+        this._inflight.set(key, task);
+        return task;
+    },
+
     async _fetchWithRelogin(input, init) {
         if (!this._sessionAbortController) this._resetSessionRequests();
         const nextInit = {
@@ -1648,6 +1671,9 @@ const Api = {
     // 但從來沒有人讀回來，所以換一台裝置登入就看不到自己收藏過的東西——
     // 「跨裝置同步」只做了寫的那一半。
     async listRemoteFavorites(email) {
+        return this._dedupe(`favorites:${email}`, () => this.__listRemoteFavorites(email));
+    },
+    async __listRemoteFavorites(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false, favorites: [] };
         try {
@@ -1831,6 +1857,9 @@ const Api = {
 
     // 會員點數：GET /api/members/{email}/points → { balance, lifetime, transactions[] }。
     async getMemberPoints(email) {
+        return this._dedupe(`points:${email}`, () => this.__getMemberPoints(email));
+    },
+    async __getMemberPoints(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false, balance: null };
         try {
@@ -1889,6 +1918,9 @@ const Api = {
     },
 
     async listMemberTasks(email) {
+        return this._dedupe(`tasks:${email}`, () => this.__listMemberTasks(email));
+    },
+    async __listMemberTasks(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false, tasks: [] };
         try {
@@ -1974,6 +2006,9 @@ const Api = {
         }
     },
     async listSavedLooks(email) {
+        return this._dedupe(`saved-looks:${email}`, () => this.__listSavedLooks(email));
+    },
+    async __listSavedLooks(email) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email) return { ok: false, looks: [] };
         try {
