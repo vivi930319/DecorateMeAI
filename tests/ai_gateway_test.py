@@ -1617,6 +1617,39 @@ class FaceTrainingRunTest(unittest.TestCase):
         self.assertIsNone(r.json()["worker"])
 
 
+class TrainingRunsAreAppendOnlyTest(unittest.TestCase):
+    """訓練批次紀錄只能新增與更新，不能刪除。
+
+    2026-08-28 使用者兩次以為「模型批次被弄掉了」。實際上一筆都沒有少——
+    壞的是顯示。但那個誤會會一直回來，除非「刪不掉」是一件被檢查的事，
+    而不是一句「應該不會」。
+
+    這些紀錄是訓練真的跑過的**唯一證據**：startedAt、finishedAt、
+    modelBefore、modelAfter 四個欄位後台寫不進去，只有本機訓練腳本寫得到。
+    刪掉一筆，那次訓練就再也證明不了。
+    """
+
+    def test_no_delete_path_for_training_runs(self):
+        src = Path(gateway.__file__).read_text(encoding="utf-8")
+        # 只允許建立與讀取
+        uses = [line.strip() for line in src.splitlines()
+                if "FACE_TRAINING_RUNS_COL" in line and not line.strip().startswith("#")]
+        for line in uses:
+            self.assertFalse(
+                "delete" in line.lower(),
+                f"訓練批次不該有刪除路徑，但看到：{line}")
+        # 明確確認建立與讀取都還在——這一項不是為了擋，是為了在有人重構時提醒
+        self.assertTrue(any("job_store.create" in u for u in uses), uses)
+        self.assertTrue(any("all_jobs" in u for u in uses), uses)
+
+    def test_no_delete_route_reaches_the_runs_collection(self):
+        src = Path(gateway.__file__).read_text(encoding="utf-8")
+        # face-training/runs 只開 GET 與 POST
+        self.assertIn('@app.post("/admin-api/face-training/runs")', src)
+        self.assertIn('@app.get("/admin-api/face-training/runs")', src)
+        self.assertNotIn('@app.delete("/admin-api/face-training/runs', src)
+
+
 class ProductUpstreamRejectionTest(unittest.TestCase):
     """上游拒絕管理請求時，不能讓前端說成「登入失效」。
 
