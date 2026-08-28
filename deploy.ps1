@@ -13,17 +13,44 @@ Set-Location -Path $PSScriptRoot
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $indexPath = Join-Path $PSScriptRoot "index.html"
 
+# 底下每一個檢查都要**真的擋得住部署**，所以一律走這個函式，不要直接寫 `node ...`。
+#
+# `$ErrorActionPreference = "Stop"` 對 node 這種原生指令沒有作用：它只管 PowerShell 自己的
+# cmdlet。原生指令失敗只會設 $LASTEXITCODE，腳本照樣往下跑到 `firebase deploy`。
+# 2026-08-29 實測（PowerShell 7.6.5，`$PSNativeCommandUseErrorActionPreference` 是 False）：
+# `node -e "process.exit(1)"` 之後的那一行**照印不誤**。
+#
+# 也就是說在這行註解寫下之前，這裡的每一個檢查都只是印訊息而已，從來沒有攔下任何一次部署——
+# 紅字捲過去，壞掉的版本照樣上線。所以要看 $LASTEXITCODE，而且要自己 throw。
+#
+# node 的參數用**陣列**傳，不要靠 ValueFromRemainingArguments：`--check` 會被 PowerShell
+# 當成參數名去比對（`-e` 更慘，會撞上 -ErrorAction 而報 ambiguous）。包成陣列就純粹是值。
+function Invoke-DeployCheck {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string[]]$NodeArgs
+    )
+    & node @NodeArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "部署中止：$Name 沒有通過（離開碼 $LASTEXITCODE）。修好再部署，不要用 -AllowDirty 繞過——那個開關只放行未提交的變更，不放行壞掉的程式碼。"
+    }
+}
+
 Write-Host "執行部署前語法、流程與秘密掃描..." -ForegroundColor Cyan
-node --check "js/api.js"
-node --check "js/router.js"
-node --check "js/makeup-contract.js"
-node --check "js/makeup-flow.js"
-node "frontend_smoke_check.js"
+Invoke-DeployCheck "api.js 語法"             @('--check', 'js/api.js')
+Invoke-DeployCheck "router.js 語法"          @('--check', 'js/router.js')
+Invoke-DeployCheck "makeup-contract.js 語法" @('--check', 'js/makeup-contract.js')
+Invoke-DeployCheck "makeup-flow.js 語法"     @('--check', 'js/makeup-flow.js')
+Invoke-DeployCheck "前端冒煙測試"             @('frontend_smoke_check.js')
 # 用到不存在的變數：語法完全合法，node --check 過得了，只有跑到那一行才炸。
 # 2026-08-28 有一個藏在覆核清單重畫裡，讓訓練批次整整一天載不出來。
-node "tests/undefined_names_check.js" .
+Invoke-DeployCheck "未定義的名字"             @('tests/undefined_names_check.js', '.')
+# 名字存在、但在初始化前就被用到（TDZ）：上面那支用的是 eslint no-undef，看的是
+# 「有沒有宣告」，這種名字有宣告，所以它放行。2026-08-29 商品推薦頁整片全白就是這樣
+# 溜過去的——它拋在 innerHTML 賦值之前，連空狀態都畫不出來。這支直接把每個頁面跑一次。
+Invoke-DeployCheck "每頁都畫得出東西"         @('tests/page_dispatch_tdz_check.js', '.')
 # 選擇器清單被切斷：大括號依然平衡，CSS 也不報錯，只有畫面知道。
-node "tests/css_structure_check.js" .
+Invoke-DeployCheck "CSS 結構"                @('tests/css_structure_check.js', '.')
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {
