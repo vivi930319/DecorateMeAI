@@ -138,6 +138,18 @@
                          或 updatedAt**，而 id 是遞增的，所以它是目前唯一可用的時間代理。
                          ⚠️ 這代表「編輯過的商品不會浮到最上面」——要做到那個，
                          得先請商品後端加 updatedAt。 -->
+                    <!-- 品牌與價格都在**本機的完整清單**上過濾，不送給 API。
+                         實測（2026-08-28）線上商品服務：`minPrice`/`maxPrice` 完全沒有作用
+                         （minPrice=99999 仍回全部 68 筆），`brand=MAC,YSL` 這種逗號多選回 0 筆
+                         （單一品牌才有值）。送出去只會得到一個「篩了但沒篩到」的畫面。
+                         清單本來就已經整份抓回本機（fetchAllPages），在這裡過濾是準的。
+                         後端把這些參數做好之後可以改送 API，見
+                         docs/對外規格書/商品與推薦/給前端_商品賣場篩選_..._2026-08-28.md -->
+                    <label><span>品牌</span><select id="adminProductBrandFilter" multiple size="1">
+                        <option value="">全部品牌</option>
+                    </select></label>
+                    <label><span>最低價</span><input id="adminProductMinPrice" type="number" min="0" step="1" placeholder="不限" inputmode="numeric"></label>
+                    <label><span>最高價</span><input id="adminProductMaxPrice" type="number" min="0" step="1" placeholder="不限" inputmode="numeric"></label>
                     <label><span>排序</span><select id="adminProductSort">
                         <option value="newest">最新在上</option>
                         <option value="oldest">最舊在上</option>
@@ -155,7 +167,13 @@
                         <div class="admin-block-heading"><span>Editor</span><h3>商品資料</h3></div>
                         <div class="admin-product-form-mode">編輯中：<span id="adminProductEditingLabel"></span></div>
                         <label>商品名稱<input id="adminProductName" type="text" placeholder="例如：柔霧粉底液" required></label>
-                        <label>品牌<input id="adminProductBrand" type="text" placeholder="例如：DECORATE ME" required></label>
+                        <!-- 品牌用 datalist 而不是 select：既有品牌可以直接挑（打字就會浮出來），
+                             新品牌也還是打得進去。純文字輸入的問題是「MAC」「Mac」「MAC 」會變成
+                             三個不同的品牌，而篩選器與推薦都是用字串比對，分家之後看不出來。
+                             選項由 js/router.js 的 syncAdminBrandOptions 從實際載到的清單長出來。 -->
+                        <label>品牌<input id="adminProductBrand" type="text" list="adminBrandOptions"
+                            placeholder="輸入或從既有品牌挑選" autocomplete="off" required>
+                            <datalist id="adminBrandOptions"></datalist></label>
                         <!-- SKU 與色號名稱：商品 API 沒有這兩個欄位（實測 25 個欄位裡都沒有），
                              所以填了存不進去。欄位改成 hidden 而不是整個刪掉——
                              router.js 的編輯回填與送出都會讀它們，直接刪會變成 null 參考。

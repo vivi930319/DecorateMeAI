@@ -95,5 +95,37 @@ check('feedback 按鈕存在', setB.has('feedback'));
 check('feedback 區塊存在', setV.has('feedback'));
 check('feedback 在白名單裡（先前就是漏了這個）', setM.has('feedback'));
 
+console.log('\n=== 商品管理：品牌與價格篩選 ===');
+// 2026-08-28 實測線上商品服務：minPrice/maxPrice 完全沒有作用（minPrice=99999
+// 仍回全部 68 筆），brand=MAC,YSL 這種逗號多選回 0 筆。所以這兩個條件必須在
+// 本機的完整清單上做——送出去只會得到「看起來有篩、其實沒篩」或「篩到空的」。
+check('品牌篩選在畫面上', html.includes('id="adminProductBrandFilter"'));
+check('價格區間在畫面上',
+  html.includes('id="adminProductMinPrice"') && html.includes('id="adminProductMaxPrice"'));
+check('過濾在本機做，不送 API', js.includes('const filterAdminProducts ='));
+check('沒有把 minPrice 送給 API', !/listProducts\([^)]*minPrice/.test(js));
+check('沒有把逗號品牌串送給 API', !/brand:\s*[^,\n]*\.join\(','\)/.test(js));
+// 價格抽不出數字的商品在有價格條件時要排除，不能當成 0
+check('沒有價格的商品不混進價格區間', js.includes('if (price == null) return false;'));
+// 本機再篩過就不能報伺服器的總數
+check('筆數跟著篩選走', js.includes('已從 ${dbProducts.length} 筆篩選'));
+
+console.log('\n=== 新增商品時的品牌 ===');
+// 純文字輸入會讓「MAC」「Mac」「MAC 」變成三個品牌，而篩選與推薦都是字串比對
+check('品牌欄有既有選項可挑', html.includes('list="adminBrandOptions"')
+  && html.includes('<datalist id="adminBrandOptions">'));
+check('選項從實際清單長出來，不寫死', js.includes('const syncAdminBrandOptions ='));
+check('載入完成後同步選項', js.includes('syncAdminBrandOptions(dbProducts)'));
+
+console.log('\n=== 完整翻頁（契約 §3.3）===');
+// 2169 筆 @ limit=100 需要 22 頁；上限要留得夠
+check('翻頁上限足夠載完', /PRODUCT_MAX_PAGES = (\d+)/.test(js)
+  && Number(js.match(/PRODUCT_MAX_PAGES = (\d+)/)[1]) >= 22,
+  `目前 ${(js.match(/PRODUCT_MAX_PAGES = (\d+)/) || [])[1]}`);
+check('去重用完整 id，不是尾端數字', js.includes('p.rawId != null ? `raw:${p.rawId}`'));
+check('重複游標會停下來', js.includes('usedCursors.has(next)'));
+check('被上限截斷要標成部分載入', js.includes('truncated = true'));
+check('部分載入時不報伺服器總數', js.includes('(typeFilter || rec.partial)'));
+
 console.log(`\n${pass}/${pass + fail} passed`);
 process.exit(fail ? 1 : 0);

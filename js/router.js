@@ -6041,6 +6041,72 @@ const PageInit = {
         //
         // 排序在前端做而不是交給 API：清單本來就已經全部抓回本機了（fetchAllPages），
         // 為了換個順序再打一次網路不划算，而且切換排序會有明顯延遲。
+        // 品牌與價格在本機過濾，不送 API。
+        //
+        // 實測 2026-08-28 的線上商品服務：`minPrice`/`maxPrice` 完全沒有作用
+        // （minPrice=99999 仍回全部 68 筆），`brand=MAC,YSL` 這種逗號多選回 0 筆。
+        // 送出去會得到一個「看起來有篩、其實沒篩」或「篩到空的」畫面——
+        // 兩種都比不做更糟，因為管理員無從發現。
+        //
+        // 清單本來就整份抓回本機了（fetchAllPages 會翻到 nextCursor 為 null），
+        // 所以在這裡過濾是準的。⚠️ 但只有在「完整載入」時才準：
+        // rec.partial 為真時清單不完整，過濾與排序的結果也就不完整，畫面要講出來。
+        const adminBrandFilter = () => {
+            const el = document.getElementById('adminProductBrandFilter');
+            if (!el) return [];
+            return [...el.selectedOptions].map(o => o.value).filter(Boolean);
+        };
+        const adminPriceRange = () => {
+            const num = (id) => {
+                const raw = document.getElementById(id)?.value ?? '';
+                const n = Number(raw);
+                return raw === '' || !Number.isFinite(n) ? null : n;
+            };
+            return { min: num('adminProductMinPrice'), max: num('adminProductMaxPrice') };
+        };
+        // 價格是 "NT$377" 這種字串，比大小前要先抽出數字。
+        const adminPriceOf = (p) => {
+            const n = Number(String(p?.price ?? '').replace(/[^0-9.]/g, ''));
+            return Number.isFinite(n) ? n : null;
+        };
+        const filterAdminProducts = (list) => {
+            const brands = adminBrandFilter();
+            const { min, max } = adminPriceRange();
+            if (!brands.length && min == null && max == null) return list || [];
+            return (list || []).filter((p) => {
+                if (brands.length && !brands.includes(String(p.brand || ''))) return false;
+                if (min == null && max == null) return true;
+                const price = adminPriceOf(p);
+                // 沒有價格的商品在有價格條件時排除：把它當成 0 會讓它永遠落在
+                // 「最低價以上」而混進結果裡，而它其實是「不知道」。
+                if (price == null) return false;
+                if (min != null && price < min) return false;
+                if (max != null && price > max) return false;
+                return true;
+            });
+        };
+
+        // 品牌下拉的選項從實際載到的清單長出來，不寫死。
+        // 寫死的話新品牌進資料庫後會篩不到，而畫面上看不出少了選項。
+        const syncAdminBrandOptions = (list) => {
+            const brands = [...new Set((list || []).map(p => String(p.brand || '')).filter(Boolean))].sort();
+            const el = document.getElementById('adminProductBrandFilter');
+            if (el) {
+                const picked = new Set([...el.selectedOptions].map(o => o.value));
+                el.innerHTML = brands.map(b =>
+                    `<option value="${escapeHtml(b)}"${picked.has(b) ? ' selected' : ''}>${escapeHtml(b)}</option>`
+                ).join('');
+                el.size = Math.min(6, Math.max(2, brands.length));
+            }
+            // 新增／編輯商品時的品牌欄也用同一份清單。
+            // 「MAC」「Mac」「MAC 」會變成三個品牌，而篩選與推薦都是字串比對——
+            // 分家之後畫面上看不出來，只會發現某些商品怎麼篩都篩不到。
+            const dl = document.getElementById('adminBrandOptions');
+            if (dl) {
+                dl.innerHTML = brands.map(b => `<option value="${escapeHtml(b)}"></option>`).join('');
+            }
+        };
+
         const sortAdminProducts = (list) => {
             const rows = [...(list || [])];
             const mode = document.getElementById('adminProductSort')?.value || 'newest';
@@ -6081,12 +6147,19 @@ const PageInit = {
                 return;
             }
             const normalizedQuery = productSearchQuery.trim().toLowerCase();
-            const products = sortAdminProducts(dbProducts);
+            const filtered = filterAdminProducts(dbProducts);
+            const products = sortAdminProducts(filtered);
             const searchStatus = document.getElementById('adminProductSearchStatus');
             if (searchStatus) {
+                // 本機再過濾過就不能報伺服器的總數——那個數字描述的是沒有套品牌與
+                // 價格條件的清單，掛在一份 30 筆的表格上會讓人以為還有 1000 筆沒顯示。
+                const narrowed = filtered.length !== (dbProducts || []).length;
+                const shown = narrowed
+                    ? `${filtered.length} 筆（已從 ${dbProducts.length} 筆篩選）`
+                    : `${productResultTotal} 筆`;
                 searchStatus.textContent = normalizedQuery
-                    ? `找到 ${productResultTotal} 筆符合「${productSearchQuery.trim()}」的資料庫商品。`
-                    : `目前條件共有 ${productResultTotal} 筆商品。`;
+                    ? `找到 ${shown}符合「${productSearchQuery.trim()}」的資料庫商品。`
+                    : `目前條件共有 ${shown}商品。`;
             }
             if (!products.length) {
                 area.innerHTML = `<tr><td colspan="6"><div class="empty-state compact">資料庫沒有符合「${escapeHtml(productSearchQuery.trim())}」的商品，可使用上方 Google 搜尋找來源頁，再交由爬蟲匯入。</div></td></tr>`;
@@ -6177,6 +6250,7 @@ const PageInit = {
                     dbProductsError = rec.partial
                         ? `商品清單只載入了部分資料（${dbProducts.length} 筆），請按重新載入再試一次。`
                         : '';
+                    syncAdminBrandOptions(dbProducts);
                     productConnectionState = rec.partial ? 'error' : 'ok';
                     setConnectionStatus('adminProductConnection', rec.partial ? '部分載入' : '正常', rec.partial ? 'error' : 'ok');
                     const total = document.getElementById('adminProductTotal');
@@ -6217,10 +6291,23 @@ const PageInit = {
         // 排序只重畫，不重新抓：清單已經在本機了（見 sortAdminProducts 的說明）。
         const sortSelect = document.getElementById('adminProductSort');
         if (sortSelect) sortSelect.onchange = renderProducts;
+        // 品牌與價格是本機過濾，不必重打 API——換條件只要重畫。
+        ['adminProductBrandFilter', 'adminProductMinPrice', 'adminProductMaxPrice']
+            .forEach((id) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.onchange = renderProducts;
+                if (el.tagName === 'INPUT') el.oninput = renderProducts;
+            });
         if (productSearchClearBtn) productSearchClearBtn.onclick = () => {
             if (productSearchInput) productSearchInput.value = '';
             const type = document.getElementById('adminProductTypeFilter'); if (type) type.value = '';
             const status = document.getElementById('adminProductStatusFilter'); if (status) status.value = 'active';
+            const brand = document.getElementById('adminProductBrandFilter');
+            if (brand) [...brand.options].forEach(o => { o.selected = false; });
+            ['adminProductMinPrice', 'adminProductMaxPrice'].forEach((id) => {
+                const el = document.getElementById(id); if (el) el.value = '';
+            });
             updateProductSearch();
             productSearchInput?.focus();
         };

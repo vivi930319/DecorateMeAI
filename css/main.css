@@ -2160,7 +2160,13 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
 .admin-fail.ok { color:var(--admin-green); border-color:#b8d8ce; background:#f2faf7; }
 .admin-fail.warn { color:var(--admin-red); border-color:#e4b6b9; background:#fff6f6; }
 .admin-product-grid { display:grid; grid-template-columns:340px minmax(0,1fr); gap:18px; align-items:start; }
-.admin-product-search-panel { display:grid; grid-template-columns:minmax(260px,1fr) auto auto; gap:10px; align-items:end; margin-bottom:16px; border:1px solid var(--admin-line); border-radius:6px; padding:16px; background:#fff; }
+/* 篩選列從三欄改成自動換行：加了品牌與價格區間之後，固定三欄會把後面的控制項
+   擠成一條看不清的細縫。auto-fit + minmax 讓寬螢幕排成一列、窄螢幕自己折行。 */
+.admin-product-search-panel { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,auto)); gap:10px; align-items:end; margin-bottom:16px; border:1px solid var(--admin-line); border-radius:6px; padding:16px; background:#fff; }
+.admin-product-search-panel > label:first-of-type { grid-column:span 2; min-width:240px; }
+.admin-product-search-panel select { width:100%; min-height:42px; border:1px solid #cfd5d9; border-radius:4px; padding:6px 10px; background:#fff; color:var(--admin-ink); font:400 14px/1.4 "Noto Sans TC",sans-serif; }
+.admin-product-search-panel select[multiple] { padding:4px; }
+.admin-product-search-panel select:focus { border-color:var(--gold-deep); box-shadow:0 0 0 3px rgba(192,137,122,.16); outline:none; }
 .admin-product-search-panel label { display:grid; gap:8px; color:#536069; font:600 12px/1.2 "Noto Sans TC",sans-serif; }
 .admin-product-search-panel input { width:100%; height:42px; border:1px solid #cfd5d9; border-radius:4px; padding:0 12px; background:#fff; color:var(--admin-ink); font:400 14px/1.4 "Noto Sans TC",sans-serif; outline:none; }
 .admin-product-search-panel input:focus { border-color:var(--gold-deep); box-shadow:0 0 0 3px rgba(192,137,122,.16); }
