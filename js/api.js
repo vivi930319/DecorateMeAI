@@ -1611,6 +1611,17 @@ const Api = {
         try {
             const session = await this.validateSession();
             if (!session.ok || !session.sub || !session.actorId) {
+                // 上游查無此帳號時**不要**登出：重新登入會拿到一模一樣的結果。
+                //
+                // 這就是 2026-08-29 管理員被反覆踢出去的那條路徑：某個請求回 403
+                // 觸發這裡 → 打 /auth/session → Gateway 拿 sub 去上游查
+                // `admin@decoratme.local`（Gateway 端的內建管理員，`.local` 假網域）
+                // → 上游 404 → 這裡判定 session 失效 → 跳「登入已過期」回登入頁。
+                // 使用者重登、再被踢，而畫面從頭到尾沒說過真正的原因。
+                //
+                // 留在原地，讓呼叫端顯示那個帳號不存在的訊息；能修這件事的是
+                // 資料庫端建帳號，不是使用者再登入一次。
+                if (session.code === 'MEMBER_NOT_PROVISIONED') return;
                 this._notifySessionInvalid('decorate-me:session-expired');
                 return;
             }
