@@ -25,13 +25,35 @@ if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {
     throw "部署中止：firebase.json 必須排除只供本機使用的 config.local.js。"
 }
 
-$secretMatches = & rg -n --glob "*.js" --glob "!config.local.js" --glob "*.html" --glob "*.json" `
-    "(faceApiKey\s*:|renderApiKey\s*:|textSuggestionApiKey\s*:|https://[A-Za-z0-9-]+\.trycloudflare\.com)" . 2>$null
-if ($LASTEXITCODE -eq 0 -and $secretMatches) {
-    throw "部署中止：公開前端仍包含上游金鑰欄位或臨時 Tunnel 網址。`n$secretMatches"
+# 秘密掃描。rg 比較快，但它不一定在 PATH 上——2026-08-28 就因為這樣讓整個
+# deploy.ps1 在第一步中止，於是改用 `firebase deploy` 直接部署，跳過了底下的
+# 版本號 bump：`?v=` 從 8/25 卡到 8/28，瀏覽器一直拿舊的 JS 與 CSS，
+# 改好的東西看起來像沒上線。
+#
+# 掃描本身不能因為工具缺席就跳過（那等於把金鑰檢查關掉），所以沒有 rg 時
+# 改用 PowerShell 自己的 Select-String 走同一組樣式與同一組檔案。
+$secretPattern = "(faceApiKey\s*:|renderApiKey\s*:|textSuggestionApiKey\s*:|https://[A-Za-z0-9-]+\.trycloudflare\.com)"
+$rg = Get-Command rg -ErrorAction SilentlyContinue
+if ($rg) {
+    $secretMatches = & rg -n --glob "*.js" --glob "!config.local.js" --glob "*.html" --glob "*.json" `
+        $secretPattern . 2>$null
+    if ($LASTEXITCODE -gt 1) {
+        throw "部署中止：秘密掃描執行失敗。"
+    }
+} else {
+    Write-Host "  找不到 rg，改用 Select-String 掃描" -ForegroundColor DarkGray
+    # rg 預設會照 .gitignore 跳過檔案，Select-String 不會——不排除的話會掃到
+    # .claude\settings.local.json 這種只存在於本機、根本不會部署的檔，
+    # 掃出一堆歷史 tunnel 網址然後把部署擋下來。
+    # 只掃真的會被上傳的東西：排掉點開頭的目錄與 node_modules。
+    $skip = "\\.(claude|git|firebase|vscode|idea)\\|\\node_modules\\"
+    $secretMatches = Get-ChildItem -Recurse -File -Include *.js, *.html, *.json |
+        Where-Object { $_.Name -ne "config.local.js" -and $_.FullName -notmatch $skip } |
+        Select-String -Pattern $secretPattern |
+        ForEach-Object { "{0}:{1}:{2}" -f $_.Path, $_.LineNumber, $_.Line.Trim() }
 }
-if ($LASTEXITCODE -gt 1) {
-    throw "部署中止：秘密掃描執行失敗。"
+if ($secretMatches) {
+    throw "部署中止：公開前端仍包含上游金鑰欄位或臨時 Tunnel 網址。`n$($secretMatches -join "`n")"
 }
 
 $gitChanges = git status --porcelain -- .
