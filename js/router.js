@@ -1344,7 +1344,7 @@ const SVC_ICONS = {
 const STYLE_ROLE = { softBaddie:'Soft Glam', richGirl:'Quiet Luxury', hongKong:'Retro HK', koreanClean:'Clean Girl', yandere:'Doll Core', japaneseClear:'J-Sheer', mensPlain:'Mens Bare' };
 
 // 頁面順序（判斷轉場方向）
-const NAV_ORDER = ['dashboard','analysis','style','products','favorites','history','compare','suggestion','profile','admin'];
+const NAV_ORDER = ['dashboard','analysis','style','products','favorites','history','compare','suggestion','profile','about','admin'];
 const ROUTE_PAGES = new Set(NAV_ORDER);
 
 // 玻璃提示彈窗（取代瀏覽器原生 alert）
@@ -5633,6 +5633,59 @@ const PageInit = {
             return String(text || '已收藏此妝容對比圖，之後可回到會員中心查看完整搭配。').slice(0, 72);
         }
     },
+    about() {
+        document.querySelectorAll('[data-nav]').forEach(el => {
+            el.onclick = () => Router.go(el.dataset.nav);
+        });
+        const box = document.getElementById('aboutPremium');
+        if (!box) return;
+
+        // 權益一律照**這個帳號實際的狀態**寫，不照設計稿那組示意文案。
+        //
+        // 設計稿寫的是「試妝次數無限／完整臉部分析／對比永久保存／獨家優惠與新品／
+        // 專屬客服支援」，配一顆「立即升級 Premium」與「支援信用卡 / Apple Pay /
+        // Google Pay」。那五項裡有三項這個系統沒有，而且**沒有金流**——
+        // 做一顆看起來能付款的按鈕，是在收一筆收不到的錢，使用者會等一個不會來的東西。
+        //
+        // PRO / VIP 也不是前端能開通的（Api 那邊直接回「由你的會員方案決定」），
+        // 所以這裡只做兩件事：說清楚你現在有什麼，以及下一步該找誰。
+        const guest = typeof isGuest === 'function' && isGuest();
+        const profile = (typeof Auth !== 'undefined' && Auth.getProfile) ? Auth.getProfile() : null;
+        const isVip = !guest && typeof AdminStore !== 'undefined' && AdminStore.isVip(profile);
+        const tier = (!guest && typeof MemberTier !== 'undefined')
+            ? MemberTier.describe(profile) : null;
+        const tierName = guest ? '訪客' : (tier?.name || (isVip ? 'PRO / VIP 會員' : '一般會員'));
+        // 額度那一句直接用既有的 renderQuotaText()：會員中心也是用它，
+        // 兩頁講同一件事就不會各寫一套而對不上。
+        const quotaLine = (typeof renderQuotaText === 'function')
+            ? renderQuotaText() : 'AI 妝容渲染：依你的會員方案提供每日次數';
+
+        const benefits = [
+            ['BASIC 臉部分析', guest ? '訪客可以體驗' : '已開通'],
+            ['PRO 臉部分析', isVip ? '已開通' : (guest ? '註冊會員後依方案開通' : '依你的會員方案開通')],
+            ['AI 妝容渲染', guest ? '訪客無法使用，請先註冊' : quotaLine.replace(/^AI 妝容渲染：/, '')],
+            ['收藏與分析紀錄', guest ? '註冊後才能保存' : '已開通']
+        ];
+
+        box.innerHTML = `
+            <div class="ap-card">
+                <div class="ap-head">
+                    <span class="ap-tier ${isVip ? 'vip' : (guest ? 'guest' : 'general')}">${escapeHtml(tierName)}</span>
+                    <p class="ap-note">${guest
+                        ? '註冊會員後可以保存分析結果與妝容圖，並依方案取得 AI 妝容渲染次數。'
+                        : 'PRO / VIP 由你的會員方案決定，需要調整請聯繫管理員。'}</p>
+                </div>
+                <ul class="ap-benefits">
+                    ${benefits.map(([name, state]) => `
+                        <li><b>${escapeHtml(name)}</b><span>${escapeHtml(state)}</span></li>`).join('')}
+                </ul>
+                ${guest ? '<button type="button" class="btn-gold ap-cta" id="aboutJoinBtn">註冊會員　→</button>' : ''}
+            </div>`;
+
+        const join = document.getElementById('aboutJoinBtn');
+        if (join) join.onclick = () => { if (typeof showRegister === 'function') showRegister(); };
+    },
+
     admin() {
         if (typeof AdminStore === 'undefined' || !AdminStore.isAdmin()) {
             Router.go('dashboard');
