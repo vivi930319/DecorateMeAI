@@ -10,8 +10,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Serif+TC:wght@300;400;500;700&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/main.css?v=20260829-065142">
-<link rel="stylesheet" href="css/makeup-flow.css?v=20260829-065142">
+<link rel="stylesheet" href="css/main.css?v=20260829-065525">
+<link rel="stylesheet" href="css/makeup-flow.css?v=20260829-065525">
 <script>
 (function(){
     try {
@@ -187,7 +187,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     }, { passive: true });
 })();
 </script>
-<script defer src="js/config.js?v=20260829-065142"></script>
+<script defer src="js/config.js?v=20260829-065525"></script>
 <script>
 // config.local.js 只存在於開發機：firebase.json 明確把它排除在部署之外（它是本機覆寫用的，
 // 而且 deploy.ps1 會斷言這件事，因為那個檔案可能含有不該公開的設定）。
@@ -210,13 +210,13 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     document.currentScript.parentNode.insertBefore(local, document.currentScript.nextSibling);
 })();
 </script>
-<script defer src="js/service-endpoints.js?v=20260829-065142"></script>
-<script defer src="js/data.js?v=20260829-065142"></script>
-<script defer src="js/api.js?v=20260829-065142"></script>
+<script defer src="js/service-endpoints.js?v=20260829-065525"></script>
+<script defer src="js/data.js?v=20260829-065525"></script>
+<script defer src="js/api.js?v=20260829-065525"></script>
 <!-- 五官圖鑑：要在 router.js 之前，router 初始化分析頁時會呼叫 FeatureAtlas.attach -->
-<script defer src="js/feature-atlas.js?v=20260829-065142"></script>
-<script defer src="js/makeup-contract.js?v=20260829-065142"></script>
-<script defer src="js/router.js?v=20260829-065142"></script>
-<script defer src="js/makeup-flow.js?v=20260829-065142"></script>
+<script defer src="js/feature-atlas.js?v=20260829-065525"></script>
+<script defer src="js/makeup-contract.js?v=20260829-065525"></script>
+<script defer src="js/router.js?v=20260829-065525"></script>
+<script defer src="js/makeup-flow.js?v=20260829-065525"></script>
 </body>
 </html>

@@ -4100,18 +4100,21 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 .drawer-head, .drawer-foot { display:none; }
 .topbar-nav .nav-ico { display:none; }
 @media (max-width:760px) {
+    /* ⚠️ 位置與開合動畫**不要動**。
+       2026-08-29 曾把它改成從左側滑出的整片選單（照設計稿圖 4），使用者回報
+       「右邊的選單故障了，以前可以拉下來」——漢堡在右上角，選單卻從左邊出現，
+       而且原本那套 opacity／visibility／transform 的開合是寫在基礎規則裡的，
+       改掉 transform 等於在動它已經驗證過的開合流程。
+       只換外觀，定位交給基礎規則。 */
     .topbar-nav {
-        /* 從右上角的小面板改成整片：設計稿是從左側蓋上來的一整頁選單 */
-        right:auto; left:0; top:0; bottom:0;
-        width:min(340px,86vw); max-height:none; height:100%;
-        padding:26px 18px calc(22px + env(safe-area-inset-bottom, 0px));
-        border-radius:0; border:0; border-right:1px solid var(--line-gold);
+        width:min(340px,calc(100vw - 20px));
+        padding:18px 14px;
+        border-radius:20px;
+        border:1px solid var(--line-gold);
         background:linear-gradient(168deg, var(--paper) 0%, var(--blush-panel) 100%);
-        box-shadow:26px 0 60px rgba(80,48,36,.18);
-        transform:translateX(-100%) scale(1); transform-origin:left center;
+        box-shadow:0 26px 60px rgba(80,48,36,.2);
         display:flex; flex-direction:column; gap:9px;
     }
-    .menu-open .topbar-nav { transform:none; }
 
     .drawer-head { display:flex; align-items:center; gap:13px; margin-bottom:22px; padding:0 4px; }
     .drawer-mark { flex:0 0 auto; width:52px; height:52px; border-radius:50%; overflow:hidden;
@@ -4141,7 +4144,7 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
         stroke-width:1.4; stroke-linecap:round; stroke-linejoin:round; }
 
     .drawer-foot {
-        display:flex; gap:12px; align-items:flex-start; margin-top:auto; padding:15px 16px;
+        display:flex; gap:12px; align-items:flex-start; margin-top:6px; padding:15px 16px;
         border:1px solid var(--line-gold); border-radius:16px; background:var(--glass); }
     .df-icon { flex:0 0 auto; display:grid; place-items:center; width:34px; height:34px;
         border-radius:50%; background:var(--gold-dim); }
