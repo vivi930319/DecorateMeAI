@@ -878,6 +878,11 @@ body {
 .result-panel:not(.is-ready) { filter:grayscale(1) contrast(.92); opacity:.55; }
 .result-panel:not(.is-ready) .result-grid,
 .result-panel:not(.is-ready) .skin-box { box-shadow:none; }
+/* 還沒有結果時不要邀請點擊。「看說明」在 hover 時會浮出來，但 feature-atlas
+   對值是「—」的格子會直接 return——按了完全沒有反應，而沒有反應的可點提示
+   讀起來就是壞掉。 */
+.result-panel:not(.is-ready) .result-cell[data-fa-field] .rmore { opacity:0; }
+.result-panel:not(.is-ready) .result-cell[data-fa-field] { cursor:default; }
 .result-panel .result-grid,
 .result-panel .skin-box { transition:box-shadow .45s ease, border-color .45s ease, transform .45s ease; }
 .result-panel.is-ready .result-grid {
@@ -1127,6 +1132,45 @@ body {
 .member-avatar { width:84px; height:84px; border:1px solid var(--gold-dim); border-radius:50%; overflow:hidden; display:flex; align-items:center; justify-content:center; font-family:var(--serif); font-size:30px; color:var(--gold-lt); background:rgba(228,207,161,0.06); margin-bottom:22px; }
 .member-avatar.has-photo { border-color:var(--gold); }
 .member-avatar img { width:100%; height:100%; object-fit:cover; display:block; }
+/* 頭貼現在是按鈕。<button> 會帶進瀏覽器預設的 padding 與系統字體，
+   而這一顆的字（名字首字）是刻意用襯線體的，所以要顯式收回來。 */
+.member-avatar { position:relative; padding:0; cursor:pointer; font-family:var(--serif);
+    transition:border-color .18s, transform .18s; }
+.member-avatar.is-readonly { cursor:default; }
+/* 「更換」蓋在下緣。平常只露一條，hover／鍵盤聚焦時整條浮起——
+   一直全亮會擋住照片，完全不顯示又沒人知道這裡可以按。 */
+.member-avatar .ma-edit { position:absolute; left:0; right:0; bottom:0;
+    padding:5px 0 4px; font-family:var(--cjk); font-size:10px; letter-spacing:.1em;
+    color:var(--white); background:rgba(44,32,36,.62);
+    opacity:0; transform:translateY(100%); transition:opacity .18s, transform .18s; }
+.member-avatar:hover:not(.is-readonly) { border-color:var(--gold); transform:translateY(-1px); }
+.member-avatar:hover:not(.is-readonly) .ma-edit,
+.member-avatar:focus-visible .ma-edit { opacity:1; transform:none; }
+.member-avatar.is-readonly .ma-edit { display:none; }
+/* 上傳中。按鈕已經 disabled，但只是不能按看不出來——把「更換」換成「儲存中」
+   並固定顯示，才講得出現在正在做事。 */
+.member-avatar.is-saving { cursor:wait; }
+.member-avatar.is-saving .ma-edit { opacity:1; transform:none; font-size:0; }
+.member-avatar.is-saving .ma-edit::after { content:'儲存中'; font-size:10px; }
+.member-avatar:focus-visible { outline:2px solid var(--gold-deep); outline-offset:3px; }
+
+/* 會員中心分頁。三組取代原本七個等重、一路往下排的區塊。 */
+.member-tabs { display:flex; gap:4px; margin:34px 0 22px; padding:4px;
+    border:1px solid var(--line-gold); border-radius:999px; background:var(--paper);
+    width:fit-content; max-width:100%; overflow-x:auto; }
+.member-tab { flex:0 0 auto; padding:9px 22px; border:0; border-radius:999px;
+    background:transparent; cursor:pointer; font-family:var(--cjk); font-size:13.5px;
+    letter-spacing:.04em; color:var(--mid); white-space:nowrap;
+    transition:background .2s, color .2s; }
+.member-tab:hover { color:var(--gold-deep); }
+.member-tab.is-active { background:var(--gold-deep); color:var(--white); font-weight:500; }
+.member-tab:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; }
+/* [hidden] 在有 display 的規則下會失效，明確蓋掉。 */
+.member-panel[hidden] { display:none; }
+@media (max-width:620px) {
+    .member-tabs { width:100%; justify-content:flex-start; }
+    .member-tab { padding:9px 16px; font-size:12.5px; }
+}
 .member-name { font-family:var(--cjk); font-size:26px; font-weight:500; letter-spacing:.06em; color:var(--ivory); }
 .member-role { font-family:var(--sans); font-size:10px; letter-spacing:.28em; text-transform:uppercase; color:var(--gold-soft); margin-top:11px; }
 .member-id .btn-outline { color:var(--btn-ink); }
@@ -1230,7 +1274,6 @@ body[data-member-theme="noir"] ::selection { background:var(--gold); color:var(-
    關掉不影響任何功能；要恢復只要刪掉這條規則。 */
 body[data-member-theme="noir"] .brand-watermark,
 body[data-member-theme="noir"] .signal-watermark,
-body[data-member-theme="noir"] .gold-cursor-flow,
 body[data-member-theme="noir"] .cursor-glow { display:none !important; }
 
 /* 「黑不夠正、帶黃」的真正來源（2026-08-13）：把 --ivory 改成 #000 是不夠的，
@@ -1410,7 +1453,6 @@ body.admin-mode .topbar-menu-backdrop,
 body.admin-mode .brand-watermark,
 body.admin-mode .signal-watermark,
 body.admin-mode .cursor-glow,
-body.admin-mode .gold-cursor-flow,
 body.admin-mode .app-shell { background:#f3f5f7; }
 body.admin-mode .main-content { max-width:none; min-height:100vh; margin:0; padding:0; background:#f3f5f7; }
 body.admin-mode .main-content.page-enter,
@@ -2337,7 +2379,7 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
 /* 沒有游標的裝置：這兩層不會有效果，只會留下成本。用 hover／pointer 能力判斷比
    寬度準——觸控筆電和大平板都夠寬，但一樣沒有游標可以跟。 */
 @media (hover:none), (pointer:coarse) {
-    .cursor-glow, .gold-cursor-flow { display:none !important; }
+    .cursor-glow { display:none !important; }
 }
 
 /* 可套用於任何區塊的流光邊框 */
@@ -3394,7 +3436,22 @@ html.intro-off #brand-intro{display:none}
 .auth-brand-panel,.auth-form-panel{position:relative;display:flex;flex-direction:column;justify-content:center;padding:clamp(42px,8vw,130px)}.auth-brand-panel{overflow:hidden;background:var(--paper-deep)}
 .auth-brand-panel:before{content:"DECORATE ME";position:absolute;inset:auto -4vw -7vw;font:700 clamp(90px,17vw,280px)/.7 Georgia,serif;color:var(--gold);opacity:.055;white-space:nowrap}.auth-brand-panel:after{content:"";position:absolute;width:65%;aspect-ratio:1;right:-18%;top:-20%;border:1px solid var(--gold);border-radius:50%;opacity:.25}
 .auth-kicker{font-size:11px;letter-spacing:.28em;color:var(--gold-deep)}.auth-brand-panel h1{position:relative;margin:14px 0 24px;font:500 clamp(68px,9vw,150px)/.8 Georgia,var(--cjk),serif;letter-spacing:-.07em}.auth-brand-panel p{max-width:510px;line-height:1.9;color:var(--mid)}
-.auth-form-panel{border-left:1px solid var(--line)}.auth-form-panel .auth-card{width:min(100%,430px);padding:0;margin:auto;background:transparent;border:0;box-shadow:none;text-align:left}.auth-form-panel .auth-card h2{margin:10px 0;font-size:clamp(36px,4vw,56px)}.auth-description{margin:0 0 30px;color:var(--mid);line-height:1.7}.auth-form-panel .input-group input{background:transparent;border-width:0 0 1px;border-radius:0;padding-left:0}
+.auth-form-panel{border-left:1px solid var(--line)}.auth-form-panel .auth-card{width:min(100%,430px);padding:0;margin:auto;background:transparent;border:0;box-shadow:none;text-align:center}.auth-form-panel .auth-card h2{margin:10px 0;font-size:clamp(36px,4vw,56px)}.auth-description{margin:0 0 30px;color:var(--mid);line-height:1.7}.auth-form-panel .input-group input{background:transparent;border-width:0 0 1px;border-radius:0;padding-left:0}
+
+/* 登入畫面的欄位置中。
+   「電子郵件」「密碼」原本跟上面的「會員登入」用同一套字：10px、大寫、.28em 字距、
+   金色——三行長得一模一樣、又全部靠左貼齊，讀起來像同一組標題連續排了三次，
+   分不出哪個是段落標籤、哪個是欄位名。
+   置中之後欄位自成一欄，與上方的標題塊不再並排在同一條左緣上；標籤同時改用
+   中文字體、放大、拿掉大寫轉換與過寬的字距，讓它讀起來就是「這一格要填什麼」。 */
+.auth-form-panel .input-group { text-align:center; }
+.auth-form-panel .input-group label {
+    font-family:var(--cjk); font-size:12px; letter-spacing:.06em;
+    text-transform:none; color:var(--mid); margin-bottom:7px; }
+.auth-form-panel .input-group input { text-align:center; padding-right:0; }
+.auth-form-panel .input-group input::placeholder { text-align:center; }
+/* 密碼欄的顯示切換鈕是絕對定位的，欄位置中後它會壓在文字上。 */
+.auth-form-panel .input-group.has-pw-toggle input { padding-left:52px; padding-right:52px; }
 .analysis-workbench{grid-template-columns:minmax(340px,.95fr) minmax(460px,1.05fr);gap:16px;align-items:start}.analysis-workbench>div{padding:clamp(18px,2.3vw,34px);border:1px solid var(--line);background:var(--glass);border-radius:18px;box-shadow:0 24px 80px rgba(50,35,35,.07)}.analysis-workbench .result-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:0;border:1px solid var(--line)}.analysis-workbench .result-cell{min-height:92px;border:0;border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:18px}.analysis-workbench .upload-box{min-height:350px;border-radius:16px}
 .member-dashboard-hero{display:grid;grid-template-columns:minmax(320px,1.2fr) minmax(420px,1.8fr);gap:14px}.member-dashboard-hero .member-id,.member-dashboard-hero .member-stats{border:1px solid var(--line);border-radius:20px;background:var(--glass);overflow:hidden}.member-dashboard-hero .member-stats{display:grid;grid-template-columns:repeat(2,1fr)}.member-dashboard-hero .stat-cell{min-height:130px}.member-tier,.member-suggestions{border:1px solid var(--line);border-radius:20px;padding:clamp(18px,2.2vw,32px);background:var(--glass);margin-top:14px}
 .suggestion-page-header{max-width:1180px;margin-inline:auto}.journey-dialog-shell{position:relative;max-width:1180px;margin:0 auto 40px;padding:clamp(18px,3vw,40px);border:1px solid var(--line);border-radius:24px;background:var(--paper);box-shadow:0 28px 100px rgba(45,25,27,.16)}.journey-dialog-close{position:absolute;z-index:3;right:16px;top:16px;width:40px;height:40px;border:1px solid var(--line-gold);border-radius:50%;background:var(--paper);color:var(--ink-soft);font-size:22px;cursor:pointer}/* 建議流程採單欄排列，並使用主題的玻璃背景。 */
@@ -3512,18 +3569,6 @@ html.intro-off #brand-intro{display:none}
     background-size:100% 100%, 100% 46px;
 }
 
-/* 在游標光暈上疊加有方向的金色流光。 */
-.gold-cursor-flow {
-    position:fixed; z-index:3; left:var(--wm-x); top:var(--wm-y);
-    width:230px; height:230px; margin:-115px 0 0 -115px; border-radius:50%;
-    pointer-events:none; opacity:0; mix-blend-mode:screen;
-    transition:opacity .5s var(--ease);
-    background:conic-gradient(from 30deg, transparent 0 16%,
-        rgba(255,236,171,.62) 21%, rgba(218,151,34,.10) 31%,
-        transparent 40% 66%, rgba(255,236,171,.34) 72%, transparent 82%);
-    animation:goldFlowSpin 7s linear infinite;
-}
-@keyframes goldFlowSpin { to{ transform:rotate(360deg); } }
 
 /* 提高金色光暈在深色背景上的可見度。 */
 .cursor-glow { background:radial-gradient(circle, rgba(226,195,116,0.22) 0%, rgba(226,195,116,0.08) 40%, transparent 68%); }
@@ -3532,12 +3577,11 @@ html.intro-off #brand-intro{display:none}
 .app-shell > .main-content { position:relative; z-index:5; }
 
 @media (max-width:980px){
-    .gold-cursor-flow { display:none; }
     .brand-watermark:after { display:none; }
     .signal-watermark { opacity:.28; }
 }
 @media (prefers-reduced-motion:reduce){
-    .brand-watermark:before, .brand-watermark:after, .gold-cursor-flow { animation:none !important; }
+    .brand-watermark:before, .brand-watermark:after { animation:none !important; }
 }
 
 /* 明確設定原生下拉選單顏色，避免深色主題出現白底。 */

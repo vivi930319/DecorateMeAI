@@ -1,7 +1,12 @@
 <div class="page-header"><span class="eyebrow">Member</span><h1>會員中心</h1><div class="divider"></div></div>
 <div class="member-wrap member-dashboard-hero">
     <div class="member-id">
-        <div class="member-avatar" id="profileAvatar">✦</div>
+        <!-- 頭貼可換。整塊是 <button>：滑鼠、鍵盤、螢幕閱讀器都要按得到，
+             而且「這裡可以點」必須靠元素本身講，不能只靠 hover 才浮出來的字。
+             ⚠️ js/router.js 的 fallbacks.profile 還有一份，改這裡要一起改那裡。 -->
+        <button type="button" class="member-avatar" id="profileAvatar"
+                aria-label="更換大頭貼">✦<span class="ma-edit" aria-hidden="true">更換</span></button>
+        <input type="file" id="profileAvatarInput" accept="image/*" style="display:none;">
         <div class="member-name" id="profileName">訪客</div>
         <div class="member-role" id="profileRole">Decorate Me Member</div>
         <div class="member-actions">
@@ -33,6 +38,18 @@
     </div>
 </div>
 
+<!-- 七個區塊原本等重地一路往下排：會員等級、PRO、任務中心、推薦好友、點數商店、
+     點數紀錄、收藏妝容。每一塊都長得一樣重要，於是沒有一塊看起來重要，
+     要找任何一項都得整頁捲過去。
+     分成三組：帳戶（我是誰、有什麼權限）、點數（怎麼賺、怎麼花）、收藏（我存下來的）。
+     這三組是使用者來會員中心的三種理由，不是把功能清單塞進三個資料夾。 -->
+<div class="member-tabs" role="tablist" aria-label="會員中心分頁">
+    <button type="button" class="member-tab is-active" role="tab" id="mtab-account" aria-selected="true" aria-controls="mpanel-account" data-mtab="account">帳戶</button>
+    <button type="button" class="member-tab" role="tab" id="mtab-points" aria-selected="false" aria-controls="mpanel-points" data-mtab="points">點數與任務</button>
+    <button type="button" class="member-tab" role="tab" id="mtab-saved" aria-selected="false" aria-controls="mpanel-saved" data-mtab="saved">我的收藏</button>
+</div>
+
+<div class="member-panel" id="mpanel-account" data-mpanel="account" role="tabpanel" aria-labelledby="mtab-account">
 <section class="member-tier">
     <div class="member-section-head">
         <span>Membership</span>
@@ -40,7 +57,6 @@
     </div>
     <div id="profileTierCard"></div>
 </section>
-
 <section class="member-tier">
     <div class="member-section-head">
         <span>PRO Plan</span>
@@ -48,7 +64,8 @@
     </div>
     <div id="profileProCard"></div>
 </section>
-
+</div>
+<div class="member-panel" id="mpanel-points" data-mpanel="points" role="tabpanel" aria-labelledby="mtab-points" hidden>
 <section class="member-tier">
     <div class="member-section-head">
         <span>Tasks</span>
@@ -56,7 +73,6 @@
     </div>
     <div id="profileTaskCenter"></div>
 </section>
-
 <section class="member-tier">
     <div class="member-section-head">
         <span>Referral</span>
@@ -64,7 +80,6 @@
     </div>
     <div id="profileReferralCard"></div>
 </section>
-
 <section class="member-tier">
     <div class="member-section-head">
         <span>Theme Shop</span>
@@ -72,7 +87,6 @@
     </div>
     <div id="profileThemeShop"></div>
 </section>
-
 <section class="member-tier">
     <div class="member-section-head">
         <span>Ledger</span>
@@ -80,7 +94,8 @@
     </div>
     <div id="profilePointLedger"></div>
 </section>
-
+</div>
+<div class="member-panel" id="mpanel-saved" data-mpanel="saved" role="tabpanel" aria-labelledby="mtab-saved" hidden>
 <section class="member-suggestions">
     <div class="member-section-head">
         <span>Saved Looks</span>
@@ -88,3 +103,4 @@
     </div>
     <div id="profileSuggestionArea"></div>
 </section>
+</div>

@@ -47,7 +47,6 @@
     <div class="brand-watermark" aria-hidden="true"></div>
     <div class="signal-watermark" aria-hidden="true"></div>
     <div class="cursor-glow" id="cursorGlow"></div>
-    <div class="gold-cursor-flow" id="goldCursorFlow" aria-hidden="true"></div>
     <header class="topbar">
         <div class="topbar-inner">
             <div class="topbar-brand" onclick="Router.go('dashboard')">
@@ -122,13 +121,16 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     document.addEventListener('keydown', onKey);
 })();
 
-// 滑鼠裝置顯示金色光暈，並共用座標更新浮水印。
+// 滑鼠裝置顯示金色光暈。
+// 原本這裡還有一圈 230px 的金色錐形漸層跟著游標永遠旋轉（.gold-cursor-flow）。
+// 它不表示任何事情——不是載入中、不是進度，什麼都不是——卻一直在動，
+// 而畫面上一直在動的東西會被讀成「還在跑」。留下不會轉的柔光就好。
 (function(){
     // 觸控裝置沒有固定游標，因此不啟用這個效果。
     var fine = window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches;
     if (!fine) return;
 
-    var glow = null, flow = null, root = document.documentElement;
+    var glow = null, root = document.documentElement;
     var x = 0, y = 0, queued = false;
     // 每個畫面更新一次座標，減少重複重算樣式。
     function paint(){
@@ -136,17 +138,14 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
         root.style.setProperty('--wm-x', x + 'px');
         root.style.setProperty('--wm-y', y + 'px');
         if (glow) { glow.style.left = x + 'px'; glow.style.top = y + 'px'; glow.style.opacity = '1'; }
-        if (flow) flow.style.opacity = '1';
     }
     document.addEventListener('mousemove', function(e){
         glow = glow || document.getElementById('cursorGlow');
-        flow = flow || document.getElementById('goldCursorFlow');
         x = e.clientX; y = e.clientY;
         if (!queued) { queued = true; requestAnimationFrame(paint); }
     }, { passive: true });
     document.addEventListener('mouseleave', function(){
         if (glow) glow.style.opacity = '0';
-        if (flow) flow.style.opacity = '0';
     }, { passive: true });
 })();
 </script>

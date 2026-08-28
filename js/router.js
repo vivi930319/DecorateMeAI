@@ -1335,6 +1335,77 @@ function lookImageSrc(value){
   return '';
 }
 
+// 把選到的圖縮成正方形小圖再存。
+//
+// 不縮的後果是具體的：手機直出的照片是好幾 MB 的 base64，會整包塞進會員資料的
+// PATCH body 裡，而頭貼在畫面上只有 96px。同時輸出 JPEG——PNG 的照片會大好幾倍。
+//
+// 用 cover 裁切（取中間的正方形）而不是整張壓扁：頭貼框本來就是圓的，
+// 壓扁的臉會歪。
+function readAvatarFile(file, size = 256) {
+    return new Promise((resolve, reject) => {
+        if (!file) return reject(new Error('沒有選到檔案'));
+        if (!/^image\//.test(file.type || '')) return reject(new Error('請選擇圖片檔'));
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+            try {
+                const w = img.naturalWidth || 1, h = img.naturalHeight || 1;
+                const side = Math.min(w, h);
+                const cv = document.createElement('canvas');
+                cv.width = cv.height = size;
+                const ctx = cv.getContext('2d');
+                ctx.drawImage(img, (w - side) / 2, (h - side) / 2, side, side, 0, 0, size, size);
+                resolve(cv.toDataURL('image/jpeg', 0.82));
+            } catch (err) {
+                reject(err);
+            } finally {
+                URL.revokeObjectURL(url);
+            }
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('這個檔案讀不出圖片')); };
+        img.src = url;
+    });
+}
+
+// 換頭貼。先寫遠端再更新本機——順序反過來的話，PATCH 失敗時畫面已經換了新照片，
+// 使用者會以為存好了，下次登入才發現沒有。
+let avatarUploading = false;
+async function changeProfileAvatar(file) {
+    // 上傳中就擋掉後續的點擊。縮圖加一次 PATCH 之間畫面沒有明顯變化，
+    // 使用者會以為沒反應而再按一次，於是同一張照片送兩趟。
+    if (avatarUploading) return;
+    const profile = (Auth.getProfile && Auth.getProfile()) || {};
+    const email = profile.email;
+    if (!email) { showAlert('訪客無法更換大頭貼，請先登入'); return; }
+    const btn = document.getElementById('profileAvatar');
+    avatarUploading = true;
+    if (btn) { btn.disabled = true; btn.classList.add('is-saving'); }
+    try {
+        let dataUrl;
+        try {
+            dataUrl = await readAvatarFile(file);
+        } catch (err) {
+            showAlert(err.message, { type: 'error' });
+            return;
+        }
+        const res = await Api.patchMember(email, { avatar: dataUrl });
+        if (!res.ok) {
+            showAlert('大頭貼儲存失敗：' + (res.error || `HTTP ${res.status || '?'}`), { type: 'error' });
+            return;
+        }
+        Auth.setProfile({ ...profile, avatar: dataUrl });
+        // PageInit.profile() 會重畫這顆按鈕並重新綁事件，連同 disabled 一起復原，
+        // 所以底下的 finally 只需要處理「沒有重畫」的那幾條路徑。
+        if (Router.currentPage === 'profile') PageInit.profile();
+        showToast('大頭貼已更新');
+    } finally {
+        avatarUploading = false;
+        const cur = document.getElementById('profileAvatar');
+        if (cur) { cur.disabled = false; cur.classList.remove('is-saving'); }
+    }
+}
+
 // 外部連結只接受 http(s)，避免 javascript: 或 data: 內容被執行。
 function safeExternalUrl(value){
   const raw = String(value || '').trim();
@@ -2269,7 +2340,9 @@ profile: `
 <div class="page-header"><span class="eyebrow">Member</span><h1>會員中心</h1><div class="divider"></div></div>
 <div class="member-wrap">
     <div class="member-id">
-        <div class="member-avatar" id="profileAvatar">✦</div>
+        <button type="button" class="member-avatar" id="profileAvatar"
+                aria-label="更換大頭貼">✦<span class="ma-edit" aria-hidden="true">更換</span></button>
+        <input type="file" id="profileAvatarInput" accept="image/*" style="display:none;">
         <div class="member-name" id="profileName">訪客</div>
         <div class="member-role" id="profileRole">Decorate Me Member</div>
         <div class="member-actions">
@@ -2295,12 +2368,11 @@ profile: `
             <span class="stat-label">會員點數</span><span class="stat-go">查看 &darr;</span></button>
     </div>
 </div>
-<section class="member-tier"><div class="member-section-head"><span>Membership</span><h2>會員等級</h2></div><div id="profileTierCard"></div></section>
+
 <!-- 2026-08-28 拿掉每日打卡。點數機制與這個專案要展示的東西無關，
      而它佔著會員中心最上面那塊，把真正該看的（分析紀錄、妝容收藏）擠下去。 -->
-<section class="member-tier"><div class="member-section-head"><span>Theme Shop</span><h2>點數商店</h2></div><div id="profileThemeShop"></div></section>
-<section class="member-tier"><div class="member-section-head"><span>Ledger</span><h2>點數紀錄</h2></div><div id="profilePointLedger"></div></section>
-<section class="member-suggestions"><div class="member-section-head"><span>Saved Looks</span><h2>已收藏的妝容對比圖</h2></div><div id="profileSuggestionArea"></div></section>`
+
+`
     };
     return fallbacks[page] || null;
 }
@@ -2801,7 +2873,28 @@ const Router = {
             }
             const back = (NAV_ORDER.indexOf(page) > -1 && NAV_ORDER.indexOf(this.currentPage) > -1
                           && NAV_ORDER.indexOf(page) < NAV_ORDER.indexOf(this.currentPage));
-            const res = await fetch(`pages/${page}.html?v=20260624-brightness`, { cache: 'no-store' });
+            const res = await fetch(`pages/${page}.html?v=20260624-brightness
+
+<!-- 分組與 pages/profile.html 一致；那邊改了這裡要跟著改。
+     這是 fetch 失敗時的備援，區塊比較少（沒有 PRO、任務中心、推薦好友），
+     但分頁的 id 與行為必須一模一樣，否則備援畫面上的分頁按鈕會按不動。 -->
+<div class="member-tabs" role="tablist" aria-label="會員中心分頁">
+    <button type="button" class="member-tab is-active" role="tab" id="mtab-account" aria-selected="true" aria-controls="mpanel-account" data-mtab="account">帳戶</button>
+    <button type="button" class="member-tab" role="tab" id="mtab-points" aria-selected="false" aria-controls="mpanel-points" data-mtab="points">點數與任務</button>
+    <button type="button" class="member-tab" role="tab" id="mtab-saved" aria-selected="false" aria-controls="mpanel-saved" data-mtab="saved">我的收藏</button>
+</div>
+
+<div class="member-panel" id="mpanel-account" data-mpanel="account" role="tabpanel" aria-labelledby="mtab-account">
+<section class="member-tier"><div class="member-section-head"><span>Membership</span><h2>會員等級</h2></div><div id="profileTierCard"></div></section>
+</div>
+<div class="member-panel" id="mpanel-points" data-mpanel="points" role="tabpanel" aria-labelledby="mtab-points" hidden>
+<section class="member-tier"><div class="member-section-head"><span>Theme Shop</span><h2>點數商店</h2></div><div id="profileThemeShop"></div></section>
+<section class="member-tier"><div class="member-section-head"><span>Ledger</span><h2>點數紀錄</h2></div><div id="profilePointLedger"></div></section>
+</div>
+<div class="member-panel" id="mpanel-saved" data-mpanel="saved" role="tabpanel" aria-labelledby="mtab-saved" hidden>
+<section class="member-suggestions"><div class="member-section-head"><span>Saved Looks</span><h2>已收藏的妝容對比圖</h2></div><div id="profileSuggestionArea"></div></section>
+</div>
+`, { cache: 'no-store' });
             if (!res.ok) throw new Error('Page not found');
             const html = await res.text();
             const mc = document.getElementById('mainContent');
@@ -3012,9 +3105,6 @@ const PageInit = {
                 return r[field] || '';
             });
         }
-        // 從別頁回到分析頁時結果還在（Router.analysisResult 有值），這時不該再灰一次。
-        setResultState(!!(Router.analysisResult && Object.keys(Router.analysisResult).length));
-
         const fileInput = document.getElementById('fileInput');
         const uploadBox = document.getElementById('uploadBox');
         const preview = document.getElementById('preview');
@@ -3035,6 +3125,13 @@ const PageInit = {
         Router.analysisPackage = null;
         Router.analysisResult = null;
         if (typeof AnalysisDraft !== 'undefined' && AnalysisDraft.clear) AnalysisDraft.clear();
+        // 進頁一律灰階。上面剛把 analysisResult 清成 null，而頁面的 HTML 也是重新
+        // 插入的，六格都是「—」——這時若還顯示成「已完成」的立體樣式，就是拿
+        // 完成的外觀去包一組空值。
+        //
+        // ⚠️ 這一行必須在上面那串清除**之後**。放在前面的話讀到的是上一次的
+        // analysisResult，於是剛進頁面就升起一塊全是「—」的結果區。
+        setResultState(false);
 
         const setLoadingStatus = (text, active = false) => {
             if (!loadingStatus) return;
@@ -4793,8 +4890,22 @@ const PageInit = {
             // 大頭貼網址與名稱都可能是會員自訂內容：網址只接受 http(s)／data:image，
             // 名稱進 alt 屬性一律轉義，避免用 " 跳脫屬性後注入 onerror 之類的事件。
             var __avatarSrc = lookImageSrc(__p.avatar);
-            if (__avatarSrc) { __av.classList.add('has-photo'); __av.innerHTML = '<img src="' + __avatarSrc + '" alt="' + escapeHtml(user || '會員') + '">'; }
-            else { __av.classList.remove('has-photo'); __av.textContent = (user && user !== '訪客') ? user.trim().charAt(0).toUpperCase() : '✦'; }
+            const __edit = '<span class="ma-edit" aria-hidden="true">更換</span>';
+            if (__avatarSrc) { __av.classList.add('has-photo'); __av.innerHTML = '<img src="' + __avatarSrc + '" alt="' + escapeHtml(user || '會員') + '">' + __edit; }
+            else { __av.classList.remove('has-photo'); __av.innerHTML = escapeHtml((user && user !== '訪客') ? user.trim().charAt(0).toUpperCase() : '✦') + __edit; }
+            // 換頭貼。訪客沒有 email，改了也沒有地方存，所以直接關掉入口——
+            // 讓它看起來能按、按了才說不行，是多繞一圈才給同一個答案。
+            const __avInput = document.getElementById('profileAvatarInput');
+            const __canEdit = !!profile.email;
+            __av.disabled = !__canEdit;
+            __av.classList.toggle('is-readonly', !__canEdit);
+            if (__canEdit && __avInput) {
+                __av.onclick = () => { __avInput.value = ''; __avInput.click(); };
+                __avInput.onchange = (ev) => {
+                    const f = ev.target.files && ev.target.files[0];
+                    if (f) changeProfileAvatar(f);
+                };
+            }
         }
         const tierCard = document.getElementById('profileTierCard');
         if (tierCard) {
@@ -4835,10 +4946,31 @@ const PageInit = {
         document.querySelectorAll('.member-stats [data-goto]').forEach(btn => {
             btn.onclick = () => Router.go(btn.dataset.goto);
         });
+        // 分頁切換。用 hidden 而不是 display:none，因為 hidden 也把內容從
+        // 無障礙樹與 Tab 順序裡拿掉——只是視覺上藏起來的話，鍵盤還是會走進
+        // 看不見的按鈕裡。
+        const showMemberTab = (key) => {
+            document.querySelectorAll('.member-tab').forEach(t => {
+                const on = t.dataset.mtab === key;
+                t.classList.toggle('is-active', on);
+                t.setAttribute('aria-selected', on ? 'true' : 'false');
+            });
+            document.querySelectorAll('.member-panel').forEach(pl => {
+                pl.hidden = pl.dataset.mpanel !== key;
+            });
+        };
+        document.querySelectorAll('.member-tab').forEach(t => {
+            t.onclick = () => showMemberTab(t.dataset.mtab);
+        });
+
         document.querySelectorAll('.member-stats [data-scroll]').forEach(btn => {
             btn.onclick = () => {
                 const target = document.getElementById(btn.dataset.scroll);
                 if (!target) return;
+                // 目標可能在沒開啟的分頁裡。先切過去再捲——否則捲到一個
+                // hidden 的元素上，畫面完全沒有反應，而按鈕看起來壞了。
+                const panel = target.closest('.member-panel');
+                if (panel && panel.hidden) showMemberTab(panel.dataset.mpanel);
                 const section = target.closest('section') || target;
                 section.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 section.classList.remove('section-flash');
