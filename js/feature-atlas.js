@@ -478,6 +478,18 @@ const FeatureAtlas = (() => {
 
     return {
         FIELD_TO_PART,
+        // 分類定義的唯一出口。
+        //
+        // 用途是「改判之前先看定義」：使用者在回饋面板把方臉改成長臉時，
+        // 要先讀到長臉是什麼，才有辦法確認自己真的要改。那個時刻他還沒改成功，
+        // 所以浮層（open）幫不上忙——open 解釋的是「你現在是什麼」。
+        //
+        // 回傳 how（形狀定義），不回傳 look（妝容建議）：DEF 裡刻意把這兩件事分開，
+        // 混在一起會讓人讀完還是不知道自己是不是這一類。
+        definitionOf(category) {
+            const hit = DEF[String(category || '').trim()];
+            return (hit && hit.how) ? hit.how : '';
+        },
         // 把圖鑑接到分析結果那六格上。可以重複呼叫，不會累積事件（用 onclick 而非 addEventListener）。
         attach(getCurrent) {
             getCurrentRef = getCurrent;

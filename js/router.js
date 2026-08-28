@@ -1530,6 +1530,8 @@ function applyAnalysisCorrections(corrections, predicted) {
         if (el && Router.analysisResult[field]) el.textContent = Router.analysisResult[field];
     });
     paintNoseCell(Router.analysisResult);
+    // 答案改了，按鈕上的問句要跟著改，否則會問「什麼是鵝蛋臉？」而格子裡寫著方臉。
+    paintCellHints();
     // 圖鑑若正開著，「你的判斷」那個標記還掛在舊答案上，一起重畫。
     if (typeof FeatureAtlas !== 'undefined') FeatureAtlas.refresh();
     // 已經排隊等收藏的那筆快照是修正前建的，丟掉讓它重建。
@@ -1539,10 +1541,30 @@ function applyAnalysisCorrections(corrections, predicted) {
 // 結果區有兩種狀態，差別要看得出來：還沒分析時整區去飽和、壓平、往後退，
 // 一眼就知道那些「—」是還沒填的欄位而不是分析失敗；結果進來後才浮起來。
 // 用 class 切換而不是逐格改樣式，因為要動的是「整區」的層次，不是個別數值。
+// 每一格的說明按鈕要問出那一格的分類名：「什麼是方臉？」，不是「為什麼是這個？」。
+//
+// 帶上名字才知道按下去會得到什麼。看著「方臉」兩個字、旁邊寫「為什麼是這個？」，
+// 讀的人還要先在心裡把「這個」代換回「方臉」——而他心裡本來就已經是那句話了。
+//
+// 掃格子而不是在每個填值點各寫一次：值會從三個地方進來（首次分析、
+// paintNoseCell 的 PRO 側臉、回饋修正後的重畫），逐一改遲早漏掉一個，
+// 而漏掉的那個會變成「什麼是鵝蛋臉？」配著已經被改成方臉的答案。
+function paintCellHints() {
+    document.querySelectorAll('.result-cell[data-fa-field]').forEach((cell) => {
+        const more = cell.querySelector('.rmore');
+        if (!more) return;
+        const value = cell.querySelector('.rvalue')?.textContent?.trim() || '';
+        // 沒有值時留通用問法：那時候按鈕本來就是隱藏的，
+        // 但值可能中途被清掉，不留退路會顯示成「什麼是—？」。
+        more.textContent = (value && value !== '—') ? `什麼是${value}？` : '為什麼是這個？';
+    });
+}
+
 function setResultState(ready) {
     const panel = document.getElementById('resultPanel');
     if (!panel) return;
     panel.classList.toggle('is-ready', !!ready);
+    paintCellHints();
 }
 
 // 一律用同一條規則決定「鼻型要顯示什麼」：有 PRO 側臉結果就用它，沒有才退回 BASIC 正面。
@@ -1665,12 +1687,40 @@ function renderAnalysisFeedback(result, packageId) {
       </div>`;
 
     box.querySelectorAll('[data-af-field]').forEach(select => {
-      select.onchange = () => {
+      // 改判前先讓他讀到那一類是什麼。
+      //
+      // 這排下拉是唯一能改分類的地方，而選項只有「改成長臉」四個字——
+      // 要先知道長臉跟方臉差在哪才選得下去，否則使用者是在猜。
+      // 定義浮層（點格子那個）解釋的是「你現在是什麼」，這裡要的是
+      // 「你正要改成的是什麼」，時機不同，所以另外問一次。
+      //
+      // 選「判斷正確」（清掉修正）不問：那是收回自己的修改，沒有新分類要理解。
+      const applyChoice = () => {
         const field = select.dataset.afField;
         if (select.value) corrections[field] = select.value; else delete corrections[field];
         // 下拉選項立即更新資料包；按下送出時才將回饋傳到後端。
         applyAnalysisCorrections(corrections, predicted);
         draw();
+      };
+      select.onchange = () => {
+        const field = select.dataset.afField;
+        const value = select.value;
+        const def = (typeof FeatureAtlas !== 'undefined' && FeatureAtlas.definitionOf)
+          ? FeatureAtlas.definitionOf(value) : '';
+        // 沒有值（收回修正）或查不到定義就直接套用——為了一個空的說明框
+        // 多按一次確定，只是把路變長。
+        if (!value || !def) { applyChoice(); return; }
+        // 取消要還原下拉，否則畫面停在「改成長臉」而資料還是方臉。
+        const previous = corrections[field] || '';
+        showConfirm(def, {
+          title: `什麼是${value}？`,
+          okText: `我知道了，改成${value}`,
+          cancelText: '先不要改',
+          mark: '✦',
+          onOk: applyChoice,
+          onCancel: () => { select.value = previous; },
+          onDismiss: () => { select.value = previous; }
+        });
       };
     });
     const consent = document.getElementById('afAllowTraining');
