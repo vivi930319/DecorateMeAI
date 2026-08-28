@@ -1,52 +1,51 @@
-<div class="arch-hero" data-nav="analysis">
-    <div class="arch-corner">Maison Decorate Me</div>
-    <span class="arch-eyebrow">A Platform Created for the Love of Beauty</span>
-    <div class="arch-stage">
-        <div class="arch-word-base">妝識你的美</div>
-    </div>
-    <div class="arch-tagline">
-        <!-- 這裡曾經也有一顆「開始臉部分析 →」。一個畫面裡同一句話說兩次不是強調，
-             是讓人停下來判斷「這兩個是同一件事嗎」——而那零點幾秒正是要省掉的。
-             行動集中到下面的問候區；這一塊維持整塊可點（data-nav="analysis"），
-             但角色是品牌畫面，不是按鈕。 -->
-        <div class="at-text">為你打造的<em>美學旅程</em> · 從臉部分析開始</div>
-    </div>
-</div>
-
-<div class="dash-greet">
-    <div class="greet-l">
-        <span class="eyebrow">Welcome</span>
-        <h1 id="dashGreet">歡迎回來，<span class="accent">訪客</span></h1>
-        <div class="greet-actions">
-            <!-- 全頁唯一的實心按鈕。畫面上只有一個地方看起來可以按，
-                 就不需要任何文字說明「該點哪裡」。
-                 文字講結果不講步驟：「開始臉部分析」是系統要做的事，
-                 「看看什麼適合我」才是使用者要的東西——也跟品牌那句
-                 「更了解適合自己的樣子」是同一句話。
-                 副標寫**要準備什麼**，那是真正讓人猶豫的地方。
-                 刻意不寫「約 N 秒」：Cloud Run 有冷啟動，那個數字撐不住。 -->
-            <!-- 用 button 不用 <a href="#">：後者會同時觸發 hash 跳轉，
-                 跟 Router.go 的 pushState 打架；而這是一個動作不是一個位址。 -->
-            <button type="button" class="btn-gold greet-cta" data-nav="analysis" id="dashPrimaryCta">
-                <b>看看什麼適合我　→</b><small>只要一張正面照</small></button>
-            <button type="button" class="btn-outline greet-cta-alt" data-nav="analysis"
-                    id="dashSecondaryCta" hidden>重新分析</button>
-            <div class="tone-scale" title="膚色比對">
-                <div class="swatches">
-                    <span style="background:#F1D9C4"></span>
-                    <span style="background:#E4BE9E"></span>
-                    <span style="background:#CFA079"></span>
-                    <span style="background:#A9774F"></span>
-                    <span style="background:#7C5334"></span>
-                </div>
-                <em>五種膚色基準</em>
+<!-- 首頁最上面這塊照設計稿圖 2：左邊文案＋行動，右邊拱形線稿。
+     先前是一整屏的巨大字加一條深色橫幅，字很好看但沒有出口——
+     使用者看完只能往下捲，而這裡正是他最想開始的時候。 -->
+<section class="home-hero">
+    <div class="hh-copy">
+        <span class="hh-kicker">A PLATFORM CREATED<br>FOR THE LOVE OF BEAUTY</span>
+        <h1 class="hh-title">妝識你的美</h1>
+        <p class="hh-sub">為你打造的美學旅程，從臉部分析開始</p>
+        <button type="button" class="btn-gold hh-cta" data-nav="analysis" id="dashPrimaryCta">開始臉部分析　→</button>
+        <button type="button" class="btn-outline hh-cta-alt" data-nav="analysis" id="dashSecondaryCta" hidden>重新分析</button>
+        <!-- 膚色基準設計稿沒畫，但它是這個系統真的在用的五級刻度，
+             留著並縮小：它說明的是「分析會分到什麼程度」。 -->
+        <div class="tone-scale" title="膚色比對">
+            <div class="swatches">
+                <span style="background:#F1D9C4"></span>
+                <span style="background:#E4BE9E"></span>
+                <span style="background:#CFA079"></span>
+                <span style="background:#A9774F"></span>
+                <span style="background:#7C5334"></span>
             </div>
+            <em>五種膚色基準</em>
         </div>
     </div>
-    <div class="greet-r">
-        <!-- 日期拿掉：對使用者不構成資訊，也不能因此做什麼。 -->
-        <div class="greet-meta">Your Beauty Atelier</div>
+    <div class="hh-art" aria-hidden="true">
+        <svg viewBox="0 0 200 260">
+            <path class="arch" d="M20 258V96a80 80 0 0 1 160 0v162"/>
+            <path class="ln" d="M150 84c9 5 15 15 15 27 0 16-9 25-13 32-3 6-2 10-2 14"/>
+            <path class="ln" d="M150 84c-16-6-33 2-41 16-6 11-4 23 2 31 5 7 6 11 6 17"/>
+            <path class="ln" d="M111 133c-5 1-8 5-5 9 2 3 6 4 9 2"/>
+            <path class="ln" d="M117 158c8 5 19 5 27 2"/>
+            <path class="ln" d="M42 150c8-9 20-14 32-14M46 176c10 3 21 1 29-5"/>
+            <path class="ln" d="M74 136l14-10c4-3 9-2 11 2s1 9-3 11l-15 9"/>
+            <path class="br" d="M88 122c6-9 16-15 26-15 3 0 5 3 4 6-3 10-11 18-21 21z"/>
+            <g class="sp"><path d="M158 196l3.5 9 9 3.5-9 3.5-3.5 9-3.5-9-9-3.5 9-3.5z"/></g>
+        </svg>
     </div>
+</section>
+
+<!-- 問候條（設計稿圖 2 的月亮那條）。它跟上面那顆按鈕是兩個不同的去處：
+     上面是「開始分析」，這裡是「去逛逛有什麼」。 -->
+<div class="home-greet" data-nav="style">
+    <span class="hg-moon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg></span>
+    <div class="hg-copy">
+        <h1 id="dashGreet">歡迎回來，<span class="accent">訪客</span></h1>
+        <p>探索專屬於你的美妝靈感</p>
+    </div>
+    <span class="hg-cta">立即探索　→</span>
+</div>
 </div>
 
 <div class="dash-sec-head">

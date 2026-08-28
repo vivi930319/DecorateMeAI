@@ -278,13 +278,17 @@ body {
 .input-group input:focus { border-bottom-color:var(--gold); }
 /* 密碼顯示／隱藏切換 */
 .input-group.has-pw-toggle { position:relative; }
-.input-group.has-pw-toggle input { padding-right:52px; }
+.input-group.has-pw-toggle input { padding-right:72px; }
 .pw-toggle {
-    position:absolute; right:0; bottom:10px; z-index:2;
+    position:absolute; right:0; bottom:8px; z-index:2;
+    display:inline-flex; align-items:center; gap:6px;
     padding:4px 2px; border:none; background:none; cursor:pointer;
     font-family:var(--sans); font-size:10px; letter-spacing:.16em;
     color:var(--gold-deep); transition:color .3s var(--ease);
 }
+.pw-toggle svg { width:16px; height:16px; fill:none; stroke:currentColor;
+    stroke-width:1.4; stroke-linecap:round; stroke-linejoin:round; }
+.pw-toggle.is-on { color:var(--gold); }
 .pw-toggle:hover { color:var(--gold); }
 .pw-toggle:focus-visible { outline:1px solid var(--gold); outline-offset:3px; }
 .auth-link { font-family:var(--sans); font-size:11px; letter-spacing:.12em; color:var(--gold-deep); cursor:pointer; display:inline-block; margin-top:6px; transition:color .3s; }
@@ -4186,18 +4190,6 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 /* 有圖示就要讓出位置，否則游標會壓在圖示上 */
 .ig-field input { width:100%; padding-left:42px; }
 .ig-field:focus-within .ig-icon svg { stroke:var(--gold-deep); }
-/* 密碼欄右側的「顯示／隱藏」 */
-.ig-reveal {
-    position:absolute; right:12px; display:inline-flex; align-items:center; gap:6px;
-    padding:5px 6px; border:0; background:transparent; color:var(--mid);
-    font-family:var(--cjk); font-size:12.5px; cursor:pointer; z-index:2;
-}
-.ig-reveal svg { width:17px; height:17px; fill:none; stroke:currentColor;
-    stroke-width:1.4; stroke-linecap:round; stroke-linejoin:round; }
-.ig-reveal:hover, .ig-reveal.is-on { color:var(--gold-deep); }
-.ig-reveal:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; border-radius:6px; }
-/* 有顯示鈕時右邊也要留白，密碼點點才不會跑到按鈕底下 */
-.ig-field:has(.ig-reveal) input { padding-right:76px; }
 /* 忘記密碼：靠右，貼在密碼欄下面（設計稿的位置） */
 .ig-aside { display:flex; justify-content:flex-end; margin:8px 0 4px; }
 /* 「或」分隔線 */
@@ -4241,4 +4233,66 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     .member-actions .ma-cell { padding:13px 12px; font-size:13px; gap:9px; }
     .ma-ico { width:30px; height:30px; }
     .stat-cell .stat-ico svg { width:21px; height:21px; }
+}
+
+/* ═══ 首頁最上面那塊與問候條（設計稿圖 2） ═════════════════════════════ */
+.home-hero {
+    display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);
+    gap:clamp(16px,3vw,40px); align-items:center;
+    padding:clamp(20px,3.5vw,48px) 0 clamp(16px,2.5vw,28px);
+}
+.hh-kicker {
+    display:block; margin-bottom:18px;
+    font-family:var(--sans); font-size:clamp(10px,1vw,11.5px);
+    letter-spacing:.22em; line-height:1.9; color:var(--gold-deep);
+}
+.hh-title {
+    font-family:var(--cjk); font-weight:500;
+    font-size:clamp(34px,6vw,62px); letter-spacing:.12em; line-height:1.2;
+    color:var(--ink); margin-bottom:16px;
+}
+.hh-sub {
+    font-family:var(--cjk); font-size:clamp(13px,1.3vw,15px);
+    line-height:1.9; color:var(--mid); margin-bottom:24px;
+}
+.hh-cta { min-width:min(230px,100%); }
+.home-hero .tone-scale { margin-top:22px; }
+.hh-art { justify-self:center; width:min(260px,100%); }
+.hh-art svg { width:100%; height:auto; }
+.hh-art .arch { fill:none; stroke:var(--line-gold); stroke-width:1.2; }
+.hh-art .ln { fill:none; stroke:var(--gold); stroke-width:1.4; stroke-linecap:round; }
+.hh-art .br { fill:var(--gold-dim); stroke:var(--gold); stroke-width:1.1; }
+.hh-art .sp { fill:var(--gold); }
+
+.home-greet {
+    display:flex; align-items:center; gap:clamp(12px,2vw,22px);
+    margin-bottom:clamp(24px,3.5vw,44px);
+    padding:clamp(16px,2.2vw,24px) clamp(18px,2.5vw,28px);
+    border:1px solid var(--line-gold); border-radius:20px;
+    background:linear-gradient(110deg, var(--blush-panel) 0%, var(--glass) 100%);
+    cursor:pointer; transition:box-shadow .35s var(--ease);
+}
+.home-greet:hover { box-shadow:0 16px 40px -22px rgba(80,48,36,.5); }
+.hg-moon { flex:0 0 auto; display:inline-flex; }
+.hg-moon svg { width:38px; height:38px; fill:var(--gold-dim); stroke:var(--gold);
+    stroke-width:1.2; stroke-linejoin:round; }
+.hg-copy { flex:1 1 auto; min-width:0; }
+/* dashGreet 是 <h1>，JS 會往裡面寫「早安，陳陳」。它在這裡是一行問候，
+   不該套用頁面標題的尺寸。 */
+.hg-copy h1 { font-family:var(--cjk); font-size:clamp(17px,2vw,22px);
+    font-weight:500; letter-spacing:.04em; color:var(--ink); margin:0 0 5px; }
+.hg-copy h1 .accent { color:var(--gold-deep); }
+.hg-copy p { font-family:var(--cjk); font-size:clamp(12px,1.2vw,13.5px); color:var(--mid); }
+.hg-cta {
+    flex:0 0 auto; padding:10px 20px; border-radius:999px;
+    border:1px solid var(--line-gold); background:var(--paper); color:var(--gold-deep);
+    font-family:var(--cjk); font-size:13px; white-space:nowrap;
+}
+@media (max-width:760px) {
+    .home-hero { grid-template-columns:1fr; gap:18px; }
+    /* 線稿排到文案後面：手機上先讀到「這是什麼、可以做什麼」比先看到裝飾重要 */
+    .hh-art { order:2; width:min(190px,58%); }
+    .hh-copy { order:1; }
+    .home-greet { flex-wrap:wrap; }
+    .hg-cta { width:100%; text-align:center; }
 }

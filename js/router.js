@@ -1962,26 +1962,6 @@ function showConfirm(msg, opts){
     setTimeout(function(){ var b = ov.querySelector(".ga-ok"); if (b) b.focus(); }, 60);
 }
 
-// 密碼欄的顯示／隱藏（設計稿圖 1、9 的那顆眼睛）。
-//
-// 只切換 type 與按鈕文字，不碰值：改 value 會把游標推到結尾，
-// 而使用者按「顯示」多半是打到一半發現打錯，想接著改。
-function toggleReveal(inputId, btn) {
-    const input = document.getElementById(inputId);
-    if (!input) return;
-    const show = input.type === 'password';
-    input.type = show ? 'text' : 'password';
-    if (btn) {
-        const label = btn.querySelector('span');
-        if (label) label.textContent = show ? '隱藏' : '顯示';
-        btn.setAttribute('aria-label', show ? '隱藏密碼' : '顯示密碼');
-        btn.classList.toggle('is-on', show);
-    }
-    // 焦點還給輸入框，否則按完要再點一次才能繼續打
-    input.focus();
-}
-if (typeof window !== 'undefined') window.toggleReveal = toggleReveal;
-
 // ═══ 訪客：提示登入或註冊 ═══
 function promptGuestAuth(featureName){
     showConfirm("登入會員即可使用「" + featureName + "」功能，立即加入吧。", {
@@ -8021,13 +8001,19 @@ function enhancePasswordField(input) {
     const btn = document.createElement('button');
     btn.type = 'button';          // 不寫的話它在表單裡預設是 submit，按一下就送出
     btn.className = 'pw-toggle';
-    btn.textContent = '顯示';
+    // 眼睛圖示照設計稿圖 1。用 innerHTML 塞 SVG 之後，文字要透過這個 span 換，
+    // 不能再用 btn.textContent——那會把圖示一起洗掉。
+    btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">'
+        + '<path d="M2.5 12c2.6-4 6-6 9.5-6s6.9 2 9.5 6c-2.6 4-6 6-9.5 6s-6.9-2-9.5-6z"/>'
+        + '<circle cx="12" cy="12" r="2.6"/></svg><span class="pw-txt">顯示</span>';
     btn.setAttribute('aria-label', '顯示密碼');
     btn.setAttribute('aria-pressed', 'false');
     btn.onclick = () => {
         const reveal = input.type === 'password';
         input.type = reveal ? 'text' : 'password';
-        btn.textContent = reveal ? '隱藏' : '顯示';
+        const txt = btn.querySelector('.pw-txt');
+        if (txt) txt.textContent = reveal ? '隱藏' : '顯示';
+        btn.classList.toggle('is-on', reveal);
         btn.setAttribute('aria-label', reveal ? '隱藏密碼' : '顯示密碼');
         btn.setAttribute('aria-pressed', String(reveal));
         // 切換後游標會被丟到開頭，使用者得再點一次才能接著打。補回尾端。
@@ -8324,10 +8310,6 @@ function showLogin() {
                   <div class="ig-field">
                     <span class="ig-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 10V7.5a4 4 0 0 1 8 0V10"/><rect x="5.5" y="10" width="13" height="9.5" rx="2"/></svg></span>
                     <input type="password" id="loginPwd" placeholder="••••••••" autocomplete="current-password">
-                    <button type="button" class="ig-reveal" onclick="toggleReveal('loginPwd', this)" aria-label="顯示密碼">
-                      <svg viewBox="0 0 24 24"><path d="M2.5 12c2.6-4 6-6 9.5-6s6.9 2 9.5 6c-2.6 4-6 6-9.5 6s-6.9-2-9.5-6z"/><circle cx="12" cy="12" r="2.6"/></svg>
-                      <span>顯示</span>
-                    </button>
                   </div></div>
                 <div class="ig-aside"><span class="auth-link" onclick="showForgotPassword()">忘記密碼？</span></div>
                 <button class="btn-gold btn-full" onclick="doLoginAction()" style="margin-top:8px;">登　入</button>
