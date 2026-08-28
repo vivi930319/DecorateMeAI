@@ -1980,6 +1980,28 @@ async def proxy_admin_request(request: Request, upstream_path: str):
     except httpx.HTTPError:
         return JSONResponse(status_code=503, content={"detail": {"error": {"code": "PRODUCT_SERVICE_UNAVAILABLE", "message": "Product service is unavailable.", "retryable": True}}})
 
+    # 上游用「商品管理金鑰」認我們，跟瀏覽器的登入 session 是兩回事。
+    #
+    # 走到這裡代表管理員的 session 已經驗過了（上面的 _require_admin_claims）。
+    # 所以上游再回 401/403，講的一定是**它不接受我們的金鑰**，或它根本不是商品服務——
+    # 原樣傳回去的話，前端會照 401 顯示「登入狀態已失效，請重新登入」，
+    # 而使用者才剛登入，重登一百次也不會好。
+    #
+    # 2026-08-28 就是這樣：PRODUCT_DATABASE_URL 指到會員資料庫，
+    # 它不認得商品管理金鑰，於是新增／刪除／稽核全部變成「請先登入」。
+    if response.status_code in (401, 403):
+        logging.warning("商品上游拒絕管理請求 status=%s path=%s", response.status_code, upstream_path)
+        return JSONResponse(
+            status_code=502,
+            content={"detail": {"error": {
+                "code": "PRODUCT_UPSTREAM_REJECTED",
+                "message": "商品服務不接受這次管理操作（你的登入是有效的）。"
+                           "請確認 Gateway 的 PRODUCT_DATABASE_URL 指向商品服務。",
+                "retryable": False,
+                "details": {"upstreamStatus": response.status_code},
+            }}},
+        )
+
     response_headers = {"X-Content-Type-Options": "nosniff"}
     for header in ("content-type", "cache-control", "retry-after", "x-request-id"):
         if response.headers.get(header):

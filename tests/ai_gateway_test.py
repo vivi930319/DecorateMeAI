@@ -1617,6 +1617,32 @@ class FaceTrainingRunTest(unittest.TestCase):
         self.assertIsNone(r.json()["worker"])
 
 
+class ProductUpstreamRejectionTest(unittest.TestCase):
+    """上游拒絕管理請求時，不能讓前端說成「登入失效」。
+
+    走到轉送這一步時，管理員的 session 已經驗過了。上游再回 401/403，講的是
+    **它不接受我們的商品管理金鑰**，或它根本不是商品服務——原樣傳回去的話，
+    前端會照 401 顯示「請重新登入」，而使用者才剛登入，重登幾次都不會好。
+
+    2026-08-28 就是這樣：PRODUCT_DATABASE_URL 指到會員資料庫，
+    新增／刪除／稽核全部變成「請先登入」。
+    """
+
+    def test_source_maps_upstream_auth_failures(self):
+        src = Path(gateway.__file__).read_text(encoding="utf-8")
+        self.assertIn("PRODUCT_UPSTREAM_REJECTED", src)
+        # 502 而不是原樣的 401：這是「我們與上游之間」的問題，不是使用者的登入問題
+        self.assertIn("status_code=502", src)
+        # 訊息要明講登入是有效的，否則使用者只會一直重登
+        self.assertIn("你的登入是有效的", src)
+
+    def test_only_auth_statuses_are_remapped(self):
+        # 404、409、422 這些要原樣傳回去——它們講的是這一筆資料的事，
+        # 蓋掉的話管理員看不到「商品已被刪除」「版本衝突」這種可以自己處理的訊息。
+        src = Path(gateway.__file__).read_text(encoding="utf-8")
+        self.assertIn("if response.status_code in (401, 403):", src)
+
+
 class PublicProductPathTest(unittest.TestCase):
     """公開商品代理的路徑白名單。
 
