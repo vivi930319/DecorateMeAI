@@ -7217,11 +7217,13 @@ const PageInit = {
                         }
                         feedbackBody.innerHTML =
                             `<div class="admin-empty">${escapeHtml(needLogin ? '未取得管理員權限' : (res.error || '讀取失敗'))}</div>`;
-                        return;
+                        // 回傳成敗，讓 _loadFeedbackOnce 知道這次能不能算「載過了」。
+                        return false;
                     }
                     fbItems = Array.isArray(res.items) ? res.items : [];
                     fbRepaint();
                     loadTrainingRuns();
+                    return true;
                 } finally {
                     if (fbRefresh) fbRefresh.disabled = false;
                 }
@@ -7400,10 +7402,16 @@ const PageInit = {
             });
             if (fbRefresh) fbRefresh.onclick = loadAdminFeedback;
             // 切到這個區塊才載入，而且只自動載一次；之後要更新按「重新載入」。
-            Router._loadFeedbackOnce = () => {
+            // 只在**載成功**之後才算「載過了」。
+            //
+            // 先前是一進來就把旗標設起來，於是第一次失敗（最常見的是登入還沒完成、
+            // 後端回 401）之後就再也不會自己重試——切走再切回來、重新整理都沒用，
+            // 因為旗標還在。而畫面上看到的是一個空的訓練批次區，
+            // 沒有任何線索說「那次載入失敗了，再按一次就好」。
+            Router._loadFeedbackOnce = async () => {
                 if (Router._feedbackLoaded) return;
-                Router._feedbackLoaded = true;
-                loadAdminFeedback();
+                const ok = await loadAdminFeedback();
+                Router._feedbackLoaded = ok !== false;
             };
             if (document.querySelector('[data-admin-view="feedback"]:not([hidden])')) {
                 Router._loadFeedbackOnce();

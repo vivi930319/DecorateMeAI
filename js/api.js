@@ -2156,11 +2156,15 @@ const Api = {
         }
     },
 
-    async fetchFaceTrainingRuns() {
+    // limit 要明講。Gateway 的預設是 5，而後台這一區的用途是**看完整歷史**——
+    // 預設值會讓「送訓完成」永遠只數得到最近五批，早期跑過的批次直接消失，
+    // 而畫面上不會說它被截斷了。50 是 Gateway 允許的上限。
+    async fetchFaceTrainingRuns(limit = 50) {
         const baseUrl = gatewayService('admin-api');
         if (!baseUrl) return { ok: false, error: 'admin-api 未設定' };
         try {
-            const res = await this._protectedFetch(`${baseUrl}/face-training/runs`, {
+            const res = await this._protectedFetch(
+                `${baseUrl}/face-training/runs?limit=${encodeURIComponent(limit)}`, {
                 credentials: 'include', cache: 'no-store', headers: this._adminProductHeaders(),
             });
             const data = await res.json().catch(() => ({}));
