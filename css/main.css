@@ -2193,7 +2193,7 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
 .admin-product-search-panel { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,auto)); gap:10px; align-items:end; margin-bottom:16px; border:1px solid var(--admin-line); border-radius:6px; padding:16px; background:#fff; }
 .admin-product-search-panel > label:first-of-type { grid-column:span 2; min-width:240px; }
 .admin-product-search-panel select { width:100%; min-height:42px; border:1px solid #cfd5d9; border-radius:4px; padding:6px 10px; background:#fff; color:var(--admin-ink); font:400 14px/1.4 "Noto Sans TC",sans-serif; }
-.admin-product-search-panel select[multiple] { padding:4px; }
+.admin-product-search-panel select { max-width:220px; }
 .admin-product-search-panel select:focus { border-color:var(--gold-deep); box-shadow:0 0 0 3px rgba(192,137,122,.16); outline:none; }
 .admin-product-search-panel label { display:grid; gap:8px; color:#536069; font:600 12px/1.2 "Noto Sans TC",sans-serif; }
 .admin-product-search-panel input { width:100%; height:42px; border:1px solid #cfd5d9; border-radius:4px; padding:0 12px; background:#fff; color:var(--admin-ink); font:400 14px/1.4 "Noto Sans TC",sans-serif; outline:none; }

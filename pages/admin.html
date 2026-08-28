@@ -138,18 +138,17 @@
                          或 updatedAt**，而 id 是遞增的，所以它是目前唯一可用的時間代理。
                          ⚠️ 這代表「編輯過的商品不會浮到最上面」——要做到那個，
                          得先請商品後端加 updatedAt。 -->
-                    <!-- 品牌與價格都在**本機的完整清單**上過濾，不送給 API。
-                         實測（2026-08-28）線上商品服務：`minPrice`/`maxPrice` 完全沒有作用
-                         （minPrice=99999 仍回全部 68 筆），`brand=MAC,YSL` 這種逗號多選回 0 筆
-                         （單一品牌才有值）。送出去只會得到一個「篩了但沒篩到」的畫面。
-                         清單本來就已經整份抓回本機（fetchAllPages），在這裡過濾是準的。
-                         後端把這些參數做好之後可以改送 API，見
-                         docs/對外規格書/商品與推薦/給前端_商品賣場篩選_..._2026-08-28.md -->
-                    <label><span>品牌</span><select id="adminProductBrandFilter" multiple size="1">
+                    <!-- 品牌在**本機的完整清單**上過濾，不送 API。
+                         實測（2026-08-28）舊版商品服務的 `brand=MAC,YSL` 這種逗號多選回 0 筆
+                         （單一品牌才有值）；新版支援時 js/router.js 會改送 API
+                         （見 Api.productServerFiltering）。
+                         單選而不是多選：後台是「找某一件商品」的地方，不是逛街——
+                         多選清單在三十幾個品牌時會展開成一大片，而且沒有人需要
+                         同時看 MAC 和 YSL 的商品來決定要編輯哪一筆。
+                         價格區間也拿掉了，理由相同：找商品用名稱與品牌，不用價格。 -->
+                    <label><span>品牌</span><select id="adminProductBrandFilter">
                         <option value="">全部品牌</option>
                     </select></label>
-                    <label><span>最低價</span><input id="adminProductMinPrice" type="number" min="0" step="1" placeholder="不限" inputmode="numeric"></label>
-                    <label><span>最高價</span><input id="adminProductMaxPrice" type="number" min="0" step="1" placeholder="不限" inputmode="numeric"></label>
                     <label><span>排序</span><select id="adminProductSort">
                         <option value="newest">最新在上</option>
                         <option value="oldest">最舊在上</option>

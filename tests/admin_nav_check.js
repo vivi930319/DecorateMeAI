@@ -95,18 +95,22 @@ check('feedback 按鈕存在', setB.has('feedback'));
 check('feedback 區塊存在', setV.has('feedback'));
 check('feedback 在白名單裡（先前就是漏了這個）', setM.has('feedback'));
 
-console.log('\n=== 商品管理：品牌與價格篩選 ===');
+console.log('\n=== 商品管理：品牌篩選 ===');
 // 2026-08-28 實測線上商品服務：minPrice/maxPrice 完全沒有作用（minPrice=99999
 // 仍回全部 68 筆），brand=MAC,YSL 這種逗號多選回 0 筆。所以這兩個條件必須在
 // 本機的完整清單上做——送出去只會得到「看起來有篩、其實沒篩」或「篩到空的」。
 check('品牌篩選在畫面上', html.includes('id="adminProductBrandFilter"'));
-check('價格區間在畫面上',
-  html.includes('id="adminProductMinPrice"') && html.includes('id="adminProductMaxPrice"'));
+// 後台不放價格區間：這裡是「找某一件商品」的地方，找法是名稱、品牌、分類。
+// 一般商品頁那邊留著，那裡是逛街。
+check('後台不放價格區間',
+  !html.includes('id="adminProductMinPrice"') && !html.includes('id="adminProductMaxPrice"'));
+// 單選而不是多選：三十幾個品牌的多選清單會展開成一大片，
+// 而且沒有人需要同時看兩個品牌來決定要編輯哪一筆。
+check('品牌是單選下拉', /<select id="adminProductBrandFilter">/.test(html)
+  && !/adminProductBrandFilter"[^>]*multiple/.test(html));
+check('重畫時保住已選的品牌', js.includes("const picked = el.value;"));
 check('過濾在本機做，不送 API', js.includes('const filterAdminProducts ='));
-check('沒有把 minPrice 送給 API', !/listProducts\([^)]*minPrice/.test(js));
-check('沒有把逗號品牌串送給 API', !/brand:\s*[^,\n]*\.join\(','\)/.test(js));
-// 價格抽不出數字的商品在有價格條件時要排除，不能當成 0
-check('沒有價格的商品不混進價格區間', js.includes('if (price == null) return false;'));
+check('後台不把價格送給 API', !/listProducts\([^)]*minPrice/.test(js));
 // 本機再篩過就不能報伺服器的總數
 check('筆數跟著篩選走', js.includes('已從 ${dbProducts.length} 筆篩選'));
 
@@ -139,9 +143,10 @@ check('用回應判斷後端支不支援篩選',
 check('第一次問到之前保守當成不支援', api.includes('productServerFiltering: false'));
 check('後端支援時前端不再重複篩',
   js.includes('if (Api.productServerFiltering) return list || [];'));
-check('後端支援時才把條件送出去',
-  js.includes("baseParams.brand = brands.join(',')")
-  && /if \(Api\.productServerFiltering\)[\s\S]{0,400}?baseParams\.minPrice/.test(js));
+check('後端支援時才把品牌送出去',
+  /if \(Api\.productServerFiltering\)[\s\S]{0,200}?baseParams\.brand = brand;/.test(js));
+// 後端篩的是全部商品，所以換品牌要重打 API；本機篩時只要重畫
+check('後端支援時換品牌會重抓', js.includes('if (Api.productServerFiltering) loadAdminProducts();'));
 check('認得 OFFSET_NOT_SUPPORTED', api.includes('OFFSET_NOT_SUPPORTED'));
 // 新版粉底會帶完整色號清單，那正是色號比較區一直缺的資料
 check('帶入 shades 清單', api.includes('shades: Array.isArray(product.shades)'));

@@ -6185,41 +6185,16 @@ const PageInit = {
         // 清單本來就整份抓回本機了（fetchAllPages 會翻到 nextCursor 為 null），
         // 所以在這裡過濾是準的。⚠️ 但只有在「完整載入」時才準：
         // rec.partial 為真時清單不完整，過濾與排序的結果也就不完整，畫面要講出來。
-        const adminBrandFilter = () => {
-            const el = document.getElementById('adminProductBrandFilter');
-            if (!el) return [];
-            return [...el.selectedOptions].map(o => o.value).filter(Boolean);
-        };
-        const adminPriceRange = () => {
-            const num = (id) => {
-                const raw = document.getElementById(id)?.value ?? '';
-                const n = Number(raw);
-                return raw === '' || !Number.isFinite(n) ? null : n;
-            };
-            return { min: num('adminProductMinPrice'), max: num('adminProductMaxPrice') };
-        };
-        // 價格是 "NT$377" 這種字串，比大小前要先抽出數字。
-        const adminPriceOf = (p) => {
-            const n = Number(String(p?.price ?? '').replace(/[^0-9.]/g, ''));
-            return Number.isFinite(n) ? n : null;
-        };
+        // 後台只篩品牌。價格區間拿掉了：這裡是「找某一件商品」的地方，
+        // 找法是名稱、品牌、分類——不會有人用價格區間找要編輯哪一筆。
+        // 一般商品頁那邊的價格篩選留著，那裡是逛街。
+        const adminBrandFilter = () => document.getElementById('adminProductBrandFilter')?.value || '';
         const filterAdminProducts = (list) => {
-            // 同上：後端支援時交給後端，前端不再重複套用。
+            // 後端支援時交給後端，前端不再重複套用。
             if (Api.productServerFiltering) return list || [];
-            const brands = adminBrandFilter();
-            const { min, max } = adminPriceRange();
-            if (!brands.length && min == null && max == null) return list || [];
-            return (list || []).filter((p) => {
-                if (brands.length && !brands.includes(String(p.brand || ''))) return false;
-                if (min == null && max == null) return true;
-                const price = adminPriceOf(p);
-                // 沒有價格的商品在有價格條件時排除：把它當成 0 會讓它永遠落在
-                // 「最低價以上」而混進結果裡，而它其實是「不知道」。
-                if (price == null) return false;
-                if (min != null && price < min) return false;
-                if (max != null && price > max) return false;
-                return true;
-            });
+            const brand = adminBrandFilter();
+            if (!brand) return list || [];
+            return (list || []).filter(p => String(p.brand || '') === brand);
         };
 
         // 品牌下拉的選項從實際載到的清單長出來，不寫死。
@@ -6228,11 +6203,13 @@ const PageInit = {
             const brands = [...new Set((list || []).map(p => String(p.brand || '')).filter(Boolean))].sort();
             const el = document.getElementById('adminProductBrandFilter');
             if (el) {
-                const picked = new Set([...el.selectedOptions].map(o => o.value));
-                el.innerHTML = brands.map(b =>
-                    `<option value="${escapeHtml(b)}"${picked.has(b) ? ' selected' : ''}>${escapeHtml(b)}</option>`
-                ).join('');
-                el.size = Math.min(6, Math.max(2, brands.length));
+                // 重畫時保住目前選的那一個：清單是每次載入完才長出來的，
+                // 不保留的話管理員選了品牌、按重新載入就被打回「全部品牌」。
+                const picked = el.value;
+                el.innerHTML = '<option value="">全部品牌</option>'
+                    + brands.map(b =>
+                        `<option value="${escapeHtml(b)}"${picked === b ? ' selected' : ''}>${escapeHtml(b)}</option>`
+                    ).join('');
             }
             // 新增／編輯商品時的品牌欄也用同一份清單。
             // 「MAC」「Mac」「MAC 」會變成三個品牌，而篩選與推薦都是字串比對——
@@ -6335,11 +6312,8 @@ const PageInit = {
             // 舊版對這些參數是靜默忽略的，送了會得到一份沒篩到的清單，
             // 所以要等回應說它支援（appliedFilters／facets）之後才送。
             if (Api.productServerFiltering) {
-                const brands = adminBrandFilter();
-                if (brands.length) baseParams.brand = brands.join(',');
-                const { min, max } = adminPriceRange();
-                if (min != null) baseParams.minPrice = min;
-                if (max != null) baseParams.maxPrice = max;
+                const brand = adminBrandFilter();
+                if (brand) baseParams.brand = brand;
             }
             const fetchAllPages = async () => {
                 const all = [];
@@ -6438,22 +6412,19 @@ const PageInit = {
         const sortSelect = document.getElementById('adminProductSort');
         if (sortSelect) sortSelect.onchange = renderProducts;
         // 品牌與價格是本機過濾，不必重打 API——換條件只要重畫。
-        ['adminProductBrandFilter', 'adminProductMinPrice', 'adminProductMaxPrice']
-            .forEach((id) => {
-                const el = document.getElementById(id);
-                if (!el) return;
-                el.onchange = renderProducts;
-                if (el.tagName === 'INPUT') el.oninput = renderProducts;
-            });
+        const brandFilterEl = document.getElementById('adminProductBrandFilter');
+        // 後端支援伺服器端篩選時要重打一次 API（它篩的是全部商品）；
+        // 不支援時只要在本機重畫。
+        if (brandFilterEl) brandFilterEl.onchange = () => {
+            if (Api.productServerFiltering) loadAdminProducts();
+            else renderProducts();
+        };
         if (productSearchClearBtn) productSearchClearBtn.onclick = () => {
             if (productSearchInput) productSearchInput.value = '';
             const type = document.getElementById('adminProductTypeFilter'); if (type) type.value = '';
             const status = document.getElementById('adminProductStatusFilter'); if (status) status.value = 'active';
             const brand = document.getElementById('adminProductBrandFilter');
-            if (brand) [...brand.options].forEach(o => { o.selected = false; });
-            ['adminProductMinPrice', 'adminProductMaxPrice'].forEach((id) => {
-                const el = document.getElementById(id); if (el) el.value = '';
-            });
+            if (brand) brand.value = '';
             updateProductSearch();
             productSearchInput?.focus();
         };
