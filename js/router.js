@@ -550,9 +550,11 @@ const RecommendationNotice = {
         if (again) again.onclick = () => Router.go('analysis');
         const browse = root.querySelector('[data-rec-browse]');
         if (browse) browse.onclick = () => {
-            // 已經在商品頁時，改成把篩選切回「全部」，而不是原地重新導覽。
-            if (Router.currentPage === 'products') renderShop('all');
-            else Router.go('products');
+            // 一律走 Router.go：`renderShop` 是 PageInit.products 裡面的區域函式，
+            // 從這裡呼叫得到的是 ReferenceError——按鈕在商品頁上按下去會直接壞掉，
+            // 而錯誤只留在 console，畫面上什麼都不會發生。
+            // Router.go 進到商品頁本來就會重畫成「全部」。
+            Router.go('products');
         };
     },
 };
@@ -6864,9 +6866,16 @@ const PageInit = {
                 fbSetState(pending ? `${pending} 筆待覆核` : (fbItems.length ? '全部已覆核' : '沒有資料'),
                     pending ? 'loading' : (fbItems.length ? 'success' : 'idle'));
                 if (fbSummary) {
+                    // ⚠️ 這裡只能用上面算出來的四個桶。分頁從三個變四個之後，這一行還留著
+                    // 舊的 `accepted`，而它已經不存在了——每次重畫都在這裡拋 ReferenceError。
+                    //
+                    // 拋在這個位置特別難查：卡片與計數在它之前就畫完了，畫面看起來正常，
+                    // 但它之後的每一行都沒執行，包括呼叫端下一行的 loadTrainingRuns()。
+                    // 症狀因此是「訓練批次永遠載不出來」，而錯誤只留在 console。
                     fbSummary.textContent = fbItems.length
                         // 講清楚採用的那些會怎麼被用掉：這是唯一會改到訓練集的動作。
-                        ? `${FB_HINT}（共 ${fbItems.length} 筆／待覆核 ${pending}、已採用 ${accepted}、已退回 ${rejected}；`
+                        ? `${FB_HINT}（共 ${fbItems.length} 筆／待覆核 ${pending}、送訓中 ${training}、`
+                          + `送訓完成 ${trained}、已退回 ${rejected}；`
                           + `已採用的會被 training/import_feedback_samples.py 收進下一次重訓）`
                         : '目前沒有使用者修正紀錄。等有人按過「這判斷不準」之後，紀錄會出現在這裡。';
                 }
@@ -7221,7 +7230,16 @@ const PageInit = {
                         return false;
                     }
                     fbItems = Array.isArray(res.items) ? res.items : [];
-                    fbRepaint();
+                    // 兩件獨立的事，不要讓其中一件的失敗連坐另一件。
+                    // 2026-08-28：fbRepaint 用到一個不存在的變數而拋錯，
+                    // 於是同一個 try 裡的 loadTrainingRuns() 從此沒被呼叫過一次——
+                    // 訓練批次區永遠停在佔位字，而畫面上其他部分看起來完全正常。
+                    try {
+                        fbRepaint();
+                    } catch (err) {
+                        console.error('[admin] fbRepaint failed', err);
+                        if (fbSummary) fbSummary.textContent = `清單重畫失敗：${err && err.message || err}`;
+                    }
                     loadTrainingRuns();
                     return true;
                 } finally {

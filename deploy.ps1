@@ -19,6 +19,11 @@ node --check "js/router.js"
 node --check "js/makeup-contract.js"
 node --check "js/makeup-flow.js"
 node "frontend_smoke_check.js"
+# 用到不存在的變數：語法完全合法，node --check 過得了，只有跑到那一行才炸。
+# 2026-08-28 有一個藏在覆核清單重畫裡，讓訓練批次整整一天載不出來。
+node "tests/undefined_names_check.js" .
+# 選擇器清單被切斷：大括號依然平衡，CSS 也不報錯，只有畫面知道。
+node "tests/css_structure_check.js" .
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {
