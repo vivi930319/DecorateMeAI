@@ -4162,7 +4162,6 @@ const PageInit = {
                 ${RecommendationNotice.html()}
                 ${RecommendationNotice.isEmpty && !recommended.length && !Router.productRecommendationLoading
                     ? RecommendationNotice.emptyHtml() : ''}
-                <div class="filter-bar">${chips}</div>
                 <div class="shop-controls">
                     <label><span>品牌</span><select data-shop="brand">
                         <option value="">全部品牌</option>
@@ -4186,6 +4185,7 @@ const PageInit = {
                         || (Router.shopSort && Router.shopSort !== 'default'))
                         ? '<button type="button" class="sc-clear" data-shop="clear">清除條件</button>' : ''}
                 </div>
+                <div class="filter-bar">${chips}</div>
                 <div class="prod-count">${isLoadingProducts ? '商品載入中'
                     : (Router.generalProductError && !list.length ? '商品服務暫時無法載入，請稍後再試'
                     : (list.length !== byCat.length

@@ -983,11 +983,12 @@ body {
 .pc-shade span { width:13px; height:13px; border:1px solid var(--paper); border-radius:50%; margin-left:-3px; box-shadow:0 0 0 1px var(--line-gold); }
 .shop-more { display:flex; justify-content:center; margin:34px 0 8px; }
 .shop-more .btn-outline { min-width:min(320px,100%); }
-/* 一般商品頁的品牌／價格／排序。跟分類 chip 同一層，但視覺上退一階——
-   分類是「我要看哪一類」，這一列是「在這一類裡怎麼看」，兩者不該等重。 */
+/* 一般商品頁的品牌／價格／排序，排在分類 chip 之前。
+   不給外框與底色：包起來就自成一個區塊，跟緊接在下面的分類列各據一方，
+   看起來像兩個各自獨立的控制台。拿掉之後它只是頁首與分類之間的一列欄位，
+   收邊交給分類列底下那條分隔線——一條線收束兩列，比兩個框安靜。 */
 .shop-controls { display:flex; flex-wrap:wrap; align-items:flex-end; gap:14px 18px;
-    margin:14px 0 4px; padding:14px 16px; border:1px solid var(--line);
-    border-radius:14px; background:var(--glass); }
+    margin:0 0 20px; padding:0; }
 .shop-controls label { display:grid; gap:6px; font-family:var(--cjk); font-size:11px;
     letter-spacing:.1em; color:var(--mid); }
 .shop-controls select, .shop-controls input {
@@ -1006,7 +1007,7 @@ body {
 .sc-clear:hover { background:var(--blush-panel); }
 .sc-clear:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; }
 @media (max-width:620px) {
-    .shop-controls { gap:10px 12px; padding:12px; }
+    .shop-controls { gap:10px 12px; }
     .shop-controls select { min-width:0; width:100%; }
     .shop-controls label { flex:1 1 130px; }
     .sc-clear { margin-left:0; flex:1 1 100%; }
