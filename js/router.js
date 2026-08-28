@@ -290,8 +290,22 @@ function pointReasonLabel(reason) {
 // 最多讀取 30 頁，避免後端重複回傳同一個游標時無限請求。
 const PRODUCT_MAX_PAGES = 30;
 
+// 商品清單載入過了嗎。
+//
+// `null` = 還沒載過，或被主動清掉要求重抓（後台改完商品就是這樣強制刷新的）。
+// `[]`   = 載過了，只是一件都沒有——後台把商品全下架時的正常結果。
+//
+// 這兩件事**必須分開**，而用 `.length` 判斷會把它們混成同一件事：
+// 空清單被當成「還沒載」，於是每次重畫都再抓一次，而每次抓都會把
+// generalProductLoading 設成 true，畫面就永遠停在「商品載入中」。
+// 使用者看到的是「一直在載入」，實際上是後端已經回了 200 和一個空陣列，
+// 而且那支 API 正在被無限重打。
+function productCatalogLoaded() {
+    return Array.isArray(Router?.generalProductCatalog);
+}
+
 function loadGeneralProductCatalog(onDone) {
-    if (Array.isArray(Router?.generalProductCatalog) && Router.generalProductCatalog.length) {
+    if (productCatalogLoaded()) {
         if (typeof onDone === 'function') onDone();
         return;
     }
@@ -2630,7 +2644,7 @@ function openProductRecommendationModal(){
     };
     draw();
     // 商品清單尚未載入時，先載入後再補齊推薦圖片與價格。
-    if(!Router.generalProductCatalog?.length)loadGeneralProductCatalog(draw);
+    if(!productCatalogLoaded())loadGeneralProductCatalog(draw);
 
     modal.querySelector('.makeup-style-close').onclick=closeProductRecommendationModal;
     modal.querySelector('[data-close]').onclick=closeProductRecommendationModal;
@@ -3090,7 +3104,10 @@ const PageInit = {
         const glow = document.getElementById('dashGlow');
         if (glow) {
             const picks = getFeaturedProducts(6);
-            if (!picks.length && !Router.generalProductLoading) {
+            // 守衛看的是「載過沒有」，不是「有沒有東西」。用 picks.length 的話，
+            // 商品全下架後 loadGeneralProductCatalog 會立刻同步回呼、重畫 dashboard、
+            // 再次進到這裡——每一輪都是同步的，堆疊直接爆掉。
+            if (!picks.length && !productCatalogLoaded() && !Router.generalProductLoading) {
                 loadGeneralProductCatalog(() => {
                     if (Router.currentPage === 'dashboard') PageInit.dashboard();
                 });
@@ -4076,10 +4093,27 @@ const PageInit = {
             // 兩邊都篩不會錯，但會讓「為什麼這件沒出現」變成兩個地方要查；
             // 而且後端篩的是**全部商品**，本機篩的只是已載入的那些——
             // 兩者結果不同時，重複套用會把後端的正確結果再切一刀。
-            if (Api.productServerFiltering) return list || [];
+            // 關鍵字**一律**在本機篩，而且要在伺服器端篩選的 early return 之前。
+            //
+            // 商品 API 沒有關鍵字參數（listProducts 只送 cursor），所以這個條件
+            // 後端從來收不到。放到 return 之後的話，等哪天後端開始回 appliedFilters／facets，
+            // productServerFiltering 變成 true，搜尋就會安靜地整個失效——
+            // 使用者打字、清單不動，而畫面上沒有任何東西說明為什麼。
+            const q = String(Router.shopQuery || '').trim().toLowerCase();
+            let base = list || [];
+            if (q) {
+                base = base.filter((p) => {
+                    // 名稱、品牌、色號都比對：使用者記得的可能是「RUBY WOO」也可能是「MAC」，
+                    // 或是櫃上抄下來的那組色號。
+                    const hay = [p?.name, p?.brand, p?.shadeCode, CAT_EN[p?.cat], p?.cat]
+                        .map(v => String(v ?? '').toLowerCase());
+                    return hay.some(v => v.includes(q));
+                });
+            }
+            if (Api.productServerFiltering) return base;
             const brand = Router.shopBrand || '';
             const min = Router.shopMinPrice, max = Router.shopMaxPrice;
-            let rows = (list || []).filter((p) => {
+            let rows = base.filter((p) => {
                 if (brand && String(p.brand || '') !== brand) return false;
                 if (min == null && max == null) return true;
                 const price = shopPriceOf(p);
@@ -4118,7 +4152,7 @@ const PageInit = {
             const recommendedByCat = RecFilter.apply(recommendedAll);
             const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
             // 就算已有個人化推薦也要載全部商品清單：下方「全部商品」要靠它，推薦卡缺圖時也要用它補圖
-            const shouldLoadGeneralProducts = !apiCatalog.length && !Router.generalProductLoading;
+            const shouldLoadGeneralProducts = !productCatalogLoaded() && !Router.generalProductLoading;
             if (shouldLoadGeneralProducts) {
                 loadGeneralProductCatalog(() => {
                     if (Router.currentPage === 'products') renderShop(filter);
@@ -4133,7 +4167,9 @@ const PageInit = {
                 Router.shopVisible = SHOP_PAGE_SIZE;
             }
             const visible = Math.min(Router.shopVisible, list.length);
-            const isLoadingProducts = Router.generalProductLoading && !apiCatalog.length;
+            // 「載入中」是還沒載過才算。清單載過了但是空的（後台把商品全下架），
+            // 那是結果不是過程，要顯示「目前沒有商品資料」——講成載入中會讓人一直等。
+            const isLoadingProducts = Router.generalProductLoading && !productCatalogLoaded();
             const header = `
                 <div class="page-header"><span class="eyebrow">Boutique · 選物</span><h1>商品推薦</h1><div class="divider"></div></div>
                 ${recommended.length ? `<section class="recommended-strip">
@@ -4163,6 +4199,11 @@ const PageInit = {
                 ${RecommendationNotice.isEmpty && !recommended.length && !Router.productRecommendationLoading
                     ? RecommendationNotice.emptyHtml() : ''}
                 <div class="shop-controls">
+                    <label class="sc-search"><span>搜尋</span><span class="sc-search-box">
+                        <svg class="sc-search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg>
+                        <input type="search" data-shop="q" placeholder="商品、品牌或色號"
+                            autocomplete="off" value="${escapeHtml(Router.shopQuery || '')}">
+                    </span></label>
                     <label><span>品牌</span><select data-shop="brand">
                         <option value="">全部品牌</option>
                         ${[...new Set(byCat.map(p => String(p.brand || '')).filter(Boolean))].sort()
@@ -4182,6 +4223,7 @@ const PageInit = {
                         <option value="name_asc"${Router.shopSort === 'name_asc' ? ' selected' : ''}>名稱：A 到 Z</option>
                     </select></label>
                     ${(Router.shopBrand || Router.shopMinPrice != null || Router.shopMaxPrice != null
+                        || String(Router.shopQuery || '').trim()
                         || (Router.shopSort && Router.shopSort !== 'default'))
                         ? '<button type="button" class="sc-clear" data-shop="clear">清除條件</button>' : ''}
                 </div>
@@ -4203,18 +4245,55 @@ const PageInit = {
                         else if (kind === 'sort') Router.shopSort = el.value;
                         else if (kind === 'min') Router.shopMinPrice = num(el.value);
                         else if (kind === 'max') Router.shopMaxPrice = num(el.value);
+                        else if (kind === 'q') Router.shopQuery = el.value;
                         else if (kind === 'clear') {
                             Router.shopBrand = '';
                             Router.shopSort = 'default';
                             Router.shopMinPrice = null;
                             Router.shopMaxPrice = null;
+                            Router.shopQuery = '';
                         }
                         Router.shopVisible = SHOP_PAGE_SIZE;
                         renderShop(Router.shopFilter);
                     };
                     if (kind === 'clear') el.onclick = apply;
+                    else if (kind === 'q') {
+                        // 邊打邊篩，但不是每個字都重畫一次整頁——1040 件商品重畫三次
+                        // 的成本會讓輸入卡住。計時器掛在 Router 上而不是這裡：
+                        // 每次 renderShop 都會重建這個閉包，區域變數的 clearTimeout
+                        // 會清到一個已經沒人認得的計時器，等於沒有 debounce。
+                        el.oninput = () => {
+                            Router.shopQuery = el.value;
+                            Router._shopSearchAt = Date.now();
+                            clearTimeout(Router._shopSearchTimer);
+                            Router._shopSearchTimer = setTimeout(apply, 250);
+                        };
+                        // Enter 立即套用，不等計時器：按下去沒反應會讓人以為壞了。
+                        el.onkeydown = (e) => {
+                            if (e.key !== 'Enter') return;
+                            e.preventDefault();
+                            clearTimeout(Router._shopSearchTimer);
+                            Router.shopQuery = el.value;
+                            Router._shopSearchAt = Date.now();
+                            apply();
+                        };
+                    }
                     else el.onchange = apply;
                 });
+                // 重畫會把輸入框整個換掉，游標跟著消失——連打兩個字就會發現
+                // 第二個字打不進去。所以重畫後要把焦點與游標位置放回去。
+                //
+                // 只在「剛剛真的在打字」時還原（1.5 秒內）：不加這個條件的話，
+                // 搜尋框有值時去點分類 chip，焦點會被搶回搜尋框，手機還會彈出鍵盤。
+                if (Date.now() - (Router._shopSearchAt || 0) < 1500) {
+                    const q = area.querySelector('[data-shop="q"]');
+                    if (q) {
+                        q.focus();
+                        const end = q.value.length;
+                        // search 型別在部分瀏覽器不支援 setSelectionRange，失敗不能擋住渲染。
+                        try { q.setSelectionRange(end, end); } catch (_) {}
+                    }
+                }
                 // 提示列的「重試」與空狀態的兩顆按鈕。跟 chip 一起綁，因為
                 // 每次 renderShop 都會重畫 area，事件必須跟著重新掛上。
                 RecommendationNotice.bind(area);
@@ -4327,7 +4406,14 @@ const PageInit = {
                 if (Router.currentPage !== 'products' || Router.shopFilter !== filter) return;
                 const content = list.length
                     ? `<div class="prod-grid" id="shopGrid">` + list.slice(0, visible).map(cardHtml).join('') + `</div>` + moreBarHtml(visible)
-                    : `<div class="empty-state compact">${isLoadingProducts ? '商品載入中' : '目前沒有商品資料'}</div>`;
+                    // 空清單有三種原因，要講對是哪一種。都寫成「目前沒有商品資料」的話，
+                    // 搜尋沒中的人會以為是平台沒貨，而不是自己的關鍵字沒對上——
+                    // 全庫有一千多件，那句話會把他直接勸退。
+                    : `<div class="empty-state compact">${
+                        isLoadingProducts ? '商品載入中'
+                        : (String(Router.shopQuery || '').trim()
+                            ? `找不到符合「${escapeHtml(String(Router.shopQuery).trim())}」的商品，換個關鍵字或清除條件再試試`
+                            : '目前沒有商品資料')}</div>`;
                 area.innerHTML = header + content;
                 bindChips();
                 bindCards(Array.from(area.querySelectorAll('.prod-card')));
@@ -4607,7 +4693,7 @@ const PageInit = {
             const retry = area.querySelector('[data-fav-retry]');
             if (retry) retry.onclick = refreshFavoritesPage;
         };
-        if (!apiCatalog.length && !Router.generalProductLoading) {
+        if (!productCatalogLoaded() && !Router.generalProductLoading) {
             loadGeneralProductCatalog(() => { if (Router.currentPage === 'favorites') PageInit.favorites(); });
         }
         // 「另有 N 件查不到資料」那行說明**刻意不顯示**（2026-08-13 決定）：對使用者來說，
@@ -5140,8 +5226,7 @@ const PageInit = {
         };
         if (favEl) { paintFavCount(); favEl.classList.add('num-pop'); }
         // 商品目錄還沒載進來時，能對上的件數會偏少，載完要重畫一次。
-        const apiCatalogReady = Array.isArray(Router.generalProductCatalog) && Router.generalProductCatalog.length > 0;
-        if (favEl && !apiCatalogReady && !Router.generalProductLoading) {
+        if (favEl && !productCatalogLoaded() && !Router.generalProductLoading) {
             loadGeneralProductCatalog(() => { if (Router.currentPage === 'profile') paintFavCount(); });
         }
         // 只讀本機 Fav 清單，換裝置或本次 session 還沒同步時會顯示 0 或過時數字，

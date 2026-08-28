@@ -49,6 +49,9 @@ Invoke-DeployCheck "未定義的名字"             @('tests/undefined_names_che
 # 「有沒有宣告」，這種名字有宣告，所以它放行。2026-08-29 商品推薦頁整片全白就是這樣
 # 溜過去的——它拋在 innerHTML 賦值之前，連空狀態都畫不出來。這支直接把每個頁面跑一次。
 Invoke-DeployCheck "每頁都畫得出東西"         @('tests/page_dispatch_tdz_check.js', '.')
+# 商品被後台清空後，空清單不能被當成「還沒載入」——那會無限重打商品 API，
+# 畫面永遠停在「商品載入中」。2026-08-29 使用者回報。
+Invoke-DeployCheck "商品清空後的狀態"         @('tests/product_catalog_empty_check.js', '.')
 # 選擇器清單被切斷：大括號依然平衡，CSS 也不報錯，只有畫面知道。
 Invoke-DeployCheck "CSS 結構"                @('tests/css_structure_check.js', '.')
 

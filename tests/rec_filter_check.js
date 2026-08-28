@@ -127,9 +127,22 @@ check('有清除條件', src.includes('data-shop="clear"'));
 // 送出去只會得到一個沒有篩到的畫面，所以全部在本機做——
 // Router.generalProductCatalog 本來就已經是整份清單。
 check('在本機套用，不送 API', src.includes('const applyShopControls ='));
+// 在 applyShopControls 的**整個區塊**裡找，不要用「從開頭起算 N 個字元內」。
+// 原本寫死 700 字元，2026-08-29 在這個函式開頭加了關鍵字搜尋（連同註解十幾行），
+// 就把這一行推出範圍而報 FAIL——程式碼沒壞，是斷言在量距離。
+// 量距離的斷言會在每次重構時假性失敗，而假性失敗久了就沒有人再相信它。
+const shopControlsBlock = (() => {
+  const i = src.indexOf('const applyShopControls =');
+  if (i < 0) return '';
+  let d = 0;
+  for (let k = src.indexOf('{', i); k < src.length; k++) {
+    if (src[k] === '{') d++;
+    else if (src[k] === '}') { d--; if (!d) return src.slice(i, k + 1); }
+  }
+  return '';
+})();
 check('沒有價格的商品不混進價格區間',
-  /applyShopControls[\s\S]{0,700}?if \(price === null\) return false;/.test(src)
-  || /applyShopControls[\s\S]{0,700}?if \(price == null\) return false;/.test(src));
+  /if \(price ===? null\) return false;/.test(shopControlsBlock));
 // 排序時沒價格的排最後，不要因為 NaN 跑到最前面（NaN 的比較結果不可預期）
 check('排序時沒價格的排最後', /byPrice[\s\S]{0,240}?if \(x === null\) return 1;/.test(src));
 // 換條件要把「已展開幾筆」歸零，否則畫面停在第 60 筆看起來像沒反應

@@ -999,6 +999,17 @@ body {
 .shop-controls input { width:86px; text-align:center; font-variant-numeric:tabular-nums; }
 .shop-controls select:focus, .shop-controls input:focus {
     outline:none; border-color:var(--gold); box-shadow:0 0 0 3px var(--gold-dim); }
+/* 搜尋欄。上面那條 `.shop-controls input` 是為價格欄寫的（86px、置中、等寬數字），
+   搜尋框全部都要反過來，所以這裡逐項覆蓋，不是新增。 */
+.sc-search { flex:1 1 260px; min-width:0; }
+.sc-search-box { position:relative; display:flex; align-items:center; }
+.sc-search-icon { position:absolute; left:12px; width:15px; height:15px;
+    fill:none; stroke:var(--lt); stroke-width:1.7; stroke-linecap:round;
+    pointer-events:none; }
+.shop-controls .sc-search input {
+    width:100%; text-align:left; padding-left:35px; font-variant-numeric:normal; }
+.shop-controls .sc-search input:focus + .sc-search-icon,
+.sc-search-box:focus-within .sc-search-icon { stroke:var(--gold-deep); }
 .sc-range { display:flex; align-items:center; gap:7px; }
 .sc-range i { font-style:normal; color:var(--lt); }
 .sc-clear { margin-left:auto; align-self:center; padding:8px 16px; border-radius:999px;
@@ -1010,6 +1021,9 @@ body {
     .shop-controls { gap:10px 12px; }
     .shop-controls select { min-width:0; width:100%; }
     .shop-controls label { flex:1 1 130px; }
+    /* 搜尋獨佔一行：跟品牌／價格擠在 130px 的欄裡，放不下「商品、品牌或色號」，
+       而它是這一列最常用的一個。 */
+    .sc-search { flex:1 1 100%; }
     .sc-clear { margin-left:0; flex:1 1 100%; }
 }
 .prod-count { font-family:var(--sans); font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--lt); margin-bottom:22px; }
