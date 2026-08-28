@@ -4783,24 +4783,21 @@ const PageInit = {
             bindRetry();
             return;
         }
-        // 已下架的排在後面：使用者要先看到還買得到的那些。
-        const goneCards = unavailable.map(p => `
-            <div class="prod-card is-gone" data-gone-pid="${escapeHtml(p.id)}">
-                <div class="pc-imgwrap">
-                    <div class="pc-gone-mark">✕</div>
-                    <button class="heart-btn pc-heart fav" data-unfav="${escapeHtml(p.id)}" aria-label="移除收藏">${HEART_SVG}</button>
-                </div>
-                <div class="pc-cat">已下架</div>
-                <div class="pc-name">此商品已下架</div>
-                <div class="pc-foot"><span class="pc-price">—</span></div>
-            </div>`).join('');
+        // 已下架的商品**不顯示**（2026-08-29 決定）。
+        //
+        // 收藏的紀錄仍留在資料庫，只是畫面上不列出來。一張寫著「此商品已下架」、
+        // 價格是「—」的卡片，對使用者來說沒有任何可做的事：他不會想買一個買不到的東西，
+        // 也多半不記得自己收藏過它。講出來只會製造疑慮。
+        // 這跟 2026-08-13「另有 N 件查不到資料」那行刻意不顯示是同一個判斷。
+        //
+        // ⚠️ 與商品硬刪除規格（2026-08-29）第 7 節不同：那份要求顯示「此商品已下架」
+        // 並保留移除鈕。這裡由專案決定不顯示；資料沒有被刪，之後要改回來只需恢復這一段。
         // 統計列做成一條膠囊（設計稿圖 10）。原本是跟商品頁共用的 .prod-count
         // 小灰字，但收藏頁只有這一行數字，它同時是「你收了幾件」的答覆，
         // 該有自己的份量。
         area.innerHTML = syncNote + `<div class="fav-stat">
             <span class="fs-heart" aria-hidden="true">${HEART_SVG}</span>
             <span>${items.length} 件收藏</span>
-            ${unavailable.length ? `<i>·</i><span class="fs-gone">${unavailable.length} 件已下架</span>` : ''}
         </div><div class="prod-grid">` + items.map((p, i) => `
             <div class="prod-card reveal-in" data-pid="${p.id}" style="animation-delay:${Math.min(i*0.035,0.4)}s">
                 <div class="pc-imgwrap">
@@ -4815,9 +4812,8 @@ const PageInit = {
                         aria-label="把「${escapeHtml(p.name)}」加入購物車">＋</button>
                 </div>
             </div>
-        `).join('') + goneCards + `</div>`;
-        // 已下架的卡片不給加購鈕（goneCards 那組沒有 .pc-add）：那件商品已經從
-        // 資料庫硬刪除了，加得進購物車也結不了帳。
+        `).join('') + `</div>`;
+        // 這裡掃到的都是還買得到的：已下架的商品不會被畫出來（見上面那段）。
         area.querySelectorAll('.pc-add').forEach(btn => {
             btn.onclick = (e) => {
                 e.stopPropagation();
