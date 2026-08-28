@@ -85,8 +85,22 @@ console.log('\n=== 8. 樣式 ===');
 check('浮層樣式存在', css.includes('.fa-sheet'));
 check('手機是底部 sheet、桌機置中',
   /@media \(min-width:700px\)[\s\S]{0,400}\.fa-layer \{ align-items:center/.test(css));
-// 觸控裝置沒有 hover，提示要一直看得到
-check('觸控裝置也看得到「看說明」', /@media \(hover:none\)[\s\S]{0,120}\.rmore/.test(css));
+// 「看說明」在**每一種**裝置上都要看得到，不能只在 hover 時才浮現。
+//
+// 原本這裡斷言的是 `@media (hover:none)` 那條特例存在——但那釘的是舊實作的形狀：
+// 桌機 opacity:0、只有觸控裝置補回 .75，結果是手機看得到、桌機看不到，
+// 而 23 類分類定義全都藏在這顆按鈕後面。2026-08-29 改成常駐的膠囊
+//（對齊商品那邊的 .cd-entry），那條特例就不再需要，斷言也跟著失效。
+//
+// 改成直接釘意圖：.rmore 的基礎規則不可以把自己設成 opacity:0。
+// 唯一允許的 opacity:0 是 :not(.is-ready)——分析還沒完成時本來就不該出現。
+// 錨在行首：不加 ^ 會先撞上 `.result-panel:not(.is-ready) .result-cell[data-fa-field] .rmore`
+// 那條（它含有一模一樣的選擇器字尾，而且排在前面），於是永遠讀到 opacity:0。
+const rmoreBase = (css.match(/^\.result-cell\[data-fa-field\] \.rmore \{[\s\S]*?\}/m) || [''])[0];
+check('「看說明」不是 hover 才出現', !!rmoreBase && !/opacity\s*:\s*0/.test(rmoreBase),
+  rmoreBase ? '' : '找不到 .rmore 的基礎樣式');
+check('分析未完成時才隱藏',
+  /\.result-panel:not\(\.is-ready\)[\s\S]{0,80}\.rmore \{ opacity:0/.test(css));
 check('尊重 prefers-reduced-motion', /prefers-reduced-motion[\s\S]{0,120}\.fa-sheet/.test(css));
 
 console.log('\n=== 9. 圖片版位 ===');

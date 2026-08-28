@@ -3774,14 +3774,31 @@ select:focus, .af-select:focus { outline:none; border-color:var(--gold); }
 .result-cell[data-fa-field] { cursor:pointer; transition:background .3s var(--ease); }
 .result-cell[data-fa-field]:hover { background:var(--white); }
 .result-cell[data-fa-field]:focus-visible { outline:2px solid var(--gold); outline-offset:-2px; }
+/* 「看說明」是常駐的按鈕，不是 hover 才浮現的提示。
+
+   原本桌機是 opacity:0、要滑過去才出現，字級 8.5px；只有觸控裝置因為沒有 hover
+   才給了 .75。結果是**手機看得到、桌機看不到**——而分類定義（FeatureAtlas 的 DEF，
+   23 類全在那裡）正是使用者看到「鵝蛋臉」三個字時最需要的東西，卻藏在一個
+   要先知道它存在才找得到的互動後面。
+
+   樣式對齊商品那邊的 .cd-entry（「色差是什麼？」）：同樣是「這個詞是什麼意思」
+   的入口，長成同一顆膠囊，使用者在兩個模組學到的是同一件事。 */
 .result-cell[data-fa-field] .rmore {
-    position:absolute; right:14px; top:18px; font-family:var(--sans); font-size:8.5px;
-    letter-spacing:.16em; color:var(--gold); opacity:0; transition:opacity .3s var(--ease);
+    position:absolute; right:12px; top:12px;
+    padding:3px 10px; border:1px solid var(--line-gold); border-radius:999px;
+    background:var(--glass); color:var(--gold-deep);
+    font-family:var(--cjk); font-size:10.5px; letter-spacing:.04em;
+    /* opacity 也要留著過渡：分析還沒完成時上面那條 :not(.is-ready) 會把它設成 0，
+       結果出來的瞬間要淡進，不是突然跳出來。 */
+    transition:background .3s var(--ease), opacity .3s var(--ease);
 }
 .result-cell[data-fa-field] { position:relative; }
-.result-cell[data-fa-field]:hover .rmore { opacity:1; }
-/* 觸控裝置沒有 hover，提示要一直看得到，否則沒人知道可以點 */
-@media (hover:none) { .result-cell[data-fa-field] .rmore { opacity:.75; } }
+.result-cell[data-fa-field]:hover .rmore { background:var(--blush-panel); }
+/* result-grid 一律兩欄（沒有單欄的斷點），所以窄螢幕上一格只有 160px 出頭：
+   膠囊要縮一點，才不會逼近左上角的欄位名。 */
+@media (max-width:620px) {
+    .result-cell[data-fa-field] .rmore { right:8px; top:10px; padding:2px 8px; font-size:9.5px; }
+}
 
 /* 桌機改成置中的視窗 */
 @media (min-width:700px) {
