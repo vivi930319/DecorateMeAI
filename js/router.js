@@ -2964,7 +2964,7 @@ const Router = {
             mc.classList.add(back ? 'page-back' : 'page-enter');
             this.currentPage = page;
             // 更新導覽 active
-            document.querySelectorAll('.topbar-nav a').forEach(a => {
+            document.querySelectorAll('.topbar-nav a, .tabbar a').forEach(a => {
                 a.classList.toggle('active', a.dataset.page === page);
             });
             updateAdminNav();
@@ -2988,7 +2988,7 @@ const Router = {
                 void mc.offsetWidth;
                 mc.classList.add('page-enter');
                 this.currentPage = page;
-                document.querySelectorAll('.topbar-nav a').forEach(a => {
+                document.querySelectorAll('.topbar-nav a, .tabbar a').forEach(a => {
                     a.classList.toggle('active', a.dataset.page === page);
                 });
                 updateAdminNav();

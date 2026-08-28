@@ -130,7 +130,11 @@ body {
 .topbar-right { display:flex; align-items:center; gap:18px; flex-shrink:0; }
 .topbar-cart { width:42px; height:42px; position:relative; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--line-dk); background:rgba(255,255,255,.05); color:var(--gold-soft); cursor:pointer; transition:.25s var(--ease); }
 .topbar-cart:hover { border-color:var(--gold-dim); background:rgba(255,255,255,.1); }
-.cart-symbol { font-size:18px; line-height:1; }
+/* 購物車從 emoji 改成線稿：emoji 由作業系統決定長相，在 Windows／iOS／Android
+   上是三個不同顏色的圖案，跟旁邊這排細線圖示搭不起來。 */
+.cart-symbol { display:inline-flex; line-height:1; }
+.cart-symbol svg { width:19px; height:19px; fill:none; stroke:currentColor;
+    stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
 .cart-count { position:absolute; top:-7px; right:-7px; min-width:19px; height:19px; padding:0 5px; display:flex; align-items:center; justify-content:center; border-radius:999px; background:var(--ivory); color:var(--ink-soft); border:1px solid var(--gold-dim); font:500 10px/1 var(--sans); opacity:.55; }
 .cart-count.has-items { background:var(--gold); color:#fff; opacity:1; }
 .topbar-user { display:flex; align-items:center; gap:9px; text-decoration:none; background:transparent; cursor:pointer;
@@ -1501,6 +1505,12 @@ body.admin-mode .topbar-menu-backdrop,
 body.admin-mode .brand-watermark,
 body.admin-mode .signal-watermark,
 body.admin-mode .cursor-glow { display:none !important; }
+/* 後台不出現底部導覽：那四項是美妝站的功能，管理中台借用同一個外框，
+   留著會變成從後台一鍵跳回前台的入口。
+   （單獨寫一條，不併進上面那串——註解夾在逗號清單中間會讓
+   css_structure_check 判定選擇器懸空，而那個檢查是對的：清單被切斷很難用肉眼看出來。） */
+body.admin-mode .tabbar { display:none !important; }
+body.admin-mode .main-content { padding-bottom:0; }
 body.admin-mode .app-shell { background:#f3f5f7; }
 body.admin-mode .main-content { max-width:none; min-height:100vh; margin:0; padding:0; background:#f3f5f7; }
 body.admin-mode .main-content.page-enter,
@@ -3979,4 +3989,43 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 }
 @media (max-width:560px) {
     .about-features { grid-template-columns:1fr; }
+}
+
+/* ═══ 底部導覽（只在窄螢幕） ═══════════════════════════════════════════════
+   桌機不出現：那裡的選單是右上角的漢堡抽屜，再加一條固定在底部的列，
+   等於同一組導覽出現兩次，而且會吃掉一條永遠佔著的橫幅。 */
+.tabbar { display:none; }
+@media (max-width:760px) {
+    .tabbar {
+        position:fixed; z-index:200; left:0; right:0; bottom:0;
+        display:grid; grid-template-columns:repeat(4,1fr);
+        border-top:1px solid var(--line-gold);
+        background:color-mix(in srgb, var(--paper) 94%, transparent);
+        backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
+        /* iOS 的home indicator 會蓋住最後幾 px，沒有這個 inset 圖示會被切到 */
+        padding-bottom:env(safe-area-inset-bottom, 0px);
+    }
+    .tabbar a {
+        display:grid; justify-items:center; align-content:center; gap:4px;
+        min-height:56px; padding:8px 4px; color:var(--lt);
+        font-family:var(--cjk); font-size:11px; letter-spacing:.04em;
+        text-decoration:none; transition:color .25s var(--ease);
+    }
+    .tabbar a.active { color:var(--gold-deep); }
+    .tabbar .tb-icon { display:inline-flex; }
+    .tabbar .tb-icon svg {
+        width:22px; height:22px; fill:none; stroke:currentColor;
+        stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round;
+    }
+    /* 目前這頁：圖示改成實心，只靠顏色區分在小圖示上看不出來 */
+    .tabbar a.active .tb-icon svg { fill:var(--gold-dim); }
+    /* 內容要讓開這條列，否則最後一段永遠被蓋住 */
+    .main-content { padding-bottom:calc(72px + env(safe-area-inset-bottom, 0px)); }
+
+    /* 抽屜與底部列不重複列同樣的項目：這四項已經在下面了，
+       留在抽屜裡只會讓人以為是兩個不同的入口。 */
+    .topbar-nav a[data-page="dashboard"],
+    .topbar-nav a[data-page="products"],
+    .topbar-nav a[data-page="favorites"],
+    .topbar-nav a[data-page="profile"] { display:none; }
 }
