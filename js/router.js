@@ -4059,12 +4059,6 @@ const PageInit = {
     },
 
     products(opts) {
-        if (opts && opts.productId) {
-            renderProductDetail(opts.productId);
-        } else {
-            renderShop((opts && opts.category) || Router.shopFilter || 'all');
-        }
-
         // 一般瀏覽也要有品牌、價格與排序——使用者不是只在「推薦」那一區買東西，
         // 一般商品頁就是逛街的地方，而逛街本來就會照價格與品牌看。
         //
@@ -4581,6 +4575,18 @@ const PageInit = {
                     }
                 }
             }
+        }
+
+        // 分派放在最後：這個方法裡的 renderShop / renderProductDetail 是函式宣告
+        // （會提升），但它們用到的 applyShopControls、shopPriceOf、
+        // refetchShadeIfMissing 是 const。在原本的位置先呼叫，會在 const 初始化前
+        // 讀到它們，拋 ReferenceError: Cannot access ... before initialization——
+        // 而錯誤發生在 area.innerHTML 賦值之前，所以整個商品頁是全白的，
+        // 連「目前沒有商品資料」都不會出現。語法檢查抓不到，這是執行期的 TDZ。
+        if (opts && opts.productId) {
+            renderProductDetail(opts.productId);
+        } else {
+            renderShop((opts && opts.category) || Router.shopFilter || 'all');
         }
     },
 
