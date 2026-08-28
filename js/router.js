@@ -2185,7 +2185,7 @@ dashboard: `
 <div class="arch-hero" data-nav="analysis">
     <div class="arch-corner">Maison Decorate Me</div>
     <span class="arch-eyebrow">A Platform Created for the Love of Beauty</span>
-    <div class="arch-stage"><div class="arch-word-base">裝識你的美</div></div>
+    <div class="arch-stage"><div class="arch-word-base">妝識你的美</div></div>
     <div class="arch-tagline"><div class="at-text">為你打造的<em>美學旅程</em> · 從臉部分析開始</div></div>
 </div>
 <div class="dash-greet">
@@ -5339,16 +5339,14 @@ const PageInit = {
             };
             // source: 'remote' = 讀到資料庫紀錄；'unknown' = 還沒讀到（載入中或讀取失敗）。
             // 不再有 'local' 這個狀態——本機 localStorage 不是點數的真相來源。
-            const paintCheckin = (status, source) => {
-                const nextMilestone = MemberRewards.nextStreakMilestone(Number(status.streak) || 0);
-                const streakLine = (Number(status.streak) || 0) > 0
-                    ? `目前連續簽到 <b>${Number(status.streak) || 0}</b> 天${nextMilestone ? `，再簽 ${nextMilestone - (Number(status.streak) || 0)} 天可拿額外 ${MemberRewards._streakBonusTable[nextMilestone]} 點` : '，已達最高獎勵天數'}`
-                    : '今天開始簽到就能累積連續天數';
+            const paintCheckin = (status) => {
+                // 不顯示打卡紀錄（連續天數、里程碑進度）。要的是打卡這個動作本身，
+                // 不是一份歷史——那一行會把「今天還沒打卡」這個唯一需要看的狀態擠成配角。
+                // 連續天數仍由後端記錄、獎勵照發，只是不攤在畫面上。
                 checkinCard.innerHTML = `<div class="member-action-card">
                     <div>
                         <b>${status.checkedToday ? '今天已完成打卡' : '今天還沒打卡'}</b>
-                        <p>每日打卡可獲得 10 點；連續簽到 3 / 7 / 14 / 30 天另有加碼獎勵。</p>
-                        <p class="checkin-streak">${streakLine}</p>
+                        <p>每日打卡可獲得 10 點。</p>
                     </div>
                     <button class="btn-gold btn-sm" id="dailyCheckinBtn" ${status.checkedToday || isGuest() ? 'disabled' : ''}>${status.checkedToday ? '已打卡' : '打卡 +10'}</button>
                 </div>`;
@@ -5374,14 +5372,11 @@ const PageInit = {
                 };
             };
             // 初始顯示未打卡，等資料庫回覆後再更新狀態。
-            paintCheckin({ checkedToday: false, streak: 0 }, 'unknown');
+            paintCheckin({ checkedToday: false });
             if (!isGuest() && profile.email && Api.getCheckinStatus) {
                 Api.getCheckinStatus(profile.email).then(r => {
                     if (!r || !r.ok) return;
-                    paintCheckin({
-                        checkedToday: !!r.checkedToday,
-                        streak: Number(r.streak) || 0
-                    }, 'remote');
+                    paintCheckin({ checkedToday: !!r.checkedToday });
                 }).catch(() => {});
             }
         }
@@ -8274,7 +8269,7 @@ function showLogin() {
     document.getElementById('auth-layer').innerHTML = `
         <div class="auth-overlay">
             <section class="auth-editorial" aria-label="Decorate Me 登入">
-              <div class="auth-brand-panel"><span class="auth-kicker">DECORATE ME</span><h1>裝識<br>你的美</h1><p>從臉部分析開始，保存每一次妝容建議、收藏與專屬風格。</p></div>
+              <div class="auth-brand-panel"><span class="auth-kicker">DECORATE ME</span><h1>妝識<br>你的美</h1><p>從臉部分析開始，保存每一次妝容建議、收藏與專屬風格。</p></div>
               <div class="auth-form-panel"><div class="auth-card"><span class="auth-kicker">會員登入</span><h2>歡迎回來</h2><p class="auth-description">登入後同步分析紀錄、收藏商品與會員主題。</p>
                 <div class="input-group"><label>電子郵件</label><input type="email" id="loginEmail" placeholder="your@email.com"></div>
                 <div class="input-group"><label>密碼</label><input type="password" id="loginPwd" placeholder="••••••••"></div>

@@ -3,15 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>裝識你的美 · DECORATE ME</title>
+<title>妝識你的美 · DECORATE ME</title>
 <link rel="icon" href="/favicon.ico?v=20260826-211024" sizes="16x16 32x32 48x48 64x64">
 <link rel="icon" href="/favicon-512.png?v=20260826-211024" type="image/png" sizes="512x512">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260826-211024">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Serif+TC:wght@300;400;500;700&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/main.css?v=20260829-063147">
-<link rel="stylesheet" href="css/makeup-flow.css?v=20260829-063147">
+<link rel="stylesheet" href="css/main.css?v=20260829-063719">
+<link rel="stylesheet" href="css/makeup-flow.css?v=20260829-063719">
 <script>
 (function(){
     try {
@@ -28,7 +28,7 @@
 <div id="brand-intro" data-screen-label="進場" aria-hidden="true">
     <div class="intro-haze"></div>
     <div class="intro-name">
-        <span class="ch">裝</span><span class="ch">識</span><span class="ch">你</span><span class="ch">的</span><span class="ch">美</span>
+        <span class="ch">妝</span><span class="ch">識</span><span class="ch">你</span><span class="ch">的</span><span class="ch">美</span>
         <div class="intro-mask"></div>
     </div>
     <div class="intro-glint"></div>
@@ -52,7 +52,7 @@
             <div class="topbar-brand" onclick="Router.go('dashboard')">
                 <span class="brand-round-mark" aria-hidden="true"><img src="assets/brand/decorate-me-round-source.jpg" alt=""></span>
                 <span class="topbar-brand-copy">
-                    <span class="sb-name">裝識你的美</span>
+                    <span class="sb-name">妝識你的美</span>
                     <span class="sb-sub">DECORATE ME</span>
                 </span>
             </div>
@@ -171,7 +171,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     }, { passive: true });
 })();
 </script>
-<script defer src="js/config.js?v=20260829-063147"></script>
+<script defer src="js/config.js?v=20260829-063719"></script>
 <script>
 // config.local.js 只存在於開發機：firebase.json 明確把它排除在部署之外（它是本機覆寫用的，
 // 而且 deploy.ps1 會斷言這件事，因為那個檔案可能含有不該公開的設定）。
@@ -194,13 +194,13 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     document.currentScript.parentNode.insertBefore(local, document.currentScript.nextSibling);
 })();
 </script>
-<script defer src="js/service-endpoints.js?v=20260829-063147"></script>
-<script defer src="js/data.js?v=20260829-063147"></script>
-<script defer src="js/api.js?v=20260829-063147"></script>
+<script defer src="js/service-endpoints.js?v=20260829-063719"></script>
+<script defer src="js/data.js?v=20260829-063719"></script>
+<script defer src="js/api.js?v=20260829-063719"></script>
 <!-- 五官圖鑑：要在 router.js 之前，router 初始化分析頁時會呼叫 FeatureAtlas.attach -->
-<script defer src="js/feature-atlas.js?v=20260829-063147"></script>
-<script defer src="js/makeup-contract.js?v=20260829-063147"></script>
-<script defer src="js/router.js?v=20260829-063147"></script>
-<script defer src="js/makeup-flow.js?v=20260829-063147"></script>
+<script defer src="js/feature-atlas.js?v=20260829-063719"></script>
+<script defer src="js/makeup-contract.js?v=20260829-063719"></script>
+<script defer src="js/router.js?v=20260829-063719"></script>
+<script defer src="js/makeup-flow.js?v=20260829-063719"></script>
 </body>
 </html>

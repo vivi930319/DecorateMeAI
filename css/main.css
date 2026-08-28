@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════════
-   裝識你的美 · DECORATE ME — Luxury Beauty System
+   妝識你的美 · DECORATE ME — Luxury Beauty System
    Palette : rose-espresso × rose-gold × blush
    Type    : Playfair Display + Noto Serif TC (display) / Jost (labels)
    Motion  : shimmer entrance · page fade-rise · hover lift · img reveal
@@ -3623,7 +3623,7 @@ html.intro-off #brand-intro{display:none}
 }
 /* 往下流的那一條。字串重複兩次，位移一半再回到原點，看起來是連續的。 */
 .brand-watermark:after {
-    content:"裝識你的美 · 從臉部分析開始 · 裝識你的美 · 從臉部分析開始 · ";
+    content:"妝識你的美 · 從臉部分析開始 · 妝識你的美 · 從臉部分析開始 · ";
     position:absolute; top:-40vh; right:6vw; width:1.6em;
     font-family:var(--sans); font-size:11px; letter-spacing:.42em;
     color:rgba(226,195,116,.10); white-space:pre-wrap; word-break:break-all;
