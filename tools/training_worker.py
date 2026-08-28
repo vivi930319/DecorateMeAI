@@ -163,7 +163,8 @@ def process_run(run: dict, args, project: str) -> bool:
         [sys.executable, "training/train_basic_cnn_roi.py",
          "--training-run", run_id, "--parts", *parts,
          "--architecture", "convnext_tiny", "--epochs", str(args.epochs),
-         "--skip-random", "--out-dir", out_dir],
+         "--skip-random", "--out-dir", out_dir,
+         *(["--holdout-split", args.holdout_split] if args.holdout_split else [])],
     ]
 
     if args.dry_run:
@@ -212,6 +213,18 @@ def main() -> int:
                         help="心跳用的識別字；後台顯示的就是這個")
     parser.add_argument("--once", action="store_true", help="把目前排隊中的做完就結束")
     parser.add_argument("--dry-run", action="store_true", help="只顯示會做什麼")
+    # 保留集要在**每一次**訓練都排除，否則它就不是保留集了。
+    #
+    # v1 就是這樣花掉的：2026-08-06 為了多拿 27% 的資料，讓線上模型把 v1 的 613 張
+    # 全部訓練過，從此沒有任何一份考卷能拿來比較不同版本的模型——後台顯示的
+    # 「訓練前 → 訓練後」只能在同一批次內部看，跨批次比等於比運氣。
+    #
+    # 所以預設值是 v2 而不是 None：這件事一旦要「記得加參數」就會有人忘記，
+    # 而忘記一次的代價是整個基準作廢。要關掉必須明講 --holdout-split ''。
+    parser.add_argument("--holdout-split", default="v2", metavar="VERSION",
+                        help="每次訓練都排除 data/roi_cache/holdout_split_<VERSION>.json "
+                             "裡標為 holdout 的樣本，讓 tools/eval_on_holdout.py 的分數"
+                             "可以跨批次比較。傳空字串可停用（會讓基準失效）。")
     args = parser.parse_args()
 
     _log(f"訓練機 {args.worker_id} 啟動｜專案 {args.project}｜快取 {args.cache_dir}")

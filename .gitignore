@@ -325,3 +325,8 @@ local_only_notes/
 #   *.zip                    18 MB 的二進位備份，git 對它沒有壓縮優勢
 #   *.log                    實驗的原始輸出，結論已經在訓練紀錄與 holdout_scores.json
 #   未套用_*.patch           還沒套用的修補，套用後應該是 commit 而不是檔案
+
+# 保留集的說明文件。上面的 `*.md` 把它們一起擋掉了，而它們正是那份 json 的
+# 使用說明：v1 的檔案還在，但已經作廢，唯一寫著「不要用它」的地方就是這份 md。
+# 只有 json 進版控、說明留在本機，等於把一顆已知有問題的基準交給下一個人。
+!data/roi_cache/holdout_split_*.md
