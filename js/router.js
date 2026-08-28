@@ -4077,6 +4077,12 @@ const PageInit = {
             return Number.isFinite(n) ? n : null;
         };
         const applyShopControls = (list) => {
+            // 後端支援伺服器端篩選時就不要再篩一次。
+            //
+            // 兩邊都篩不會錯，但會讓「為什麼這件沒出現」變成兩個地方要查；
+            // 而且後端篩的是**全部商品**，本機篩的只是已載入的那些——
+            // 兩者結果不同時，重複套用會把後端的正確結果再切一刀。
+            if (Api.productServerFiltering) return list || [];
             const brand = Router.shopBrand || '';
             const min = Router.shopMinPrice, max = Router.shopMaxPrice;
             let rows = (list || []).filter((p) => {
@@ -6187,6 +6193,8 @@ const PageInit = {
             return Number.isFinite(n) ? n : null;
         };
         const filterAdminProducts = (list) => {
+            // 同上：後端支援時交給後端，前端不再重複套用。
+            if (Api.productServerFiltering) return list || [];
             const brands = adminBrandFilter();
             const { min, max } = adminPriceRange();
             if (!brands.length && min == null && max == null) return list || [];
@@ -6312,6 +6320,16 @@ const PageInit = {
                 status: document.getElementById('adminProductStatusFilter')?.value ?? 'active',
                 limit: 100
             };
+            // 後端支援時把品牌與價格一起送出去，讓它篩全部商品而不是只篩這一頁。
+            // 舊版對這些參數是靜默忽略的，送了會得到一份沒篩到的清單，
+            // 所以要等回應說它支援（appliedFilters／facets）之後才送。
+            if (Api.productServerFiltering) {
+                const brands = adminBrandFilter();
+                if (brands.length) baseParams.brand = brands.join(',');
+                const { min, max } = adminPriceRange();
+                if (min != null) baseParams.minPrice = min;
+                if (max != null) baseParams.maxPrice = max;
+            }
             const fetchAllPages = async () => {
                 const all = [];
                 const seen = new Set();
@@ -6571,13 +6589,16 @@ const PageInit = {
             const shades = shadesInput.filter(c => /^#[0-9a-fA-F]{3,8}$/.test(c));
             // 來源網址不再是必填：手動建立的商品本來就沒有來源頁，逼人填一個等於逼人亂編。
             // 爬蟲匯入的商品仍然帶著抓到的來源（隱藏欄位），照樣會一起送出去。
-            // 來源網址也是必填。契約 2026-08-28 §7 的必要欄位是
-            // name / brand / type / price / imageUrl / sourceUrl，缺任何一個回 400
-            // MISSING_FIELDS。先前這裡沒驗它、payload 又送 `sourceUrl: sourceUrl || null`，
-            // 於是管理員留白時整筆新增被擋下，而畫面上只說「資料庫寫入失敗」——
-            // 沒有指出是哪一欄，也沒有任何欄位標紅。
-            if (!name || !brand || !cat || !priceRaw || !img || !sourceUrl) {
-                showAlert('請完整填寫商品名稱、品牌、分類、價格、圖片網址與來源網址', { type:'error' });
+            // 來源網址可填但不強制。
+            //
+            // 兩份契約對它的說法不一致：2026-08-28 的必要欄位表列它為必填，
+            // 但同一份的新增範例寫 `"sourceUrl": null`。前端不替後端決定——
+            // 留白就送 null，由後端回它的判斷；真的必填時錯誤訊息會指出來
+            // （我們已經會顯示 error.details.fields）。
+            //
+            // 它先前是 type="hidden"，管理員根本填不到，這才是要修的部分。
+            if (!name || !brand || !cat || !priceRaw || !img) {
+                showAlert('請完整填寫商品名稱、品牌、分類、價格與圖片網址', { type:'error' });
                 return;
             }
             // 無效價格在送出前顯示錯誤，避免 NaN 被轉成 null。
@@ -6597,8 +6618,10 @@ const PageInit = {
             // foundations。管理員沒有碰分類，我們就不該替他決定分類。
             // 兩個網址都要是 http(s) 絕對網址。相對路徑或 `javascript:` 會被上游擋成 400，
             // 而那個錯誤訊息不會說是哪一欄。
+            // 只驗有填的那些：來源網址留白是允許的，但填了就必須是完整網址。
             const badUrl = [['圖片網址', img], ['來源網址', sourceUrl]]
-                .find(([, v]) => !/^https?:\/\//i.test(String(v || '')));
+                .filter(([, v]) => String(v || '').trim())
+                .find(([, v]) => !/^https?:\/\//i.test(String(v)));
             if (badUrl) {
                 showAlert(`${badUrl[0]}要填完整網址，必須以 http:// 或 https:// 開頭。`, { type:'error' });
                 return;
@@ -6630,8 +6653,8 @@ const PageInit = {
                 description: desc || '',
                 // 沒有來源就送 null，不要送空字串——上游對 source_url 有 URL 格式驗證時，
                 // "" 會被當成格式錯誤而擋下整筆新增，null 才是「這個商品沒有來源頁」。
-                sourceUrl,
-                source_url: sourceUrl,
+                sourceUrl: sourceUrl || null,
+                source_url: sourceUrl || null,
                 sku: sku || null,
                 shadeName: shadeName || null,
                 hex: shades[0] || null,

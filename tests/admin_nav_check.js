@@ -117,6 +117,30 @@ check('品牌欄有既有選項可挑', html.includes('list="adminBrandOptions"'
 check('選項從實際清單長出來，不寫死', js.includes('const syncAdminBrandOptions ='));
 check('載入完成後同步選項', js.includes('syncAdminBrandOptions(dbProducts)'));
 
+console.log('\n=== 新舊兩版 API 都要正確 ===');
+// 舊版對 minPrice/sort 是靜默忽略——送了不報錯也沒效果；新版會回
+// appliedFilters 與 facets。寫死任一種都會在另一版上壞掉：
+// 假設支援 → 舊版上顯示一份沒篩到的清單；假設不支援 → 新版上白抓整份。
+// 所以用回應自己說的來判斷。
+check('用回應判斷後端支不支援篩選',
+  api.includes('const serverFiltering = !!(data.appliedFilters || data.facets)'));
+check('第一次問到之前保守當成不支援', api.includes('productServerFiltering: false'));
+check('後端支援時前端不再重複篩',
+  js.includes('if (Api.productServerFiltering) return list || [];'));
+check('後端支援時才把條件送出去',
+  js.includes("baseParams.brand = brands.join(',')")
+  && /if \(Api\.productServerFiltering\)[\s\S]{0,400}?baseParams\.minPrice/.test(js));
+check('認得 OFFSET_NOT_SUPPORTED', api.includes('OFFSET_NOT_SUPPORTED'));
+// 新版粉底會帶完整色號清單，那正是色號比較區一直缺的資料
+check('帶入 shades 清單', api.includes('shades: Array.isArray(product.shades)'));
+check('帶入 seriesId 與 depthIndex',
+  api.includes('seriesId: product.seriesId') && api.includes('depthIndex: Number.isFinite'));
+// depthIndexOfficial=false 代表由 Lab 亮度推導，文案不可寫「官方淺一階」
+check('記下色階是不是官方的',
+  api.includes('depthIndexOfficial: product.depthIndexOfficial === true'));
+// 後端已依 depthIndex 排好；前端再排一次遲早會跟後端不一致
+check('不重排 shades', !/shades:[\s\S]{0,200}?\.sort\(/.test(api));
+
 console.log('\n=== 完整翻頁（契約 §3.3）===');
 // 2169 筆 @ limit=100 需要 22 頁；上限要留得夠
 check('翻頁上限足夠載完', /PRODUCT_MAX_PAGES = (\d+)/.test(js)

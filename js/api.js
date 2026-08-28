@@ -1168,6 +1168,22 @@ const Api = {
             tags: product.tags || [],
             sku: product.sku || null,
             shadeName: product.shadeName || product.shade_name || null,
+            // 同一支粉底的完整色號清單（契約 2026-08-28）。這正是色號比較區
+            // 一直缺的那份資料——先前 seriesId 是 null，「同系列」永遠圈不出東西。
+            //
+            // 已由後端依 depthIndex 排好，前端**不要重排**：排序規則是
+            // 「Lab L* 由大到小推導」，前端自己排一次遲早會跟後端不一致，
+            // 而不一致的樣子是「同一支粉底在清單頁與詳情頁的色號順序不同」。
+            shades: Array.isArray(product.shades) ? product.shades : [],
+            shadeCount: Number.isFinite(Number(product.shadeCount))
+                ? Number(product.shadeCount) : null,
+            seriesId: product.seriesId ?? product.series_id ?? null,
+            depthIndex: Number.isFinite(Number(product.depthIndex))
+                ? Number(product.depthIndex) : null,
+            // 這個色階順序是不是品牌官方的。false 代表由 Lab 亮度推導——
+            // 文案必須寫「較明亮／較深的替代色」，不可寫「官方淺一階／深一階」。
+            depthIndexOfficial: product.depthIndexOfficial === true,
+            shadeOrderSource: product.shadeOrderSource || null,
             // 色號代碼。先前只留 shadeName，而卡片要顯示的是這個——
             // 沒有它的話色號只存在於商品名稱字串裡（「…SPF 48/ PA++ - PO-02」），
             // 使用者得自己從一長串名稱的尾巴去找。
@@ -1328,6 +1344,12 @@ const Api = {
             : (Array.isArray(error.details?.allowed) ? error.details.allowed : []);
         // MISSING_FIELDS 會把缺的欄位放在 details.fields（契約 2026-08-28 §7）。
         // 不讀出來的話畫面上只有一句「資料庫寫入失敗」，管理員得逐欄猜。
+        // 新版對 offset 回 400 OFFSET_NOT_SUPPORTED（契約 2026-08-28 §3）。
+        // 前端本來就只用 cursor，這裡認出來是為了萬一有人加了 offset，
+        // 錯誤訊息要直接指出原因，而不是一句 HTTP 400。
+        if (String(error.code || '') === 'OFFSET_NOT_SUPPORTED') {
+            return { error: 'offset 分頁不支援，請改用 nextCursor', status, code: error.code };
+        }
         const missing = Array.isArray(error.details?.fields) ? error.details.fields
             : (Array.isArray(error.fields) ? error.fields : []);
         const base = (error.message || data?.message || `HTTP ${status}`)
@@ -1345,6 +1367,11 @@ const Api = {
         };
     },
 
+    // 目前這一版商品服務支不支援伺服器端篩選。第一次 listProducts 回來才知道，
+    // 在那之前保守當成不支援——本機篩在兩版上都會給出正確結果，只是多算一點；
+    // 反過來假設支援，在舊版上會顯示一個「有篩選器但沒篩到」的清單。
+    productServerFiltering: false,
+
     async listProducts(params = {}) {
         const url = this.config.url('product', 'listPath');
         if (!url) return { ok: false, products: [] };
@@ -1357,9 +1384,24 @@ const Api = {
             if (!res.ok) return { ok: false, status: res.status, products: [] };
             const data = await res.json();
             const list = Array.isArray(data.items) ? data.items : (Array.isArray(data.products) ? data.products : []);
+            // 這一版的商品服務支不支援伺服器端篩選，用回應自己說的來判斷。
+            //
+            // 契約 2026-08-28 的新版會回 `appliedFilters` 與 `facets`；舊版兩個都沒有，
+            // 而且對 minPrice/sort 是**靜默忽略**——送了不報錯也沒效果。
+            // 寫死「用 API 篩」會在舊版上得到一個沒篩到的畫面；寫死「本機篩」則會在
+            // 新版上白白把整份清單抓下來。讓回應自己回答，兩版都對。
+            //
+            // 記在 Api 上而不是回傳值裡：呼叫端要在**送出請求前**就知道能不能交給後端。
+            const serverFiltering = !!(data.appliedFilters || data.facets);
+            if (serverFiltering !== this.productServerFiltering) {
+                this.productServerFiltering = serverFiltering;
+            }
             return {
                 ok: true,
                 ...data,
+                serverFiltering,
+                facets: data.facets || null,
+                appliedFilters: data.appliedFilters || null,
                 products: list.map(item => this._normalizeProduct(item)).filter(Boolean),
                 total: Number(data.total ?? list.length),
                 nextCursor: data.nextCursor ?? null

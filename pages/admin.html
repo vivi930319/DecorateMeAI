@@ -202,8 +202,8 @@
                              管理員填不到，送出去永遠是空的，整筆新增被上游擋成 400。
                              爬蟲匯入與編輯既有商品仍然會回填這一欄（router.js 的
                              enterEditMode），所以它同時是「顯示既有來源」與「手動補來源」。 -->
-                        <label>來源網址（必填）<input id="adminProductSourceUrl" type="url"
-                            placeholder="https://（商品原始頁面）" required></label>
+                        <label>來源網址（選填）<input id="adminProductSourceUrl" type="url"
+                            placeholder="https://（商品原始頁面），可留白"></label>
                         <label>商品描述<textarea id="adminProductDesc" placeholder="商品頁顯示內容"></textarea></label>
                         <label>色碼<input id="adminProductShades" type="text" placeholder="#3A241C"></label>
                         <label>狀態<select id="adminProductStatus"><option value="active">上架中</option><option value="draft">草稿</option><option value="inactive">停用</option></select></label>
