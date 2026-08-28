@@ -280,5 +280,34 @@ check('待送訓的卡片有標記', src.includes("' awaiting'") && css.includes
 check('摘要說明已採用的會進重訓', src.includes('import_feedback_samples.py'));
 check('卡片樣式存在', css.includes('.fb-card') && css.includes('.fb-shots'));
 
+console.log('');
+console.log('=== 可送訓的判定 ===');
+// fbBucket 只回 pending／training／trained／rejected，**沒有 accepted**。
+// 拿 `fbBucket(it) === 'accepted'` 去過濾，可送訓永遠是 0 筆：
+// 按鈕永遠寫「已採用未送訓 0」，全選框因為 all.length === 0 而是 disabled，
+// 勾了完全沒有反應——看起來像功能被拿掉，其實是在找一個不存在的值。
+// 掃描前先去掉註解：程式裡解釋這個坑的那段註解本身就含有這個字串，
+// 不去掉的話這一項會被自己的說明文字命中而永遠失敗。
+const srcNoComment = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+check('fbTrainable 不靠 fbBucket 判斷',
+  !srcNoComment.includes("fbBucket(it) === 'accepted'"));
+check('fbTrainable 直接看 reviewStatus',
+  src.includes("it.reviewStatus === 'accepted' || it.reviewStatus === 'partial'"));
+check('仍然排除沒有影像與已進批次的',
+  src.includes('it.hasSample && !it.trainingRunId'));
+check('fbBucket 確實不會回傳 accepted',
+  !/const fbBucket[\s\S]{0,900}?return 'accepted'/.test(src));
+
+console.log('');
+console.log('=== 訓練批次面板不能停在佔位字 ===');
+// 只有三種合法畫面：載入中、載到了、失敗（帶原因）。
+// 「維持 admin.html 的初始文字」不是其中之一——那讓「還沒開始」「正在跑」
+// 「失敗了」三種完全不同的情況長得一模一樣。
+check('載入前先蓋掉初始文字', src.includes('訓練批次載入中…'));
+check('失敗要說原因', src.includes('訓練批次讀取失敗'));
+check('權限不足要講清楚', src.includes('需要管理員身分，請重新登入後按「重新載入」'));
+check('渲染炸掉也要說', src.includes('訓練批次顯示失敗'));
+check('初始化失敗要顯示在畫面上', src.includes('模型修正複核初始化失敗'));
+
 console.log(`\n${pass}/${pass + fail} passed`);
 process.exit(fail ? 1 : 0);

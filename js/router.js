@@ -6487,6 +6487,12 @@ const PageInit = {
         // 所以這張表只有「模型答什麼、使用者改成什麼」，沒有誰改的。
         const feedbackBody = document.getElementById('adminFeedbackBody');
         if (feedbackBody) {
+          // 這一段接近九百行，中間任何一個例外都會讓後面的事件綁定**整批不執行**：
+          // 畫面看起來是完整的，但「全選可送訓」「送去訓練」按下去毫無反應，
+          // 訓練批次也停在初始佔位字上——看起來像功能被拿掉了，其實是初始化半路死掉。
+          // 例外只留在 console 的話，使用者回報的永遠是「按了沒反應」，
+          // 而那句話沒有指向任何一行程式。所以把它接住並寫到畫面上。
+          try {
             const fbState = document.getElementById('adminFeedbackState');
             const fbSummary = document.getElementById('adminFeedbackSummary');
             const fbRefresh = document.getElementById('adminFeedbackRefresh');
@@ -6546,9 +6552,18 @@ const PageInit = {
             // 「採用」跟「送去訓練」本來就是同一件事——採用的意思就是「這個標註可以拿去
             // 訓練」。所以按鈕預設就對準這一堆，不必再勾一次；勾選只是想單獨送某幾筆時
             // 才用得到。已經有 trainingRunId 的不再列入，否則每按一次就重送一遍舊資料。
+            // 可以送訓的：已採用（或部分採用）、有影像、還沒進過任何批次、而且真的有
+            // 被採用的部位。
+            //
+            // ⚠️ 不能用 `fbBucket(it) === 'accepted'` 判斷——fbBucket **不會**回傳
+            // 'accepted'。它只回 pending／training／trained／rejected 四種，
+            // 而「已採用但還沒送出」被歸在 pending（因為那還需要你動手）。
+            // 拿一個永遠不成立的條件去過濾，結果是可送訓永遠 0 筆：
+            // 按鈕永遠寫「已採用未送訓 0」，全選框因為 all.length === 0 而是 disabled，
+            // 勾了完全沒有反應——看起來像功能壞了，其實是這一行在找一個不存在的值。
             const fbTrainable = () => fbItems.filter(it =>
-                fbBucket(it) === 'accepted' && it.hasSample
-                && !it.trainingRunId && fbApprovedFields(it).length);
+                (it.reviewStatus === 'accepted' || it.reviewStatus === 'partial')
+                && it.hasSample && !it.trainingRunId && fbApprovedFields(it).length);
 
             const fbTrainTargets = () => (fbSelected.size
                 ? [...fbSelected]
@@ -7018,8 +7033,29 @@ const PageInit = {
                 }).join('');
             };
 
+            // 這一塊只有三種合法的畫面：載入中、載到了、失敗（帶原因）。
+            //
+            // 沒有第四種「維持原本那句佔位字」。2026-08-28 就卡在那裡：畫面一直寫著
+            // 「尚未載入訓練批次。」與「目前指標載入中…」，那是 admin.html 的初始文字，
+            // 看不出是還沒開始、正在跑、還是失敗了——三種情況的處理方式完全不同，
+            // 而畫面對三種都給同一句話。
+            //
+            // 所以：進來先蓋掉佔位字，任何離開路徑都必須留下一句說明。
             const loadTrainingRuns = async () => {
-                const res = await Api.fetchFaceTrainingRuns();
+                if (fbRuns && !fbRuns.dataset.painted) fbRuns.textContent = '訓練批次載入中…';
+                if (fbCurrentScore && !fbCurrentScore.dataset.painted) {
+                    fbCurrentScore.textContent = '線上模型指標載入中…';
+                }
+                let res;
+                try {
+                    res = await Api.fetchFaceTrainingRuns();
+                } catch (err) {
+                    // Api 那層已經包過 try/catch，走到這裡代表是它自己壞了。
+                    // 吞掉的話畫面就永遠停在「載入中」，而那是在說謊。
+                    if (fbRuns) fbRuns.textContent = `訓練批次讀取失敗：${err && err.message || err}`;
+                    if (fbCurrentScore) fbCurrentScore.textContent = '線上模型指標讀取失敗';
+                    return;
+                }
                 // 每一筆回饋要知道自己那一批跑完了沒，分頁才分得出「送訓中」與「送訓完成」。
                 if (Array.isArray(res?.runs)) {
                     fbRunStatus.clear();
@@ -7027,8 +7063,22 @@ const PageInit = {
                     // 狀態可能剛從 running 變 done，卡片要跟著換分頁
                     if (fbItems.length) fbRepaint();
                 }
-                if (res.ok) renderTrainingRuns(res);
-                else if (fbRuns) fbRuns.textContent = `訓練批次讀取失敗：${res.error || '未知錯誤'}`;
+                if (res.ok) {
+                    try {
+                        renderTrainingRuns(res);
+                        if (fbRuns) fbRuns.dataset.painted = '1';
+                        if (fbCurrentScore) fbCurrentScore.dataset.painted = '1';
+                    } catch (err) {
+                        // 畫的時候炸掉，畫面會停在「載入中」而資料其實已經拿到了。
+                        if (fbRuns) fbRuns.textContent = `訓練批次顯示失敗：${err && err.message || err}`;
+                    }
+                    return;
+                }
+                const why = (res.status === 401 || res.status === 403)
+                    ? '需要管理員身分，請重新登入後按「重新載入」'
+                    : (res.error || `HTTP ${res.status || '未知錯誤'}`);
+                if (fbRuns) fbRuns.textContent = `訓練批次讀取失敗：${why}`;
+                if (fbCurrentScore) fbCurrentScore.textContent = `線上模型指標讀取失敗：${why}`;
             };
 
             // 訓練機在不在線。這是「批次還在排隊」唯一有意義的解釋來源：
@@ -7332,6 +7382,16 @@ const PageInit = {
             if (document.querySelector('[data-admin-view="feedback"]:not([hidden])')) {
                 Router._loadFeedbackOnce();
             }
+          } catch (err) {
+            const box = document.getElementById('adminFeedbackSummary')
+                     || document.getElementById('adminFeedbackState')
+                     || feedbackBody;
+            if (box) {
+                box.textContent = `模型修正複核初始化失敗：${err && err.message || err}`
+                    + '（這一區的按鈕會沒有反應，請把這行訊息回報）';
+            }
+            console.error('[admin] feedback init failed', err);
+          }
         }
 
         // ═══ 商品操作紀錄 ═══
