@@ -5475,11 +5475,11 @@ const PageInit = {
             const failed = states.includes('error');
             const ready = states.every(state => state === 'ok');
             el.className = `admin-sync-status ${failed ? 'error' : (ready ? 'ok' : 'pending')}`;
-            // 正常時不說話：「資料已同步」對使用者不構成任何資訊，
-            // 他既不能因此做什麼，也不會因為看不到它而困擾。
-            // 有問題才出聲——那時候那行字才真的在講一件事。
-            el.innerHTML = failed ? '<i></i>部分服務異常' : '';
-            el.style.display = failed ? '' : 'none';
+            // 這一行是**後台**的服務狀態，管理員要靠它知道會員資料庫與商品服務都連得上。
+            // 2026-08-28 一度把它改成「正常時不顯示」，那是把使用者端「拿掉資料庫同步字樣」
+            // 的要求套錯了地方——那個要求指的是會員中心，不是這裡。
+            // 對管理員來說「資料已同步」是有意義的：它回答「我現在看到的數字可不可信」。
+            el.innerHTML = `<i></i>${failed ? '部分服務異常' : (ready ? '資料已同步' : '資料同步中')}`;
             if (ready) {
                 const sync = document.getElementById('adminLastSync');
                 if (sync) sync.textContent = `最近同步 ${new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}`;
