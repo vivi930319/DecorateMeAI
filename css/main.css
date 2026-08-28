@@ -4151,3 +4151,22 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     .df-copy b { font-family:var(--cjk); font-size:13px; color:var(--ink-soft); }
     .df-copy span { font-size:11.5px; line-height:1.75; color:var(--mid); }
 }
+
+/* 收藏頁的統計列（設計稿圖 10）：一條膠囊，不是一行小灰字。
+   這頁只有這一行數字，它就是「你收了幾件」的答覆。 */
+.fav-stat {
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    margin-bottom:20px; padding:13px 20px;
+    border:1px solid var(--line-gold); border-radius:999px; background:var(--glass);
+    font-family:var(--cjk); font-size:13.5px; color:var(--ink-soft);
+}
+.fav-stat i { font-style:normal; color:var(--lt); }
+.fav-stat .fs-gone { color:var(--mid); }
+.fav-stat .fs-heart { display:inline-flex; width:18px; height:18px; }
+.fav-stat .fs-heart svg { width:18px; height:18px; fill:var(--gold); }
+/* HEART_SVG 內含一顆 .pulse 光暈，那是給收藏按鈕的點擊回饋用的，
+   放在靜態的統計列上會一直閃。 */
+.fav-stat .fs-heart .pulse { display:none; }
+@media (max-width:620px) {
+    .fav-stat { padding:11px 16px; font-size:12.5px; gap:8px; }
+}

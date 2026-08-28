@@ -4790,8 +4790,14 @@ const PageInit = {
                 <div class="pc-name">此商品已下架</div>
                 <div class="pc-foot"><span class="pc-price">—</span></div>
             </div>`).join('');
-        area.innerHTML = syncNote + `<div class="prod-count">${items.length} 件收藏${
-            unavailable.length ? `　·　${unavailable.length} 件已下架` : ''}</div><div class="prod-grid">` + items.map((p, i) => `
+        // 統計列做成一條膠囊（設計稿圖 10）。原本是跟商品頁共用的 .prod-count
+        // 小灰字，但收藏頁只有這一行數字，它同時是「你收了幾件」的答覆，
+        // 該有自己的份量。
+        area.innerHTML = syncNote + `<div class="fav-stat">
+            <span class="fs-heart" aria-hidden="true">${HEART_SVG}</span>
+            <span>${items.length} 件收藏</span>
+            ${unavailable.length ? `<i>·</i><span class="fs-gone">${unavailable.length} 件已下架</span>` : ''}
+        </div><div class="prod-grid">` + items.map((p, i) => `
             <div class="prod-card reveal-in" data-pid="${p.id}" style="animation-delay:${Math.min(i*0.035,0.4)}s">
                 <div class="pc-imgwrap">
                     ${phBox('', p.name, p.img)}
@@ -4799,11 +4805,25 @@ const PageInit = {
                 </div>
                 <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}</div>
                 <div class="pc-name">${escapeHtml(p.name)}</div>
-                <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
+                <div class="pc-foot">
+                    <span class="pc-price">${escapeHtml(p.price)}</span>
+                    <button type="button" class="pc-add" data-add="${escapeHtml(p.id)}"
+                        aria-label="把「${escapeHtml(p.name)}」加入購物車">＋</button>
+                </div>
             </div>
         `).join('') + goneCards + `</div>`;
+        // 已下架的卡片不給加購鈕（goneCards 那組沒有 .pc-add）：那件商品已經從
+        // 資料庫硬刪除了，加得進購物車也結不了帳。
+        area.querySelectorAll('.pc-add').forEach(btn => {
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                Cart.add(btn.dataset.add);
+                if (typeof updateCartBadge === 'function') updateCartBadge();
+                showToast('已加入購物車');
+            };
+        });
         area.querySelectorAll('.prod-card').forEach(card => {
-            card.onclick = (e) => { if (!e.target.closest('.heart-btn')) Router.go('products',{productId:card.dataset.pid}); };
+            card.onclick = (e) => { if (!e.target.closest('.heart-btn') && !e.target.closest('.pc-add')) Router.go('products',{productId:card.dataset.pid}); };
         });
         area.querySelectorAll('[data-unfav]').forEach(btn => {
             btn.onclick = (e) => {
