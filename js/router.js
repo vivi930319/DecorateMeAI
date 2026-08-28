@@ -21,7 +21,13 @@ const CAT_EN = { '底妝':'FOUNDATION','眼影':'EYESHADOW','眼線/睫毛':'EYE
 function phBox(cls, label, src){
     const cap = (cls.indexOf('product-thumb')>-1) ? '' : `<span class="ph-cap">${escapeHtml(label||'')}</span>`;
     const img = src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(label||'')}" loading="lazy" decoding="async" onload="this.classList.add('loaded')">` : '';
-    return `<div class="ph ${cls}">${cap}${img}</div>`;
+    // 圖片放在佔位文字**前面**，這個順序是有意義的：載入完成後要靠
+    // `.ph img.loaded ~ .ph-cap` 把佔位藏起來，而 `~` 只選得到後面的兄弟。
+    //
+    // 為什麼一定要藏：商品圖多半是去背 PNG，透明的地方會直接看到底下那行
+    // 8px 的商品名（.ph-cap 是 z-index:2、圖片是 3，但透明像素擋不住任何東西）。
+    // 結果是同一個商品名在卡片上出現兩次——一次淡淡印在口紅圖底部，一次在圖片下方。
+    return `<div class="ph ${cls}">${img}${cap}</div>`;
 }
 
 function escapeHtml(value) {
@@ -4358,7 +4364,11 @@ const PageInit = {
                         <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}</div>
                         <div class="pc-name">${escapeHtml(p.name)}</div>
                         ${p.brand ? `<div class="pc-cat">${escapeHtml(p.brand)}</div>` : ''}
-                        <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
+                        <div class="pc-foot">
+                            <span class="pc-price">${escapeHtml(p.price)}</span>
+                            <button type="button" class="pc-add" data-add="${escapeHtml(p.id)}"
+                                aria-label="把「${escapeHtml(p.name)}」加入購物車">＋</button>
+                        </div>
                     </div>`;
             };
             // 卡片事件逐批綁定：載入更多時只綁新加進來的那批，已經在畫面上的不重綁。
@@ -4366,8 +4376,17 @@ const PageInit = {
                 nodes.forEach(card => {
                     if (!card.classList || !card.classList.contains('prod-card')) return;
                     card.onclick = (e) => {
-                        if (e.target.closest('.heart-btn')) return;
+                        // 卡片本身是「看詳情」，愛心與加購是卡片上的獨立動作，
+                        // 少擋一個就會變成「想加入購物車、結果跳去詳情頁」。
+                        if (e.target.closest('.heart-btn') || e.target.closest('.pc-add')) return;
                         renderProductDetail(card.dataset.pid || card.dataset.recPid);
+                    };
+                    const addBtn = card.querySelector('.pc-add');
+                    if (addBtn) addBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        Cart.add(addBtn.dataset.add);
+                        if (typeof updateCartBadge === 'function') updateCartBadge();
+                        showToast('已加入購物車');
                     };
                     const heart = card.querySelector('.pc-heart');
                     if (!heart) return;
