@@ -1347,6 +1347,13 @@ const Api = {
         // 新版對 offset 回 400 OFFSET_NOT_SUPPORTED（契約 2026-08-28 §3）。
         // 前端本來就只用 cursor，這裡認出來是為了萬一有人加了 offset，
         // 錯誤訊息要直接指出原因，而不是一句 HTTP 400。
+        // Gateway 已經確認過管理員 session，是**上游**不接受這次操作
+        //（多半是 PRODUCT_DATABASE_URL 指錯服務）。這一句要壓過任何
+        // 「請重新登入」的預設文案——使用者才剛登入，重登不會好。
+        if (String(error.code || '') === 'PRODUCT_UPSTREAM_REJECTED') {
+            return { error: error.message || '商品服務不接受這次管理操作（你的登入是有效的）',
+                     status, code: error.code };
+        }
         if (String(error.code || '') === 'OFFSET_NOT_SUPPORTED') {
             return { error: 'offset 分頁不支援，請改用 nextCursor', status, code: error.code };
         }

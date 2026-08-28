@@ -5547,6 +5547,17 @@ const PageInit = {
             Router.go('dashboard');
             return;
         }
+        // 「這一區已經載過了」是**這一次進頁**的事，不是整個 session 的事。
+        //
+        // 每次進後台，pages/admin.html 都會重新抓、mainContent.innerHTML 整個換掉，
+        // 所以 DOM 是全新的空表格。而 Router._feedbackLoaded 掛在 Router 上、跨頁面
+        // 存活——離開後台再回來，旗標還是 true，於是 loadAdminFeedback 不會被呼叫：
+        // 待覆核 0、送訓中 0、訓練批次「尚未載入」，看起來像資料整批消失。
+        //
+        // 第一次進去看起來正常，第二次才壞，所以特別難重現。
+        Router._feedbackLoaded = false;
+        Router._productAuditLoaded = false;
+
         const profile = Auth.getProfile ? (Auth.getProfile() || {}) : {};
         const profileNameEl = document.getElementById('adminProfileName');
         const profileEmailEl = document.getElementById('adminProfileEmail');
@@ -6535,7 +6546,7 @@ const PageInit = {
                             if (!result.ok) {
                                 deleteTrigger.disabled = false;
                                 deleteTrigger.textContent = '刪除';
-                                showAlert(`商品刪除失敗：${result.error || '未知錯誤'}${result.status === 401 ? '（登入狀態已失效，請重新登入）' : ''}`, { type: 'error' });
+                                showAlert(`商品刪除失敗：${result.error || '未知錯誤'}${(result.status === 401 && result.code !== 'PRODUCT_UPSTREAM_REJECTED') ? '（登入狀態已失效，請重新登入）' : ''}`, { type: 'error' });
                                 return;
                             }
                             if (String(editingProductId) === String(product.id)) exitEditMode();
@@ -6693,7 +6704,7 @@ const PageInit = {
                         const sent = `（送出的 type=「${payload.type}」、category=「${payload.category}」）`;
                         const needsDetail = /類別|分類|category|type/i.test(String(result.error || ''));
                         showAlert(`資料庫寫入失敗：${result.error}${needsDetail ? sent : ''}`
-                            + `${result.status === 401 ? '（登入狀態已失效，請重新登入）' : ''}`, { type: 'error' });
+                            + `${(result.status === 401 && result.code !== 'PRODUCT_UPSTREAM_REJECTED') ? '（登入狀態已失效，請重新登入）' : ''}`, { type: 'error' });
                     }
                     return false;
                 }

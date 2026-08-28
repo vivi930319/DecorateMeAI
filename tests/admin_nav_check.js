@@ -117,6 +117,18 @@ check('品牌欄有既有選項可挑', html.includes('list="adminBrandOptions"'
 check('選項從實際清單長出來，不寫死', js.includes('const syncAdminBrandOptions ='));
 check('載入完成後同步選項', js.includes('syncAdminBrandOptions(dbProducts)'));
 
+console.log('\n=== 一次性旗標的生命週期 ===');
+// 「這一區已經載過了」是**這一次進頁**的事，不是整個 session 的事。
+// 每次進後台 pages/admin.html 都重新抓、DOM 整個換掉，但這些旗標掛在 Router 上、
+// 跨頁面存活。不重設的話：離開後台再回來，旗標還是 true，資料不會載，
+// 待覆核 0、訓練批次「尚未載入」——看起來像資料整批消失。
+// 第一次進去正常、第二次才壞，所以特別難重現。
+['_feedbackLoaded', '_productAuditLoaded'].forEach((flag) => {
+  const re = new RegExp('admin\\(\\) \\{[\\s\\S]{0,1200}?Router\\.' + flag + ' = false;');
+  check('進頁時重設 Router.' + flag, re.test(js));
+});
+check('旗標只在載入成功後才設起來', js.includes('Router._feedbackLoaded = ok !== false;'));
+
 console.log('\n=== 新舊兩版 API 都要正確 ===');
 // 舊版對 minPrice/sort 是靜默忽略——送了不報錯也沒效果；新版會回
 // appliedFilters 與 facets。寫死任一種都會在另一版上壞掉：
