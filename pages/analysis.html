@@ -98,6 +98,10 @@
     </div>
     <div class="result-panel" id="resultPanel">
         <div class="section-label"><span>NO.02</span>分 析 結 果</div>
+        <!-- 只在未完成時出現（CSS 用 .result-panel:not(.is-ready) 控制）。
+             六格掛著鎖，但畫面上沒有一句話說明那是「還沒到」而不是「不給看」，
+             也沒有說完成後每一格可以點開看分類定義。 -->
+        <div class="result-locked-note">✦ 分析結果將在完成後解鎖，每一格都可以點開看分類說明 ✦</div>
         <div class="result-grid">
             <div class="result-cell" data-fa-field="臉型"><span class="ricon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.2c4.3 0 7 3.1 7 7.3 0 4.5-3 8.3-7 10.3-4-2-7-5.8-7-10.3 0-4.2 2.7-7.3 7-7.3z"/></svg></span><div class="rlabel">臉型</div><div class="rvalue" id="r-face">—</div><div class="rmore">看說明</div><span class="rlock" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 10V7.5a4 4 0 0 1 8 0V10"/><rect x="5.5" y="10" width="13" height="9.5" rx="2"/></svg></span></div>
             <div class="result-cell" data-fa-field="眉型"><span class="ricon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 14c4-5 12-5 16 0"/></svg></span><div class="rlabel">眉型</div><div class="rvalue" id="r-brow">—</div><div class="rmore">看說明</div><span class="rlock" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 10V7.5a4 4 0 0 1 8 0V10"/><rect x="5.5" y="10" width="13" height="9.5" rx="2"/></svg></span></div>

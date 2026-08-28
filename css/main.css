@@ -4079,3 +4079,11 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     .result-cell .rlock { right:8px; top:10px; }
     .result-cell .rlock svg { width:13px; height:13px; }
 }
+
+/* 「分析結果將在完成後解鎖」。只在未完成時出現——完成之後那句話就沒有意義了，
+   而且六格已經自己說明了一切。 */
+.result-locked-note {
+    margin:0 0 14px; text-align:center;
+    font-family:var(--cjk); font-size:12px; letter-spacing:.08em; color:var(--gold-deep);
+}
+.result-panel.is-ready .result-locked-note { display:none; }
