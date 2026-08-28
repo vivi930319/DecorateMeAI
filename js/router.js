@@ -6840,11 +6840,16 @@ const PageInit = {
                 fbPickAll.indeterminate = picked > 0 && picked < all.length;
             };
 
+            // 還沒載到資料之前，按鈕不要說出任何數字——同上，0 是一個宣稱。
+            let fbLoaded = false;
             const fbUpdateTrainButton = () => {
                 // 掛在這裡而不是逐一去補呼叫點：按鈕文字與全選框說的是同一件事
                 // （現在會送出哪幾筆），兩者分開更新遲早會有一邊忘了跟上。
                 fbSyncPickAll();
                 if (!fbTrain) return;
+                // 還沒載到就不要報數字。「已採用未送訓 0」是一個關於資料的宣稱，
+                // 而這時候我們什麼都還不知道。
+                if (!fbLoaded) { fbTrain.textContent = '送去訓練'; fbTrain.disabled = true; return; }
                 const n = fbTrainTargets().length;
                 fbTrain.textContent = fbSelected.size
                     ? `送去訓練（已選 ${n}）`
@@ -7484,10 +7489,19 @@ const PageInit = {
                         }
                         feedbackBody.innerHTML =
                             `<div class="admin-empty">${escapeHtml(needLogin ? '未取得管理員權限' : (res.error || '讀取失敗'))}</div>`;
+                        // 四個分頁的數字退回「—」。
+                        //
+                        // 這是這一整天最要緊的一條：**0 是一個關於資料的宣稱**，
+                        // 意思是「我查過了，一筆都沒有」。沒載到卻寫 0，畫面就在說謊，
+                        // 而它說的正好是最可怕的那句——「你的紀錄都不見了」。
+                        // 使用者因此以為批次被刪掉了，實際上 Firestore 一筆都沒少。
+                        fbCounts.forEach((el) => { el.textContent = '—'; });
+                        fbLoaded = false;
                         // 回傳成敗，讓 _loadFeedbackOnce 知道這次能不能算「載過了」。
                         return false;
                     }
                     fbItems = Array.isArray(res.items) ? res.items : [];
+                    fbLoaded = true;      // 到這裡才真的知道有幾筆
                     // 兩件獨立的事，不要讓其中一件的失敗連坐另一件。
                     // 2026-08-28：fbRepaint 用到一個不存在的變數而拋錯，
                     // 於是同一個 try 裡的 loadTrainingRuns() 從此沒被呼叫過一次——

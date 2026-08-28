@@ -320,6 +320,30 @@ check('已停權的統計欄位保留（資料庫仍有 status）',
   html.includes('id="adminSuspended"'));
 
 console.log('');
+console.log('=== 「0」和「沒載到」必須分得開 ===');
+// 這是 2026-08-28 整天誤會的根源：待覆核 0、送訓中 0、送訓完成 0、退回 0，
+// 看起來就是「我的紀錄都被刪掉了」——而 Firestore 一筆都沒少（11 筆，只增不減）。
+//
+// **0 是一個關於資料的宣稱**，意思是「我查過了，一筆都沒有」。
+// 還沒查到就寫 0，畫面說的是謊，而且說的正好是最可怕的那一句。
+check('分頁計數的初始值不是 0', !/data-fb-count="\w+">0</.test(html));
+check('分頁計數初始顯示 —', /data-fb-count="\w+">—</.test(html));
+check('備援樣板同步', !/data-fb-count="\w+">0</.test(src));
+check('載入失敗時計數退回 —', src.includes("fbCounts.forEach((el) => { el.textContent = '—'; });"));
+check('送訓按鈕載入前不報數字', src.includes("if (!fbLoaded) { fbTrain.textContent = '送去訓練'; fbTrain.disabled = true; return; }"));
+check('載入成功才認為知道筆數', src.includes('fbLoaded = true;'));
+check('失敗後把「知道」關回去', /fbCounts\.forEach[\s\S]{0,120}?fbLoaded = false;/.test(src));
+
+console.log('');
+console.log('=== 訓練批次紀錄刪不掉（結構上）===');
+// 使用者兩次以為批次被刪掉。實際上整個系統沒有任何刪除路徑：
+// Gateway 只有 create 與 all_jobs，訓練機只 patch 狀態與指標。
+// 這一項守著那個事實——真的要加刪除功能時，會先在這裡亮紅燈。
+check('前端沒有刪除訓練批次的 API', !/delete[A-Za-z]*Training|Training[A-Za-z]*Delete/i.test(api));
+check('前端沒有對 runs 送 DELETE',
+  !/face-training\/runs[^`'"]*`?,\s*\{\s*method:\s*'DELETE'/i.test(api));
+
+console.log('');
 console.log('=== 訓練批次面板不能停在佔位字 ===');
 // 只有三種合法畫面：載入中、載到了、失敗（帶原因）。
 // 「維持 admin.html 的初始文字」不是其中之一——那讓「還沒開始」「正在跑」
