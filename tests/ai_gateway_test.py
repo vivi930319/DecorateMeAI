@@ -1643,6 +1643,11 @@ class PublicProductPathTest(unittest.TestCase):
         self.assertFalse(self._allowed("api/products/a/b/shade-matches"))
         self.assertFalse(self._allowed("api/products/../admin/shade-matches"))
 
+    def test_health_is_allowed_for_deploy_verification(self):
+        # 切換 PRODUCT_DATABASE_URL 之後要能從正式站確認指到哪一版。
+        # 沒有它就只能看 api/products 的 total 猜，而那個數字不會說服務版本。
+        self.assertTrue(self._allowed("health"))
+
     def test_other_product_routes_stay_closed(self):
         self.assertFalse(self._allowed("api/products/902"))
         self.assertFalse(self._allowed("api/crawler-staging/products"))

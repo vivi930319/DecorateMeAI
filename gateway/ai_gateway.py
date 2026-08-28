@@ -297,8 +297,14 @@ GUEST_QUOTA_SPEND_PATHS = {"face-basic": _patterns(r"v1/face/jobs/basic")}
 # 回 404「Route not found」，而那個訊息長得跟上游沒有這個端點一模一樣——
 # 讀起來像是對方沒做，實際上是我們沒開。id 段落限制成不含斜線，避免用路徑
 # 穿越到商品服務的其他端點。
+#
+# `health` 是部署後的驗收入口（商品後端契約 2026-08-28 §正式部署責任邊界第 4 步）：
+# 切換 PRODUCT_DATABASE_URL 之後要能從正式站確認「Gateway 指到的是哪一版、幾筆商品」。
+# 沒有它就只能靠 `api/products` 的 total 猜，而那個數字不會說服務版本。
+# 它只回服務自己的版本與統計，沒有任何會員或商品明細。
 PUBLIC_PRODUCT_PATHS = _patterns(r"api/products", r"recommend-products",
-                                 r"api/products/[^/]+/shade-matches")
+                                 r"api/products/[^/]+/shade-matches",
+                                 r"health")
 SAVED_LOOK_PATH_RE = re.compile(r"^api/members/([^/]+)/saved-looks(?:/([^/]+))?$")
 MEMBER_PATH_RE = re.compile(r"^api/members/([^/]+)$")
 MEMBER_SCOPE_RE = re.compile(r"^api/members/([^/]+)(?:/|$)")
@@ -2512,7 +2518,7 @@ async def admin_face_training_runs(request: Request):
 async def proxy_public_product_request(request: Request, path: str):
     if not PRODUCT_DATABASE_URL or not any(pattern.fullmatch(path) for pattern in PUBLIC_PRODUCT_PATHS):
         raise HTTPException(status_code=404, detail={"error": {"code": "NOT_FOUND", "message": "Route not found."}})
-    if ((path == "api/products" or path.endswith("/shade-matches")) and request.method != "GET")             or (path == "recommend-products" and request.method != "POST"):
+    if ((path in ("api/products", "health") or path.endswith("/shade-matches")) and request.method != "GET")             or (path == "recommend-products" and request.method != "POST"):
         raise HTTPException(status_code=405, detail={"error": {"code": "METHOD_NOT_ALLOWED", "message": "Method not allowed."}})
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
