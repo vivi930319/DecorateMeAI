@@ -3825,10 +3825,16 @@ select:focus, .af-select:focus { outline:none; border-color:var(--gold); }
 }
 .result-cell[data-fa-field] { position:relative; }
 .result-cell[data-fa-field]:hover .rmore { background:var(--blush-panel); }
-/* result-grid 一律兩欄（沒有單欄的斷點），所以窄螢幕上一格只有 160px 出頭：
-   膠囊要縮一點，才不會逼近左上角的欄位名。 */
+/* result-grid 一律兩欄（沒有單欄的斷點），所以窄螢幕上一格只有 160px 出頭。
+   「為什麼是這個？」有七個字，釘在右上角會壓到左上的欄位名，
+   所以在窄螢幕改成跟著內容排到值的下面——格子長一點，總比兩段字疊在一起好。
+   鎖頭留在右上：它只有 13px，那個角落放得下。 */
 @media (max-width:620px) {
-    .result-cell[data-fa-field] .rmore { right:8px; top:10px; padding:2px 8px; font-size:9.5px; }
+    .result-cell[data-fa-field] .rmore {
+        position:static; right:auto; top:auto;
+        display:inline-block; margin-top:10px;
+        padding:3px 11px; font-size:10px;
+    }
 }
 
 /* 桌機改成置中的視窗 */
