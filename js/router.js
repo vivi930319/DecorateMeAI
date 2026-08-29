@@ -2272,7 +2272,7 @@ dashboard: `
 <!-- 首頁的「關於我們」整段已移除（2026-08-29 使用者要求）；
      pages/dashboard.html 那份也一起拿掉，兩份樣板必須同步。 -->`,
 analysis: `
-<div class="page-header"><h1>臉部分析</h1><div class="divider"></div><p>上傳正面照片，分析五官特徵</p></div>
+<div class="page-header analysis-signal-header"><div class="ash-copy"><span class="eyebrow">FACE ANALYSIS</span><h1>臉部分析</h1><div class="divider"></div><p>上傳正面照片，分析五官特徵</p></div><div class="ash-art" aria-hidden="true"><img src="assets/feature/analysis-head.webp" alt="" loading="eager" decoding="async"></div></div>
 <div class="analyze-grid">
     <div>
         <div class="section-label"><span>NO.01</span>上 傳 照 片</div>
@@ -2282,14 +2282,14 @@ analysis: `
         </div>
         <div class="mode-panel active" id="basicPanel">
             <div class="upload-box" id="uploadBox">
-                <div class="upload-icon"><span>＋</span></div>
+                <div class="upload-icon has-art"><img src="assets/feature/upload-cloud.webp" alt="" loading="lazy" decoding="async"></div>
                 <div class="upload-label">選擇照片</div>
                 <div class="upload-hint">正面、光線均勻，並把頭髮撥開露出額頭與兩頰</div>
                 <input type="file" id="fileInput" accept="image/*" style="display:none;">
             </div>
             <div class="camera-actions">
-                <button class="btn-outline btn-sm" id="startCameraBtn">開啟鏡頭</button>
-                <button class="btn-outline btn-sm" id="capturePhotoBtn">拍照使用</button>
+                <button class="btn-outline btn-sm has-ico" id="startCameraBtn"><img class="btn-ico" src="assets/feature/ico-lens.webp" alt="" loading="lazy">開啟鏡頭</button>
+                <button class="btn-outline btn-sm has-ico" id="capturePhotoBtn"><img class="btn-ico" src="assets/feature/ico-camera.webp" alt="" loading="lazy">拍照使用</button>
             </div>
             <div class="camera-box" id="cameraBox">
                 <video id="cameraVideo" autoplay playsinline></video>
@@ -2336,7 +2336,7 @@ analysis: `
         </div>
         <div class="loading-bar" id="loadingBar"><div class="fill" id="loadingFill"></div></div>
         <div class="loading-status" id="loadingStatus">等待圖片</div>
-        <div class="package-status" id="packageStatus"><b>分析進度</b><span>尚未開始</span></div>
+        <div class="package-status" id="packageStatus"><img class="ps-ico" src="assets/feature/ico-progress.webp" alt="" aria-hidden="true" loading="lazy"><b>分析進度</b><span>尚未開始</span></div>
         <ol class="analysis-steps" id="analysisSteps" aria-label="分析進度">
             <li data-step="1"><span class="as-dot" aria-hidden="true"></span><span class="as-name">上傳照片</span></li>
             <li data-step="2"><span class="as-dot" aria-hidden="true"></span><span class="as-name">生成中</span></li>
@@ -2347,12 +2347,12 @@ analysis: `
     <div class="result-panel" id="resultPanel">
         <div class="section-label"><span>NO.02</span>分 析 結 果</div>
         <div class="result-grid">
-            <div class="result-cell"><div class="rlabel">臉型</div><div class="rvalue" id="r-face">—</div></div>
-            <div class="result-cell"><div class="rlabel">眉型</div><div class="rvalue" id="r-brow">—</div></div>
-            <div class="result-cell"><div class="rlabel">眼型</div><div class="rvalue" id="r-eye">—</div></div>
-            <div class="result-cell"><div class="rlabel">鼻型</div><div class="rvalue" id="r-nose">—</div></div>
-            <div class="result-cell"><div class="rlabel">嘴型</div><div class="rvalue" id="r-lip">—</div></div>
-            <div class="result-cell"><div class="rlabel">色彩季型</div><div class="rvalue" id="r-season">—</div></div>
+            <div class="result-cell"><span class="ricon" aria-hidden="true"><img src="assets/feature/face.webp" alt="" loading="lazy" decoding="async"></span><div class="rlabel">臉型</div><div class="rvalue" id="r-face">—</div></div>
+            <div class="result-cell"><span class="ricon" aria-hidden="true"><img src="assets/feature/brow.webp" alt="" loading="lazy" decoding="async"></span><div class="rlabel">眉型</div><div class="rvalue" id="r-brow">—</div></div>
+            <div class="result-cell"><span class="ricon" aria-hidden="true"><img src="assets/feature/eye.webp" alt="" loading="lazy" decoding="async"></span><div class="rlabel">眼型</div><div class="rvalue" id="r-eye">—</div></div>
+            <div class="result-cell"><span class="ricon" aria-hidden="true"><img src="assets/feature/nose.webp" alt="" loading="lazy" decoding="async"></span><div class="rlabel">鼻型</div><div class="rvalue" id="r-nose">—</div></div>
+            <div class="result-cell"><span class="ricon" aria-hidden="true"><img src="assets/feature/lip.webp" alt="" loading="lazy" decoding="async"></span><div class="rlabel">嘴型</div><div class="rvalue" id="r-lip">—</div></div>
+            <div class="result-cell"><span class="ricon" aria-hidden="true"><img src="assets/feature/season.webp" alt="" loading="lazy" decoding="async"></span><div class="rlabel">色彩季型</div><div class="rvalue" id="r-season">—</div></div>
         </div>
         <div class="skin-box"><div class="skin-title">膚 色 基 準 · M A C</div><div class="skin-row"><div class="skin-swatch" id="skinSwatch"></div><div><div class="skin-name" id="skinName">—</div></div></div><div class="skin-warn" id="skinReliabilityWarn" style="display:none;"></div></div>
         <div class="skin-box"><div class="skin-title">唇 色</div><div class="skin-row"><div class="skin-swatch" id="lipSwatch"></div></div></div>

@@ -174,6 +174,15 @@ check('兩顆相機按鈕各有圖示', analysis.includes('assets/feature/ico-le
 check('分析進度列有圖示', analysis.includes('assets/feature/ico-progress.webp'));
 check('五張插圖檔案都在', ['analysis-head', 'upload-cloud', 'ico-lens', 'ico-camera', 'ico-progress']
     .every(n => fs.existsSync(path.join(ROOT, `assets/feature/${n}.webp`))));
+// 備援樣板（router.js 的 fallbacks.analysis）必須帶同一批插圖。
+// 它只在 fetch 失敗時出現，平常測不到——掉件的樣子正好是「插圖沒上去」，
+// 而且怎麼重新整理都一樣。這個專案已經在會員中心踩過同一個坑。
+check('備援樣板也帶著同一批插圖',
+    ['analysis-head', 'upload-cloud', 'ico-lens', 'ico-camera', 'ico-progress',
+     'face', 'brow', 'eye', 'nose', 'lip', 'season']
+        .every(n => router.includes(`assets/feature/${n}.webp`)));
+check('備援樣板的上傳框也是雲朵', router.includes('upload-icon has-art')
+    && !router.includes('<div class="upload-icon"><span>＋</span></div>'));
 // 標題文案也照設計稿（原本是「分析你的臉部訊號」加一段 BASIC/PRO 的解釋）。
 check('標題文案照設計稿', analysis.includes('<h1>臉部分析</h1>')
     && analysis.includes('上傳正面照片，分析五官特徵'));
