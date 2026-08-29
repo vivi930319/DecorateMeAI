@@ -301,6 +301,40 @@ class AiGatewayTest(unittest.TestCase):
             asyncio.run(session_status(request))
         self.assertEqual(revoked.exception.status_code, 401)
 
+    def test_unknown_upstream_subject_is_not_reported_as_an_expired_session(self):
+        # 404 講的不是憑證，是「上游沒有這個人」。兩者都轉成 MEMBER_SESSION_INVALID
+        # 的話，前端會照登出清單把人踢回登入頁，而重新登入不可能修好一個
+        # 上游根本不存在的帳號——2026-08-29 後台的 admin@decoratme.local
+        # 就是這樣每 90 秒被踢一次，畫面上沒有一個字說明原因。
+        gateway.MEMBER_DATABASE_URL = "https://member.test"
+        token, _ = issue_access_token("admin@decoratme.local", "admin", "active")
+        request = Mock()
+        request.headers = {}
+        request.cookies = session_cookies(token, seal_member_cookie("session=live-upstream-value"))
+        request.app.state.http_client.get = AsyncMock(return_value=httpx.Response(404))
+        with self.assertRaises(Exception) as missing:
+            asyncio.run(session_status(request))
+        self.assertEqual(missing.exception.status_code, 401)
+        self.assertEqual(missing.exception.detail["error"]["code"], "MEMBER_NOT_PROVISIONED")
+
+    def test_revoked_and_unknown_do_not_share_one_code(self):
+        # 兩條路各自要有自己的碼，否則前端無從分辨「該重新登入」與
+        # 「這個帳號不在會員名冊裡」——而只有後者重登是沒用的。
+        gateway.MEMBER_DATABASE_URL = "https://member.test"
+        token, _ = issue_access_token("member@example.com", "member", "active")
+        codes = {}
+        for status in (401, 403, 404):
+            request = Mock()
+            request.headers = {}
+            request.cookies = session_cookies(token, seal_member_cookie("session=abc"))
+            request.app.state.http_client.get = AsyncMock(return_value=httpx.Response(status))
+            with self.assertRaises(Exception) as raised:
+                asyncio.run(session_status(request))
+            codes[status] = raised.exception.detail["error"]["code"]
+        self.assertEqual(codes[401], "MEMBER_SESSION_INVALID")
+        self.assertEqual(codes[403], "MEMBER_SESSION_INVALID")
+        self.assertEqual(codes[404], "MEMBER_NOT_PROVISIONED")
+
     def test_partial_cookie_rotation_keeps_the_whole_session_jar(self):
         jar = "session=abc; refresh=def"
         rotated = gateway.merge_upstream_cookies(

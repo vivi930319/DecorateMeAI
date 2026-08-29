@@ -942,7 +942,23 @@ async def _validate_upstream_member_cookie(request: Request, upstream_cookie: st
             status_code=503,
             detail={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE", "message": "Member authentication is unavailable."}},
         )
-    if response.status_code in {401, 403, 404}:
+    # 404 與 401/403 是兩件不同的事，不能都說成「session 無效」。
+    #
+    # 404 = 這個 session 有效，但它的 subject 在會員資料庫裡**找不到這個人**。
+    # 重新登入一百次也不會好——那個帳號不存在於上游，不是憑證過期。
+    #
+    # 2026-08-29 就是這樣把管理員每 90 秒踢出去一次的：後台的
+    # `admin@decoratme.local` 是 Gateway 端的內建管理員（`.local` 是假網域），
+    # 上游查無此人回 404，這裡轉成 MEMBER_SESSION_INVALID，而那個碼在前端的
+    # 登出清單裡。使用者看到的是「請重新登入」，登入後 90 秒又被踢，
+    # 而真正的問題（上游沒有這組 admin）畫面上一個字都沒說。
+    if response.status_code == 404:
+        raise HTTPException(
+            status_code=401,
+            detail={"error": {"code": "MEMBER_NOT_PROVISIONED",
+                              "message": "This account does not exist in the member directory."}},
+        )
+    if response.status_code in {401, 403}:
         raise HTTPException(
             status_code=401,
             detail={"error": {"code": "MEMBER_SESSION_INVALID", "message": "Member session is invalid or expired."}},
