@@ -69,7 +69,7 @@ check('捲動前先切到目標分頁', routerCode.includes("target.closest('.me
 //
 // 點名之後，少了哪一塊會直接說出是哪一塊，多了一塊不算失敗。
 const MEMBER_BLOCKS = ['會員等級', 'PRO 付費解鎖（Demo）', '每日打卡', '任務中心',
-                       '推薦好友', '點數商店', '點數紀錄', '已收藏的妝容對比圖'];
+                       '推薦好友', '點數商店', '已收藏的妝容對比圖'];
 MEMBER_BLOCKS.forEach(title => {
     check(`區塊還在：${title}`, profileCode.includes(`<h2>${title}</h2>`));
 });
@@ -103,8 +103,11 @@ console.log('');
 console.log('=== 3. 分析結果區的兩種狀態 ===');
 check('有狀態容器', profileCode !== null && read('pages/analysis.html').includes('class="result-panel"'));
 check('備援樣板同步', routerCode.includes('<div class="result-panel" id="resultPanel">'));
-check('沒結果時灰階', cssCode.includes('.result-panel:not(.is-ready)')
-    && cssCode.includes('grayscale(1)'));
+// 灰階程度 2026-08-29 從 grayscale(1)+opacity .55 降到 .55/.9：手機上原本糊到
+// 連「臉型」兩個字都讀不出來，而設計稿圖 7 的鎖定態是清楚的——靠右上角那把鎖
+// 說「還沒解鎖」，不是靠把畫面弄暗。所以這裡驗的是「有做灰階處理」，
+// 不是特定數值；數值調整不該讓這一項變紅。
+check('沒結果時灰階', /\.result-panel:not\(\.is-ready\) \{[^}]*grayscale\(/.test(cssCode));
 check('有結果時抬起', cssCode.includes('.result-panel.is-ready .result-grid')
     && /\.result-panel\.is-ready \.result-grid \{[^}]*box-shadow/.test(cssCode));
 check('尊重 prefers-reduced-motion', /prefers-reduced-motion[\s\S]{0,400}\.result-panel/.test(cssCode));

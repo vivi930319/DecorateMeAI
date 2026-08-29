@@ -588,9 +588,14 @@ body {
 .gc-img .ph img { transition:transform 1s var(--ease), opacity .7s var(--ease); }
 .glow-card:hover .gc-img .ph { box-shadow:0 22px 48px rgba(80,48,24,0.16); }
 .glow-card:hover .gc-img .ph img { transform:scale(1.05); }
-.gc-heart { position:absolute; top:14px; left:14px; z-index:5; }
+/* 愛心在右上（設計稿圖 2）。先前在左上，蓋住的正好是商品照片裡最常放主體的
+   那一角——口紅、粉底瓶身多半靠左。 */
+.gc-heart { position:absolute; top:14px; right:14px; z-index:5; }
 .gc-meta { }
-.gc-top { display:flex; align-items:baseline; justify-content:space-between; gap:14px; }
+/* 名稱與價格**上下排**，不是左右排（設計稿圖 2）。
+   左右排時價格被推到最右邊，名稱長一點就把價格擠成一條窄柱；而手機兩欄時
+   每張卡只有約 170px 寬，那一行等於一半給名稱一半給價格，兩邊都不夠。 */
+.gc-top { display:flex; flex-direction:column; align-items:flex-start; gap:6px; }
 .gc-name { font-family:var(--cjk); font-size:18px; font-weight:500; letter-spacing:.02em; color:var(--ink-soft); }
 .gc-price { font-family:var(--serif); font-size:18px; color:var(--gold-deep); white-space:nowrap; }
 .gc-rating { display:flex; align-items:center; gap:11px; margin-top:10px; }
@@ -3421,6 +3426,13 @@ a:focus-visible, button:focus-visible, [data-nav]:focus-visible,
        縮到 158px 之後是兩張完整加一個明顯的邊，那個邊本身就在說「還有」。 */
     .insp-card { flex-basis:158px; }
     .insp-visual { height:168px; }
+    /* 兩欄之後每張卡只有約 170px 寬，18px 的名稱會佔掉三行。 */
+    .gc-name { font-size:14px; line-height:1.5; }
+    .gc-price { font-size:15px; }
+    .gc-rating { gap:7px; margin-top:7px; }
+    .gc-rating .stars { font-size:10.5px; letter-spacing:1px; }
+    .gc-rev { font-size:9px; letter-spacing:.1em; }
+    .gc-heart { top:9px; right:9px; }
     .style-intro-card { padding:26px 22px; }
     .makeup-guide-title { font-size:25px; }
     .pd-wrap { gap:28px; }
@@ -4253,6 +4265,37 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     content:''; flex:1 1 auto; height:1px; background:var(--line);
 }
 
+/* ═══ 臉部分析頁：完全照設計稿圖 6 ═══════════════════════════════════════
+   五張插圖全部裁自設計稿本身（assets/feature/），沒有一張是重畫的近似品：
+   側臉線稿、雲朵上傳、鏡頭、相機、進度。理由跟六格插圖一樣——這些是有筆觸的
+   畫，用 path 湊出來的東西擺在旁邊一眼就看得出不是同一套。 */
+.analysis-signal-header {
+    display:grid; grid-template-columns:minmax(0,1fr) 38%;
+    gap:16px; align-items:center;
+}
+.ash-copy { min-width:0; }
+.ash-art { justify-self:end; width:100%; }
+.ash-art img { width:100%; height:auto; display:block; }
+/* 雲朵：連淡粉圓盤一起裁的，所以外框那個菱形／圓圈邊線要收掉，
+   否則會變成「圓盤外面再套一個圈」。 */
+.upload-icon.has-art { border:0; transform:none; width:auto; height:auto; }
+.upload-box:hover .upload-icon.has-art { transform:none; }
+.upload-icon img { width:104px; height:104px; display:block; margin-inline:auto;
+    transition:transform .45s var(--ease); }
+.upload-box:hover .upload-icon img { transform:scale(1.05); }
+/* 按鈕裡的圖示。btn-sm 原本是純文字置中，加圖示要改成 flex 才對得齊。 */
+.btn-sm.has-ico { display:inline-flex; align-items:center; justify-content:center; gap:9px; }
+.btn-ico { width:20px; height:20px; object-fit:contain; flex:0 0 auto; }
+/* 分析進度那一列：圖示在最左，標題其次，狀態靠右（設計稿圖 6）。 */
+.package-status { justify-content:flex-start; }
+.package-status .ps-ico { width:22px; height:22px; object-fit:contain; flex:0 0 auto; }
+.package-status span { margin-left:auto; }
+@media (max-width:620px) {
+    .analysis-signal-header { grid-template-columns:minmax(0,1fr) 40%; gap:10px; }
+    .analysis-signal-header h1 { font-size:clamp(26px,7vw,34px); }
+    .upload-icon img { width:84px; height:84px; }
+}
+
 /* ═══ 分析結果六格：手機三欄，鎖定狀態要讀得出來（設計稿圖 7） ═══════════
    2026-08-29 比對手機截圖後修的兩件事。
 
@@ -4482,10 +4525,24 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     font-family:var(--cjk); font-size:13px; white-space:nowrap;
 }
 @media (max-width:760px) {
-    .home-hero { grid-template-columns:1fr; gap:18px; }
-    /* 線稿排到文案後面：手機上先讀到「這是什麼、可以做什麼」比先看到裝飾重要 */
-    .hh-art { order:2; width:min(190px,58%); }
-    .hh-copy { order:1; }
+    /* 線稿與文案**併排**，不要堆成上下（2026-08-29 使用者指正）。
+       設計稿圖 2 在手機上就是左文右圖，而先前這裡把它改成單欄、線稿排到文案
+       後面，理由寫的是「先讀到能做什麼比先看到裝飾重要」。那個理由本身沒錯，
+       但代價是線稿變成一張佔掉半屏的大圖擋在中間——它從陪襯變成主體，
+       而且把下面真正的內容整個推出畫面外。併排時它只佔約三分之一寬，
+       文案照樣在左邊先被讀到，兩件事並不衝突。 */
+    .home-hero { grid-template-columns:minmax(0,1fr) 34%; gap:14px; align-items:center; }
+    .hh-art { width:100%; justify-self:end; }
+    .hh-copy { min-width:0; }
+    /* 併排之後左欄變窄，標題要跟著收——62px 的字在半個螢幕寬裡會一個字一行。 */
+    .hh-title { font-size:clamp(26px,7.2vw,38px); letter-spacing:.06em; }
+    .hh-kicker { margin-bottom:12px; letter-spacing:.16em; }
+    .hh-cta { min-width:0; width:100%; }
     .home-greet { flex-wrap:wrap; }
     .hg-cta { width:100%; text-align:center; }
+}
+/* 很窄的手機：34% 的圖欄會把標題壓到兩三個字一行，圖再收一點。 */
+@media (max-width:400px) {
+    .home-hero { grid-template-columns:minmax(0,1fr) 30%; }
+    .hh-title { font-size:clamp(24px,6.6vw,32px); }
 }

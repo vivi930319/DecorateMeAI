@@ -129,6 +129,19 @@ check('虛線上傳框', analysis.includes('id="uploadBox"') && analysis.include
 check('開啟鏡頭與拍照使用', analysis.includes('id="startCameraBtn"')
     && analysis.includes('id="capturePhotoBtn"'));
 check('分析進度列', analysis.includes('id="packageStatus"'));
+// 這一頁的五張插圖全部裁自設計稿，一張都不是重畫的近似品。
+// 這一組擋的是「重構時順手換回通用線條圖示」——那會讓整頁退回上一版的樣子。
+check('標題區有側臉線稿', analysis.includes('assets/feature/analysis-head.webp'));
+check('上傳框是雲朵圖不是「＋」', analysis.includes('assets/feature/upload-cloud.webp')
+    && !analysis.includes('<div class="upload-icon"><span>＋</span></div>'));
+check('兩顆相機按鈕各有圖示', analysis.includes('assets/feature/ico-lens.webp')
+    && analysis.includes('assets/feature/ico-camera.webp'));
+check('分析進度列有圖示', analysis.includes('assets/feature/ico-progress.webp'));
+check('五張插圖檔案都在', ['analysis-head', 'upload-cloud', 'ico-lens', 'ico-camera', 'ico-progress']
+    .every(n => fs.existsSync(path.join(ROOT, `assets/feature/${n}.webp`))));
+// 標題文案也照設計稿（原本是「分析你的臉部訊號」加一段 BASIC/PRO 的解釋）。
+check('標題文案照設計稿', analysis.includes('<h1>臉部分析</h1>')
+    && analysis.includes('上傳正面照片，分析五官特徵'));
 check('開始分析是整寬主按鈕', /btn-gold btn-full" id="analyzeBtn"/.test(analysis));
 
 console.log('');

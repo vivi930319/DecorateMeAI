@@ -1,4 +1,18 @@
-<div class="page-header analysis-signal-header"><span class="eyebrow">臉部分析</span><h1>分析你的臉部訊號</h1><div class="divider"></div><p>BASIC 使用單張照片；PRO 透過多角度掃描建立更完整的五官與輪廓資料。</p></div>
+<!-- 標題區照設計稿圖 6：eyebrow、標題、短線、一句副標，右邊一張側臉線稿。
+     文案也照稿改——原本是「分析你的臉部訊號」加一段解釋 BASIC 與 PRO 差別的話，
+     而那件事由底下那兩顆膠囊自己回答（PRO 沒開通時掛著鎖），標題不必兼差。
+     線稿裁自設計稿原圖，不是用 path 湊的近似品。 -->
+<div class="page-header analysis-signal-header">
+    <div class="ash-copy">
+        <span class="eyebrow">FACE ANALYSIS</span>
+        <h1>臉部分析</h1>
+        <div class="divider"></div>
+        <p>上傳正面照片，分析五官特徵</p>
+    </div>
+    <div class="ash-art" aria-hidden="true">
+        <img src="assets/feature/analysis-head.webp" alt="" loading="eager" decoding="async">
+    </div>
+</div>
 <div class="analyze-grid analysis-workbench">
     <div>
         <div class="section-label"><span>NO.01</span>上 傳 照 片</div>
@@ -9,14 +23,17 @@
 
         <div class="mode-panel active" id="basicPanel">
             <div class="upload-box" id="uploadBox">
-                <div class="upload-icon"><span>＋</span></div>
+                <!-- 雲朵上傳圖示裁自設計稿（連淡粉圓盤一起，圓盤是設計的一部分）。
+                     先前是一個「＋」字元——那是排版字，跟旁邊每一個線稿圖示都不同調。 -->
+                <div class="upload-icon has-art"><img src="assets/feature/upload-cloud.webp" alt="" loading="lazy" decoding="async"></div>
                 <div class="upload-label">選擇照片</div>
                 <div class="upload-hint">正面、光線均勻，並把頭髮撥開露出額頭與兩頰</div>
                 <input type="file" id="fileInput" accept="image/*" style="display:none;">
             </div>
+            <!-- 兩顆按鈕各帶一個圖示（設計稿圖 6）：圖示裁自設計稿，不另外畫。 -->
             <div class="camera-actions">
-                <button class="btn-outline btn-sm" id="startCameraBtn">開啟鏡頭</button>
-                <button class="btn-outline btn-sm" id="capturePhotoBtn">拍照使用</button>
+                <button class="btn-outline btn-sm has-ico" id="startCameraBtn"><img class="btn-ico" src="assets/feature/ico-lens.webp" alt="" loading="lazy">開啟鏡頭</button>
+                <button class="btn-outline btn-sm has-ico" id="capturePhotoBtn"><img class="btn-ico" src="assets/feature/ico-camera.webp" alt="" loading="lazy">拍照使用</button>
             </div>
             <div class="camera-box" id="cameraBox">
                 <video id="cameraVideo" autoplay playsinline></video>
@@ -91,6 +108,7 @@
         <div class="loading-bar" id="loadingBar"><div class="fill" id="loadingFill"></div></div>
         <div class="loading-status" id="loadingStatus">等待圖片</div>
         <div class="package-status" id="packageStatus">
+            <img class="ps-ico" src="assets/feature/ico-progress.webp" alt="" aria-hidden="true" loading="lazy">
             <b>分析進度</b>
             <span>尚未開始</span>
         </div>

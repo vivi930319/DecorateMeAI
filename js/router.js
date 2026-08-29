@@ -2257,17 +2257,8 @@ dashboard: `
 <div class="insp-row" id="dashInsp"></div>
 <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">02</span><h2>為你精選</h2></div></div>
 <div class="glow-row" id="dashGlow"></div>
-<!-- 四步驟：這套系統實際會發生的事。 品牌那兩句講的是「為什麼」，這裡講「怎麼走」——使用者看完就知道 從臉部分析開始、最後會走到商品，而不是只知道有這些功能。 --><section class="about-sys">
-    <div class="as-head">
-        <div class="about-headrow"><span class="as-eyebrow-it">About the Atelier</span><h2 class="about-title">OUR BEAUTY<span class="l2">SYSTEM</span></h2></div>
-        <span class="bs-link" data-nav="analysis">開始你的美學旅程　→</span>
-        <p class="bs-desc"><b>美，不是成為另一個人。</b><br>而是更了解適合自己的樣子。</p>
-
-    </div>
-    <div class="as-photo"><img class="as-photo-img" src="assets/brand/decorate-me-home.jpg" alt="Decorate Me 品牌識別" onload="this.classList.add('loaded')"><div class="as-photo-ph"><div class="demo-mark">❧</div><div class="demo-cap">商品形象照 · Demo</div></div></div>
-
-<div class="sys-steps" aria-label="系統流程"><div class="ss-item" data-nav="analysis"><span class="ss-no">01</span><span class="ss-en">ANALYZE</span><span class="ss-zh">臉部分析</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">Understand<br>your features</span></div><div class="ss-item" data-nav="style"><span class="ss-no">02</span><span class="ss-en">DISCOVER</span><span class="ss-zh">專屬推薦</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">Find your<br>perfect look</span></div><div class="ss-item" data-nav="suggestion"><span class="ss-no">03</span><span class="ss-en">TRY ON</span><span class="ss-zh">AI 試妝</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">See your<br>new look</span></div><div class="ss-item" data-nav="products"><span class="ss-no">04</span><span class="ss-en">SHOP</span><span class="ss-zh">商品搭配</span><span class="ss-rule" aria-hidden="true"></span><span class="ss-desc">Complete<br>the look</span></div></div>
-</section>`,
+<!-- 首頁的「關於我們」整段已移除（2026-08-29 使用者要求）；
+     pages/dashboard.html 那份也一起拿掉，兩份樣板必須同步。 -->`,
 analysis: `
 <div class="page-header"><h1>臉部分析</h1><div class="divider"></div><p>上傳正面照片，分析五官特徵</p></div>
 <div class="analyze-grid">
@@ -2535,7 +2526,7 @@ profile: `
         <button class="stat-cell" type="button" data-scroll="profileSuggestionArea" aria-label="捲動到已收藏的妝容">
             <span class="stat-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M17 3.5c1.4 0 2.5 1.1 2.5 2.5 0 .8-.4 1.5-1 2L8.5 18.2 4 20l1.8-4.5L16 5.1"/><path d="M14.5 6.5l3 3"/></svg></span><span class="stat-en">Looks</span><span class="stat-num" id="profileSuggestionCount">0</span>
             <span class="stat-label">收藏妝容</span><span class="stat-go">查看 &darr;</span></button>
-        <button class="stat-cell" type="button" data-scroll="profilePointLedger" aria-label="捲動到點數紀錄">
+        <button class="stat-cell" type="button" data-scroll="profileThemeShop" aria-label="捲動到點數商店">
             <span class="stat-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3.6l2.5 5.4 5.9.7-4.4 4 1.2 5.8L12 16.6 6.8 19.5 8 13.7 3.6 9.7l5.9-.7z"/></svg></span><span class="stat-en">Points</span><span class="stat-num" id="profilePointCount">0</span>
             <span class="stat-label">會員點數</span><span class="stat-go">查看 &darr;</span></button>
     </div>
@@ -2563,7 +2554,8 @@ profile: `
 <div class="member-panel" id="mpanel-points" data-mpanel="points" role="tabpanel" aria-labelledby="mtab-points" hidden>
 <section class="member-tier"><div class="member-section-head"><span>Check-in</span><h2>每日打卡</h2></div><div id="profileCheckinCard"></div></section>
 <section class="member-tier"><div class="member-section-head"><span>Theme Shop</span><h2>點數商店</h2></div><div id="profileThemeShop"></div></section>
-<section class="member-tier"><div class="member-section-head"><span>Ledger</span><h2>點數紀錄</h2></div><div id="profilePointLedger"></div></section>
+<!-- 點數紀錄已移除（2026-08-29 使用者要求）。備援樣板與 pages/profile.html
+     必須同步，不然 fetch 失敗時它會單獨冒出來。 -->
 </div>
 <div class="member-panel" id="mpanel-saved" data-mpanel="saved" role="tabpanel" aria-labelledby="mtab-saved" hidden>
 <section class="member-suggestions"><div class="member-section-head"><span>Saved Looks</span><h2>已收藏的妝容對比圖</h2></div><div id="profileSuggestionArea"></div></section>

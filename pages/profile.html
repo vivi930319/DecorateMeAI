@@ -101,13 +101,11 @@
     </div>
     <div id="profileThemeShop"></div>
 </section>
-<section class="member-tier">
-    <div class="member-section-head">
-        <span>Ledger</span>
-        <h2>點數紀錄</h2>
-    </div>
-    <div id="profilePointLedger"></div>
-</section>
+<!-- 「點數紀錄」已移除（2026-08-29 使用者要求）。
+     餘額仍在上面的統計卡，賺點在「任務中心」、花點在「點數商店」——
+     一條一條的流水帳是拿來對帳的，不是使用者來會員中心的理由。
+     ⚠️ js/router.js 裡畫它的那段刻意留著：整段包在 `if (ledgerEl)` 裡，
+     沒有這個節點就自然不執行。要復原只需把這個 section 補回來。 -->
 </div>
 <div class="member-panel" id="mpanel-saved" data-mpanel="saved" role="tabpanel" aria-labelledby="mtab-saved" hidden>
 <section class="member-suggestions">

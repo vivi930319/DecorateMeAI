@@ -196,14 +196,15 @@ if (sandbox.ApiConfig.services.aiGateway.sessionPath !== '/auth/session') throw 
 
 // ── 首頁品牌素材 ─────────────────────────────────────────────
 const indexSource = fs.readFileSync(path.join(rootDir, 'index.html'), 'utf8');
-const dashboardSource = fs.readFileSync(path.join(rootDir, 'pages', 'dashboard.html'), 'utf8');
-for (const assetPath of [
-  'assets/brand/decorate-me-round-source.jpg',
-  'assets/brand/decorate-me-home.jpg'
-]) {
+// 2026-08-29：首頁的「關於我們」整段依使用者要求移除，那一段裡的
+// decorate-me-home.jpg 因此不再被任何樣板引用。檔案留著（要復原那段時還要用），
+// 但這裡不再要求它出現在畫面上——否則這條會擋住一個刻意的移除。
+//
+// 圓形品牌章仍然要守：頂欄與抽屜的品牌頭都在用，掉了那兩處會變成空白方塊。
+for (const assetPath of ['assets/brand/decorate-me-round-source.jpg']) {
   if (!fs.existsSync(path.join(rootDir, assetPath))) throw new Error(`Missing brand asset: ${assetPath}`);
 }
-if (!indexSource.includes('decorate-me-round-source.jpg') || !dashboardSource.includes('decorate-me-home.jpg')) {
+if (!indexSource.includes('decorate-me-round-source.jpg')) {
   throw new Error('Homepage brand assets are not wired into the rendered templates');
 }
 
