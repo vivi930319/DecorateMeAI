@@ -2302,6 +2302,25 @@ const Api = {
         }
     },
 
+    // 儲存空間 ↔ 會員名冊對帳。唯讀。
+    //
+    // 沒有 limit 參數：這條的用途就是「全部算一次」，能截斷的話得到的數字
+    // 就不是差額而是抽樣，而抽樣出來的「少了 4 個會員」是會被當真去刪東西的。
+    async fetchMemberStorageAudit() {
+        const baseUrl = gatewayService('admin-api');
+        if (!baseUrl) return { ok: false, error: 'admin-api 未設定' };
+        try {
+            const res = await this._protectedFetch(`${baseUrl}/member-storage-audit`, {
+                credentials: 'include', cache: 'no-store', headers: this._adminProductHeaders(),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
+            return { ok: true, ...data };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
     async patchRemoteProduct(rawId, payload, version) {
         const baseUrl = gatewayService('admin-api');
         if (!baseUrl) return { ok: false, error: 'productUrl 未設定' };

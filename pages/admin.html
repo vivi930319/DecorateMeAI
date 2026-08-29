@@ -75,6 +75,22 @@
                         <button type="button" data-admin-jump="products"><span>手動新增商品</span><b>前往</b></button>
                     </section>
                 </div>
+
+                <!-- 儲存空間 ↔ 會員名冊對帳。
+                     2026-08-28 會員數 10 掉到 6、渲染圖還留在 GCS，當時只能人工查一次。
+                     這一塊把它變成按一顆按鈕就有答案，而且答案會講清楚哪些救得回來、
+                     哪些救不回來（ownerId 是單向雜湊，推不回 email）。 -->
+                <section class="admin-status-board admin-storage-audit" aria-labelledby="adminStorageAuditTitle">
+                    <div class="admin-block-heading">
+                        <span>Storage</span><h3 id="adminStorageAuditTitle">儲存空間對帳</h3>
+                    </div>
+                    <p class="admin-block-note">比對渲染資料的擁有者與目前的會員名冊，找出「儲存空間裡有、名冊上沒有」的差額。唯讀，不會刪任何東西。</p>
+                    <div class="admin-toolbar">
+                        <button class="admin-secondary-button" id="adminStorageAuditBtn" type="button">開始對帳</button>
+                        <span class="admin-inline-status" id="adminStorageAuditStatus" aria-live="polite"></span>
+                    </div>
+                    <div id="adminStorageAuditResult"></div>
+                </section>
             </section>
 
             <section class="admin-view" data-admin-view="members" hidden>

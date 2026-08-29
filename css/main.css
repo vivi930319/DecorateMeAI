@@ -1578,6 +1578,20 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .admin-summary article small { display:block; margin-top:13px; color:#8b959c; font-size:11px; }
 .admin-overview-grid { display:grid; grid-template-columns:minmax(0,1.45fr) minmax(280px,.75fr); gap:16px; margin-top:18px; }
 .admin-status-board,.admin-quick-actions { border:1px solid var(--admin-line); border-radius:6px; background:#fff; padding:22px; }
+/* 儲存空間對帳。整塊橫跨兩欄——它的表格會列出孤兒資料，擠在 .admin-overview-grid
+   的半欄裡讀不了。 */
+.admin-storage-audit { margin-top:14px; }
+.admin-block-note { margin:10px 0 0; color:var(--admin-muted); font-size:12.5px; line-height:1.75; }
+.admin-storage-audit .admin-toolbar { margin-top:14px; }
+.admin-audit-summary { margin-top:16px; }
+.admin-audit-summary article { min-height:0; padding:16px; }
+.admin-audit-summary article b { margin-top:8px; font-size:26px; }
+.admin-audit-summary article small { margin-top:8px; }
+/* 有差額才變色。沒有差額時是好消息，不該長得像警告。 */
+.admin-audit-summary b.is-warn { color:#b4412f; }
+.admin-storage-audit .admin-table-wrap { margin-top:16px; }
+.admin-storage-audit code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; }
+.admin-storage-audit .admin-empty { padding:22px 16px; color:#8a949b; text-align:center; font-size:12.5px; }
 .admin-block-heading { margin-bottom:17px; }
 .admin-block-heading h3 { font-size:16px; }
 .admin-service-row { display:flex; align-items:center; justify-content:space-between; gap:18px; min-height:68px; border-top:1px solid #e6e9eb; }
@@ -2011,10 +2025,20 @@ body.admin-mode .main-content * { letter-spacing:0; }
    一起才比得出深淺；一旦換行就變成三張各自獨立的卡，比較關係消失。
    寬度不夠時縮欄，不要換行。實際寬度見底下 min-width:1100px 那一段。 */
 .sc2-row { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; align-items:stretch; }
+/* min-width:0 是必要的，不是保險。
+   grid 項目的 min-width 預設是 auto，也就是「不得小於內容」。色號字串
+   （NC42、Moving On Up）與那行「與主推薦色號的色差 3.2」都會把欄撐開，
+   於是在窄螢幕上三欄的總寬超過容器——溢出的第三欄被切掉，使用者看到的是
+   「只有兩個深度」，而畫面上沒有任何橫向捲軸提示還有東西在外面。 */
 .sc2-col { display:flex; flex-direction:column; align-items:center; gap:5px;
-    padding:12px 8px; text-align:center; font-family:inherit; width:100%;
+    padding:12px 8px; text-align:center; font-family:inherit; width:100%; min-width:0;
     border:1px solid var(--line); border-radius:11px; background:var(--glass);
     transition:border-color .18s, transform .18s, box-shadow .18s; }
+/* 色號本身也要斷得了行。長色號沒有空白可斷（"MovingOnUp"），
+   不給 anywhere 的話它會自己把欄撐回去，min-width:0 就白設了。 */
+.sc2-code, .sc2-match, .sc2-label { overflow-wrap:anywhere; }
+/* 只有一支色號可比時的說明。沒有它，單欄會看起來像「另外兩欄載入失敗」。 */
+.sc2-note { margin:10px 0 0; color:var(--mid); font-size:11.5px; line-height:1.7; }
 /* 可點的那兩欄。整欄是按鈕，目標比底下一顆小按鈕大得多。 */
 button.sc2-col { cursor:pointer; }
 button.sc2-col:hover { border-color:var(--gold-soft); transform:translateY(-2px);

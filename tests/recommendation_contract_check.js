@@ -31,6 +31,8 @@ const sandbox = {
   escapeHtml: s => String(s ?? '').replace(/[&<>"']/g,
     c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
   Router: { shadeRecommendation: null },
+  // userSkinRow 會用它把使用者的 LAB 轉成畫得出來的顏色。
+  Api: { labToRgb: (L, a, b) => `rgb(${Math.round(L)},${Math.round(a)},${Math.round(b)})` },
   Number, Math, Array, String, Boolean, JSON,
 };
 vm.createContext(sandbox);
@@ -225,8 +227,25 @@ out = shade({ id: 'api-foundations-1' });
 check('lighter 是 null → 只少那一格，其餘照常', !out.includes('淺一階') && out.includes('深一階'));
 sandbox.Router.shadeRecommendation = { ...official, lighter: null, darker: null };
 out = shade({ id: 'api-foundations-1' });
-// 只有主推薦時不給比較按鈕：按開一個只有一欄的比較視窗是空動作
-check('沒有替代色 → 不出現並排區塊', !out.includes('sc2-row'));
+// 2026-08-29 改：只有主推薦時**仍然**要出現這一區，只是變成一欄。
+//
+// 舊行為是整區不出現，理由寫的是「一欄的比較是空動作」。那句話只有在
+// 「比較」等於「跟其他色號比」的時候才成立——而使用者真正要回答的問題是
+// 「這支像不像我」，那個問題在只有一支色號時完全沒有消失。膚色色塊當時
+// 綁在這個容器裡，於是沒有替代色 = 連自己的膚色都看不到，
+// 而那正是手機上最常見的情況（相鄰色階跟著那一次推薦流程走）。
+check('沒有替代色 → 仍然出現比較區（單欄）', out.includes('sc2-row'));
+check('沒有替代色 → 欄數跟著實際色號數，不是寫死三欄',
+  /grid-template-columns:repeat\(1,minmax\(0,1fr\)\)/.test(out));
+check('沒有替代色 → 明說是「沒有可比的相鄰色號」而不是留白',
+  out.includes('sc2-note'));
+// 三支都在時欄數要回到 3——上一項若被寫死成 1，正常情況也只會畫一欄，
+// 而那個症狀在有替代色的機器上才看得到，很容易漏。
+sandbox.Router.shadeRecommendation = official;
+check('三支色號都在 → 三欄',
+  /grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/.test(shade({ id: 'api-foundations-1' })));
+sandbox.Router.shadeRecommendation = { ...official, lighter: null, darker: null };
+out = shade({ id: 'api-foundations-1' });
 
 // 重新整理之後不能消失。
 //
@@ -265,10 +284,30 @@ check('只對通過門檻的粉底補',
 
 check('fallback 不會二次正規化',
   !shadeFallbackBody.includes('_normalizeShadeRecommendation('));
-// 沒有可比的時候，主推薦的色號要改由上方那塊印出來，
-// 否則整段只剩一個百分比，看不出是哪一支
-check('沒有替代色 → 主推薦色號仍然看得到', out.includes('sr-anchor-code'));
+// 沒有可比的時候，主推薦的色號由那唯一一欄印出來（sc2-code），
+// 不再另外印一份 sr-anchor-code——同一個 N20 上下各出現一次只是佔位置。
+// 這一項要守的是「色號看得到」，不是「由哪個元素印」。
+check('沒有替代色 → 主推薦色號仍然看得到', out.includes('sc2-code'));
+check('沒有替代色 → 色號不會上下重複印兩次', !out.includes('sr-anchor-code'));
 check('沒有替代色 → 主推薦照常顯示', out.includes('N20'));
+// 膚色色塊：使用者要的是「這支像不像我」，那個問題在只有一支色號時還在。
+// 這一組守的是它**不再綁在有沒有替代色上**——2026-08-29 之前它長在三欄容器裡，
+// 所以推薦端沒給相鄰色階時（手機上最常見）連自己的膚色都看不到。
+sandbox.Router.analysisPackage = { faceAnalysis: { skinTone: { lab: [62, 12, 18], season: '春' } } };
+sandbox.Router.shadeRecommendation = { ...official, lighter: null, darker: null };
+out = shade({ id: 'api-foundations-1' });
+check('沒有替代色 → 膚色色塊仍然顯示', out.includes('sc2-mine'));
+check('膚色色塊畫的是使用者的 LAB', out.includes('rgb(62,12,18)'));
+sandbox.Router.shadeRecommendation = official;
+check('有替代色 → 膚色色塊照樣在', shade({ id: 'api-foundations-1' }).includes('sc2-mine'));
+// 取樣不可信時要說出來，否則使用者會拿一個本來就不準的色塊去判斷商品。
+sandbox.Router.analysisPackage = {
+  faceAnalysis: { skinTone: { lab: [62, 12, 18], labReliable: false } } };
+check('膚色取樣不可信時會標注', shade({ id: 'api-foundations-1' }).includes('is-unreliable'));
+sandbox.Router.analysisPackage = undefined;
+check('沒有分析資料 → 不硬畫一個膚色色塊',
+  !shade({ id: 'api-foundations-1' }).includes('sc2-mine'));
+
 sandbox.Router.shadeRecommendation = { ...official, darker: null };
 out = shade({ id: 'api-foundations-1' });
 check('darker 是 null → 只少那一格', !out.includes('深一階') && out.includes('淺一階'));

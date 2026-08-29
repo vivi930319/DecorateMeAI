@@ -1201,23 +1201,44 @@ function shadeRecommendationHtml(p) {
             ${gate ? `<div class="sr-gate">${escapeHtml(gate)}</div>` : ''}`,
         // 有並排的三欄時，主推薦的色號由中間那一欄負責——上下各印一次同樣的 PO-02
         // 只是佔位置，還會讓人以為是兩件事。沒有替代色可比時才在這裡印。
-        hasVariants ? '' : `
-            <div class="sr-anchor-label">${escapeHtml(a.label)}</div>
-            <div class="sr-anchor-code">${escapeHtml(String(a.shadeCode || '—'))}</div>
-            ${a.description ? `<p class="sr-anchor-desc">${escapeHtml(a.description)}</p>` : ''}`
+        // 主推薦的色號一律由底下那一欄負責——那一欄現在一定會出現（欄數跟著實際
+        // 色號數走，主推薦本身就是一欄）。在這裡再印一次同樣的 PO-02 只是佔位置，
+        // 還會讓人以為上下是兩件事。
+        ''
     ].join('').trim();
+
+    // 欄數跟著實際有幾支色號走，而不是永遠寫死三欄。
+    //
+    // 推薦端不一定給得出相鄰色階：同系列只有一支、或這支已經是最淺／最深的時候，
+    // lighter 或 darker 就是 null（契約 §5）。寫死三欄時，缺的那一欄會變成一格
+    // 有邊框沒內容的空白，而主推薦被擠到偏一邊——看起來像載入失敗。
+    const columns = [
+        col(sr.lighter, 'lighter', '較明亮的替代色'),
+        col(a, 'anchor', '主推薦色號'),
+        col(sr.darker, 'darker', '較深的替代色'),
+    ].filter(Boolean);
+
+    // 膚色色塊**不再綁在「有沒有替代色」上**。
+    //
+    // 先前它只長在三欄比較那個容器裡，所以推薦端沒給相鄰色階時，使用者連自己的
+    // 膚色都看不到——而那正是他最需要的一塊：要回答的問題是「這支像不像我」，
+    // 只有一支色號的時候那個問題還在，只是沒有別的選項可以換而已。
+    // 這也是手機上最常見的情況（相鄰色階跟著那一次推薦流程，換裝置就沒有）。
+    const skinRow = userSkinRow();
+    const compareHead = hasVariants ? '想比較不同妝效？' : '和你的膚色比一比';
 
     return `<section class="shade-rec">
         ${heroInner ? `<div class="sr-hero">${heroInner}</div>` : ''}
-        ${hasVariants ? `
+        ${(skinRow || columns.length) ? `
         <div class="sc2-wrap">
-            <div class="sc2-head">想比較不同妝效？</div>
-            ${userSkinRow()}
-            <div class="sc2-row">
-                ${col(sr.lighter, 'lighter', '較明亮的替代色')}
-                ${col(a, 'anchor', '主推薦色號')}
-                ${col(sr.darker, 'darker', '較深的替代色')}
+            <div class="sc2-head">${compareHead}</div>
+            ${skinRow}
+            <div class="sc2-row" style="grid-template-columns:repeat(${columns.length},minmax(0,1fr))">
+                ${columns.join('')}
             </div>
+            ${hasVariants ? '' : `
+            <p class="sc2-note">這支在同系列裡沒有可比較的相鄰色號，
+               所以這裡只列出推薦的那一支。</p>`}
         </div>` : ''}
         ${(sr.disclaimer && !panelCarriesHeader)
             ? `<p class="sr-disclaimer">${escapeHtml(sr.disclaimer)}</p>` : ''}
@@ -4152,17 +4173,19 @@ const PageInit = {
             return Number.isFinite(n) ? n : null;
         };
         const applyShopControls = (list) => {
-            // 後端支援伺服器端篩選時就不要再篩一次。
+            // 商品頁的篩選**一律**在本機做，不看 Api.productServerFiltering。
             //
-            // 兩邊都篩不會錯，但會讓「為什麼這件沒出現」變成兩個地方要查；
-            // 而且後端篩的是**全部商品**，本機篩的只是已載入的那些——
-            // 兩者結果不同時，重複套用會把後端的正確結果再切一刀。
-            // 關鍵字**一律**在本機篩，而且要在伺服器端篩選的 early return 之前。
+            // 「後端會篩就交給後端」的前提是我們真的有把條件送出去。商品頁沒有：
+            // loadGeneralProductCatalog 只送 { cursor }，把全部商品整份抓回本機，
+            // 品牌／價格／排序從來沒有離開過瀏覽器。所以一旦後端開始回
+            // appliedFilters／facets（2026-08-28 契約已經在回了），這裡的 early return
+            // 就會把唯一真正在篩的那段跳過去——下拉選了品牌、清單原封不動，
+            // 排序選了價格、順序原封不動，而畫面上沒有任何東西說明為什麼。
             //
-            // 商品 API 沒有關鍵字參數（listProducts 只送 cursor），所以這個條件
-            // 後端從來收不到。放到 return 之後的話，等哪天後端開始回 appliedFilters／facets，
-            // productServerFiltering 變成 true，搜尋就會安靜地整個失效——
-            // 使用者打字、清單不動，而畫面上沒有任何東西說明為什麼。
+            // 整份清單本來就在記憶體裡，本機篩的結果是完整且正確的。
+            // 要改成交給後端，得先讓 loadGeneralProductCatalog 把條件送出去、
+            // 並在每次改條件時重抓——那是另一件事，不是這裡少篩一次就能換到的。
+            //（後台 filterAdminProducts 那邊有送 brand，所以它保留 early return。）
             const q = String(Router.shopQuery || '').trim().toLowerCase();
             let base = list || [];
             if (q) {
@@ -4174,7 +4197,6 @@ const PageInit = {
                     return hay.some(v => v.includes(q));
                 });
             }
-            if (Api.productServerFiltering) return base;
             const brand = Router.shopBrand || '';
             const min = Router.shopMinPrice, max = Router.shopMaxPrice;
             let rows = base.filter((p) => {
@@ -4777,7 +4799,11 @@ const PageInit = {
         // 一件他從沒察覺自己失去的收藏，講出來只會製造疑慮，而他也無法做任何處理。
         // 查不到的收藏仍留在 Fav 清單裡（resolveFavoriteProducts 不會刪它們），商品重新
         // 上架就會自己回來；會員中心的數字也一律只數畫得出來的件數，兩邊因此一致。
-        if (!items.length && !unavailable.length) {
+        // 只看畫得出來的那幾件。已下架的**不顯示**（見下面那段），所以
+        // 「收藏全部下架了」在畫面上就等於「沒有收藏」——原本這裡還檢查
+        // unavailable.length，於是那種情況會落到下面，畫出一張寫著
+        // 「0 件收藏」的統計列和一個空格子，而不是「目前尚無收藏商品」。
+        if (!items.length) {
             const emptyText = syncState === 'loading' ? '正在讀取收藏商品' : '目前尚無收藏商品';
             area.innerHTML = syncNote + `<div class="empty-state">${emptyText}</div>`;
             bindRetry();
@@ -7969,6 +7995,59 @@ const PageInit = {
                 loadProductAudit();
             };
         }
+
+        // ── 儲存空間 ↔ 會員名冊對帳 ──
+        //
+        // 只在按下去時才跑，不跟著開後台一起載：它要讀整份 render_jobs 並向會員
+        // 資料庫要一次完整名冊，那是對帳才需要付的成本，不是每次開後台都要付的。
+        const storageAuditBtn = document.getElementById('adminStorageAuditBtn');
+        if (storageAuditBtn) storageAuditBtn.onclick = async () => {
+            const statusEl = document.getElementById('adminStorageAuditStatus');
+            const resultEl = document.getElementById('adminStorageAuditResult');
+            if (!resultEl) return;
+            storageAuditBtn.disabled = true;
+            if (statusEl) statusEl.textContent = '對帳中…';
+            try {
+                const rec = await Api.fetchMemberStorageAudit();
+                if (!rec.ok) {
+                    // 失敗要講是哪一種失敗。特別是名冊讀不到那一種：後端刻意不拿空名冊
+                    // 去比（那會把所有資料判成孤兒），所以這裡沒有數字可顯示是**正確**的，
+                    // 不是壞掉——講清楚才不會有人以為對帳功能故障。
+                    if (statusEl) statusEl.textContent = '';
+                    resultEl.innerHTML = `<div class="admin-empty">${escapeHtml(rec.error || '對帳失敗')}</div>`;
+                    return;
+                }
+                const s = rec.summary || {};
+                const orphans = Array.isArray(rec.orphans) ? rec.orphans : [];
+                if (statusEl) statusEl.textContent = `完成 · ${new Date().toLocaleTimeString('zh-TW')}`;
+                resultEl.innerHTML = `
+                    <div class="admin-summary admin-audit-summary">
+                        <article><span>會員名冊</span><b>${s.members ?? '—'}</b><small>目前的帳號數</small></article>
+                        <article><span>渲染紀錄</span><b>${s.jobs ?? '—'}</b><small>儲存空間裡的筆數</small></article>
+                        <article><span>對得上</span><b>${s.matchedOwners ?? '—'}</b><small>資料有主人</small></article>
+                        <article><span>孤兒資料</span><b class="${orphans.length ? 'is-warn' : ''}">${s.orphanOwners ?? '—'}</b><small>${s.orphanJobs ?? 0} 筆沒有主人</small></article>
+                    </div>
+                    <p class="admin-block-note">另有 ${s.guestOwners ?? 0} 位訪客的資料（正常，訪客本來就不在名冊上），
+                        以及 ${s.membersWithoutStorage ?? 0} 位會員還沒有任何渲染紀錄。</p>
+                    ${orphans.length ? `
+                    <div class="admin-table-wrap">
+                        <table class="admin-table">
+                            <thead><tr><th>擁有者代號</th><th>渲染筆數</th><th>已保存</th><th>檔案數</th></tr></thead>
+                            <tbody>${orphans.map(o => `<tr>
+                                <td><code>${escapeHtml(String(o.ownerId || ''))}</code></td>
+                                <td>${o.jobs ?? 0}</td><td>${o.retained ?? 0}</td><td>${o.objects ?? 0}</td>
+                            </tr>`).join('')}</tbody>
+                        </table>
+                    </div>
+                    <p class="admin-block-note">${escapeHtml(rec.note || '')}</p>`
+                    : '<div class="admin-empty">沒有差額：儲存空間裡的每一筆資料都對得上一位會員或訪客。</div>'}`;
+            } catch (err) {
+                if (statusEl) statusEl.textContent = '';
+                resultEl.innerHTML = `<div class="admin-empty">對帳失敗：${escapeHtml(err.message || '')}</div>`;
+            } finally {
+                storageAuditBtn.disabled = false;
+            }
+        };
 
         const refreshAllBtn = document.getElementById('adminRefreshAllBtn');
         if (refreshAllBtn) refreshAllBtn.onclick = () => {
