@@ -3413,25 +3413,42 @@ a:focus-visible, button:focus-visible, [data-nav]:focus-visible,
     .page-header { margin-bottom:28px; }
     .page-header h1 { font-size:27px; }
 
-    /* 「為你精選」四欄——設計稿圖 2 就是四件並排。
-       先前這裡先是一欄、再被我改成兩欄，兩次都是拿「手機放不下」當理由自作主張。
-       設計稿是照手機畫的，四欄是它要的密度，字級跟著縮就放得下。 */
-    .glow-row { grid-template-columns:repeat(4,1fr); gap:14px 8px; margin-bottom:48px; }
-    .glow-card:nth-child(even), .glow-card:nth-child(3n+2) { margin-top:0; }
+    /* 「為你精選」改成橫向滑動的照片牆（2026-08-29 使用者指定，跟 01 風格靈感一樣）。
+       設計稿圖 2 那裡是四件並排的方格；使用者要的是可以滑的那種，
+       所以這一塊以他的指定為準，不是設計稿。
+
+       ⚠️ 這裡要把 grid 換成 flex：.glow-row 的基礎規則是 grid，
+       只設 flex 相關屬性而不改 display，那些屬性會被靜靜忽略。 */
+    .glow-row {
+        display:flex; grid-template-columns:none;
+        gap:12px; overflow-x:auto; margin-bottom:48px;
+        scroll-snap-type:x proximity;
+        -webkit-overflow-scrolling:touch; overscroll-behavior-inline:contain;
+        scrollbar-width:none;
+        /* 滿版出血：卡片從螢幕邊緣滑進來，跟 .insp-row 同一個做法。 */
+        margin-left:-18px; margin-right:-18px;
+        padding-left:18px; padding-right:18px; padding-bottom:4px;
+    }
+    .glow-row::-webkit-scrollbar { display:none; }
+    /* 一次看到兩張多一點——露出的那半張就是在說「還可以滑」。 */
+    .glow-card {
+        flex:0 0 44%; scroll-snap-align:start; min-width:0;
+        margin-top:0 !important;
+    }
     .style-grid, .cat-grid { grid-template-columns:repeat(2,1fr); gap:12px; }
     /* 風格靈感一次看到三張，跟設計稿圖 2 一樣（它底下那三個點也是在說「三張一頁」）。
        用 calc 而不是固定 px：三張要剛好填滿一行，扣掉兩個 gap。 */
     .insp-card { flex:0 0 calc((100% - 24px) / 3); }
     .insp-visual { height:138px; }
     .insp-row { gap:12px; }
-    /* 四欄之後每張卡約 85pt 寬，字級要跟著設計稿的比例縮。 */
-    .gc-name { font-size:11px; line-height:1.45; }
-    .gc-price { font-size:12px; }
-    .gc-rating { gap:4px; margin-top:5px; flex-wrap:wrap; }
-    .gc-rating .stars { font-size:8px; letter-spacing:.5px; }
-    .gc-rev { font-size:7.5px; letter-spacing:.06em; border-bottom:0; }
-    .gc-img { margin-bottom:7px; }
-    .gc-heart { top:5px; right:5px; transform:scale(.78); transform-origin:top right; }
+    /* 卡片約 44% 寬（約 170pt），字級跟著收。 */
+    .gc-name { font-size:13px; line-height:1.5; }
+    .gc-price { font-size:14px; }
+    .gc-rating { gap:6px; margin-top:6px; flex-wrap:wrap; }
+    .gc-rating .stars { font-size:9.5px; letter-spacing:1px; }
+    .gc-rev { font-size:8.5px; letter-spacing:.08em; border-bottom:0; }
+    .gc-img { margin-bottom:9px; }
+    .gc-heart { top:7px; right:7px; transform:scale(.85); transform-origin:top right; }
     .style-intro-card { padding:26px 22px; }
     .makeup-guide-title { font-size:25px; }
     .pd-wrap { gap:28px; }

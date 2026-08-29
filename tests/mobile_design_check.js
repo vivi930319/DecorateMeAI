@@ -81,6 +81,17 @@ check('為你精選有「查看更多」出口', /sh-l[\s\S]{0,120}為你精選[
 check('兩個出口都接得上導航', count(dashboard, 'class="sh-link" data-nav=') === 2);
 check('標題列有 gap（窄螢幕不會撞在一起）',
     /\.dash-sec-head \{[^}]*gap:/.test(css));
+// 「為你精選」在手機上是橫向滑動的照片牆。
+// ⚠️ 這一項**刻意與設計稿不同**：圖 2 畫的是四件並排的方格，2026-08-29 使用者
+// 指定改成可以滑的（「01 IG 那種放照片的方式」）。記在這裡是為了讓下一個人
+// 知道它不是漏掉，而是被指定改掉的——否則有人會「照設計稿修好」它。
+check('為你精選是橫向滑動，不是方格',
+    /@media[^{]*\{[\s\S]{0,4000}\.glow-row \{[^}]*display:flex[^}]*overflow-x:auto/.test(css));
+check('滑動有貼齊與邊緣出血',
+    /\.glow-row \{[^}]*scroll-snap-type:x/.test(css)
+    && /\.glow-row \{[^}]*margin-left:-18px/.test(css));
+check('卡片固定寬度才滑得動',
+    /\.glow-card \{[^}]*flex:0 0 [0-9]/.test(css));
 check('出口不換行', /\.dash-sec-head \.sh-link \{[^}]*white-space:nowrap/.test(css));
 
 console.log('');
