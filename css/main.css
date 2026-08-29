@@ -4390,6 +4390,15 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     .topbar {
         background:color-mix(in srgb, var(--paper) 92%, transparent);
         border-bottom:1px solid var(--line-gold);
+        /* ⚠️ backdrop-filter 一定要拿掉，這不是視覺調整。
+           帶 backdrop-filter 的元素會成為它子孫裡 position:fixed 的**包含塊**。
+           抽屜（.topbar-nav）就在 .topbar 裡面，所以只要這個屬性還在，
+           抽屜的 top:0／bottom:0 就不是相對於整個視窗，而是相對於這條 74px 高的
+           頂欄——整片選單被壓成一條細長條。
+           2026-08-29 使用者回報「抽屜壞掉」就是這個。舊版是 top:76px 的下拉卡、
+           靠內容撐高，剛好避開這個限制，所以一直沒露出來。
+           這裡底色已經接近不透明，那點模糊本來也看不出來。 */
+        backdrop-filter:none; -webkit-backdrop-filter:none;
     }
     /* 深底換淺底之後，原本靠「淺字」才看得見的東西全部要翻過來，
        一個都不能漏——漏掉的那個會變成淺色底上的淺色字，等於消失。 */

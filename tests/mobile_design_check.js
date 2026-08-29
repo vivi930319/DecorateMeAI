@@ -128,6 +128,11 @@ check('抽屜從左邊滑出，不是右邊',
 check('抽屜是淺色面板',
     /@media[^{]*\{[\s\S]{0,4000}\.topbar-nav \{[^}]*background:linear-gradient\([^)]*var\(--paper\)/.test(css));
 check('漢堡在左邊', /\.topbar-menu-toggle \{[^}]*order:-1/.test(css));
+// 抽屜是 .topbar 的子孫，而帶 backdrop-filter 的元素會成為 position:fixed 子孫的
+// 包含塊——留著它，抽屜的 top:0／bottom:0 就變成相對於 74px 高的頂欄，
+// 整片選單被壓成一條細長條（2026-08-29 使用者回報的「抽屜壞掉」）。
+check('手機的頂欄關掉 backdrop-filter（否則抽屜量不到視窗高度）',
+    /@media[^{]*760px[^{]*\{[\s\S]{0,600}\.topbar \{[^}]*backdrop-filter:none/.test(css));
 // 四個項目的圓形圖示裁自設計稿，不是重畫的線條圖示。
 check('抽屜圖示用設計稿裁的插圖',
     ['nav-face', 'nav-history', 'nav-suggestion', 'nav-about']
