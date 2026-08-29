@@ -4100,6 +4100,14 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
    鎖頭與「看說明」共用右上角同一個位置——它們不會同時出現：
    還沒分析完只有鎖頭，完成後鎖頭消失、換成可以點的說明入口。 */
 .result-cell .ricon { display:inline-flex; margin-bottom:9px; }
+/* 插圖直接用設計稿裁出來的（assets/feature/*.webp，圓形去背）。
+   跟首頁線稿同一個判斷：這六個是有筆觸的插畫——眉毛的排線、睫毛、四季色彩的
+   四色圓餅——用幾條 SVG path 湊出來的近似品，跟設計師畫的差很遠。
+   來源是 LINE_ALBUM_改版_260828_7.jpg，裁切座標記在提交訊息裡。 */
+.result-cell .ricon img {
+    width:56px; height:56px; display:block;
+    opacity:.82; transition:opacity .4s var(--ease);
+}
 .result-cell .ricon svg {
     width:26px; height:26px; fill:none; stroke:var(--gold-deep);
     stroke-width:1.4; stroke-linecap:round; stroke-linejoin:round;
@@ -4113,11 +4121,15 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 /* 分析完成後解鎖：鎖頭收掉，圖示轉為完整不透明 */
 .result-panel.is-ready .result-cell .rlock { display:none; }
 .result-panel.is-ready .result-cell .ricon svg { opacity:1; }
+.result-panel.is-ready .result-cell .ricon img { opacity:1; }
 /* 色彩季型那一格沒有「看說明」可以取代鎖頭（它不在 FeatureAtlas 的分類表裡），
    但完成後它一樣要解鎖——那時候它已經有值了，繼續掛一把鎖是在說謊。
    上面的 .is-ready 規則已經涵蓋它，這裡不需要例外。 */
 @media (max-width:620px) {
     .result-cell .ricon svg { width:22px; height:22px; }
+    /* 插圖在手機上略縮，但不能縮太多：眉毛的排線與眼睫毛在 40px 以下就糊成一團，
+       那時候六格看起來會像六個一樣的粉色圓點。 */
+    .result-cell .ricon img { width:46px; height:46px; }
     .result-cell .rlock { right:8px; top:10px; }
     .result-cell .rlock svg { width:13px; height:13px; }
 }
