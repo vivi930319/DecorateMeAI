@@ -1111,17 +1111,30 @@ function userSkinRow() {
 function shadeRecommendationHtml(p) {
     const sr = currentShadeRecommendation();
     if (!sr || !sr.anchor) {
-        // 這件是通過膚色門檻的粉底，卻沒有相鄰色號可畫——多半是**這台裝置上
-        // 沒有這次的分析資料**。色階跟著「套用妝容風格 → 抓推薦」那一次流程來，
-        // 而 session 是每台裝置各自獨立的：在電腦做過分析，換手機看同一件商品，
-        // 手機這邊什麼都沒有。
+        // 沒有相鄰色號可畫。原因有兩種，而它們的下一步完全不同，
+        // 所以**不能講成同一句話**。
         //
-        // 默默不顯示是最糟的處理：使用者會以為功能壞了或這支沒有其他色號，
-        // 而真正的原因（要先在這台裝置做一次分析）他無從得知。
+        //   A. 這台裝置沒有分析資料。色階跟著「套用妝容風格 → 抓推薦」那一次流程來，
+        //      而 session 每台裝置各自獨立——在電腦做過分析、換手機看同一件商品，
+        //      手機這邊什麼都沒有。使用者自己做一次分析就會有。
+        //
+        //   B. 這台裝置有分析資料，但推薦端沒有回 shadeRecommendation。
+        //      2026-08-29 實測：/api/products 的 seriesId 與 depthIndex 都有值，
+        //      但 shades 是空陣列、shadeCount／depthIndexOfficial／shadeOrderSource
+        //      都是 null，推薦端也沒有帶 shadeRecommendation。
+        //      **這種使用者再做幾次分析都不會有**，講成 A 等於叫他做白工。
+        //
+        // ⚠️ 前端不自己從 seriesId + depthIndex 推算相鄰色號（2026-08-29 專案決定）：
+        // 那份資料由資料庫端提供，前端算一份等於同一件事有兩個真相來源，
+        // 而兩邊排序規則一旦不同，症狀是「同一支粉底在不同畫面色號順序不一樣」。
         if (p?.foundationSkinMatch?.accepted === true) {
+            const hasAnalysisHere = !!(Router.analysisPackage?.faceAnalysis
+                || (typeof AnalysisDraft !== 'undefined' && AnalysisDraft.load()?.faceAnalysis));
             return `<section class="shade-rec shade-rec-empty">
-                <p>這台裝置上還沒有這次的臉部分析資料，所以無法比較相鄰色號。
-                   完成一次臉部分析並選擇妝容風格之後，這裡會顯示同系列的較亮／較深色號。</p>
+                <p>${hasAnalysisHere
+                    ? '這支粉底目前沒有可比較的相鄰色號資料，同系列的色階還沒有提供。'
+                    : '這台裝置上還沒有這次的臉部分析資料，所以無法比較相鄰色號。'
+                       + '完成一次臉部分析並選擇妝容風格之後，這裡會顯示同系列的較亮／較深色號。'}</p>
             </section>`;
         }
         return '';
@@ -2242,9 +2255,8 @@ dashboard: `
         <div class="greet-actions">
             <button type="button" class="btn-gold greet-cta" data-nav="analysis" id="dashPrimaryCta">
                 <b>看看什麼適合我　→</b><small>只要一張正面照</small></button>
-            <button type="button" class="btn-outline greet-cta-alt" data-nav="analysis"
-                    id="dashSecondaryCta" hidden>重新分析</button>
-            <div class="tone-scale" title="膚色比對"><div class="swatches"><span style="background:#F1D9C4"></span><span style="background:#E4BE9E"></span><span style="background:#CFA079"></span><span style="background:#A9774F"></span><span style="background:#7C5334"></span></div><em>五種膚色基準</em></div>
+            <!-- 「重新分析」與五種膚色基準色階都已移除（2026-08-29 使用者要求）；
+                 pages/dashboard.html 那份也一起拿掉，兩份樣板必須同步。 -->
         </div>
     </div>
     <div class="greet-r"><div class="greet-meta">Your Beauty Atelier</div></div>

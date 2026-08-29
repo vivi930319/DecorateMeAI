@@ -3438,8 +3438,11 @@ a:focus-visible, button:focus-visible, [data-nav]:focus-visible,
     .style-grid, .cat-grid { grid-template-columns:repeat(2,1fr); gap:12px; }
     /* 風格靈感一次看到三張，跟設計稿圖 2 一樣（它底下那三個點也是在說「三張一頁」）。
        用 calc 而不是固定 px：三張要剛好填滿一行，扣掉兩個 gap。 */
-    .insp-card { flex:0 0 calc((100% - 24px) / 3); }
-    .insp-visual { height:138px; }
+    /* 風格靈感跟為你精選同一個寬度（2026-08-29 使用者指定：三張太擠）。
+       先前為了照設計稿的「一頁三張」把它壓到約 115pt，人臉縮到那個尺寸
+       就看不出風格差別了，而那正是這一排要給人看的東西。 */
+    .insp-card { flex:0 0 44%; }
+    .insp-visual { height:190px; }
     .insp-row { gap:12px; }
     /* 卡片約 44% 寬（約 170pt），字級跟著收。 */
     .gc-name { font-size:13px; line-height:1.5; }
@@ -3604,9 +3607,16 @@ html.intro-off #brand-intro{display:none}
 /* 推薦彈窗額外顯示推薦原因。 */
 /* 卡片上的色號。使用者要拿去櫃上問的就是這個字串，
    在商品名稱裡它只是結尾四個字元，看清單比較好幾支時最需要它。 */
-.pc-shade{display:inline-flex;align-items:baseline;gap:6px;margin-top:6px;padding:2px 9px;border:1px solid var(--line-gold);border-radius:999px;background:var(--glass)}
-.pc-shade span{color:var(--mid);font-size:10px;letter-spacing:.08em}
-.pc-shade b{color:var(--ink-soft);font-size:13px;font-weight:600;letter-spacing:.02em}
+/* 色號膠囊。⚠️ .pc-shade span 上面（第 1005 行附近）還有一份舊規則，
+   那是另一個元件——一排互相重疊的小色點：width/height 13px、圓形、負左邊距、
+   外加一圈 box-shadow。兩個元件共用同一個 class，而那份規則在前面，
+   所以這裡不把幾何屬性重設掉的話，「色號」兩個字會被塞進一個 13x13 的圓圈裡
+   還往左位移——2026-08-29 使用者回報的「色號那個地方有點跑版」就是這個。
+   重設寫在這裡而不是去改前面那份：那份還有它自己的使用者。 */
+.pc-shade{display:inline-flex;align-items:baseline;gap:6px;margin-top:6px;padding:2px 9px;border:1px solid var(--line-gold);border-radius:999px;background:var(--glass);max-width:100%}
+.pc-shade span{color:var(--mid);font-size:10px;letter-spacing:.08em;
+    width:auto;height:auto;margin-left:0;border:0;border-radius:0;box-shadow:none;flex:0 0 auto}
+.pc-shade b{color:var(--ink-soft);font-size:13px;font-weight:600;letter-spacing:.02em;min-width:0;overflow-wrap:anywhere}
 .pc-reason{margin-top:6px;font-size:12px;line-height:1.5;color:var(--mid);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .product-recommendation-dialog{max-width:980px}@media(max-width:700px){.recommendation-modal-grid{grid-template-columns:repeat(2,1fr)}}
 
@@ -4329,6 +4339,23 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     .btn-outline::before { display:none; }
     .btn-outline:hover { transform:none; background:var(--gold-dim); box-shadow:none; }
 }
+
+/* ═══ 區塊出口改回文字連結，不是玻璃按鈕 ═══════════════════════════════
+   2026-08-29 使用者指定：「查看全部／查看更多」就是文字按鈕。
+   基礎規則（第 434 行附近）本來就是純文字樣式；是後面那組共用的玻璃質感
+   （border ＋ backdrop-filter ＋ 內外陰影 ＋ ::before 高光）把它變成一顆膠囊。
+   這裡只把那一層拆掉，不動它原本的字級與字距。 */
+.dash-sec-head .sh-link {
+    border:0; border-radius:0; padding:0;
+    background:none; backdrop-filter:none; -webkit-backdrop-filter:none;
+    box-shadow:none; overflow:visible;
+}
+.dash-sec-head .sh-link::before { display:none; }
+.dash-sec-head .sh-link:hover {
+    transform:none; background:none; box-shadow:none; border-color:transparent;
+    color:var(--ink-soft);
+}
+.dash-sec-head .sh-link:active { transform:none; box-shadow:none; }
 
 /* ═══ 臉部分析頁：完全照設計稿圖 6 ═══════════════════════════════════════
    五張插圖全部裁自設計稿本身（assets/feature/），沒有一張是重畫的近似品：
