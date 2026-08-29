@@ -15,8 +15,8 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = process.argv[2] || path.join(__dirname, '..');
-const html = fs.readFileSync(path.join(ROOT, 'pages/admin.html'), 'utf8');
-const js = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8');
+const html = fs.readFileSync(path.join(ROOT, 'pages/admin.html'), 'utf8').replace(/\r\n/g, '\n');
+const js = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8').replace(/\r\n/g, '\n');
 
 const all = (re, s) => [...s.matchAll(re)].map(m => m[1]);
 const buttons = all(/data-admin-section="([^"]+)"/g, html);
@@ -61,7 +61,7 @@ for (const gone of ['demo', 'crawler']) {
 }
 check('router.js 沒有 initAdminDemo', !js.includes('initAdminDemo'));
 check('router.js 沒有 adminStaging', !js.includes('adminStaging'));
-const api = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8');
+const api = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8').replace(/\r\n/g, '\n');
 check('api.js 沒有暫存商品的 API 方法', !api.includes('_stagingBase'));
 
 console.log('\n=== 導覽編號要連續 ===');
@@ -88,7 +88,7 @@ check('切到 feedback 會觸發載入', js.includes("next === 'feedback'") && j
 check('有「重新載入」的處理', js.includes('fbRefresh.onclick'));
 check('401/403 導向重新登入而不是顯示連線失敗', js.includes('需要管理員身分才能檢視'));
 check('api.js 提供 fetchFaceFeedback',
-  fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8').includes('async fetchFaceFeedback'));
+  fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8').replace(/\r\n/g, '\n').includes('async fetchFaceFeedback'));
 
 console.log('\n=== 模型修正複核必須可用 ===');
 check('feedback 按鈕存在', setB.has('feedback'));

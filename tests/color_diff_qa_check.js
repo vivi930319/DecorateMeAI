@@ -10,8 +10,8 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = process.argv[2] || path.join(__dirname, '..');
-const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8');
-const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8');
+const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8').replace(/\r\n/g, '\n');
+const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8').replace(/\r\n/g, '\n');
 
 const cut = (sig) => {
     const i = src.indexOf(sig);

@@ -18,8 +18,8 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = process.argv[2] || path.join(__dirname, '..');
-const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8');
-const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8');
+const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8').replace(/\r\n/g, '\n');
+const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8').replace(/\r\n/g, '\n');
 
 // 把同意區塊的樣板抽出來當函式跑。抄一份到測試裡的話，router.js 改壞了不會有人知道。
 const start = src.indexOf('<div class="af-consent">');

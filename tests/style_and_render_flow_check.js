@@ -9,9 +9,9 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = process.argv[2] || path.join(__dirname, '..');
-const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8');
-const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8');
-const compareHtml = fs.readFileSync(path.join(ROOT, 'pages/compare.html'), 'utf8');
+const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8').replace(/\r\n/g, '\n');
+const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8').replace(/\r\n/g, '\n');
+const compareHtml = fs.readFileSync(path.join(ROOT, 'pages/compare.html'), 'utf8').replace(/\r\n/g, '\n');
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail) => {
@@ -63,7 +63,7 @@ console.log('=== 3b. 等待中與失敗都不要給重試按鈕 ===');
 // 掃的是程式本體，不是連註解一起——那幾行註解正好在解釋
 // 「為什麼不能有重試按鈕」，連註解掃的話這段解釋自己會把測試弄紅。
 // css_tokens_check 與 recommendation_contract_check 都踩過同一個坑。
-const flow = fs.readFileSync(path.join(ROOT, 'js/makeup-flow.js'), 'utf8')
+const flow = fs.readFileSync(path.join(ROOT, 'js/makeup-flow.js'), 'utf8').replace(/\r\n/g, '\n')
     .split(String.fromCharCode(10))
     .filter(line => !line.trim().startsWith('//'))
     .join(String.fromCharCode(10));

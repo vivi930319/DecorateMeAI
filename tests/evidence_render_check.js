@@ -12,7 +12,7 @@ const vm = require('vm');
 const ROOT = process.argv[2] || path.join(__dirname, '..');
 
 function extract(file, marker) {
-  const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+  const src = fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\r\n/g, '\n');
   const start = src.indexOf(marker);
   if (start < 0) throw new Error(`找不到 ${marker}`);
   let depth = 0, i = src.indexOf('{', start), end = -1;
@@ -31,7 +31,7 @@ const sandbox = {
 vm.createContext(sandbox);
 
 // 從 router.js 抽出評分標籤、順序與渲染函式（原封不動）
-const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8');
+const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8').replace(/\r\n/g, '\n');
 for (const name of ['const SCORE_LABELS = Object.freeze(', 'const SCORE_ORDER = [']) {
   const s = src.indexOf(name);
   const semi = src.indexOf(';', src.indexOf(name === 'const SCORE_ORDER = [' ? ']' : ')', s));
@@ -42,7 +42,7 @@ const fnEnd = src.indexOf('\n}', fnStart) + 2;
 vm.runInContext(src.slice(fnStart, fnEnd), sandbox);
 
 // 從 api.js 抽出 _safeMatchReason（掛成獨立函式來測）
-const apiSrc = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8');
+const apiSrc = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8').replace(/\r\n/g, '\n');
 const sStart = apiSrc.indexOf('    _safeMatchReason(product) {');
 let d = 0, j = apiSrc.indexOf('{', sStart), sEnd = -1;
 for (; j < apiSrc.length; j++) {

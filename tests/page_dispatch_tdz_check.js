@@ -44,7 +44,7 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = process.argv[2] || path.join(__dirname, '..');
-const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8');
+const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8').replace(/\r\n/g, '\n');
 
 // ── 從 router.js 取出 PageInit 的每個頁面方法 ───────────────────────────────
 function matchBrace(text, from) {

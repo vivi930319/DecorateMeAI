@@ -12,7 +12,16 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = process.argv[2] || path.join(__dirname, '..');
-const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
+// 讀進來就把換行統一成 \n。
+//
+// 2026-08-29 補的。起因是「狀態判斷在 analysisResult 清空之後」那一項突然變成
+// FAIL，而那段程式碼一個字都沒改——router.js 的換行在某次編輯後變成 CRLF，
+// 而那項比對的是含 `\n` 的跨行字面字串，於是永遠對不上。
+//
+// 危險的不是這次的誤報，是它反過來的形狀：**跨行的字面比對在 CRLF 下會安靜地
+// 恆真或恆假**，看斷言寫成 includes 還是 !includes。恆真的那種等於這項檢查
+// 從此不再檢查任何東西，而畫面上一直是綠的。tests/ 底下每一支都補了同一行。
+const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8').replace(/\r\n/g, '\n');
 const router = read('js/router.js');
 const css = read('css/main.css');
 const profile = read('pages/profile.html');
@@ -52,9 +61,23 @@ check('切換用 hidden 而不是只改 class', routerCode.includes('pl.hidden =
 // 統計卡會捲到別的分頁裡的區塊——不先切過去的話，捲動完全沒有反應
 check('捲動前先切到目標分頁', routerCode.includes("target.closest('.member-panel')")
     && routerCode.includes('showMemberTab(panel.dataset.mpanel)'));
-check('七個區塊都還在（沒有在搬動時掉件）',
-    count(profileCode, '<section class="member-tier">') === 6
-    && count(profileCode, '<section class="member-suggestions">') === 1);
+// 逐個標題點名，而不是數 <section> 的數量。
+//
+// 原本寫的是「member-tier 剛好 6 個」。2026-08-29 把「每日打卡」還原之後變成 7 個，
+// 這一項就 FAIL 了——但**一個區塊都沒有掉**，是刻意加了一個。在「東西變多」時也會
+// 紅的檢查，會養成把它改掉的習慣，而那正是它該擋住的那次改動的偽裝。
+//
+// 點名之後，少了哪一塊會直接說出是哪一塊，多了一塊不算失敗。
+const MEMBER_BLOCKS = ['會員等級', 'PRO 付費解鎖（Demo）', '每日打卡', '任務中心',
+                       '推薦好友', '點數商店', '點數紀錄', '已收藏的妝容對比圖'];
+MEMBER_BLOCKS.forEach(title => {
+    check(`區塊還在：${title}`, profileCode.includes(`<h2>${title}</h2>`));
+});
+// 每一塊都要真的包在區塊容器裡，不是散在頁面上。
+check('區塊數量與點名一致（沒有多出無名區塊）',
+    count(profileCode, '<section class="member-tier">')
+    + count(profileCode, '<section class="member-suggestions">') === MEMBER_BLOCKS.length,
+    `${count(profileCode, '<section class="member-tier">')} + ${count(profileCode, '<section class="member-suggestions">')}`);
 
 console.log('');
 console.log('=== 2. 大頭貼 ===');

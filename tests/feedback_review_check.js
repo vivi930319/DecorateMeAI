@@ -14,10 +14,10 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = process.argv[2] || path.join(__dirname, '..');
-const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8');
-const api = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8');
-const html = fs.readFileSync(path.join(ROOT, 'pages/admin.html'), 'utf8');
-const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8');
+const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8').replace(/\r\n/g, '\n');
+const api = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8').replace(/\r\n/g, '\n');
+const html = fs.readFileSync(path.join(ROOT, 'pages/admin.html'), 'utf8').replace(/\r\n/g, '\n');
+const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8').replace(/\r\n/g, '\n');
 
 // 從真實原始碼抽出 fbRender 與它用到的東西。抄一份到測試裡的話，
 // 測到的就是那份抄本，router.js 改壞了也不會有人知道。

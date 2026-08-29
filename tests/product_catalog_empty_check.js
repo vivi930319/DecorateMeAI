@@ -20,7 +20,7 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = process.argv[2] || path.join(__dirname, '..');
-const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8');
+const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8').replace(/\r\n/g, '\n');
 
 function matchBrace(text, from) {
     let depth = 0;

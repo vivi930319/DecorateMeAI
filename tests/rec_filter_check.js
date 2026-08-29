@@ -10,7 +10,7 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = process.argv[2] || path.join(__dirname, '..');
-const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8');
+const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8').replace(/\r\n/g, '\n');
 
 const MARK = 'const RecFilter = {';
 const start = src.indexOf(MARK);
@@ -118,7 +118,7 @@ if (fs.existsSync(livePath)) {
 console.log('\n=== 9. 一般商品頁的品牌／價格／排序 ===');
 // 使用者不是只在「推薦」那一區買東西，一般商品頁就是逛街的地方，
 // 而逛街本來就會照價格與品牌看。
-const shopCss = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8');
+const shopCss = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8').replace(/\r\n/g, '\n');
 check('有品牌下拉', src.includes('data-shop="brand"'));
 check('有價格區間', src.includes('data-shop="min"') && src.includes('data-shop="max"'));
 check('有排序', src.includes('data-shop="sort"'));

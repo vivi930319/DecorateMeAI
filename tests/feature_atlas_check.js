@@ -15,12 +15,12 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = process.argv[2] || path.join(__dirname, '..');
-const atlas = fs.readFileSync(path.join(ROOT, 'js/feature-atlas.js'), 'utf8');
-const api = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8');
-const router = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8');
-const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8');
-const html = fs.readFileSync(path.join(ROOT, 'pages/analysis.html'), 'utf8');
-const index = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+const atlas = fs.readFileSync(path.join(ROOT, 'js/feature-atlas.js'), 'utf8').replace(/\r\n/g, '\n');
+const api = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8').replace(/\r\n/g, '\n');
+const router = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8').replace(/\r\n/g, '\n');
+const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8').replace(/\r\n/g, '\n');
+const html = fs.readFileSync(path.join(ROOT, 'pages/analysis.html'), 'utf8').replace(/\r\n/g, '\n');
+const index = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').replace(/\r\n/g, '\n');
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail) => {

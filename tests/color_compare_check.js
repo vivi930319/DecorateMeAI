@@ -10,8 +10,8 @@ const path = require('path');
 const vm = require('vm');
 
 const ROOT = process.argv[2] || path.join(__dirname, '..');
-const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8');
-const apiSrc = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8');
+const src = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8').replace(/\r\n/g, '\n');
+const apiSrc = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8').replace(/\r\n/g, '\n');
 
 // 大括號配對抽取。只計 { }，所以像 Object.freeze({...}) 這種包在小括號裡的
 // 會少抽結尾的 ")" —— 那種情況改用 blockUntil 指定結束字串。

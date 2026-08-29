@@ -13,7 +13,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = process.argv[2] || path.join(__dirname, '..');
-const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8');
+const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8').replace(/\r\n/g, '\n');
 
 // 註解裡會提到變數名（包括上面那段在講 --paper-soft 的說明），
 // 掃之前先拿掉，否則解釋 bug 的文字自己會變成 bug。

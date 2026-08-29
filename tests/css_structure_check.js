@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = process.argv[2] || path.join(__dirname, '..');
-const raw = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8');
+const raw = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8').replace(/\r\n/g, '\n');
 // 註解會夾在選擇器之間（合法），先移掉再看結構，否則會被誤判成斷點。
 const css = raw.replace(/\/\*[\s\S]*?\*\//g, '');
 const lines = css.split('\n');
