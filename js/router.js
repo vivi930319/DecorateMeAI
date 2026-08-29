@@ -2304,7 +2304,7 @@ analysis: `
             </div>
             <div class="pro-scan-panel">
                 <div class="pro-scan-copy"><b>角度輔助拍攝</b><span>系統即時顯示臉部 yaw／pitch 並提示對準與否，<b>由你自己按下擷取</b>；也可以直接用上面兩格上傳現成照片。</span></div>
-                <div class="camera-actions"><button class="btn-outline btn-sm" id="startProScanBtn">開始掃描</button><button class="btn-outline btn-sm" id="stopProScanBtn">停止掃描</button></div>
+                <!-- 開始／停止掃描按鈕已移除（2026-08-29）：切到 PRO 會自動開鏡頭 -->
                 <div class="camera-actions"><button class="btn-outline btn-sm" id="manualFrontCaptureBtn">手動存正面</button><button class="btn-outline btn-sm" id="manualSideCaptureBtn">手動存側面</button></div>
                 <div class="camera-box" id="proCameraBox">
                     <video id="proCameraVideo" autoplay playsinline muted></video>
@@ -3874,8 +3874,10 @@ const PageInit = {
             }
         };
 
-        const startProScanBtn = document.getElementById('startProScanBtn');
-        if (startProScanBtn) startProScanBtn.onclick = async () => {
+        // 開鏡頭並開始自動掃描。原本綁在「開始掃描」那顆按鈕上，2026-08-29 使用者
+        // 要求拿掉那兩顆按鈕——但開鏡頭這件事還是要有人做，否則「手動存正面／側面」
+        // 沒有串流可以拍。改成切到 PRO 就自動開（掛載點在這個函式定義之後）。
+        const startProScan = async () => {
             try {
                 if (Router.analyzeMode !== 'pro') setMode('pro');
                 if (!Router.proCameraStream) {
@@ -3898,11 +3900,16 @@ const PageInit = {
             }
         };
 
-        const stopProScanBtn = document.getElementById('stopProScanBtn');
-        if (stopProScanBtn) stopProScanBtn.onclick = () => {
-            stopProScan();
-            setProScanHint('掃描已停止');
-        };
+        // 「停止掃描」按鈕已移除（2026-08-29 使用者要求）。
+        // stopProScan() 本身留著：兩張都擷取完、以及離開頁面時仍然要收掉鏡頭。
+
+        // 切到 PRO 就自動開鏡頭，不必再按「開始掃描」。
+        // 這兩行必須放在 startProScan 定義**之後**——setMode() 在第 3639 行附近就被
+        // 呼叫過一次，把啟動塞進它裡面會在初始化時踩到 TDZ。
+        proModeBtn.addEventListener('click', () => {
+            if (Router.analyzeMode === 'pro') startProScan();
+        });
+        if (Router.analyzeMode === 'pro') startProScan();
 
         const manualFrontCaptureBtn = document.getElementById('manualFrontCaptureBtn');
         if (manualFrontCaptureBtn) manualFrontCaptureBtn.onclick = async () => {
@@ -6447,7 +6454,25 @@ const PageInit = {
             }
             saveBtn.disabled = false;
             if (failures.length) {
-                showAlert(`有 ${failures.length} 筆沒寫進資料庫：\n${failures.join('\n')}\n（401 = 管理員 session 沒帶上，請用資料庫的 admin 帳號重新登入）`, { type: 'error' });
+                // 訊息不要再叫人重新登入。
+                //
+                // 這一批開始前才剛跑過 validateSession() 並拿到 actorId——session 是有的。
+                // 上游仍然回 401「請先登入」，講的是**它不接受這個身分做這件事**：
+                // Gateway 對會員資料庫沒有送任何管理員標記（render／face 有 X-Admin-Request，
+                // 會員端沒有對應機制），所以上游看到的只是「某個使用者要改一筆資料」。
+                //
+                // 2026-08-29 使用者實測：四筆全 401，重新登入無效。叫他重登只會一直繞圈，
+                // 真正的下一步是請資料庫端開放管理員寫入。
+                // 見 docs/專案管理與交接/給資料庫端_後台管理員無法寫入會員_2026-08-29.md
+                const allUnauthorized = failures.every(f => /請先登入|UNAUTHENTICATED|401/.test(f));
+                showAlert(
+                    `有 ${failures.length} 筆沒寫進資料庫：\n${failures.join('\n')}\n\n`
+                    + (allUnauthorized
+                        ? '你的登入是有效的（這批開始前才剛驗過）。是會員資料庫不接受這次的管理操作——'
+                          + 'Gateway 目前沒有對它送管理員標記，上游看到的只是一個一般使用者要改資料。\n'
+                          + '重新登入不會改變結果，需要資料庫端開放管理員寫入權限。'
+                        : '請確認網路狀況後再試一次。'),
+                    { title: '尚未寫入', type: 'error' });
             } else {
                 showToast(`權限已更新並寫入資料庫（${rows.length} 筆）`);
             }

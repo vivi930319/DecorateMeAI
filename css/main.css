@@ -2570,8 +2570,16 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
 .camera-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
 .camera-box { display:none; margin:10px auto 0; background:#fff; position:relative; overflow:hidden; }
 .camera-box.active { display:block; width:min(100%,560px); aspect-ratio:4/3; }
+/* 預覽左右鏡像（BASIC 與 PRO 都要）。
+   使用者是對著畫面整理頭髮、對準鏡頭；不鏡像的話手往左移、畫面往右跑，
+   沒有人能靠那個把瀏海撥好。自拍介面鏡像是使用者的預期。
+
+   ⚠️ 只做在預覽上。擷取走的是 `ctx.drawImage(video, 0, 0)`，畫進 canvas 的是
+   **原始畫格**，不受 CSS transform 影響——所以存下去、送去分析的照片沒有被翻。
+   這一點必須維持：翻過的照片會讓左右五官整組對調，而分析不會報錯，
+   只會安靜地把左眼判成右眼。 */
 #cameraVideo,
-#proCameraVideo { width:100%; height:100%; display:block; background:#fff; object-fit:cover; clip-path:ellipse(36% 48% at 50% 50%); }
+#proCameraVideo { width:100%; height:100%; display:block; background:#fff; object-fit:cover; clip-path:ellipse(36% 48% at 50% 50%); transform:scaleX(-1); }
 .camera-face-guide {
     position:absolute; inset:0;
     display:flex; align-items:center; justify-content:center;
