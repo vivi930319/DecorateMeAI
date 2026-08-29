@@ -91,10 +91,15 @@ check('特色剛好四張', count(about, 'class="af-card"') === 4);
 check('四張都有圖示', count(about, 'class="af-icon"') === 4);
 check('會員權益區塊在（依實際狀態填入）', about.includes('id="aboutPremium"'));
 check('底部資安條', about.includes('class="about-privacy"'));
-// 設計稿把四個並排，要講的是「這系統有四件事」。堆成一直欄之後那個
-// 「一眼四件」就沒了，變成四段要捲過去讀的文字。
-check('手機維持兩欄，不掉成一欄', inMedia(560, '.about-features')
-    && /@media \(max-width:560px\)[\s\S]{0,400}\.about-features \{[^}]*repeat\(2/.test(css));
+// 設計稿圖 3 從頭到尾都是四欄。這一項擋的是「手機放不下所以降成兩欄／一欄」
+// 那種自作主張——2026-08-29 發生過兩次，而且兩次都在程式裡留了看起來很合理的理由，
+// 所以擋法是「任何 @media 裡都不准把它降欄」，不是只檢查某一個斷點。
+check('四欄，任何斷點都不降欄',
+    /\.about-features \{[^}]*repeat\(4/.test(css)
+    && !/\.about-features \{[^}]*grid-template-columns:repeat\([123],/.test(css));
+check('特色圖示用設計稿裁的插圖', ['af-analyze', 'af-style', 'af-shop', 'af-save']
+    .every(n => about.includes(`assets/feature/${n}.webp`)
+        && fs.existsSync(path.join(ROOT, `assets/feature/${n}.webp`))));
 
 console.log('');
 console.log('=== 圖 4 抽屜選單 ===');
@@ -103,6 +108,20 @@ check('抽屜有品牌頭', index.includes('class="drawer-head"')
 check('品牌章是圖片不是字', /drawer-mark[^>]*>\s*<img/.test(index));
 check('底部資安卡', index.includes('class="drawer-foot"'));
 check('每一項都有圖示', count(index, 'class="nav-ico"') >= 8);
+// 設計稿圖 4 的抽屜從**左邊**滑出。線上原本是右上角彈出的深色下拉卡——
+// 那是 2026-08-29 早上重建時我自己決定的，不是設計稿。
+check('抽屜從左邊滑出，不是右邊',
+    /@media[^{]*\{[\s\S]{0,3000}\.topbar-nav \{[^}]*left:0;[^}]*transform:translateX\(-/.test(css));
+// 基礎規則裡的抽屜是深色卡（#24191b），手機這一段要蓋成淺色面板。
+// 驗的是「手機那一段有給它淺色底」，不是特定寫法——換成別的淺色不該讓這項變紅。
+check('抽屜是淺色面板',
+    /@media[^{]*\{[\s\S]{0,4000}\.topbar-nav \{[^}]*background:linear-gradient\([^)]*var\(--paper\)/.test(css));
+check('漢堡在左邊', /\.topbar-menu-toggle \{[^}]*order:-1/.test(css));
+// 四個項目的圓形圖示裁自設計稿，不是重畫的線條圖示。
+check('抽屜圖示用設計稿裁的插圖',
+    ['nav-face', 'nav-history', 'nav-suggestion', 'nav-about']
+        .every(n => index.includes(`assets/feature/${n}.webp`)
+            && fs.existsSync(path.join(ROOT, `assets/feature/${n}.webp`))));
 // 設計稿的抽屜只有四項，因為另外四項在底部 tabbar。兩邊都列就是同一組導覽
 // 出現兩次——所以窄螢幕要把 tabbar 那四項從抽屜藏起來。
 check('窄螢幕把 tabbar 那四項從抽屜藏起來',

@@ -3413,26 +3413,25 @@ a:focus-visible, button:focus-visible, [data-nav]:focus-visible,
     .page-header { margin-bottom:28px; }
     .page-header h1 { font-size:27px; }
 
-    /* 「為你精選」維持兩欄，不要掉成一欄（2026-08-29，比對手機截圖）。
-       設計稿圖 2 是四件並排；一欄之後每張卡佔滿整個螢幕寬，一次只看得到一件，
-       四件要捲三四屏才看得完——那不再是「精選」，是一條商品流。
-       兩欄是手機放得下、又還維持「這是一組」的最接近做法；收藏頁（圖 10）
-       在手機上也正是兩欄。 */
-    .glow-row { grid-template-columns:repeat(2,1fr); gap:20px 12px; margin-bottom:48px; }
+    /* 「為你精選」四欄——設計稿圖 2 就是四件並排。
+       先前這裡先是一欄、再被我改成兩欄，兩次都是拿「手機放不下」當理由自作主張。
+       設計稿是照手機畫的，四欄是它要的密度，字級跟著縮就放得下。 */
+    .glow-row { grid-template-columns:repeat(4,1fr); gap:14px 8px; margin-bottom:48px; }
     .glow-card:nth-child(even), .glow-card:nth-child(3n+2) { margin-top:0; }
     .style-grid, .cat-grid { grid-template-columns:repeat(2,1fr); gap:12px; }
-    /* 風格靈感的卡片：202px 在 390px 寬的螢幕上等於一次只看得到 1.8 張——
-       第二張被切一半、第三張完全看不到，那一排看起來像「只有兩個風格」。
-       縮到 158px 之後是兩張完整加一個明顯的邊，那個邊本身就在說「還有」。 */
-    .insp-card { flex-basis:158px; }
-    .insp-visual { height:168px; }
-    /* 兩欄之後每張卡只有約 170px 寬，18px 的名稱會佔掉三行。 */
-    .gc-name { font-size:14px; line-height:1.5; }
-    .gc-price { font-size:15px; }
-    .gc-rating { gap:7px; margin-top:7px; }
-    .gc-rating .stars { font-size:10.5px; letter-spacing:1px; }
-    .gc-rev { font-size:9px; letter-spacing:.1em; }
-    .gc-heart { top:9px; right:9px; }
+    /* 風格靈感一次看到三張，跟設計稿圖 2 一樣（它底下那三個點也是在說「三張一頁」）。
+       用 calc 而不是固定 px：三張要剛好填滿一行，扣掉兩個 gap。 */
+    .insp-card { flex:0 0 calc((100% - 24px) / 3); }
+    .insp-visual { height:138px; }
+    .insp-row { gap:12px; }
+    /* 四欄之後每張卡約 85pt 寬，字級要跟著設計稿的比例縮。 */
+    .gc-name { font-size:11px; line-height:1.45; }
+    .gc-price { font-size:12px; }
+    .gc-rating { gap:4px; margin-top:5px; flex-wrap:wrap; }
+    .gc-rating .stars { font-size:8px; letter-spacing:.5px; }
+    .gc-rev { font-size:7.5px; letter-spacing:.06em; border-bottom:0; }
+    .gc-img { margin-bottom:7px; }
+    .gc-heart { top:5px; right:5px; transform:scale(.78); transform-origin:top right; }
     .style-intro-card { padding:26px 22px; }
     .makeup-guide-title { font-size:25px; }
     .pd-wrap { gap:28px; }
@@ -4007,6 +4006,10 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     box-shadow:0 14px 34px -18px rgba(80,48,36,.45); }
 .af-icon { display:grid; place-items:center; width:52px; height:52px; margin-bottom:16px;
     border-radius:50%; background:var(--gold-dim); }
+/* 圖示是從設計稿裁下來的（連淡粉圓盤），所以這裡的底色圓要收掉，
+   不然會變成圓盤外面再套一個圈。 */
+.af-icon:has(img) { background:none; width:auto; height:auto; }
+.af-icon img { width:56px; height:56px; display:block; }
 .af-icon svg { width:26px; height:26px; fill:none; stroke:var(--gold-deep);
     stroke-width:1.4; stroke-linecap:round; stroke-linejoin:round; }
 .af-card h3 { font-family:var(--cjk); font-size:17px; margin-bottom:10px; }
@@ -4040,24 +4043,24 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 .about-privacy b { display:block; font-family:var(--cjk); font-size:14.5px; margin-bottom:6px; }
 .about-privacy p { font-size:12.5px; line-height:1.9; color:var(--mid); }
 
+/* 設計稿圖 3 從頭到尾都是四欄。先前這裡在 980 降成兩欄、560 再降一次，
+   兩次都是我拿「手機放不下」當理由自作主張——設計稿本來就是照手機畫的。 */
 @media (max-width:980px) {
-    .about-features { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .about-features { gap:10px; }
 }
 @media (max-width:760px) {
-    .about-intro { grid-template-columns:1fr; }
-    /* 線稿排到文案後面：手機上先讀到「這是什麼」比先看到裝飾重要 */
-    .ai-art { order:2; width:min(190px,60%); }
-    .ai-copy { order:1; }
+    /* 簡介的線稿與文案併排，跟設計稿圖 3 一樣（先前把線稿排到文案下面）。 */
+    .about-intro { grid-template-columns:minmax(0,1fr) 34%; gap:14px; align-items:center; }
+    .ai-art { width:100%; justify-self:end; }
+    .ai-copy { min-width:0; }
 }
 @media (max-width:560px) {
-    /* 維持兩欄，不要掉成一欄。
-       設計稿圖 3 的「我們的特色」是四個並排——它要傳達的是「這個系統有四件事」，
-       那個「一眼四件」在堆成一直欄之後就沒有了，變成四段要捲過去讀的文字。
-       手機放不下四欄，兩欄是最接近的：仍然看得出是一組，也還讀得動。 */
-    .about-features { grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
-    .af-card { padding:16px 13px; }
-    .af-card h3 { font-size:14.5px; margin-bottom:7px; }
-    .af-card p { font-size:11.5px; line-height:1.75; }
+    .about-features { gap:7px; }
+    .af-card { padding:12px 7px; }
+    .af-icon { width:40px; height:40px; margin-bottom:9px; }
+    .af-icon img { width:44px; height:44px; }
+    .af-card h3 { font-size:11px; margin-bottom:5px; letter-spacing:0; }
+    .af-card p { font-size:9.5px; line-height:1.6; }
 }
 
 /* ═══ 底部導覽（只在窄螢幕） ═══════════════════════════════════════════════
@@ -4168,21 +4171,33 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 .drawer-head, .drawer-foot { display:none; }
 .topbar-nav .nav-ico { display:none; }
 @media (max-width:760px) {
-    /* ⚠️ 位置與開合動畫**不要動**。
-       2026-08-29 曾把它改成從左側滑出的整片選單（照設計稿圖 4），使用者回報
-       「右邊的選單故障了，以前可以拉下來」——漢堡在右上角，選單卻從左邊出現，
-       而且原本那套 opacity／visibility／transform 的開合是寫在基礎規則裡的，
-       改掉 transform 等於在動它已經驗證過的開合流程。
-       只換外觀，定位交給基礎規則。 */
+    /* 抽屜從**左邊**滑出，佔滿整個高度（設計稿圖 4）。
+       漢堡也要跟著移到左邊——這是關鍵。2026-08-29 早上曾把選單改成從左側滑出、
+       漢堡卻留在右上角，使用者回報「右邊的選單故障了」：他去按右上角，東西卻從
+       左邊出現，那看起來就是壞了。當時的處理是把選單移回右邊；正確的處理是
+       兩個一起搬到左邊——設計稿本來就是這樣畫的。
+       開合仍然只靠 transform 一個屬性，不動基礎規則那套已驗證過的流程。 */
     .topbar-nav {
-        width:min(340px,calc(100vw - 20px));
-        padding:18px 14px;
-        border-radius:20px;
-        border:1px solid var(--line-gold);
+        left:0; right:auto; top:0; bottom:0;
+        width:min(330px,82vw); height:100%; max-height:none;
+        padding:96px 16px 20px;
+        border:0; border-right:1px solid var(--line-gold);
+        border-radius:0 26px 26px 0;
         background:linear-gradient(168deg, var(--paper) 0%, var(--blush-panel) 100%);
-        box-shadow:0 26px 60px rgba(80,48,36,.2);
+        box-shadow:26px 0 70px rgba(60,36,34,.20);
         display:flex; flex-direction:column; gap:9px;
+        transform:translateX(-104%); transform-origin:left center;
+        opacity:1; visibility:visible; pointer-events:none;
+        overflow:auto;
     }
+    .menu-open .topbar-nav { transform:none; pointer-events:auto; }
+    /* 漢堡移到最左，並壓在抽屜上面——打開後它就是設計稿左上角那個 X。 */
+    .topbar-menu-toggle {
+        order:-1 !important; z-index:230 !important;
+        border:0; background:transparent; color:var(--gold-deep);
+    }
+    .topbar-brand { margin-right:auto; }
+    .topbar-menu-backdrop { background:rgba(60,36,34,.34) !important; }
 
     .drawer-head { display:flex; align-items:center; gap:13px; margin-bottom:22px; padding:0 4px; }
     .drawer-mark { flex:0 0 auto; width:52px; height:52px; border-radius:50%; overflow:hidden;
@@ -4210,6 +4225,10 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
         border-radius:50%; background:var(--gold-dim); }
     .topbar-nav .nav-ico svg { width:21px; height:21px; fill:none; stroke:var(--gold-deep);
         stroke-width:1.4; stroke-linecap:round; stroke-linejoin:round; }
+    /* 四個項目的圖示裁自設計稿（連淡粉圓盤一起），所以底色圓要收掉，
+       否則會變成圓盤外面再套一個圈。 */
+    .topbar-nav .nav-ico:has(img) { background:none; width:auto; height:auto; }
+    .topbar-nav .nav-ico img { width:48px; height:48px; display:block; }
 
     .drawer-foot {
         display:flex; gap:12px; align-items:flex-start; margin-top:6px; padding:15px 16px;
@@ -4263,6 +4282,35 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 }
 .auth-or:before, .auth-or:after {
     content:''; flex:1 1 auto; height:1px; background:var(--line);
+}
+
+/* ═══ 手機的按鈕照設計稿：實心，不是玻璃 ═══════════════════════════════
+   設計稿圖 1（登入）、圖 2（開始臉部分析）、圖 6（開始分析）、圖 12（發送驗證碼）
+   的主按鈕都是**實心玫瑰色配白字、平的**。線上是一顆有反光高光、內陰影與厚投影的
+   玻璃膠囊，配淺米色底與深色字——那是另一套語言，跟設計稿不是同一顆按鈕。
+
+   次要按鈕（訪客登入、返回登入）在設計稿上是透明底、玫瑰色細框、玫瑰色字，
+   同樣是平的。
+
+   只改手機（≤760px），因為使用者指定的是手機一模一樣；桌機那套玻璃質感沿用。 */
+@media (max-width:760px) {
+    .btn-gold {
+        background:linear-gradient(180deg,#C4837A 0%,#B4736C 100%);
+        color:#fff;
+        border:0;
+        box-shadow:0 6px 16px rgba(150,88,78,.22);
+    }
+    /* 高光那條是玻璃感的來源，實心按鈕上不需要。 */
+    .btn-gold::before { display:none; }
+    .btn-gold:hover { transform:none; box-shadow:0 8px 20px rgba(150,88,78,.28); }
+    .btn-gold:active { transform:translateY(1px); box-shadow:0 3px 10px rgba(150,88,78,.24); }
+    .btn-outline {
+        background:transparent; color:var(--gold-deep);
+        border:1px solid var(--gold-soft);
+        box-shadow:none;
+    }
+    .btn-outline::before { display:none; }
+    .btn-outline:hover { transform:none; background:var(--gold-dim); box-shadow:none; }
 }
 
 /* ═══ 臉部分析頁：完全照設計稿圖 6 ═══════════════════════════════════════
