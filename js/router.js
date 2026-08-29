@@ -2308,6 +2308,11 @@ analysis: `
         <div class="loading-bar" id="loadingBar"><div class="fill" id="loadingFill"></div></div>
         <div class="loading-status" id="loadingStatus">等待圖片</div>
         <div class="package-status" id="packageStatus"><b>分析進度</b><span>尚未開始</span></div>
+        <ol class="analysis-steps" id="analysisSteps" aria-label="分析進度">
+            <li data-step="1"><span class="as-dot" aria-hidden="true"></span><span class="as-name">上傳照片</span></li>
+            <li data-step="2"><span class="as-dot" aria-hidden="true"></span><span class="as-name">生成中</span></li>
+            <li data-step="3"><span class="as-dot" aria-hidden="true"></span><span class="as-name">完成</span></li>
+        </ol>
         <button class="btn-gold btn-full" id="analyzeBtn" style="margin-top:14px;">開 始 分 析</button>
     </div>
     <div class="result-panel" id="resultPanel">
@@ -3280,10 +3285,42 @@ const PageInit = {
         // analysisResult，於是剛進頁面就升起一塊全是「—」的結果區。
         setResultState(false);
 
+        // 三段式進度（設計稿圖 7）。
+        //
+        // 刻意做成**從既有訊號推導**，而不是在十幾個地方各補一次呼叫：
+        // setLoadingStatus 本來就在每一次狀態轉換時被叫到，把推導掛在它裡面，
+        // 就不會有「某一條分支忘了更新步驟」那種只在特定路徑才看得到的錯。
+        const stepsEl = document.getElementById('analysisSteps');
+        const hasChosenPhoto = () => !!(Router.selectedFile
+            || Object.values(Router.proFiles || {}).some(Boolean));
+        // idle（還沒跑／跑完又重來）｜running｜done
+        let analysisPhase = 'idle';
+        const syncAnalysisStep = () => {
+            if (!stepsEl) return;
+            const step = analysisPhase === 'done' ? 3
+                : analysisPhase === 'running' ? 2
+                : (hasChosenPhoto() ? 1 : 0);
+            stepsEl.querySelectorAll('li').forEach(li => {
+                const n = Number(li.dataset.step);
+                li.classList.toggle('is-done', n < step);
+                li.classList.toggle('is-current', n === step);
+            });
+        };
+        // 掛在既有的兩支狀態更新上，而不是在十幾個轉換點各補一次呼叫——
+        // 那種寫法漏掉一條分支時，只有走到那條路徑才看得出來。
+        //   setLoadingStatus    分析過程中的每一次轉換都會經過
+        //   updatePackageStatus 選好照片時（saveDraft → 這支）會經過
         const setLoadingStatus = (text, active = false) => {
             if (!loadingStatus) return;
             loadingStatus.textContent = text;
             loadingStatus.classList.toggle('active', active);
+            // 「分析完成」是唯一一個 active=false 卻代表走完的狀態，要先判斷，
+            // 否則它會掉進最後一條分支，變成退回「上傳照片」那一格。
+            // 「分析失敗」則刻意回到 idle：照片還在，使用者可以直接再按一次。
+            if (text === '分析完成') analysisPhase = 'done';
+            else if (active) analysisPhase = 'running';
+            else analysisPhase = 'idle';
+            syncAnalysisStep();
         };
 
         const updatePackageStatus = () => {
@@ -3296,6 +3333,9 @@ const PageInit = {
             packageStatus.querySelector('span').textContent = pkg
                 ? `${pkg.mode.toUpperCase()} · ${statusText} · ${Object.keys(pkg.images || {}).length} 張照片`
                 : '尚未開始';
+            // 選好照片時只有這條路徑會被叫到（saveDraft → 這裡），
+            // 三段式進度的第一格要靠它才亮得起來。
+            syncAnalysisStep();
         };
 
         const fileMeta = (file, role) => ({

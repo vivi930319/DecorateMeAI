@@ -94,6 +94,14 @@
             <b>分析進度</b>
             <span>尚未開始</span>
         </div>
+        <!-- 三段式進度（設計稿圖 7）。上面那條填充條說的是「跑到幾 %」，
+             這裡說的是「現在在哪一段、後面還有什麼」——分析要等十幾秒，
+             只有一條會動的長條時，使用者不知道自己等的是一步還是三步。 -->
+        <ol class="analysis-steps" id="analysisSteps" aria-label="分析進度">
+            <li data-step="1"><span class="as-dot" aria-hidden="true"></span><span class="as-name">上傳照片</span></li>
+            <li data-step="2"><span class="as-dot" aria-hidden="true"></span><span class="as-name">生成中</span></li>
+            <li data-step="3"><span class="as-dot" aria-hidden="true"></span><span class="as-name">完成</span></li>
+        </ol>
         <button class="btn-gold btn-full" id="analyzeBtn" style="margin-top:14px;">開 始 分 析</button>
     </div>
     <div class="result-panel" id="resultPanel">

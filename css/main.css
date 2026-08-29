@@ -4233,6 +4233,47 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     content:''; flex:1 1 auto; height:1px; background:var(--line);
 }
 
+/* ═══ 三段式分析進度（設計稿圖 7） ═══════════════════════════════════════
+   上面那條填充條回答「跑到幾 %」，這一排回答「現在在哪一段、後面還有什麼」。
+   分析要等十幾秒，只有一條會動的長條時，使用者不知道自己等的是一步還是三步。 */
+.analysis-steps {
+    list-style:none; margin:16px 0 0; padding:0;
+    display:grid; grid-template-columns:repeat(3,1fr);
+}
+.analysis-steps li {
+    position:relative; display:flex; flex-direction:column; align-items:center; gap:9px;
+    font-family:var(--cjk); font-size:12px; color:var(--lt);
+    transition:color .35s var(--ease);
+}
+/* 連接線畫在節點之間，不是整條橫貫底下——線要從圓心到圓心，
+   否則兩端會多出一小截穿過圓圈外面。最後一格不畫。 */
+.analysis-steps li::after {
+    content:''; position:absolute; top:8px; left:calc(50% + 14px); right:calc(-50% + 14px);
+    height:1px; background:var(--line);
+}
+.analysis-steps li:last-child::after { display:none; }
+.analysis-steps .as-dot {
+    width:17px; height:17px; border-radius:50%;
+    border:1.5px solid var(--line-gold); background:var(--paper);
+    transition:background .35s var(--ease), border-color .35s var(--ease), box-shadow .35s var(--ease);
+}
+/* 走過的：實心，連到它的線也一起變色，這樣「走到哪」是一條連續的路徑
+   而不是三個各自亮暗的點。 */
+.analysis-steps li.is-done { color:var(--mid); }
+.analysis-steps li.is-done .as-dot { background:var(--gold-deep); border-color:var(--gold-deep); }
+.analysis-steps li.is-done::after { background:var(--gold-soft); }
+/* 目前這一格：實心加一圈光暈，跟「已走過」分得開——兩者都實心的話，
+   使用者看不出停在哪裡。 */
+.analysis-steps li.is-current { color:var(--ink-soft); font-weight:500; }
+.analysis-steps li.is-current .as-dot {
+    background:var(--gold-deep); border-color:var(--gold-deep);
+    box-shadow:0 0 0 4px var(--gold-dim);
+}
+@media (max-width:520px) {
+    .analysis-steps li { font-size:11px; gap:7px; }
+    .analysis-steps li::after { left:calc(50% + 12px); right:calc(-50% + 12px); }
+}
+
 /* ═══ 忘記密碼（設計稿圖 12） ═══════════════════════════════════════════ */
 /* 這一頁的所有元件都置中——它只有一個欄位、一個動作，沒有需要靠左掃讀的清單。
    .auth-card 預設就是 text-align:center，但 .input-group 是靠左的，這裡把它
