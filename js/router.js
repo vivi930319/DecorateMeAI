@@ -8448,14 +8448,40 @@ function showVerification(email) {
 }
 
 function showForgotPassword() {
+    // 版面照設計稿圖 12。四樣之前沒有的東西，每一樣都在回答使用者這一刻會問的問題：
+    //   · 信封圖示——一眼看出這頁是「寄東西給你」，而不是又一個要你輸入密碼的表單
+    //   · 提示卡——收不到驗證碼的第一個原因永遠是垃圾郵件匣，要先講而不是等他來問
+    //   · 返回登入做成按鈕——這是這頁僅有的兩個出口之一，做成小字連結等於藏起來
+    //   · 欄位帶信封圖示，跟登入頁共用 .ig-field／.ig-icon，不是另外長一種輸入框
     document.getElementById('auth-layer').innerHTML = `
         <div class="auth-overlay">
-            <div class="auth-card">
+            <div class="auth-card auth-card-centered">
+                <div class="auth-emblem" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                        <rect x="2.5" y="5" width="19" height="14" rx="2.5"/>
+                        <path d="M3 6.5l9 6.5 9-6.5"/>
+                    </svg>
+                    <span class="auth-emblem-lock">
+                        <svg viewBox="0 0 24 24"><path d="M9 11V8.5a3 3 0 0 1 6 0V11"/><rect x="6.5" y="11" width="11" height="8" rx="1.8"/></svg>
+                    </span>
+                </div>
                 <h2>忘記密碼</h2>
+                <div class="auth-rule" aria-hidden="true"></div>
                 <p class="subtitle">輸入信箱以接收驗證碼</p>
-                <div class="input-group"><label>電子郵件</label><input type="email" id="forgotEmail" placeholder="your@email.com"></div>
+                <div class="input-group"><label>電子郵件</label>
+                  <div class="ig-field">
+                    <span class="ig-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3.5 7l8.5 6 8.5-6"/></svg></span>
+                    <input type="email" id="forgotEmail" placeholder="your@email.com" autocomplete="email">
+                  </div></div>
                 <button class="btn-gold btn-full" onclick="sendForgotOTP()">發送驗證碼</button>
-                <div style="margin-top:16px;"><span class="auth-link" onclick="showLogin()">返回登入</span></div>
+                <div class="auth-hint">
+                    <span class="auth-hint-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".9" fill="currentColor" stroke="none"/></svg>
+                    </span>
+                    <p>驗證碼將發送至您的信箱，<br>請檢查收件匣或垃圾郵件匣。</p>
+                </div>
+                <div class="auth-or"><span>或</span></div>
+                <button class="btn-outline btn-full" onclick="showLogin()">返回登入</button>
             </div>
         </div>
     `;
