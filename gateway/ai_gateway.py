@@ -2234,6 +2234,178 @@ async def admin_purge_member_media(email: str, request: Request):
     return {"status": "purged", "ownerId": owner_id, "removed": results}
 
 
+
+# 渲染服務的 Firestore 集合。改名的話 render/replicate_render_api.py 要一起改。
+# 這裡讀它是為了做「儲存空間 ↔ 會員名冊」的對帳（見 admin_member_storage_audit）：
+# 那個集合就是 GCS 的索引，兩邊零落差（2026-08-29 一次性對帳確認過），
+# 所以查 Firestore 等於查 GCS，而且不需要 google-cloud-storage
+# （gateway 的 requirements 只有 firestore）。
+RENDER_JOBS_COL = os.getenv("RENDER_JOBS_COLLECTION", "render_jobs")
+
+
+async def _member_directory_emails(request: Request) -> list[str]:
+    """目前會員名冊上的 email。只給對帳用，不回給瀏覽器。"""
+    if not MEMBER_DATABASE_URL:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE",
+                              "message": "Member directory is unavailable."}},
+        )
+    headers = with_member_gateway_key({
+        "Accept": "application/json",
+        "Cookie": require_upstream_member_cookie(request),
+    })
+    try:
+        response = await request.app.state.http_client.get(
+            f"{MEMBER_DATABASE_URL}/api/members", headers=headers, timeout=20)
+    except httpx.HTTPError:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE",
+                              "message": "Member directory is unavailable."}},
+        )
+    if not response.is_success:
+        # 名冊讀不到就**中止**，不要拿一份空名冊去比對——那會讓每一筆儲存資料
+        # 都被判成孤兒，畫面上會顯示「全部會員都不見了」，而真相只是這一次讀取失敗。
+        raise HTTPException(
+            status_code=502,
+            detail={"error": {"code": "MEMBER_DIRECTORY_UNREADABLE",
+                              "message": "讀不到會員名冊，無法對帳（沒有拿空名冊去比，"
+                                         "否則會把所有資料誤判成孤兒）。",
+                              "retryable": True,
+                              "details": {"upstreamStatus": response.status_code}}},
+        )
+    try:
+        payload = response.json()
+    except ValueError:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": {"code": "MEMBER_DIRECTORY_UNREADABLE",
+                              "message": "會員名冊回的不是 JSON，無法對帳。", "retryable": True}},
+        )
+    rows = payload.get("items") or payload.get("members") or payload.get("data") or []
+    if not isinstance(rows, list):
+        rows = []
+    emails = []
+    for row in rows:
+        if isinstance(row, str):
+            candidate = row
+        elif isinstance(row, dict):
+            candidate = row.get("email") or row.get("memberEmail") or row.get("account") or ""
+        else:
+            continue
+        candidate = str(candidate or "").strip().lower()
+        if candidate and "@" in candidate:
+            emails.append(candidate)
+    return emails
+
+
+@app.get("/admin-api/member-storage-audit")
+async def admin_member_storage_audit(request: Request):
+    """儲存空間裡有資料、會員名冊上卻沒有這個人——把差額算出來。
+
+    ## 為什麼需要這條
+
+    2026-08-28 會員數從 10 掉到 6，而那些人的渲染圖還在 GCS 裡。當時只能靠人工
+    一次性對帳去查，查完就沒有了；下次再發生一樣要重來一次，而且沒有人會主動想到要查。
+    這條把那件事變成後台按一顆按鈕就有答案的常備機制。
+
+    ## 它怎麼查
+
+    渲染資料在 GCS，索引在 Firestore 的 `render_jobs`，兩邊零落差（同日對帳確認），
+    所以查 Firestore 就等於查 GCS，而且不必把 google-cloud-storage 裝進 gateway。
+
+    每一筆 job 上只有 `ownerId`，那是 `sha256(SESSION_SECRET + email)` 的前 24 碼。
+    **這是單向的**：拿到 ownerId 推不回 email。所以對帳只能往「有 email 的那一邊」算——
+    把名冊上每個 email 各自雜湊一次，得到一份 ownerId 的集合，再去比對儲存空間裡的
+    ownerId。這也是為什麼下面回的孤兒資料**沒有 email 欄位**：不是省略，是算不出來。
+
+    ## 三種歸類
+
+    - `matched`  ownerId 對得上名冊上的某個人。正常。
+    - `guest`    `guest_` 開頭，訪客試用留下的，本來就不會在會員名冊上。正常。
+    - `orphan`   有資料、不是訪客、名冊上卻沒有對應的人。**這就是要找的差額。**
+
+    孤兒資料能做的事只有「清掉」或「留著」——重建不了，因為 email 回不來。
+    畫面上要把這件事講清楚，不要讓管理員以為按個鈕就能把人救回來。
+    """
+    claims = require_admin_access(request)
+    enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+
+    # 先讀名冊。讀不到就整條中止（見 _member_directory_emails）——
+    # 順序刻意是名冊在前：Firestore 那邊即使讀成功，沒有名冊也算不出任何結論。
+    emails = await _member_directory_emails(request)
+    owner_to_member = {opaque_actor_id(email): email for email in emails}
+
+    try:
+        rows = await asyncio.to_thread(job_store.all_jobs, RENDER_JOBS_COL)
+    except Exception:
+        logging.exception("讀取渲染工作紀錄失敗")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "RENDER_INDEX_UNAVAILABLE",
+                              "message": "暫時讀不到渲染紀錄，請稍後再試。", "retryable": True}},
+        )
+
+    owners: dict[str, dict] = {}
+    for row in rows or []:
+        owner_id = str(row.get("ownerId") or "").strip()
+        if not owner_id:
+            continue
+        bucket = owners.setdefault(owner_id, {
+            "ownerId": owner_id, "jobs": 0, "retained": 0, "objects": 0,
+            "firstSeen": None, "lastSeen": None,
+        })
+        bucket["jobs"] += 1
+        if row.get("retained"):
+            bucket["retained"] += 1
+        # 妝後圖與妝前圖各算一個物件；妝前圖常常是 None（早期的資料還沒開始存）。
+        bucket["objects"] += sum(1 for f in ("objectName", "beforeObjectName") if row.get(f))
+        created = row.get("createdAt")
+        if created is not None:
+            if bucket["firstSeen"] is None or created < bucket["firstSeen"]:
+                bucket["firstSeen"] = created
+            if bucket["lastSeen"] is None or created > bucket["lastSeen"]:
+                bucket["lastSeen"] = created
+
+    orphans, matched, guests = [], 0, 0
+    for owner_id, bucket in owners.items():
+        if owner_id.startswith("guest_"):
+            guests += 1
+        elif owner_id in owner_to_member:
+            matched += 1
+        else:
+            orphans.append(bucket)
+    orphans.sort(key=lambda b: (-b["jobs"], b["ownerId"]))
+
+    # 名冊上有、但儲存空間裡一筆資料都沒有的人。不是問題（沒渲染過就是沒有），
+    # 但兩個數字擺在一起才看得出「6 個會員裡有幾個真的用過」。
+    members_without_storage = sum(1 for owner_id in owner_to_member if owner_id not in owners)
+
+    return {
+        "status": "ok",
+        "checkedAt": datetime.now(timezone.utc).isoformat(),
+        "summary": {
+            "members": len(owner_to_member),
+            "jobs": len(rows or []),
+            "owners": len(owners),
+            "matchedOwners": matched,
+            "guestOwners": guests,
+            "orphanOwners": len(orphans),
+            "orphanJobs": sum(b["jobs"] for b in orphans),
+            "membersWithoutStorage": members_without_storage,
+        },
+        # ownerId 就是 opaque id 本身，公開它不洩漏 email（單向雜湊），
+        # 而管理員需要它才能指名要清哪一筆。
+        "orphans": orphans[:200],
+        "orphansTruncated": len(orphans) > 200,
+        # 講給畫面看的：這件事能做什麼、不能做什麼。寫在回應裡而不是只寫在前端，
+        # 是因為之後用 curl 直接打這條的人也需要知道。
+        "recoverable": False,
+        "note": "ownerId 是 email 的單向雜湊，孤兒資料推不回 email，"
+                "因此只能選擇清除或保留，無法重建會員。",
+    }
+
 @app.get("/admin-api/product-audit-logs")
 async def admin_product_audit_logs(request: Request):
     return await proxy_admin_request(request, "/api/admin/product-audit-logs")

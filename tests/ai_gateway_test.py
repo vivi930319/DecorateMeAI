@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 import asyncio
 from http.cookies import SimpleCookie
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 
@@ -1682,6 +1682,95 @@ class TrainingRunsAreAppendOnlyTest(unittest.TestCase):
         self.assertIn('@app.post("/admin-api/face-training/runs")', src)
         self.assertIn('@app.get("/admin-api/face-training/runs")', src)
         self.assertNotIn('@app.delete("/admin-api/face-training/runs', src)
+
+
+class MemberStorageAuditTest(unittest.TestCase):
+    """儲存空間裡有資料、會員名冊上沒有這個人——那個差額要算得出來，而且要算得對。
+
+    2026-08-28 會員數 10 掉到 6，渲染圖還留在 GCS。當時靠人工查一次就結束了；
+    這條端點把它變成常備機制，所以它算錯的代價是「管理員照著錯的數字去刪東西」。
+    """
+
+    def _admin_request(self):
+        gateway.MEMBER_DATABASE_URL = "https://member.test"
+        token, _ = issue_access_token("admin@example.com", "admin", "active")
+        request = Mock()
+        request.method = "GET"
+        request.headers = {"x-expected-actor": opaque_actor_id("admin@example.com")}
+        request.cookies = session_cookies(token, seal_member_cookie("session=abc"))
+        return request
+
+    def test_an_unreadable_directory_stops_the_audit(self):
+        # 最重要的一項。名冊讀不到時若拿空名冊去比，每一筆儲存資料都會被判成孤兒，
+        # 畫面會顯示「所有會員的資料都成了孤兒」——而真相只是這一次讀取失敗。
+        # 管理員照著那個畫面按清除，就會刪掉還有主人的東西。
+        request = self._admin_request()
+        request.app.state.http_client.get = AsyncMock(return_value=httpx.Response(500))
+        with patch.object(gateway.job_store, "all_jobs") as all_jobs:
+            with self.assertRaises(Exception) as raised:
+                asyncio.run(gateway.admin_member_storage_audit(request))
+            # 名冊失敗就不該再去讀 Firestore：沒有名冊，讀回來也算不出任何結論。
+            all_jobs.assert_not_called()
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertEqual(raised.exception.detail["error"]["code"], "MEMBER_DIRECTORY_UNREADABLE")
+
+    def test_owners_split_into_member_guest_and_orphan(self):
+        request = self._admin_request()
+        request.app.state.http_client.get = AsyncMock(return_value=httpx.Response(
+            200, json={"items": [{"email": "a@example.com"}, {"email": "b@example.com"}]}))
+        mine = opaque_actor_id("a@example.com")
+        jobs = [
+            {"ownerId": mine, "retained": True, "objectName": "o1", "beforeObjectName": "b1", "createdAt": 10},
+            {"ownerId": mine, "retained": False, "objectName": "o2", "createdAt": 20},
+            {"ownerId": "guest_deadbeef", "retained": False, "objectName": "o3", "createdAt": 30},
+            {"ownerId": "actor_nolongeramember", "retained": True, "objectName": "o4", "createdAt": 40},
+            {"ownerId": "actor_nolongeramember", "retained": True, "objectName": "o5", "createdAt": 50},
+        ]
+        with patch.object(gateway.job_store, "all_jobs", return_value=jobs):
+            result = asyncio.run(gateway.admin_member_storage_audit(request))
+
+        summary = result["summary"]
+        self.assertEqual(summary["members"], 2)
+        self.assertEqual(summary["matchedOwners"], 1)
+        self.assertEqual(summary["guestOwners"], 1)
+        self.assertEqual(summary["orphanOwners"], 1)
+        self.assertEqual(summary["orphanJobs"], 2)
+        # b@example.com 註冊了但沒渲染過。那不是問題，但兩個數字要分得開。
+        self.assertEqual(summary["membersWithoutStorage"], 1)
+
+        orphan = result["orphans"][0]
+        self.assertEqual(orphan["ownerId"], "actor_nolongeramember")
+        self.assertEqual(orphan["jobs"], 2)
+        self.assertEqual(orphan["objects"], 2)
+        self.assertEqual(orphan["firstSeen"], 40)
+        self.assertEqual(orphan["lastSeen"], 50)
+
+    def test_the_audit_never_hands_back_an_email(self):
+        # ownerId 是單向雜湊，孤兒推不回 email——但**有對上**的那些我們手上是有
+        # email 的（名冊剛讀回來）。順手把它放進回應會很自然，而那就是把整份會員
+        # 名單交給瀏覽器。這一項擋的是那個順手。
+        request = self._admin_request()
+        request.app.state.http_client.get = AsyncMock(return_value=httpx.Response(
+            200, json={"items": [{"email": "a@example.com"}]}))
+        jobs = [{"ownerId": opaque_actor_id("a@example.com"), "objectName": "o1", "createdAt": 1},
+                {"ownerId": "actor_gone", "objectName": "o2", "createdAt": 2}]
+        with patch.object(gateway.job_store, "all_jobs", return_value=jobs):
+            result = asyncio.run(gateway.admin_member_storage_audit(request))
+        self.assertNotIn("a@example.com", str(result))
+
+    def test_a_guest_owner_is_never_called_an_orphan(self):
+        # 訪客試用的圖本來就不會有會員名冊上的主人。把它算成孤兒的話，
+        # 每個看過 demo 的人都會在後台變成一筆「遺失的會員」。
+        request = self._admin_request()
+        request.app.state.http_client.get = AsyncMock(
+            return_value=httpx.Response(200, json={"items": []}))
+        jobs = [{"ownerId": "guest_aaa", "objectName": "o1", "createdAt": 1},
+                {"ownerId": "guest_bbb", "objectName": "o2", "createdAt": 2}]
+        with patch.object(gateway.job_store, "all_jobs", return_value=jobs):
+            result = asyncio.run(gateway.admin_member_storage_audit(request))
+        self.assertEqual(result["summary"]["guestOwners"], 2)
+        self.assertEqual(result["summary"]["orphanOwners"], 0)
+        self.assertEqual(result["orphans"], [])
 
 
 class ProductUpstreamRejectionTest(unittest.TestCase):
