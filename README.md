@@ -6,7 +6,7 @@
 [![Redis](https://img.shields.io/badge/Redis-7--alpine-red.svg)](https://redis.io/)
 [![Docker](https://img.shields.io/badge/Docker%20Compose-ready-2496ED.svg)](https://docs.docker.com/compose/)
 
-> **妝識你的美（Decorate Me）** 是結合會員服務、彩妝商品管理、妝容紀錄與個人化推薦的 Web 平台。後端以 Flask 提供 API 與 Jinja 頁面，資料層使用 PostgreSQL 18 與 Redis，並透過 CIEDE2000 色彩距離、風格關鍵字與五官特徵進行可解釋的商品推薦。
+> **妝識你的美（Decorate Me）** 是結合會員服務、彩妝商品管理、妝容紀錄與個人化推薦的 Web 平台。後端以 Flask 提供 API 與 Jinja 頁面，資料層使用 PostgreSQL 18 與 Redis；粉底／唇彩使用 CIEDE2000 色彩距離，其餘品類依妝容風格進行可解釋推薦。
 
 ---
 
@@ -112,20 +112,20 @@ python run_local_5000.py
 ### 2. 智慧色彩與風格推薦演算法
 
 - **七種妝容風格**：Soft Baddie、千金、港風、韓系亞裔、病嬌、日雜清透、男士白開水。
-- **CIEDE2000 色彩比對**：將 HEX 色票轉為 sRGB、XYZ(D65)、CIELAB，再以 ΔE00 取代舊 CIE76 色差。
+- **CIEDE2000 色彩比對**：只有粉底使用 `skinTone.lab`、唇彩使用 `lipLab`；將色彩轉為 CIELAB 後計算 ΔE00。粉底正式匹配門檻為 `0 ≤ ΔE00 ≤ 2.0`；若目前商品清單沒有符合者，可顯示一件 `2 < ΔE00 ≤ 5.0` 的最接近可比較色號，但不得顯示 MATCH 或宣稱正式匹配。眼影、腮紅、修容、打亮與眉彩不使用膚色色差排序。
 - **風格與色系偏好**：使用 Jaccard 與 Recall；`avoidTags` 會檢查商品名稱、品牌、描述、規格、色號及標籤並扣分，`preferredColors` 命中則加分。
-- **五官特徵評分**：以臉型、眼型、唇型及品類矩陣給予修飾分數。
-- **品類動態權重**：底妝偏重色彩；眼妝與腮紅偏重風格；修容偏重臉部特徵。
+- **品類邊界清楚**：粉底通過膚色色差 `0～2` 才能稱為正式匹配；找不到時只顯示一件 `2～5` 的最接近可比較色號並附未達門檻提醒。唇彩以自然唇色與妝容風格匹配；其他品類以妝容風格為主。
+- **五官欄位保留但不影響其他品類排名**：`faceShape`、`eyeShape`、`browShape` 等仍可用於使用者說明或後續研究，目前非粉底／唇彩商品不以五官或膚色色差加權。
 - **伺服器端行為個人化**：登入會員的收藏、試妝紀錄與購物車會彙整為類別／品牌偏好；不把 Email、會員 ID、Token 或影像傳入演算法。
 - **預算與品牌偏好**：前端可選擇傳送 `recommendationOptions` 的預算範圍、喜愛品牌與避免品牌；預算及喜愛品牌用於重排，`avoidedBrands` 則採硬性排除。
 - **冷啟動保護**：匿名使用者或尚無互動紀錄的會員，維持內容式推薦；行為權重為 0，不會因資料不足而被扣分。
-- **眉彩採風格導向**：眉彩絕不使用膚色比色。若有 `faceAnalysis.browLab`／`hairLab` 才使用 CIEDE2000；沒有眉色資料是正常路徑，仍會依風格與五官特徵排序並進入 `primary`，不回傳 `BROW_COLOR_UNAVAILABLE`。
+- **眉彩採純風格導向**：眉彩不使用膚色、`browLab` 或 `hairLab` 排序；即使上游日後提供眉色，現行契約仍以妝容風格選品。
 - **新商品自動納入**：新商品通過商品契約且進入 `product_catalog` 後，會成為推薦候選；未知分類採預設權重，不會因未寫死分類被忽略。
 - **資料庫檢索欄位與狀態**：以商品 `name`、`brand`、`description`、`specs`、`styleTags`／`tags` 與分類比對；只納入 `active`、`approved`、`in_stock`、`recommendation_ready` 全部成立的商品。
 - **可重跑排序**：移除隨機微擾；相同分析資料與相同候選商品會得到相同排序，能重跑 Precision@K。
-- **可解釋輸出**：每筆商品包含 `matchScore`、八項 `scoreBreakdown`、結構化 `matchReasons`，以及供前端直接呈現的 `recommendationPresentation`；畫面固定標示「根據系統演算法推薦」，並把臉部分析、妝容風格與主要理由翻譯成自然語句。
-- **粉底相鄰色號**：同品牌同系列具備 `seriesId` 與正式 `depthIndex` 時，`shadeRecommendation` 提供主推薦、淺一階與深一階；舊資料則使用 LAB 的 L* 近似並明確標成較明亮／較深替代色，不冒充品牌正式色階。
-- **降級與覆蓋資訊**：回應提供 `fallbackReasons`、`skinToneLabReliable`、品類 `coverage`、每類一件的 `primary`、80 分以上的 `alternates` 與 `threshold: 0.80`。
+- **可解釋輸出**：每筆商品包含 `matchScore`、八項 `scoreBreakdown`、結構化 `matchReasons`，以及供前端直接呈現的 `recommendationPresentation`；正式匹配畫面固定標示「根據臉部分析結果」，並把臉部分析、妝容風格與主要理由翻譯成自然語句。
+- **粉底相鄰色號**：主推薦粉底須先符合膚色色差 `0～2`；同品牌同系列具備 `seriesId` 與正式 `depthIndex` 時，`shadeRecommendation` 依正式順序提供淺一階與深一階，舊資料則在同品牌、同產品系列內使用 LAB 的 L* 近似。替代色相對主推薦色可放寬至 `ΔE00 ≤ 5.0`；不符合時回傳 `null`，不跨品牌補色，也不冒充品牌正式色階。
+- **降級與覆蓋資訊**：回應提供 `fallbackReasons`、`skinToneLabReliable`、品類 `coverage`、每類一件的 `primary`、80 分以上的 `alternates` 與 `threshold: 0.80`；有可用商品但因 `limit` 未回傳時，會明確標示「本次 limit 已用完」，不誤報資料庫無商品。
 
 #### 推薦流程圖
 
@@ -133,10 +133,17 @@ python run_local_5000.py
 flowchart TD
     A[analysisPackage: style / faceAnalysis] --> B[契約驗證與風格別名正規化]
     B --> C[取得可售、已審核的商品候選]
-    C --> D[CIEDE2000 色彩相似度；壞 LAB 自動降級]
+    C --> D[粉底比膚色、唇彩比自然唇色；CIEDE2000]
+    D --> M{色彩品類與門檻}
+    M -->|粉底且 ΔE00 在 0～2| G
+    M -->|粉底 2～5 且沒有嚴格匹配| N[顯示一件最接近可比較色號並隱藏 MATCH]
+    M -->|粉底超過 5| O[不顯示粉底並回傳原因]
+    M -->|唇彩| G
     C --> E[標籤、偏好色與避雷詞比對]
     C --> F[臉型、眼型、唇型特徵矩陣]
-    D --> G[品類動態權重計算內容分數]
+    G[粉底／唇彩色彩分數]
+    C --> L[其他品類只計妝容風格]
+    L --> G
     E --> G
     F --> G
     J[登入會員既有收藏／試妝／購物車] --> K[行為偏好重排，最高 15%]
@@ -149,6 +156,7 @@ flowchart TD
 
 - 商品瀏覽、商品 CRUD、色票查詢及商品分類 API。
 - 收藏新增、切換、刪除；購物車讀取、新增、更新、刪除。
+- 收藏與購物車讀取會保留已刪除商品的會員紀錄並回傳 `unavailable: true`，不會讓整份清單失敗。
 - 試妝紀錄、保存妝容、分析歷史及推薦頁面。
 - 每日簽到、點數、任務領取、主題兌換與推薦碼。
 
@@ -253,6 +261,7 @@ Flask 實際載入後目前有 **81 條 URL 規則**（包含 Flask 內建 stati
     "style": "richGirl",
     "faceAnalysis": {
       "faceShape": "oval",
+      "browShape": "arched",
       "eyeShape": "almond",
       "lipShape": "full",
       "skinTone": {
@@ -298,9 +307,13 @@ Flask 實際載入後目前有 **81 條 URL 規則**（包含 Flask 內建 stati
 | `matchReason` | 相容既有前端的中文推薦理由字串。 |
 | `matchReasons` | 結構化理由陣列，包含 `priority`、`reasonCode`、`personalized`、`text` 與 `evidence`。 |
 | `recommendationPresentation` | 前端呈現模型：系統演算法標籤、MATCH 顯示值、自然語句、適用特徵與非準確率聲明。 |
+| `recommendationPresentation.colorDifferenceExplanation` | 僅粉底／唇彩回傳的 CIEDE2000 色差白話說明、區間與 QA；其他品類為 `null`。 |
+| `foundationSkinMatch` | 每件粉底相對膚色的 ΔE00 與正式 `0～2` 判定；`accepted: false` 但 `displayStatus: closest_available` 代表目前商品清單沒有相近色時顯示的 `2～5` 可比較色號。 |
 | `skinToneLabReliable` | 後端依 LAB 型別、三軸完整性及合法值域重新判定的可信狀態。 |
-| `fallbackReasons` | 降級原因；壞或缺少膚色 LAB 且涉及底妝時包含 `SKIN_TONE_LAB_UNRELIABLE`。 |
-| `shadeRecommendation` | 粉底主推薦與相鄰色；`official_depth_index` 才顯示淺／深一階，`lab_lightness_approximation` 僅顯示明暗替代色。 |
+| `colorDifferencePolicy` | 回傳三層用途：膚色 vs. 正式匹配 `0～2`、無嚴格匹配時顯示最接近色號 `2～5`、主推薦 vs. 明暗替代色同品牌同系列 `0～5`。 |
+| `foundationMatchStatus` | 粉底門檻狀態、原因、合格／已評估筆數與最接近色差；可能為 `matched`、`closest_available`、`no_match`、`unavailable` 或 `not_requested`。 |
+| `fallbackReasons` | 無可靠膚色 LAB 時回傳 `SKIN_TONE_LAB_UNRELIABLE`；顯示 `2～5` 最接近色號時回傳 `FOUNDATION_CLOSEST_AVAILABLE`；所有色號皆超過 5 時回傳 `FOUNDATION_SKIN_DELTA_E_NO_MATCH`。 |
+| `shadeRecommendation` | 粉底主推薦與相鄰色；所有模式限定同品牌同產品系列且 `alternativeMaxDeltaE = 5.0`。`official_depth_index` 才顯示淺／深一階，`lab_lightness_approximation` 僅依 L* 提供明暗替代色；不符合時該方向為 `null`。`anchorDeltaE` 是替代色相對主推薦色的色差，`lightnessDifference` 是 L* 明度差。 |
 
 > `matchScore` 是排序分數，不是「商品適合度百分比」或模型準確率。準確率應以人工金標資料、Precision@K 等離線評估另行計算。
 
@@ -351,8 +364,15 @@ Backend database/
 ├── templates/                 # Jinja 頁面：會員、商品、推薦、後台等
 ├── static/brand/              # OTP Email 使用的 Decorate Me Logo
 ├── static/uploads/            # 使用者上傳或試妝產生的執行期檔案
-├── tests/recommendation/      # 15 項契約測試與 Precision@K 評估工具
-├── 推薦演算法技術內容詳細版_2026-08-26.md # 推薦公式、契約、限制與文獻
+├── tests/recommendation/      # 22 項推薦契約測試與 Precision@K 評估工具
+│   └── validate_feedback_aggregate.py # 五官回饋彙總的隱私與結構檢查
+├── tests/test_catalog_availability.py # 收藏／購物車商品參照可用性測試
+├── 五官回饋彙總_演算法端驗收與使用決議_2026-08-26.md # 資料驗收、用途界線與下一批規格
+├── 回覆前端_推薦契約眉型與下架商品標記_2026-08-26.md # 眉型契約、下架商品與前端驗收回覆
+├── 回覆前端_shadeRecommendation與coverage修正_2026-08-26.md # 色號三階與品類覆蓋第一次修正紀錄
+├── 回覆前端_shadeRecommendation替代色同系列修正_2026-08-26.md # 替代色範圍、ΔE 上限與校對清單
+├── 給前端_色差解釋QA顯示改善_2026-08-26.md # 色差說明欄位、QA UI 與驗收規則
+├── 給前端_粉底膚色色差0至2與替代色0至5_2026-08-27.md # 兩層色差門檻、空結果與前端驗收
 ├── backups/                   # PostgreSQL 升級／變更前備份，不納入部署映像
 ├── catch_errors.py、check_login.py、full_diagnostic.py
 │                                # 問題排查腳本
@@ -370,11 +390,12 @@ Backend database/
 python -m py_compile app.py recommendation.py
 $env:PYTHONPATH='.'
 python tests/recommendation/test_recommendation_contract.py
+python tests/recommendation/validate_feedback_aggregate.py <彙總JSON路徑>
 python tests\recommendation\evaluate_precision_at_k.py gold.json predictions.json
 docker compose ps
 ```
 
-- `test_recommendation_contract.py` 現有 15 項測試，另涵蓋使用者呈現文字、官方相鄰色階與 LAB 明度降級不得混用。
+- `test_recommendation_contract.py` 現有 22 項測試，涵蓋粉底正式匹配 `ΔE00 0～2`、沒有嚴格匹配時顯示 `2～5` 最接近可比較色號但隱藏 MATCH、替代色相對主推薦放寬至 `0～5`、只有粉底／唇彩使用輸入色彩、風格品類不受膚色影響、limit 覆蓋原因、官方色階與 LAB 降級不得混用，以及替代色不得跨品牌／跨產品系列；商品參照另有 1 項可用性測試。
 - 路由層還應在可連線的 PostgreSQL／Redis 環境驗證商品過濾、相似商品、502 `PRODUCT_DB_UNAVAILABLE` 與 504 `PRODUCT_DB_TIMEOUT`。純演算法單元測試不會模擬資料庫離線。
 - 評估工具可計算 Precision@5/10、重複率、停用商品率與幻覺商品率；尚未建立人工金標集前，不宣稱準確率數字。
 - 不可提交 `.env`、SMTP 密碼、Gateway/Bearer Key、真實個資、正式資料庫 dump 或 Docker Volume。

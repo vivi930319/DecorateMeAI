@@ -515,10 +515,10 @@ def is_admin_member(member):
     return member is not None and member_role(member) == "admin"
 
 
-def error_response(code, message, status_code, request_id=None):
+def error_response(code, message, status_code, request_id=None, details=None):
     return jsonify({"success": False, "status": "error", "error": {
         "code": code, "message": message, "retryable": status_code >= 500,
-        "details": {}, "requestId": request_id or f"req_{uuid.uuid4().hex}",
+        "details": details or {}, "requestId": request_id or f"req_{uuid.uuid4().hex}",
     }}), status_code
 
 
@@ -1318,9 +1318,11 @@ def get_user_favorites(phone):
         'eyeshadows': Eyeshadows, 'foundations': Foundations,
         'highlighters': Highlighters, 'products': Products
     }
+    available_sources, _ = _catalog_availability_sets(_catalog_rows())
     product_list = []
     for f in favs:
         model_class = model_mapping.get(f.item_type)
+        unavailable = (str(f.item_type), int(f.item_id)) not in available_sources
         if model_class:
             item = model_class.query.get(f.item_id)
             if item:
@@ -1335,8 +1337,15 @@ def get_user_favorites(phone):
                     "desc": getattr(item, "description", None) or "憓溶憟賣除?莎?靽桅ˇ?頛芸?",
                     "hex": getattr(item, "hex_primary", None) or "#E8A0B4",
                     "lab": getattr(item, 'lab', None) or {},
-                    "vector": item_vector, "salepage": getattr(item, 'sale_page_id', '')
+                    "vector": item_vector, "salepage": getattr(item, 'sale_page_id', ''),
+                    "item_id": f.item_id, "item_type": f.item_type, "unavailable": unavailable,
                 })
+                continue
+        product_list.append({
+            "id": f.item_id, "type": f.item_type,
+            "item_id": f.item_id, "item_type": f.item_type,
+            "name": "此商品已下架", "unavailable": True,
+        })
     return jsonify({"favorites": product_list})
 
 
@@ -1503,18 +1512,25 @@ def _staging_import_validation(item):
     return None, None
 
 
-def _write_product_audit(product_id, action, actor, before_data=None, after_data=None):
+def _write_product_audit(product_id, action, actor, before_data=None, after_data=None,
+                         product_type="products", request_id=None):
+    actor_id = actor if isinstance(actor, str) else _opaque_actor(actor)
+    request_id = (
+            (request_id or request.headers.get("X-Request-ID") or "").strip()[:128]
+            or f"req_{uuid.uuid4().hex}"
+    )
     db.session.execute(db.text("""
         INSERT INTO product_audit_logs
             (product_id, product_type, action, admin_id, before_data, after_data, request_id, source_ip)
         VALUES
-            (:product_id, 'products', :action, :admin_id, CAST(:before_data AS jsonb),
+            (:product_id, :product_type, :action, :admin_id, CAST(:before_data AS jsonb),
              CAST(:after_data AS jsonb), :request_id, CAST(:source_ip AS inet))
     """), {
-        "product_id": str(product_id), "action": action, "admin_id": _opaque_actor(actor),
+        "product_id": str(product_id), "product_type": product_type,
+        "action": action, "admin_id": actor_id,
         "before_data": json.dumps(before_data) if before_data is not None else None,
         "after_data": json.dumps(after_data) if after_data is not None else None,
-        "request_id": f"staging_{uuid.uuid4().hex}", "source_ip": request.remote_addr or None,
+        "request_id": request_id, "source_ip": request.remote_addr or None,
     })
 
 
@@ -1753,34 +1769,128 @@ def create_product_api():
     if admin_err:
         return admin_err
     data = request.get_json(silent=True) or {}
-    name = data.get('name');
-    price = data.get('price');
-    image_url = data.get('image_url')
-    if not all([name, price, image_url]):
-        return error_response("MISSING_FIELDS", "缺少必填欄位", 400)
-    category = cat_to_product_category(data.get('category'))
-    if category not in {"base", "lip", "eye", "blush", "contour", "highlight", "brow"}:
-        return error_response("INVALID_CATEGORY", "分類無效", 400)
+    category_labels = {item["type"]: item["name"] for item in MAKEUP_CATEGORIES}
+    type_aliases = {label: product_type for product_type, label in category_labels.items()}
+    type_aliases.update({"粉底": "foundations", "口紅": "lipsticks", "眉妝": "eyebrows",
+                         "眼線睫毛": "eyeliner_mascara", "高光": "highlighters"})
+    raw_type = str(data.get("type") or "").strip().lower().replace("-", "_")
+    raw_category = str(data.get("category") or "").strip()
+    product_type = raw_type or type_aliases.get(raw_category)
+    if not product_type and raw_category:
+        product_type = category_to_frontend_type(cat_to_product_category(raw_category))
+    if product_type not in _PRODUCT_CATALOG_TABLES or product_type == "products":
+        return error_response("INVALID_CATEGORY", "type 必須是合法的商品分類代碼", 422)
+    if raw_category and type_aliases.get(raw_category, product_type) != product_type:
+        return error_response("INVALID_CATEGORY", "category 與 type 不相符", 422)
+
+    name = str(data.get("name") or "").strip()
+    brand = str(data.get("brand") or "").strip()
+    description = str(data.get("description") or "").strip()
+    image_url = str(data.get("imageUrl") or data.get("image_url") or "").strip()
+    source_url = str(data.get("sourceUrl") or data.get("source_url") or "").strip()
+    source_product_id = str(data.get("sourceProductId") or "").strip()
+    sku = str(data.get("sku") or "").strip()
+    shade_name = str(data.get("shadeName") or data.get("shade_name") or "").strip()
+    currency = str(data.get("currency") or "").strip().upper()
+    missing = [field for field, value in (("name", name), ("brand", brand),
+                                          ("type", product_type), ("price", data.get("price")),
+                                          ("description", description),
+                                          ("imageUrl", image_url), ("sourceUrl", source_url),
+                                          ("sourceProductId", source_product_id), ("sku", sku),
+                                          ("shadeName", shade_name), ("currency", currency))
+               if value in (None, "")]
+    if missing:
+        return error_response("MISSING_FIELDS", "缺少必填欄位", 400, details={"fields": missing})
     try:
-        product = Products(
-            name=name, price=float(price), image_url=image_url,
-            description=data.get('description', ''),
-            category=category, shades=data.get('shades', [])
-        )
-        db.session.add(product)
-        db.session.flush()
-        catalog_id = db.session.execute(db.text("""
-            SELECT id FROM public.product_catalog WHERE product_type = 'products' AND source_id = :source_id
-        """), {"source_id": product.id}).scalar_one()
+        price = int(float(data["price"]))
+        if not 0 < price <= 10_000_000:
+            raise ValueError
+    except (TypeError, ValueError):
+        return error_response("PRODUCT_VALIDATION_FAILED", "商品價格無效", 422)
+    parsed_image = urlparse(image_url)
+    if parsed_image.scheme not in {"http", "https"} or not parsed_image.netloc:
+        return error_response("PRODUCT_VALIDATION_FAILED", "imageUrl 格式無效", 422)
+    parsed_source = urlparse(source_url)
+    if parsed_source.scheme not in {"http", "https"} or not parsed_source.netloc:
+        return error_response("PRODUCT_VALIDATION_FAILED", "sourceUrl 格式無效", 422)
+    if currency not in {"TWD", "USD", "JPY", "KRW", "EUR", "GBP", "CNY", "HKD"}:
+        return error_response("PRODUCT_VALIDATION_FAILED", "currency 格式無效", 422)
+    status = str(data.get("status") or "active")
+    review_status = str(data.get("reviewStatus") or "approved")
+    if status not in {"active", "inactive", "archived"} or review_status not in {"pending", "approved", "rejected"}:
+        return error_response("PRODUCT_VALIDATION_FAILED", "商品狀態無效", 422)
+    palette_colors = data.get("paletteColors") or []
+    if not isinstance(palette_colors, list):
+        return error_response("PRODUCT_VALIDATION_FAILED", "paletteColors 必須是陣列", 422)
+    palette_image_url = str(data.get("paletteImageUrl") or "").strip()
+    if palette_colors and (
+            not palette_image_url or
+            any(not isinstance(pan, dict) or not str(pan.get("name") or "").strip()
+                or pan.get("position") is None for pan in palette_colors)):
+        return error_response("PRODUCT_VALIDATION_FAILED", "多色盤的色格與圖片資料不完整", 422)
+    lab = data.get("lab")
+    if lab is not None and (not isinstance(lab, list) or len(lab) != 3
+                            or any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in lab)):
+        return error_response("PRODUCT_VALIDATION_FAILED", "lab 必須是三個數字", 422)
+    # A multi-pan palette is never represented by one averaged colour.
+    hex_primary = None if palette_colors else (data.get("hex") or data.get("hex_primary") or None)
+    lab = None if palette_colors else lab
+    if hex_primary and not re.fullmatch(r"#[0-9A-Fa-f]{6}", str(hex_primary)):
+        return error_response("PRODUCT_VALIDATION_FAILED", "hex 格式無效", 422)
+    if not palette_colors and shade_name != "官方單一規格" and (not hex_primary or lab is None):
+        return error_response("PRODUCT_VALIDATION_FAILED", "單色色號必須提供官方 hex 與 lab", 422)
+
+    sale_page_id = str(data.get("salePageId") or f"admin-{uuid.uuid4().hex[:16]}")[:50]
+    shade_code = str(data.get("shadeCode") or shade_name).strip()[:30]
+    table = product_type
+    params = {
+        "sale_page_id": sale_page_id, "name": name, "brand": brand, "price": price,
+        "description": description, "image_url": image_url,
+        "hex_primary": hex_primary, "lab": json.dumps(lab) if lab is not None else None,
+        "palette_colors": json.dumps(palette_colors, ensure_ascii=False),
+        "palette_image_url": palette_image_url or None, "sku": sku,
+        "category": category_labels[product_type], "product_type": product_type,
+        "status": status, "review_status": review_status, "in_stock": bool(data.get("inStock", True)),
+        "currency": currency,
+        "image_urls": json.dumps(data.get("imageUrls") or [image_url]),
+        "source_url": source_url, "source_site": parsed_source.hostname,
+        "source_product_id": source_product_id,
+        "fingerprint": hashlib.sha256(f"{source_url or sale_page_id}|{sku}|{shade_name}".encode()).hexdigest(),
+        "style_tags": data.get("styleTags") or [], "finish_tags": data.get("finishTags") or [],
+        "season_tags": data.get("seasonTags") or [], "occasion_tags": data.get("occasionTags") or [],
+        "feature_tags": data.get("featureTags") or [], "avoid_tags": data.get("avoidTags") or [],
+        "shade_name": shade_name, "coverage": data.get("coverage"), "undertone": data.get("undertone"),
+        "texture": data.get("texture"),
+    }
+    try:
+        source_id = db.session.execute(db.text(f"""INSERT INTO public.{table}(
+            sale_page_id,name,brand,price,description,image_webp_url,hex_primary,lab,palette_colors,palette_image_url,
+            sku,category,product_type,status,review_status,in_stock,currency,image_urls,source_url,source_site,
+            source_product_id,crawl_fingerprint,style_tags,finish_tags,season_tags,occasion_tags,feature_tags,
+            avoid_tags,shade_name,coverage,undertone,texture,version,updated_at)
+            VALUES(:sale_page_id,:name,:brand,:price,:description,:image_url,:hex_primary,CAST(:lab AS jsonb),
+            CAST(:palette_colors AS jsonb),:palette_image_url,:sku,:category,:product_type,:status,:review_status,
+            :in_stock,:currency,CAST(:image_urls AS jsonb),:source_url,:source_site,:source_product_id,:fingerprint,
+            :style_tags,:finish_tags,:season_tags,:occasion_tags,:feature_tags,:avoid_tags,:shade_name,:coverage,
+            :undertone,:texture,1,CURRENT_TIMESTAMP) RETURNING id"""), params).scalar_one()
+        if product_type in {"foundations", "lipsticks"}:
+            db.session.execute(db.text(f"UPDATE public.{table} SET shade_code=:shade_code WHERE id=:id"),
+                               {"shade_code": shade_code, "id": source_id})
+        catalog_id = db.session.execute(db.text("""INSERT INTO public.product_catalog(product_type,source_id)
+            VALUES(:product_type,:source_id)
+            ON CONFLICT(product_type,source_id) DO UPDATE SET product_type=EXCLUDED.product_type
+            RETURNING id"""), {"product_type": product_type, "source_id": source_id}).scalar_one()
+        _write_product_audit(f"{product_type}:{source_id}", "create", _product_delete_actor(),
+                             after_data={"catalogId": catalog_id, "name": name, "brand": brand},
+                             product_type=product_type)
         db.session.commit()
-        return jsonify({
-            "id": catalog_id, "sourceId": product.id, "type": "products",
-            "name": product.name, "price": f'NT${product.price:.0f}',
-            "image_url": product.image_url, "description": product.description,
-            "category": product.category, "shades": product.shades
-        }), 201
+        return jsonify({"ok": True, "product": _catalog_item_by_id(catalog_id)}), 201
+    except IntegrityError:
+        db.session.rollback()
+        return error_response("PRODUCT_ALREADY_EXISTS", "商品已存在", 409)
     except Exception:
         db.session.rollback()
+        app.logger.exception("product create failed")
         return error_response("CREATE_FAILED", "建立失敗", 500)
 
 
@@ -1802,19 +1912,226 @@ def get_product_api(product_id):
     return response, 200
 
 
-@app.route('/api/products/<int:product_id>', methods=['DELETE'])
-def delete_product_api(product_id):
-    admin_err = require_admin()
+def _product_relation_exists(table):
+    return db.session.execute(
+        db.text("SELECT to_regclass(:relation)"), {"relation": f"public.{table}"}
+    ).scalar() is not None
+
+
+def _product_relation_columns(table):
+    return set(db.session.execute(db.text("""
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = :table
+    """), {"table": table}).scalars().all())
+
+
+def _product_reference_values(item):
+    source_id = int(item["sourceId"])
+    catalog_id = int(item["id"])
+    ids = sorted({source_id, catalog_id})
+    product_type = str(item["type"])
+    category = cat_to_product_category(item.get("category") or product_type)
+    types = sorted({product_type, category, category_to_frontend_type(category)})
+    return ids, types
+
+
+def _product_query_parameters(item):
+    ids, types = _product_reference_values(item)
+    while len(ids) < 2:
+        ids.append(ids[0])
+    while len(types) < 3:
+        types.append(types[-1])
+    return {
+        "source_id": ids[0], "catalog_id": ids[-1],
+        "type_a": types[0], "type_b": types[len(types) // 2], "type_c": types[-1],
+    }
+
+
+def _count_preserved_product_rows(item):
+    """Count user-owned/history rows without changing or cascading them."""
+    params = _product_query_parameters(item)
+    result = {"favorites": 0, "cartItems": 0, "recommendationRecords": 0}
+
+    if _product_relation_exists("favorites"):
+        result["favorites"] = int(db.session.execute(db.text("""
+            SELECT COUNT(*) FROM public.favorites
+            WHERE item_id IN (:source_id, :catalog_id)
+              AND item_type IN (:type_a, :type_b, :type_c)
+        """), params).scalar() or 0)
+
+    for table in ("cart_items", "cart"):
+        if not _product_relation_exists(table):
+            continue
+        columns = _product_relation_columns(table)
+        if "item_id" not in columns:
+            continue
+        type_filter = (
+            " AND item_type IN (:type_a, :type_b, :type_c)"
+            if "item_type" in columns else ""
+        )
+        result["cartItems"] += int(db.session.execute(db.text(
+            f"SELECT COUNT(*) FROM public.{table} "
+            "WHERE item_id IN (:source_id, :catalog_id)" + type_filter
+        ), params).scalar() or 0)
+
+    for table in ("recommendation_records", "recommendations", "tryon_records"):
+        if not _product_relation_exists(table):
+            continue
+        columns = _product_relation_columns(table)
+        id_column = "product_id" if "product_id" in columns else (
+            "item_id" if "item_id" in columns else None
+        )
+        if not id_column:
+            continue
+        type_column = "item_type" if "item_type" in columns else (
+            "product_type" if "product_type" in columns else None
+        )
+        type_filter = (
+            f" AND {type_column} IN (:type_a, :type_b, :type_c)"
+            if type_column else ""
+        )
+        result["recommendationRecords"] += int(db.session.execute(db.text(
+            f"SELECT COUNT(*) FROM public.{table} "
+            f"WHERE {id_column} IN (:source_id, :catalog_id)" + type_filter
+        ), params).scalar() or 0)
+    return result
+
+
+def _delete_product_shade_rows(item):
+    params = _product_query_parameters(item)
+    deleted = 0
+    for table in ("product_shades", "shades"):
+        if not _product_relation_exists(table):
+            continue
+        columns = _product_relation_columns(table)
+        if "product_id" not in columns:
+            continue
+        type_filter = (
+            " AND product_type IN (:type_a, :type_b, :type_c)"
+            if "product_type" in columns else ""
+        )
+        result = db.session.execute(db.text(
+            f"DELETE FROM public.{table} "
+            "WHERE product_id IN (:source_id, :catalog_id)" + type_filter
+        ), params)
+        deleted += int(result.rowcount or 0)
+    return deleted
+
+
+def _delete_product_staging_rows(item):
+    """Remove crawler rows that refer to the product being hard-deleted."""
+    table = "crawler_staging_products"
+    if not _product_relation_exists(table):
+        return 0
+    columns = _product_relation_columns(table)
+    clauses = []
+    params = {}
+    source_id = int(item["sourceId"])
+    catalog_id = int(item["id"])
+    refs = sorted({str(source_id), str(catalog_id), f"{item['type']}:{source_id}"})
+
+    if "imported_product_id" in columns and item["type"] == "products":
+        clauses.append("imported_product_id = :source_id")
+        params["source_id"] = source_id
+    if "imported_product_ref" in columns:
+        placeholders = []
+        for index, value in enumerate(refs):
+            key = f"ref_{index}"
+            params[key] = value
+            placeholders.append(f":{key}")
+        clauses.append(f"imported_product_ref IN ({', '.join(placeholders)})")
+    source_product_id = str(item.get("sourceProductId") or "").strip()
+    if "source_product_id" in columns and source_product_id:
+        clauses.append("source_product_id = :source_product_id")
+        params["source_product_id"] = source_product_id
+    source_url = str(item.get("sourceUrl") or "").strip()
+    if "source_url" in columns and source_url:
+        clauses.append("source_url = :source_url")
+        params["source_url"] = source_url
+    if not clauses:
+        return 0
+    result = db.session.execute(db.text(
+        f"DELETE FROM public.{table} WHERE " + " OR ".join(f"({clause})" for clause in clauses)
+    ), params)
+    return int(result.rowcount or 0)
+
+
+def _product_delete_actor():
+    forwarded = (request.headers.get("X-Admin-Actor") or "").strip()[:128]
+    if forwarded:
+        return forwarded
+    actor, _ = authenticated_member()
+    return _opaque_actor(actor) if actor is not None else "gateway_product_admin"
+
+
+@app.route('/api/products/<int:product_id>/delete-impact', methods=['GET'])
+def get_product_delete_impact_api(product_id):
+    admin_err = require_product_audit_admin()
     if admin_err:
         return admin_err
-    item = _catalog_item_by_id(product_id)
+    item = _catalog_item_by_id(product_id, include_incomplete=True)
     if item is None:
-        return error_response("NOT_FOUND", "找不到商品", 404)
-    table = _PRODUCT_CATALOG_TABLES[item["type"]]
-    db.session.execute(db.text(f"DELETE FROM public.{table} WHERE id = :source_id"), {"source_id": item["sourceId"]})
-    db.session.execute(db.text("DELETE FROM public.product_catalog WHERE id = :id"), {"id": product_id})
-    db.session.commit()
-    return jsonify({"message": "商品已刪除"}), 200
+        return error_response("PRODUCT_NOT_FOUND", "商品不存在", 404)
+    return jsonify({**_count_preserved_product_rows(item), "canDelete": True}), 200
+
+
+@app.route('/api/products/<int:product_id>', methods=['DELETE'])
+def delete_product_api(product_id):
+    admin_err = require_product_audit_admin()
+    if admin_err:
+        return admin_err
+    request_id = (
+            (request.headers.get("X-Request-ID") or "").strip()[:128]
+            or f"req_{uuid.uuid4().hex}"
+    )
+    try:
+        catalog_ref = db.session.execute(db.text("""
+            SELECT product_type, source_id
+            FROM public.product_catalog
+            WHERE id = :id
+            FOR UPDATE
+        """), {"id": product_id}).mappings().first()
+        if catalog_ref is None or catalog_ref["product_type"] not in _PRODUCT_CATALOG_TABLES:
+            db.session.rollback()
+            return error_response("PRODUCT_NOT_FOUND", "商品不存在", 404, request_id=request_id)
+
+        item = _catalog_item_by_id(product_id, include_incomplete=True)
+        if item is None:
+            db.session.rollback()
+            return error_response("PRODUCT_NOT_FOUND", "商品不存在", 404, request_id=request_id)
+
+        table = _PRODUCT_CATALOG_TABLES[item["type"]]
+        preserved = _count_preserved_product_rows(item)
+        _write_product_audit(
+            f"{item['type']}:{item['sourceId']}", "delete", _product_delete_actor(),
+            before_data=item, product_type=item["type"], request_id=request_id,
+        )
+        shades = _delete_product_shade_rows(item)
+        staging_rows = _delete_product_staging_rows(item)
+        source_delete = db.session.execute(
+            db.text(f"DELETE FROM public.{table} WHERE id = :source_id"),
+            {"source_id": item["sourceId"]},
+        )
+        if source_delete.rowcount != 1:
+            db.session.rollback()
+            return error_response("PRODUCT_NOT_FOUND", "商品不存在", 404, request_id=request_id)
+        db.session.execute(
+            db.text("DELETE FROM public.product_catalog WHERE id = :id"), {"id": product_id}
+        )
+        db.session.commit()
+        deleted_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        return jsonify({
+            "ok": True, "mode": "hard", "id": product_id, "deletedAt": deleted_at,
+            "cascaded": {"shades": shades, "stagingRows": staging_rows},
+            "preserved": preserved,
+        }), 200
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("product hard delete failed product_id=%s request_id=%s", product_id, request_id)
+        return error_response(
+            "DELETE_FAILED", "刪除商品失敗，資料庫已回復原狀", 409, request_id=request_id
+        )
 
 
 # ========== Crawler ==========
@@ -2062,10 +2379,15 @@ def find_makeup_category(category_type):
     return None
 
 
-def display_price(value):
-    if value is None: return "NT$0"
+def display_price(value, currency="TWD"):
+    currency = str(currency or "TWD").upper()
+    if value is None:
+        return "NT$0" if currency == "TWD" else f"{currency} 0"
     try:
-        return f"NT${float(value):.0f}"
+        amount = float(value)
+        if currency == "TWD": return f"NT${amount:.0f}"
+        if currency == "USD": return f"US${amount:.2f}"
+        return f"{currency} {amount:.2f}"
     except (TypeError, ValueError):
         return str(value)
 
@@ -2149,7 +2471,7 @@ _PRODUCT_CATALOG_TABLES = {
 }
 
 
-def _catalog_rows():
+def _catalog_rows(include_incomplete=False):
     selects = []
     for product_type, table in _PRODUCT_CATALOG_TABLES.items():
         if product_type == "products":
@@ -2160,75 +2482,140 @@ def _catalog_rows():
                        NULL::text AS undertone, NULL::text AS shade_code, NULL::text AS shade_name,
                        NULL::text AS series_id, NULL::integer AS depth_index,
                        1 AS version, NULL::text AS hex_primary, NULL::jsonb AS lab,
+                        '[]'::jsonb AS palette_colors, NULL::text AS palette_image_url, 'TWD'::text AS currency,
+                       NULL::text AS sku, NULL::text AS source_site, NULL::text AS source_product_id,
                        TRUE AS in_stock, 'active'::text AS status, 'approved'::text AS review_status, TRUE AS recommendation_ready
                 FROM public.product_catalog c JOIN public.products p ON c.product_type='products' AND c.source_id=p.id
             """)
-        elif product_type == "foundations":
-            selects.append(f"""
-                SELECT c.id AS global_id, c.product_type, p.id AS source_id, p.name, COALESCE(p.brand,'') AS brand,
-                       p.price, p.description, p.image_webp_url AS image_url, p.source_url,
-                       p.sale_page_id, p.category, NULL::jsonb AS shades, p.season_tags, p.undertone,
-                       p.shade_code, p.shade_name, p.series_id, p.depth_index,
-                       COALESCE(p.version, 1) AS version, p.hex_primary, p.lab,
-                       COALESCE(p.in_stock,FALSE) AS in_stock, COALESCE(p.status,'inactive') AS status,
-                       COALESCE(p.review_status,'pending') AS review_status, COALESCE(p.recommendation_ready,FALSE) AS recommendation_ready
-                FROM public.product_catalog c JOIN public.{table} p ON c.product_type='{product_type}' AND c.source_id=p.id
-            """)
         else:
+            # Foundation codes have their own normalized field.  Other makeup
+            # tables use the full official shade name as the public code; this
+            # avoids the legacy 30-character lipstick column truncating names.
+            shade_code = "p.shade_code" if product_type == "foundations" else "p.shade_name"
+            series_id = "p.series_id" if product_type == "foundations" else "NULL::text"
+            depth_index = "p.depth_index" if product_type == "foundations" else "NULL::integer"
             selects.append(f"""
                 SELECT c.id AS global_id, c.product_type, p.id AS source_id, p.name, COALESCE(p.brand,'') AS brand,
                        p.price, p.description, p.image_webp_url AS image_url, p.source_url,
                        p.sale_page_id, p.category, NULL::jsonb AS shades, p.season_tags, p.undertone,
-                       NULL::text AS shade_code, NULL::text AS shade_name,
-                       NULL::text AS series_id, NULL::integer AS depth_index,
+                       {shade_code} AS shade_code, p.shade_name,
+                       {series_id} AS series_id, {depth_index} AS depth_index,
                        COALESCE(p.version, 1) AS version, p.hex_primary, p.lab,
+                        p.palette_colors, p.palette_image_url, COALESCE(p.currency,'TWD') AS currency,
+                       p.sku, p.source_site, p.source_product_id,
                        COALESCE(p.in_stock,FALSE) AS in_stock, COALESCE(p.status,'inactive') AS status,
                        COALESCE(p.review_status,'pending') AS review_status, COALESCE(p.recommendation_ready,FALSE) AS recommendation_ready
                 FROM public.product_catalog c JOIN public.{table} p ON c.product_type='{product_type}' AND c.source_id=p.id
             """)
     rows = db.session.execute(db.text(" UNION ALL ".join(selects))).mappings().all()
-    return [_catalog_payload(row) for row in rows]
+    items = [_catalog_payload(row) for row in rows]
+    return items if include_incomplete else [item for item in items if _catalog_item_is_publishable(item)]
+
+
+def _catalog_availability_sets(catalog_items):
+    """Return live source references and global ids without dropping stale member data."""
+    source_references = {
+        (str(item.get("type") or ""), int(item["sourceId"]))
+        for item in catalog_items if item.get("sourceId") is not None
+    }
+    global_ids = {int(item["id"]) for item in catalog_items if item.get("id") is not None}
+    return source_references, global_ids
 
 
 def _catalog_payload(row):
     source_url = str(row["source_url"] or "").strip()
+    palette_colors = row["palette_colors"] if isinstance(row["palette_colors"], list) else []
+    if palette_colors:
+        color_representation = "palette"
+    elif row["hex_primary"] and isinstance(row["lab"], list) and len(row["lab"]) == 3:
+        color_representation = "single"
+    elif str(row["shade_name"] or "").strip() == "官方單一規格":
+        color_representation = "not_applicable"
+    else:
+        color_representation = "official_name_only"
     return {
         "id": int(row["global_id"]), "sourceId": int(row["source_id"]), "type": row["product_type"],
         "candidateKey": f"{row['product_type']}:{row['source_id']}",
         "name": row["name"] or "未命名商品", "brand": row["brand"] or "",
-        "price": display_price(row["price"]), "description": row["description"] or "暫無描述",
+        "price": display_price(row["price"], row["currency"]), "priceValue": float(row["price"] or 0),
+        "currency": str(row["currency"] or "TWD"), "description": row["description"] or "暫無描述",
         "imageUrl": row["image_url"] or "", "image_url": row["image_url"] or "", "image_src": row["image_url"] or "",
         "sourceUrl": source_url if source_url.startswith(("https://", "http://")) else None,
+        "sourceSite": row["source_site"] or None, "sourceProductId": row["source_product_id"] or None,
+        "sku": row["sku"] or None,
         "salePageId": row["sale_page_id"] or None, "sale_page_id": row["sale_page_id"] or None,
         "category": row["category"] or "", "shades": row["shades"] or [],
         "seasonTags": row["season_tags"] or [], "undertone": row["undertone"] or "",
         "shadeCode": row["shade_code"] or None, "shadeName": row["shade_name"] or "",
         "seriesId": row["series_id"] or None,
         "depthIndex": int(row["depth_index"]) if row["depth_index"] is not None else None,
-        "version": int(row["version"] or 1), "hex_primary": row["hex_primary"], "lab": row["lab"] or None,
+        "version": int(row["version"] or 1), "hex": row["hex_primary"],
+        "hex_primary": row["hex_primary"], "lab": row["lab"] or None,
+        "paletteColors": palette_colors,
+        "paletteImageUrl": row["palette_image_url"] or None,
+        "colorRepresentation": color_representation,
         "inStock": bool(row["in_stock"]), "status": row["status"], "reviewStatus": row["review_status"],
-        "recommendationReady": bool(row["recommendation_ready"]),
+        # Complete single-colour rows with a real Lab triple are eligible for
+        # colour matching.  A stale legacy default must not silently remove a
+        # valid foundation shade from CIEDE2000 comparison.
+        "recommendationReady": bool(color_representation == "single"),
     }
 
 
-def _catalog_item_by_id(product_id):
-    return next((item for item in _catalog_rows() if item["id"] == product_id), None)
+def _catalog_item_is_publishable(item):
+    """Keep incomplete crawler rows out of every storefront/recommendation API."""
+    required_text = ("name", "brand", "description", "imageUrl", "sourceUrl", "salePageId",
+                     "category", "currency", "sku", "sourceProductId", "shadeName", "shadeCode")
+    return (
+            item.get("status") == "active"
+            and item.get("reviewStatus") == "approved"
+            and all(str(item.get(field) or "").strip() for field in required_text)
+            and float(item.get("priceValue") or 0) > 0
+    )
+
+
+def _catalog_item_by_id(product_id, include_incomplete=False):
+    return next((item for item in _catalog_rows(include_incomplete=include_incomplete)
+                 if item["id"] == product_id), None)
 
 
 def _catalog_list_response():
     items = _catalog_rows()
     raw_category = request.args.get("category") or request.args.get("type")
     if raw_category:
-        normalized_category = cat_to_product_category(raw_category)
-        normalized_type = category_to_frontend_type(normalized_category)
-        items = [item for item in items if (
-                cat_to_product_category(item.get("category") or item.get("type")) == normalized_category
-                or item.get("type") == raw_category
-                or item.get("type") == normalized_type
-        )]
-    raw_brand = (request.args.get("brand") or "").strip().casefold()
-    if raw_brand:
-        items = [item for item in items if str(item.get("brand") or "").casefold() == raw_brand]
+        normalized_raw = raw_category.strip().lower().replace("-", "_").replace(" ", "_")
+        category_types = {
+            "底妝": "foundations", "粉底": "foundations", "唇彩": "lipsticks", "口紅": "lipsticks",
+            "腮紅": "blushes", "眼影": "eyeshadows", "眼線/睫毛": "eyeliner_mascara",
+            "眼線睫毛": "eyeliner_mascara", "修容": "contouring", "打亮": "highlighters",
+            "高光": "highlighters", "眉毛彩妝": "eyebrows", "眉毛": "eyebrows", "眉妝": "eyebrows",
+        }
+        selected_type = (normalized_raw if normalized_raw in _PRODUCT_CATALOG_TABLES
+                         else category_types.get(raw_category.strip()))
+        if selected_type is None:
+            normalized_category = cat_to_product_category(raw_category)
+            selected_type = category_to_frontend_type(normalized_category)
+        if selected_type not in _PRODUCT_CATALOG_TABLES:
+            return error_response("INVALID_CATEGORY", "分類無效", 422)
+        items = [item for item in items if item.get("type") == selected_type]
+    brands = {
+        value.strip().casefold() for value in (request.args.get("brand") or "").split(",")
+        if value.strip()
+    }
+    if brands:
+        items = [item for item in items if str(item.get("brand") or "").casefold() in brands]
+    try:
+        min_price = float(request.args["minPrice"]) if request.args.get("minPrice") not in {None, ""} else None
+        max_price = float(request.args["maxPrice"]) if request.args.get("maxPrice") not in {None, ""} else None
+    except (TypeError, ValueError):
+        return error_response("INVALID_PRICE_RANGE", "價格必須是數字", 422)
+    if ((min_price is not None and min_price < 0) or (max_price is not None and max_price < 0)
+            or (min_price is not None and max_price is not None and min_price > max_price)):
+        return error_response("INVALID_PRICE_RANGE", "價格區間無效", 422)
+    if min_price is not None:
+        items = [item for item in items if (_catalog_numeric_price(item.get("price")) or 0) >= min_price]
+    if max_price is not None:
+        items = [item for item in items if (_catalog_numeric_price(item.get("price")) or 0) <= max_price]
     raw_stock = request.args.get("inStock")
     if raw_stock is not None:
         stock_value = raw_stock.strip().casefold()
@@ -2240,20 +2627,73 @@ def _catalog_list_response():
     if query:
         items = [item for item in items if query in " ".join(
             str(item.get(key) or "") for key in ("name", "brand", "description", "salePageId")).casefold()]
-    items.sort(key=lambda item: item["id"])
+    sort_aliases = {
+        "default": "default", "relevance": "default", "id": "default",
+        "price_asc": "price_asc", "price-asc": "price_asc", "priceAsc": "price_asc",
+        "price_desc": "price_desc", "price-desc": "price_desc", "priceDesc": "price_desc",
+        "newest": "newest", "name_asc": "name_asc", "name-asc": "name_asc",
+        "name_desc": "name_desc", "name-desc": "name_desc",
+    }
+    requested_sort = request.args.get("sort", "default")
+    sort_by = sort_aliases.get(requested_sort)
+    if sort_by is None:
+        return error_response("INVALID_SORT", "排序方式無效", 422)
+    if sort_by == "price_asc":
+        items.sort(
+            key=lambda item: (_catalog_numeric_price(item.get("price")) or 0, str(item.get("name") or "").casefold(),
+                              item["id"]))
+    elif sort_by == "price_desc":
+        items.sort(
+            key=lambda item: (-(_catalog_numeric_price(item.get("price")) or 0), str(item.get("name") or "").casefold(),
+                              item["id"]))
+    elif sort_by == "name_asc":
+        items.sort(key=lambda item: (str(item.get("name") or "").casefold(), item["id"]))
+    elif sort_by == "name_desc":
+        items.sort(key=lambda item: (str(item.get("name") or "").casefold(), item["id"]), reverse=True)
+    elif sort_by == "newest":
+        items.sort(key=lambda item: item["id"], reverse=True)
+    else:
+        items.sort(key=lambda item: item["id"])
+    prices = [_catalog_numeric_price(item.get("price")) for item in items]
+    prices = [price for price in prices if price is not None]
+    facets = {
+        "brands": sorted({item.get("brand") for item in items if item.get("brand")}, key=str.casefold),
+        "categories": sorted({item.get("category") for item in items if item.get("category")}),
+        "priceRange": {"min": min(prices) if prices else None, "max": max(prices) if prices else None},
+    }
+    applied_filters = {
+        "brands": sorted(brands), "category": raw_category or None,
+        "minPrice": min_price, "maxPrice": max_price, "sort": sort_by,
+    }
     raw_limit = request.args.get("limit")
     if raw_limit is None:
-        return jsonify({"products": items})
+        return jsonify({"ok": True, "items": items, "products": items, "total": len(items),
+                        "nextCursor": None, "facets": facets, "appliedFilters": applied_filters})
     try:
-        limit = max(1, min(int(raw_limit), 100))
-        cursor = int(request.args.get("cursor", "0"))
-    except ValueError:
+        limit = int(raw_limit)
+        if not 1 <= limit <= 200:
+            raise ValueError
+        cursor_value = request.args.get("cursor")
+        if cursor_value and cursor_value.isdigit() and sort_by == "default":
+            offset = next((index for index, item in enumerate(items) if item["id"] > int(cursor_value)), len(items))
+        elif cursor_value:
+            import base64
+            offset = int(base64.urlsafe_b64decode(cursor_value + "==").decode())
+        else:
+            offset = 0
+        if offset < 0:
+            raise ValueError
+    except (ValueError, TypeError):
         return error_response("INVALID_PAGINATION", "limit 或 cursor 格式無效", 400)
-    page = [item for item in items if item["id"] > cursor][:limit]
-    next_cursor = str(page[-1]["id"]) if len(page) == limit and any(
-        item["id"] > page[-1]["id"] for item in items) else None
-    return jsonify({"ok": True, "items": page, "products": page, "total": len(items), "nextCursor": next_cursor,
-                    "query": query or None})
+    page = items[offset:offset + limit]
+    if offset + limit < len(items):
+        import base64
+        next_cursor = base64.urlsafe_b64encode(str(offset + limit).encode()).decode().rstrip("=")
+    else:
+        next_cursor = None
+    return jsonify({"ok": True, "items": page, "products": page, "total": len(items),
+                    "nextCursor": next_cursor, "query": query or None,
+                    "facets": facets, "appliedFilters": applied_filters})
 
 
 def _catalog_numeric_price(value):
@@ -2297,6 +2737,106 @@ def _catalog_similarity(anchor, candidate):
     return total, {"color": round(color_score, 4), "style": round(style_score, 4),
                    "category": round(category_score, 4), "brand": round(brand_score, 4),
                    "price": round(price_score, 4)}, relation, text
+
+
+def _comparable_foundation_lab(item):
+    values = item.get("lab") if isinstance(item, dict) else None
+    if not isinstance(values, (list, tuple)) or len(values) != 3:
+        return None
+    if any(isinstance(value, bool) or not isinstance(value, (int, float))
+           or not math.isfinite(float(value)) for value in values):
+        return None
+    lab = tuple(float(value) for value in values)
+    if not (0 <= lab[0] <= 100 and abs(lab[1]) <= 128 and abs(lab[2]) <= 128):
+        return None
+    return lab
+
+
+def _cross_brand_shade_presentation(distance):
+    """Keep low-confidence percentages out of the customer-facing response."""
+    display_score = distance <= 5.0
+    match_percent = max(0, min(100, round(100 - distance * 4)))
+    if distance <= 2.0:
+        tier = "strong_match"
+    elif distance <= 5.0:
+        tier = "close_match"
+    else:
+        tier = "reference_only"
+    return {
+        "deltaE": round(float(distance), 2),
+        "matchPercent": match_percent if display_score else None,
+        "displayScore": display_score,
+        "recommendationLabel": (
+            f"配對程度 {match_percent}%" if display_score else "根據臉部分析結果推薦"
+        ),
+        "tier": tier,
+    }
+
+
+@app.route('/api/products/<int:product_id>/shade-matches', methods=['GET'])
+def get_cross_brand_foundation_shade_matches_api(product_id):
+    """Return the closest foundation shades from brands other than the source."""
+    source = _catalog_item_by_id(product_id)
+    if source is None:
+        return error_response("PRODUCT_NOT_FOUND", "商品不存在", 404)
+    if source.get("type") != "foundations":
+        return error_response(
+            "SHADE_MATCH_NOT_SUPPORTED", "跨品牌色號比較目前僅支援底妝", 422
+        )
+    source_lab = _comparable_foundation_lab(source)
+    if source_lab is None:
+        return error_response("SHADE_COLOR_UNAVAILABLE", "來源色號缺少可比較的色彩資料", 422)
+
+    try:
+        limit = int(request.args.get("limit", 5))
+    except (TypeError, ValueError):
+        return error_response("INVALID_LIMIT", "limit 必須是整數", 400)
+    if not 1 <= limit <= 20:
+        return error_response("INVALID_LIMIT", "limit 必須介於 1 至 20", 400)
+
+    target_brand = (request.args.get("targetBrand") or "").strip()
+    source_brand = str(source.get("brand") or "").strip()
+    ranked = []
+    available_target_brands = set()
+    for item in _catalog_rows():
+        item_brand = str(item.get("brand") or "").strip()
+        if (item.get("id") == product_id or item.get("type") != "foundations"
+                or not item_brand or item_brand.casefold() == source_brand.casefold()
+                or not item.get("inStock") or item.get("status") != "active"
+                or item.get("reviewStatus") != "approved"
+                or not item.get("recommendationReady")):
+            continue
+        item_lab = _comparable_foundation_lab(item)
+        if item_lab is None:
+            continue
+        available_target_brands.add(item_brand)
+        if target_brand and item_brand.casefold() != target_brand.casefold():
+            continue
+        distance = delta_e(source_lab, item_lab)
+        ranked.append((float(distance), item))
+
+    ranked.sort(key=lambda pair: (
+        pair[0], str(pair[1].get("brand") or "").casefold(),
+        str(pair[1].get("shadeCode") or pair[1].get("shadeName") or "").casefold(),
+        int(pair[1].get("id") or 0),
+    ))
+    items = [
+        {**item, "shadeMatch": _cross_brand_shade_presentation(distance)}
+        for distance, item in ranked[:limit]
+    ]
+    return jsonify({
+        "ok": True,
+        "comparisonMethod": "CIEDE2000",
+        "source": {
+            "id": source["id"], "brand": source_brand,
+            "shadeCode": source.get("shadeCode"), "shadeName": source.get("shadeName"),
+            "seriesId": source.get("seriesId"), "lab": list(source_lab),
+        },
+        "targetBrand": target_brand or None,
+        "availableTargetBrands": sorted(available_target_brands, key=str.casefold),
+        "items": items,
+        "totalCandidates": len(ranked),
+    }), 200
 
 
 @app.route('/api/products/<int:product_id>/similar', methods=['GET'])
@@ -2376,47 +2916,41 @@ def _catalog_update_response(product_id, data):
 
 
 def recommendation_candidates(categories=None):
+    """Build recommendation candidates from the live catalog projection.
+
+    The catalog query deliberately selects only the product contract columns.
+    Querying every SQLAlchemy category model here previously selected legacy
+    vector columns (for example ``qdrant_vector_12d``) that are not present in
+    the current product database, making ``/recommend-products`` fail even
+    though ``/api/products`` was healthy.
+    """
     allowed = {cat_to_product_category(c) for c in categories} if categories else None
     candidates = []
-    catalog_by_key = {item["candidateKey"]: item for item in _catalog_rows()}
-    for cat in MAKEUP_CATEGORIES:
-        category = cat_to_product_category(cat["type"])
+    for catalog_item in _catalog_rows():
+        category = cat_to_product_category(
+            catalog_item.get("category") or catalog_item.get("type")
+        )
         if allowed and category not in allowed:
             continue
-        for item in cat["model"].query.all():
-            cand = product_card_payload(item, cat["type"])
-            catalog_item = catalog_by_key.get(f"{cat['type']}:{item.id}")
-            if (catalog_item is None or not catalog_item["inStock"] or catalog_item["status"] != "active"
-                    or catalog_item["reviewStatus"] != "approved" or not catalog_item["recommendationReady"]):
-                continue
-            cand.update({
-                "id": catalog_item["id"], "sourceId": item.id,
-                "candidateKey": catalog_item["candidateKey"],
-                "category": category, "tags": [category, cat["type"]],
-                "inStock": True, "shadeName": getattr(item, "shade_name", "") or "",
-                "imageUrl": catalog_item["imageUrl"] or cand.get("image_src", ""),
-                "productUrl": catalog_item["sourceUrl"] or "",
-                "sourceUrl": catalog_item["sourceUrl"], "salePageId": catalog_item["salePageId"],
-                "seasonTags": catalog_item["seasonTags"], "undertone": catalog_item["undertone"],
-                "shadeCode": catalog_item["shadeCode"], "shadeName": catalog_item["shadeName"],
-                "seriesId": catalog_item["seriesId"], "depthIndex": catalog_item["depthIndex"],
-                "coverageCategory": cat["type"],
-                "currency": "TWD",
-                "hex_primary": getattr(item, "hex_primary", None), "lab": getattr(item, "lab", None),
-            })
-            candidates.append(cand)
-    for item in Products.query.all():
-        cand = generic_product_candidate(item)
-        catalog_item = catalog_by_key.get(f"products:{item.id}")
-        if catalog_item is None:
+        if (not catalog_item.get("inStock")
+                or catalog_item.get("status") != "active"
+                or catalog_item.get("reviewStatus") != "approved"
+                or not catalog_item.get("recommendationReady")):
             continue
-        cand.update({"id": catalog_item["id"], "sourceId": item.id,
-                     "candidateKey": catalog_item["candidateKey"], "sourceUrl": catalog_item["sourceUrl"],
-                     "salePageId": catalog_item["salePageId"], "productUrl": catalog_item["sourceUrl"] or "",
-                     "seasonTags": catalog_item["seasonTags"], "undertone": catalog_item["undertone"],
-                     "coverageCategory": category_to_frontend_type(cand["category"])})
-        if cand and (not allowed or cand["category"] in allowed):
-            candidates.append(cand)
+        product_type = str(catalog_item.get("type") or "products")
+        candidates.append({
+            **catalog_item,
+            "category": category,
+            "type": product_type,
+            "tags": [category, product_type],
+            "inStock": True,
+            "imageUrl": catalog_item.get("imageUrl") or "",
+            "image_src": catalog_item.get("imageUrl") or "",
+            "productUrl": catalog_item.get("sourceUrl") or "",
+            "sourceUrl": catalog_item.get("sourceUrl") or "",
+            "coverageCategory": product_type,
+            "currency": catalog_item.get("currency") or "TWD",
+        })
     return candidates
 
 
@@ -2520,8 +3054,21 @@ def recommend_products_api():
         return jsonify({"success": True, "status": "completed", "analysisPackage": {
             "id": analysis_package.get("id"), "schemaVersion": analysis_package.get("schemaVersion"),
             "style": analysis_package.get("style"), "faceAnalysis": analysis_package.get("faceAnalysis"),
-            "recommendations": {"products": []},
-        }, "products": [], "code": "RECOMMENDATION_EMPTY"}), 200
+            "recommendations": {
+                "products": [], "fallbackUsed": result["fallbackUsed"],
+                "fallbackReason": result["fallbackReason"], "fallbackReasons": result["fallbackReasons"],
+                "coverage": result["coverage"], "skinToneLabReliable": result["skinToneLabReliable"],
+                "colorDifferencePolicy": result["colorDifferencePolicy"],
+                "foundationMatchStatus": result["foundationMatchStatus"],
+                "primary": [], "alternates": [], "threshold": result["threshold"],
+                "personalization": result["personalization"], "shadeRecommendation": None,
+            },
+        }, "products": [], "code": "RECOMMENDATION_EMPTY",
+                        "fallbackUsed": result["fallbackUsed"], "fallbackReason": result["fallbackReason"],
+                        "fallbackReasons": result["fallbackReasons"], "coverage": result["coverage"],
+                        "skinToneLabReliable": result["skinToneLabReliable"],
+                        "colorDifferencePolicy": result["colorDifferencePolicy"],
+                        "foundationMatchStatus": result["foundationMatchStatus"]}), 200
     response_package = {
         "id": analysis_package.get("id"),
         "schemaVersion": analysis_package.get("schemaVersion"),
@@ -2532,6 +3079,8 @@ def recommend_products_api():
             "fallbackReason": result["fallbackReason"], "coverage": result["coverage"],
             "fallbackReasons": result["fallbackReasons"],
             "skinToneLabReliable": result["skinToneLabReliable"],
+            "colorDifferencePolicy": result["colorDifferencePolicy"],
+            "foundationMatchStatus": result["foundationMatchStatus"],
             "primary": result["primary"], "alternates": result["alternates"], "threshold": result["threshold"],
             "personalization": result["personalization"],
             "shadeRecommendation": result["shadeRecommendation"],
@@ -2544,6 +3093,8 @@ def recommend_products_api():
         "fallbackReasons": result["fallbackReasons"],
         "styleTagFallbackUsed": result["styleTagFallbackUsed"],
         "skinToneLabReliable": result["skinToneLabReliable"],
+        "colorDifferencePolicy": result["colorDifferencePolicy"],
+        "foundationMatchStatus": result["foundationMatchStatus"],
         "personalization": result["personalization"],
     }), 200
 
@@ -2829,7 +3380,12 @@ def get_member_favorites(email):
     if not member:
         return error_response("MEMBER_NOT_FOUND", "找不到會員", 404)
     favs = Favorites.query.filter_by(member_id=member.phone_number).all()
-    return jsonify({"favorites": [{"item_id": f.item_id, "item_type": f.item_type} for f in favs]})
+    available_sources, _ = _catalog_availability_sets(_catalog_rows())
+    return jsonify({"favorites": [{
+        "item_id": f.item_id,
+        "item_type": f.item_type,
+        "unavailable": (str(f.item_type), int(f.item_id)) not in available_sources,
+    } for f in favs]})
 
 
 @app.route('/api/members/<path:email>/favorites/toggle', methods=['POST'])
@@ -2936,7 +3492,18 @@ def get_cart(email):
     if err:
         return err
     items = CartItem.query.filter_by(member_email=target_email).all()
-    return jsonify({"cart": [{"item_id": i.item_id, "qty": i.qty} for i in items]})
+    _, available_catalog_ids = _catalog_availability_sets(_catalog_rows())
+    cart = [{
+        "item_id": i.item_id,
+        "qty": i.qty,
+        "unavailable": int(i.item_id) not in available_catalog_ids,
+    } for i in items]
+    # `cart` preserves the existing frontend contract. `items` follows the
+    # newer response wording and includes `id` as a compatibility alias.
+    return jsonify({
+        "cart": cart,
+        "items": [{"id": item["item_id"], **item} for item in cart],
+    })
 
 
 @app.route('/api/members/<path:email>/cart', methods=['PUT'])
