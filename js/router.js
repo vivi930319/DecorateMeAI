@@ -5053,28 +5053,49 @@ const PageInit = {
     },
 
     suggestion(opts) {
-        if (!hasStartedJourney()) { renderAnalysisGate("妝容建議"); return; }
         // 從會員中心點一筆收藏進來時，顯示那一筆而不是當前這次分析。
         //
         // ⚠️ 只用於顯示，不寫回 Router.analysisPackage——那份是渲染、推薦、
         // 回饋共用的，覆寫它會讓「看一眼舊收藏」把使用者正在做的新分析洗掉，
         // 而症狀會出現在別的頁面上。
         const viewLook = (opts && opts.look && typeof opts.look === 'object') ? opts.look : null;
+
+        // ⚠️ 分析門檻要排在**認出收藏之後**。
+        //
+        // 這一行原本是這支函式的第一行，於是從會員中心點「查看妝容建議」的人
+        // 會被擋去重做臉部分析——而他手上那筆收藏本來就帶著當時的分析結果與
+        // 妝前妝後圖，重做一次不但多餘，做完看到的還是新的那一次，
+        // 不是他點進來的那一筆。2026-08-29 使用者回報。
+        if (!viewLook && !hasStartedJourney()) { renderAnalysisGate("妝容建議"); return; }
         Router.viewingLook = viewLook;
         const style = viewLook
             ? (STYLES.find(x => x.name === viewLook.style) || STYLES[0])
             : (STYLES.find(s => s.id === Router.selectedStyleId) || STYLES[0]);
-        const r = getLatestAnalysisResult() || {};
+        // 看的是收藏的話，五官與照片都要讀**那一筆**，不是當前這次分析。
+        //
+        // 先前只有風格名稱走 viewLook，其餘照樣讀 Router.analysisPackage——
+        // 於是點進一筆舊收藏會看到「舊的風格名稱」配「這次的臉」，
+        // 而在換了裝置、根本沒有當前分析時，就是一整頁的「—」。
+        // 收藏本身存了 analysis 與妝前妝後圖（見 openLookModal），本來就夠畫。
+        const r = (viewLook && viewLook.analysis && typeof viewLook.analysis === 'object')
+            ? viewLook.analysis
+            : (getLatestAnalysisResult() || {});
         const skin = r['膚色'] || {};
         const pkg = Router.analysisPackage || {};
-        const aiSuggestion = pkg.generativeText?.suggestion || '';
+        const aiSuggestion = viewLook
+            ? (viewLook.suggestion || '')
+            : (pkg.generativeText?.suggestion || '');
         const render = pkg.render || {};
         const makeupOutput = render.makeupOutput || {};
-        const beforeImage = pkg.images?.front?.compressedDataUrl
-            || render.beforeImageUrl
-            || render.beforeImageDataUrl
-            || '';
-        const renderedImage = render.afterImageUrl || render.afterImageDataUrl || makeupOutput.imageUrl || makeupOutput.imageDataUrl || '';
+        const beforeImage = viewLook
+            ? (lookImageSrc(viewLook.beforeImage) || '')
+            : (pkg.images?.front?.compressedDataUrl
+                || render.beforeImageUrl
+                || render.beforeImageDataUrl
+                || '');
+        const renderedImage = viewLook
+            ? (lookImageSrc(viewLook.renderedImage) || '')
+            : (render.afterImageUrl || render.afterImageDataUrl || makeupOutput.imageUrl || makeupOutput.imageDataUrl || '');
         const displayImage = renderedImage || beforeImage;
         const area = document.getElementById('suggestionArea');
         if (!area) return;
