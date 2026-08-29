@@ -43,10 +43,16 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 
-// 真正的 labToRgb，不是自己重寫一份——顏色換算錯了測試也該紅
-vm.runInContext('var Api = { ' + block(apiSrc, '    labToRgb(L, a, b) {') + ' };', sandbox);
+// 真正的 labToRgb，不是自己重寫一份——顏色換算錯了測試也該紅。
+// _normalizeProduct 也一起抽進來：見底下第 5 節，這支測試最重要的一項要靠它。
+vm.runInContext('var Api = { '
+  + block(apiSrc, '    labToRgb(L, a, b) {') + ',\n'
+  + block(apiSrc, '    _safeMatchReason(product) {') + ',\n'
+  + block(apiSrc, '    _thumbUrl(raw, px = 400) {') + ',\n'
+  + block(apiSrc, '    _normalizeProduct(product) {') + '\n };', sandbox);
 
 vm.runInContext(blockUntil(src, 'const COMPARE_SOURCE = Object.freeze(', '});'), sandbox);
+vm.runInContext(block(src, 'function compareKindOf(p) {'), sandbox);
 vm.runInContext(blockUntil(src, 'const COMPARE_LABEL = Object.freeze(', '});'), sandbox);
 vm.runInContext(block(src, 'function userLabFor(kind) {'), sandbox);
 vm.runInContext(block(src, 'function colorCompareHtml(p) {'), sandbox);
@@ -140,6 +146,45 @@ if (fs.existsSync(livePath)) {
 } else {
   console.log('  (略過：沒有 _live_recommend_sample.json)');
 }
+
+console.log('\n=== 8. 走過 _normalizeProduct 之後仍然顯示 ===');
+// 這一節是 2026-08-29 補的，補的是這支測試自己漏掉的那一步。
+//
+// 使用者回報「粉底液出來的時候沒有膚色色塊」。上面每一項都是綠的，因為它們餵的是
+// 手寫的 `{ type: 'foundations', lab: [...] }`——而畫面上的商品**全都經過
+// Api._normalizeProduct**，那個函式回的物件裡沒有 `type`，英文 slug 存在 `apiType`。
+// colorCompareHtml 當時查的是 `p.type || p.cat`，於是永遠查不到，色塊對每一件真實
+// 商品都不顯示，而測試一路綠燈。
+//
+// 所以這一節一律**先正規化再驗**：測的是使用者真的會看到的那個物件。
+setPkg();
+const asShipped = (raw) => html(sandbox.Api._normalizeProduct(raw));
+
+const apiFoundation = { id: 915, type: 'foundations', category: '底妝', name: '粉底',
+  lab: [75.78, 5.94, 17.45], shadeCode: 'PO-03' };
+const shippedFoundation = asShipped(apiFoundation);
+check('正規化後的粉底仍然顯示色塊', shippedFoundation !== '');
+check('而且比的是膚色', shippedFoundation.includes('您的膚色'));
+check('用的是商品自己的 lab', shippedFoundation.includes(rgbOf(75.78, 5.94, 17.45)));
+
+const apiLipstick = { id: 2, type: 'lipsticks', category: '唇彩', name: '唇膏', lab: [45.88, 34, 26] };
+const shippedLipstick = asShipped(apiLipstick);
+check('正規化後的唇膏比的是唇色',
+  shippedLipstick.includes('您的唇色') && !shippedLipstick.includes('您的膚色'));
+
+// 正規化後的物件身上就是沒有 `type`。這一項把那個事實釘住——
+// 哪天有人「順手」把 compareKindOf 改回只讀 p.type，這裡會紅。
+const normalized = sandbox.Api._normalizeProduct(apiFoundation);
+check('正規化後沒有 type 欄位（英文 slug 在 apiType）',
+  normalized.type === undefined && normalized.apiType === 'foundations');
+check('cat 是中文，單獨拿它查英文表會落空', normalized.cat === '底妝');
+check('compareKindOf 認得 apiType', sandbox.compareKindOf(normalized) === 'skin');
+// 中文分類也要認得：推薦端有時只給 category 不給 type。
+check('compareKindOf 也認得中文分類', sandbox.compareKindOf({ cat: '底妝' }) === 'skin'
+  && sandbox.compareKindOf({ cat: '唇彩' }) === 'lip');
+// 眉彩不能因為新增了中文鍵就被放行——臉部分析端不產出眉色。
+check('眉彩仍然沒有對應', !sandbox.compareKindOf({ cat: '眉毛彩妝' })
+  && !sandbox.compareKindOf({ apiType: 'eyebrows' }));
 
 console.log(`\n${pass}/${pass + fail} passed`);
 process.exit(fail ? 1 : 0);

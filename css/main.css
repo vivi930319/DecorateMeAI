@@ -3408,11 +3408,19 @@ a:focus-visible, button:focus-visible, [data-nav]:focus-visible,
     .page-header { margin-bottom:28px; }
     .page-header h1 { font-size:27px; }
 
-    .glow-row { grid-template-columns:1fr; gap:24px; margin-bottom:48px; }
+    /* 「為你精選」維持兩欄，不要掉成一欄（2026-08-29，比對手機截圖）。
+       設計稿圖 2 是四件並排；一欄之後每張卡佔滿整個螢幕寬，一次只看得到一件，
+       四件要捲三四屏才看得完——那不再是「精選」，是一條商品流。
+       兩欄是手機放得下、又還維持「這是一組」的最接近做法；收藏頁（圖 10）
+       在手機上也正是兩欄。 */
+    .glow-row { grid-template-columns:repeat(2,1fr); gap:20px 12px; margin-bottom:48px; }
     .glow-card:nth-child(even), .glow-card:nth-child(3n+2) { margin-top:0; }
     .style-grid, .cat-grid { grid-template-columns:repeat(2,1fr); gap:12px; }
-    .insp-card { flex-basis:202px; }
-    .insp-visual { height:204px; }
+    /* 風格靈感的卡片：202px 在 390px 寬的螢幕上等於一次只看得到 1.8 張——
+       第二張被切一半、第三張完全看不到，那一排看起來像「只有兩個風格」。
+       縮到 158px 之後是兩張完整加一個明顯的邊，那個邊本身就在說「還有」。 */
+    .insp-card { flex-basis:158px; }
+    .insp-visual { height:168px; }
     .style-intro-card { padding:26px 22px; }
     .makeup-guide-title { font-size:25px; }
     .pd-wrap { gap:28px; }
@@ -4243,6 +4251,59 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 }
 .auth-or:before, .auth-or:after {
     content:''; flex:1 1 auto; height:1px; background:var(--line);
+}
+
+/* ═══ 分析結果六格：手機三欄，鎖定狀態要讀得出來（設計稿圖 7） ═══════════
+   2026-08-29 比對手機截圖後修的兩件事。
+
+   1) 三欄，不是兩欄。設計稿是 3×2，六格一屏看完；兩欄變成 2×3，最後一列
+      被推到摺線以下，於是「六個部位」看起來像四個。三欄在 390px 上每欄約
+      115px，放得下插圖與兩個字的標籤。
+
+   2) 鎖定狀態不能暗到讀不出來。原本是 grayscale(1) ＋ opacity .55 疊在一起，
+      在手機上整塊糊成一片灰，連「臉型」兩個字都要瞇著眼看。設計稿的鎖定態
+      是**清楚的**——粉色卡、看得見的插圖、右上角一把鎖；它靠鎖頭表達「還沒
+      解鎖」，不是靠把畫面弄暗。暗掉的版本傳達的是「這裡壞了」。 */
+.analysis-workbench .result-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.result-panel:not(.is-ready) { filter:grayscale(.55); opacity:.9; }
+@media (max-width:620px) {
+    .analysis-workbench .result-cell { padding:12px 6px; min-height:0; }
+    .analysis-workbench .result-cell .rlabel { font-size:12px; letter-spacing:.02em; }
+}
+
+/* ═══ 手機的頂欄改成淺色（設計稿圖 2、3、5、6、7、10） ═══════════════════
+   12 張設計稿的頂欄**全部**是與頁面同色的淺粉，深色文字，底下一條細線。
+   線上目前是 rgba(74,52,56,.82) 的深咖啡條——那是這一頁最上面、每一頁都在的
+   一塊，顏色不對的話「沒照設計稿」這件事在每個畫面的第一眼就成立。
+
+   只改手機（≤760px）。桌機的深色頂欄是既有設計，使用者要求的是手機一模一樣，
+   不是把整個站重新配色——而深色頂欄在寬螢幕上撐得起來，手機上它佔的比例大得多。 */
+@media (max-width:760px) {
+    .topbar {
+        background:color-mix(in srgb, var(--paper) 92%, transparent);
+        border-bottom:1px solid var(--line-gold);
+    }
+    /* 深底換淺底之後，原本靠「淺字」才看得見的東西全部要翻過來，
+       一個都不能漏——漏掉的那個會變成淺色底上的淺色字，等於消失。 */
+    .topbar .sb-sub { color:var(--gold-deep); }
+    /* sb-name 用的是「漸層裁進文字」（background-clip:text ＋ 透明字色），
+       所以單改 color 沒有用——要先把 fill 還原成實色，字才會重新出現。 */
+    .topbar .sb-name {
+        background:none; -webkit-text-fill-color:currentColor;
+        color:var(--gold-deep); animation:none;
+    }
+    .topbar-cart {
+        border-color:var(--line-gold); background:transparent; color:var(--gold-deep);
+    }
+    .topbar-cart:hover { border-color:var(--gold); background:var(--gold-dim); }
+    .topbar-menu-toggle {
+        border-color:var(--line-gold); color:var(--gold-deep); background:transparent;
+    }
+    /* ⚠️ 這裡刻意**不碰 .topbar-nav**。手機的抽屜是另一套配色（深色卡片，
+       見 3596 那段），它不是頂欄的一部分，只是位置在旁邊。一起改的話
+       抽屜會變成深底配深字，整個選單消失。 */
+    /* 品牌章原本靠深底襯出白圓，淺底上那圈白會不見，改用金線描邊。 */
+    .brand-round-mark { border-color:var(--line-gold); box-shadow:0 4px 12px rgba(120,70,66,.12); }
 }
 
 /* ═══ 三段式分析進度（設計稿圖 7） ═══════════════════════════════════════

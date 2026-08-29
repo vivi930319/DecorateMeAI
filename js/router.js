@@ -718,7 +718,33 @@ const COMPARE_SOURCE = Object.freeze({
     eyeliner_mascara: 'skin',
     lipsticks: 'lip',
     // eyebrows 沒有對應：臉部分析端不產出眉色，拿膚色比是契約明文禁止的。
+    // 中文分類也要認得。理由見 compareKindOf。
+    '底妝': 'skin',
+    '腮紅': 'skin',
+    '修容': 'skin',
+    '打亮': 'skin',
+    '眼影': 'skin',
+    '眼線/睫毛': 'skin',
+    '唇彩': 'lip',
 });
+
+// 這件商品要跟使用者的哪個顏色比。
+//
+// ⚠️ 一定要先看 apiType。`Api._normalizeProduct` 回的物件**沒有 `type` 欄位**——
+// 英文 slug 存在 `apiType` 裡（`type` 是伺服器原始欄位名，正規化時就換掉了）。
+// 先前這裡寫的是 `p.type || p.cat`：`p.type` 永遠 undefined，退回 `p.cat` 又是
+// 中文（「底妝」），而上面那張表當時只有英文鍵——於是**每一件經過 API 的商品
+// 都對不到鍵，色塊比對整個不顯示**，而畫面上不會有任何錯誤。
+//
+// 2026-08-29 使用者回報「粉底液出來的時候沒有膚色色塊」，就是這個。
+// tests/color_compare_check.js 一直是綠的，因為它餵的是自己組的物件（帶 `type`），
+// 沒有走過 _normalizeProduct——測試通過與功能可用之間差的就是這一步。
+function compareKindOf(p) {
+    return COMPARE_SOURCE[p?.apiType]
+        || COMPARE_SOURCE[p?.type]
+        || COMPARE_SOURCE[p?.cat]
+        || null;
+}
 
 const COMPARE_LABEL = Object.freeze({ skin: '您的膚色', lip: '您的唇色' });
 
@@ -735,7 +761,7 @@ function userLabFor(kind) {
 }
 
 function colorCompareHtml(p) {
-    const kind = COMPARE_SOURCE[p?.type || p?.cat];
+    const kind = compareKindOf(p);
     if (!kind) return '';
     const prodLab = Array.isArray(p.lab) && p.lab.length === 3 && p.lab.every(n => Number.isFinite(Number(n)))
         ? p.lab.map(Number) : null;
