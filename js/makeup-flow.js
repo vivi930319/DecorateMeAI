@@ -491,8 +491,9 @@
                 <div class="look-map-shell">
                     <div class="look-pin-lane left-lane">${pinLayout.filter(item => item.side === 'left').map(pin).join('')}</div>
                     <figure class="look-portrait-frame">
-                        <img id="lookPortrait" src="${escapeHtml(after)}" alt="${escapeHtml(style.name)}妝後效果">
-                        <figcaption id="lookPhotoCaption">妝後</figcaption>
+                        <img id="lookPortrait" src="${escapeHtml(after)}" alt="${escapeHtml(style.name)}妝後效果" style="opacity:.45">
+                        ${before ? `<img id="lookPortraitBefore" src="${escapeHtml(before)}" alt="${escapeHtml(style.name)}妝前照片" style="display:none">` : ''}
+                        <figcaption id="lookPhotoCaption">妝後 · 載入中…</figcaption>
                     </figure>
                     <div class="look-pin-lane right-lane">${pinLayout.filter(item => item.side === 'right').map(pin).join('')}</div>
                 </div>
@@ -509,15 +510,43 @@
             </section>`;
 
         const portrait = area.querySelector('#lookPortrait');
+        const portraitBefore = area.querySelector('#lookPortraitBefore');
         const caption = area.querySelector('#lookPhotoCaption');
+
+        // 妝前妝後各自是一個 <img>，切換只改 display，不改 src。
+        //
+        // 妝後圖要跑「Gateway 驗證 → 向渲染服務取簽名網址 → 302 → 從 GCS 下載」
+        // 三段往返才開始傳，而那個 302 帶 no-store，瀏覽器不會重用它。所以每換一次
+        // src 就整條重跑一遍；而瀏覽器在新圖載完之前會**繼續顯示舊圖**，
+        // 看起來就是「按了妝後卻停在妝前」。
+        //
+        // 兩個 <img> 同時掛在 DOM 上，妝後圖從進頁面就開始載（等於預載），
+        // 之後來回切換都不再產生任何請求。
+        const markAfterSettled = (text) => {
+            portrait.style.opacity = '1';
+            // 使用者可能在載入期間就切去看妝前；那時不要把說明搶回「妝後」。
+            if (caption && caption.dataset.showing !== 'before') caption.textContent = text;
+        };
+        if (portrait.complete && portrait.naturalWidth > 0) {
+            markAfterSettled('妝後');
+        } else {
+            // 載入中先半透明（CSS 已經有 opacity transition），並在說明那一行寫出來。
+            // 先前載入中與載完長得一模一樣，使用者只能從「圖沒變」猜系統在不在動。
+            portrait.addEventListener('load', () => markAfterSettled('妝後'), { once: true });
+            portrait.addEventListener('error', () => markAfterSettled('妝後圖載入失敗，請重新整理'), { once: true });
+        }
+
         area.querySelectorAll('[data-photo]').forEach(button => {
             button.onclick = () => {
                 const isAfter = button.dataset.photo === 'after';
-                const source = isAfter ? after : before;
-                if (!source) return;
-                portrait.src = source;
-                portrait.alt = `${style.name}${isAfter ? '妝後效果' : '妝前照片'}`;
-                caption.textContent = isAfter ? '妝後' : '妝前';
+                if (!isAfter && !portraitBefore) return;
+                portrait.style.display = isAfter ? 'block' : 'none';
+                if (portraitBefore) portraitBefore.style.display = isAfter ? 'none' : 'block';
+                if (caption) {
+                    caption.dataset.showing = isAfter ? 'after' : 'before';
+                    const afterReady = portrait.complete && portrait.naturalWidth > 0;
+                    caption.textContent = isAfter ? (afterReady ? '妝後' : '妝後 · 載入中…') : '妝前';
+                }
                 area.querySelectorAll('[data-photo]').forEach(item => item.classList.toggle('active', item === button));
             };
         });
