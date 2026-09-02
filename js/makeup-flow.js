@@ -100,6 +100,11 @@
             if (!rawSuggestion && structured.source !== 'structured') {
                 throw new Error('Ollama 沒有回傳可顯示的妝容建議。');
             }
+            // 這裡原本把 Ollama 的 renderPromptEn 強制寫成 null，且把簽章丟掉。
+            // Journey 流程載入本檔後會覆蓋 router.js 的同名核心函式，導致下一步
+            // 渲染只能退回固定風格，甚至再次呼叫 Ollama。保留原始 prompt 與簽章，
+            // 渲染端才能驗證後使用同一份指令。
+            const ollamaRenderPromptEn = String(response?.renderPromptEn || '').trim();
 
             Router.analysisPackage = AnalysisPackage.update(pkg, {
                 generativeText: {
@@ -113,8 +118,11 @@
                     error: null,
                     fallbackUsed: false,
                     promptSignature: response?.promptSignature || null,
-                    renderPromptEn: null,
-                    ollamaRenderPromptEn: null
+                    promptSignatureVersion: response?.promptSignatureVersion || null,
+                    renderPromptEn: ollamaRenderPromptEn
+                        ? buildRenderPrompt(pkg.faceAnalysis, Router.selectedStyleId, rawSuggestion, ollamaRenderPromptEn)
+                        : null,
+                    ollamaRenderPromptEn: ollamaRenderPromptEn || null
                 },
                 recommendations: {
                     ...(pkg.recommendations || {}),
@@ -126,12 +134,17 @@
             // 降級原因與錯誤碼要記下來，商品頁與推薦彈窗才顯示得出提示。
             // 先前這裡只取 products，其餘整包丟掉。
             if (typeof RecommendationNotice !== 'undefined') RecommendationNotice.record(recommended);
-            if (recommended?.products?.length) {
+            // 三色階不是只給當下的商品頁用；它必須跟推薦商品一起寫回分析資料包，
+            // 否則 SPA 換頁、重新整理或從分析結果再次進推薦頁時，
+            // Router.shadeRecommendation 一清空，畫面就只剩舊的單一色差區塊。
+            // 這裡要保存完整 shadeRecommendation，不能只保存 products。
+            if (recommended?.products?.length || recommended?.shadeRecommendation?.anchor) {
                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
                     recommendations: {
                         ...(Router.analysisPackage.recommendations || {}),
                         style: style.name,
-                        products: recommended.products
+                        ...(recommended?.products?.length ? { products: recommended.products } : {}),
+                        shadeRecommendation: recommended?.shadeRecommendation || null
                     }
                 });
             }
