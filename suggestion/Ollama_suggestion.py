@@ -1,5 +1,8 @@
 import json
+import hashlib
+import hmac
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -29,6 +32,10 @@ OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "120"))
 # 斷在句子中間 —— 六段只生到第五段，「避免事項」「總結與建議」永遠出不來。
 # prompt 要求 350~1050 中文字，中文一個字約 1~2 token，抓 4096 讓它足夠把六段寫完。
 OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "4096"))
+SUGGESTION_CONTRACT_VERSION = "2026-08-30"
+# 這把金鑰只由文字建議服務與渲染服務共享；沒有設定時仍可在本機開發，
+# 但回應會明確標示 promptSignature 為 null，不假裝有簽章。
+PROMPT_SIGNING_SECRET = os.getenv("PROMPT_SIGNING_SECRET", "").strip()
 # 缺金鑰就拒絕啟動（fail closed），檢查掛在啟動流程而非 import 時（P0-7）——
 # smoke test 只 import `build_prompt` 這類純函式，不該因為沒帶金鑰就 import 失敗。
 SUGGESTION_API_KEY = os.getenv("SUGGESTION_API_KEY", "")
@@ -128,7 +135,15 @@ MAKEUP_DATABASE = {
 # 已淘汰的舊代碼保留，但一律指向合併後的新名稱——資料庫裡還有舊分析包，
 # 讀到舊代碼要顯示現在還存在的類別，不能顯示一個前端回饋選項裡已經沒有的名字。
 MAP_FACE   = {"oval": "鵝蛋臉", "round": "圓形臉", "square": "方形臉", "oblong": "長形臉", "heart": "心形臉", "unknown": "未知臉型"}
-MAP_BROW   = {"straight": "一字眉", "curved": "彎月眉", "drooping_tail": "落尾眉", "unknown": "未知眉型"}
+# 2026-08-24 模型加入第四類眉型「挑眉」。analysis_package.BROW_SHAPE_CODES 當時就補上
+# 了 "挑眉": "arched"，但這張表沒跟著加——_map_or_raw 查不到就把原值回傳，於是 prompt
+# 寫成「眉型：arched（）」：一個英文代碼配一對空括號，而下面 EYEBROW_LOGIC 與
+# EYEBROW_METHOD 同樣查不到，眉毛做法退回通用文案。
+# 那份註解記著線上實測一萬張裡有 964 張（10%）判為挑眉，也就是每十個使用者就有一個
+# 拿到這種建議。tests/ollama_feature_labels_test.py 現在會把這五張表綁在 classes.json
+# 上，下次再加類別會被擋下來。
+MAP_BROW   = {"straight": "一字眉", "curved": "彎月眉", "arched": "挑眉",
+              "drooping_tail": "落尾眉", "unknown": "未知眉型"}
 MAP_EYE    = {"downturned": "下垂眼", "round": "圓眼", "peach_almond": "桃杏眼",
               "phoenix": "鳳眼", "unknown": "未知眼型"}
 # 鼻型現行只有標準鼻與寬鼻；顯示名稱必須和回饋面板的分類表一致。
@@ -138,7 +153,8 @@ MAP_SEASON = {"spring": "春季型", "summer": "夏季型", "autumn": "秋季型
 
 # 特徵描述邏輯
 FACE_LOGIC     = {"鵝蛋臉": "比例完美流暢", "圓形臉": "雙頰圓潤飽滿", "長形臉": "比例顯得成熟", "方形臉": "輪廓英氣硬朗", "心形臉": "下巴精緻纖細"}
-EYEBROW_LOGIC  = {"一字眉": "眉型平直無邪", "彎月眉": "弧度圓潤溫柔", "落尾眉": "眉尾優雅下落"}
+EYEBROW_LOGIC  = {"一字眉": "眉型平直無邪", "彎月眉": "弧度圓潤溫柔",
+                  "挑眉": "眉峰上揚英氣", "落尾眉": "眉尾優雅下落"}
 # 五個現行眼型都要有描述詞。查不到只會得到空字串，prompt 變成「眼型：桃杏眼（）」
 # ——不報錯，只是那句話少掉一半資訊。只列現行類別：舊標籤在 face_corrections.apply()
 # 就已經正規化成合併後的名稱，不會走到這裡。
@@ -150,7 +166,8 @@ SKIN_LOGIC     = {"春季型": "適合亮暖黃系", "夏季型": "適合冷粉�
 
 # 特定技法
 FACE_METHOD    = {"鵝蛋臉": "輕掃下顎線；腮紅斜上暈染；打亮額頭鼻尖。", "圓形臉": "從耳際斜下刷修容；腮紅調高拉提；打亮下巴。", "長形臉": "修容額頭頂與下巴底；腮紅橫平刷；打亮眼下。", "方形臉": "下頷稜角圓潤修容；蘋果肌打圈腮紅；打亮中心。", "心形臉": "顴骨下方向內收縮；下巴尖端打亮；腮紅斜掃顴骨。"}
-EYEBROW_METHOD = {"一字眉": "縮短中庭，眉尾拉平。", "彎月眉": "圓潤轉折，修飾硬朗。", "落尾眉": "眉峰後移，輕輕下撇。"}
+EYEBROW_METHOD = {"一字眉": "縮短中庭，眉尾拉平。", "彎月眉": "圓潤轉折，修飾硬朗。",
+                  "挑眉": "眉峰壓低，弧度放緩。", "落尾眉": "眉峰後移，輕輕下撇。"}
 
 
 # ═══ Request Schema ═══
@@ -258,7 +275,10 @@ def build_prompt(payload: SuggestRequest) -> str:
 2. 語氣像真的化妝師在提醒使用者，客觀自然，不宣稱分析結果 100% 精準。
 3. 絕對不可自行編造側面鼻型、特定品牌或特定商品色號。
 4. 禁止輸出任何 Markdown 程式碼區塊或內部思考鏈區塊（如 <think>）。
-5. 總字數限制在 350 ~ 1050 中文字。"""
+5. 中文第一部分總字數限制在 350 ~ 1050 字。
+6. 中文六段結束後，另起一行輸出「第二部分：英文渲染指令」，接著只寫一段英文影像
+   編輯指令。英文指令要描述可見的底妝、眉眼、腮紅修容與唇妝，必須使用這份分析與
+   風格資料，不得改變人物、五官、姿勢、背景或光線；不要輸出解釋、Markdown 或引號。"""
 
 
 def call_ollama(prompt: str, model: str) -> str:
@@ -286,6 +306,68 @@ def call_ollama(prompt: str, model: str) -> str:
     return suggestion.strip()
 
 
+_RENDER_PROMPT_MARKER = re.compile(
+    r"(?:^|\n)\s*(?:第二部分|第\s*2\s*部分|part\s*2|renderprompten)\s*[:：\-]?\s*[^\n]*\n?",
+    re.IGNORECASE,
+)
+
+
+def split_ollama_response(raw: str) -> tuple[str, str]:
+    """把 Ollama 偶爾黏在一起的中文建議與英文渲染指令拆開。
+
+    舊模型只回六段中文時，第二段會是空字串；呼叫端再使用安全的風格 prompt
+    補位。這個拆分不依賴 Ollama 的 JSON mode，因此 gemma3 或其他模型版本都能用。
+    """
+    text = str(raw or "").strip()
+    marker = _RENDER_PROMPT_MARKER.search(text)
+    if not marker:
+        return text, ""
+    return text[: marker.start()].strip(), text[marker.end() :].strip()
+
+
+RENDER_PROMPT_FALLBACKS = {
+    "日常自然妝": "Apply visible natural everyday makeup only: a sheer fresh base, softly defined natural brows and eyes, subtle peach blush, and a translucent warm tea-colored lip.",
+    "Soft Baddie": "Apply visible soft baddie makeup only: a luminous natural base, softly smudged earthy eyes with a lifted liner, rosy mauve blush with gentle contour, and defined muted mauve lips.",
+    "千金": "Apply visible refined rich-girl makeup only: a thin luminous base, softly defined taupe eyes and brows, restrained highlight and contour, and an elegant nude rose lip.",
+    "港風": "Apply visible Hong Kong retro makeup only: a natural matte base, warm brown smoky eyes with defined brows, subtle contour, and a saturated brick-red lip.",
+    "韓系亞裔": "Apply visible Korean clean makeup only: a sheer dewy base, light neutral eyes with softly defined straight brows, peach-pink blush, and a natural MLBB lip.",
+    "病嬌": "Apply visible soft yandere-inspired makeup only: a natural pale base, delicate downturned liner, restrained rosy under-eye blush, airy brows, and a blurred berry-red lip.",
+    "日雜清透": "Apply visible Japanese clear makeup only: a thin satin base, soft peach eyeshadow with airy brows, translucent pink-orange blush, and a glossy coral lip.",
+    "男士白開水": "Apply visible minimal men's grooming only: light spot concealing while preserving natural skin texture, subtle eye definition with original brows, the lightest contour, and a colorless low-saturation lip.",
+}
+
+
+def build_render_prompt_fallback(payload: SuggestRequest) -> str:
+    """舊版 Ollama 沒有輸出第二部分時的安全渲染指令。
+
+    這不是冒充 Ollama 的結果；它只讓尚未支援雙段輸出的模型仍有明確妝容指令，
+    並由回應裡的 renderPromptSource=style_fallback 說清楚來源。
+    """
+    return RENDER_PROMPT_FALLBACKS.get(payload.style or "日常自然妝", RENDER_PROMPT_FALLBACKS["日常自然妝"])
+
+
+def sign_render_prompt(prompt: str) -> str | None:
+    if not PROMPT_SIGNING_SECRET or not prompt:
+        return None
+    return hmac.new(
+        PROMPT_SIGNING_SECRET.encode("utf-8"),
+        prompt.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def ollama_version() -> str | None:
+    """讀 Ollama 原生 /api/version；舊版沒有此端點時回 null。"""
+    try:
+        response = requests.get(f"{OLLAMA_BASE_URL}/api/version", timeout=5)
+        if not response.ok:
+            return None
+        value = response.json().get("version")
+        return str(value).strip() if value else None
+    except Exception:
+        return None
+
+
 @app.get("/health")
 async def health():
     reachable = False
@@ -304,11 +386,15 @@ async def health():
         "ollama": {
             "baseUrl": OLLAMA_BASE_URL,
             "model": OLLAMA_MODEL,
+            "version": ollama_version(),
             "reachable": reachable,
             "error": error,
         },
         "fallbackEnabled": False,
         "api_key_required": bool(SUGGESTION_API_KEY),
+        "contractVersion": SUGGESTION_CONTRACT_VERSION,
+        "renderPromptEnSupported": True,
+        "promptSignatureAlgorithm": "hmac-sha256-v1" if PROMPT_SIGNING_SECRET else None,
     }
 
 
@@ -324,7 +410,9 @@ async def suggest(payload: SuggestRequest, _=Depends(require_api_key)):
     model = payload.model or OLLAMA_MODEL
     prompt = build_prompt(payload)
     try:
-        suggestion = call_ollama(prompt, model)
+        raw_response = call_ollama(prompt, model)
+        suggestion, ollama_render_prompt = split_ollama_response(raw_response)
+        render_prompt = ollama_render_prompt or build_render_prompt_fallback(payload)
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -344,6 +432,13 @@ async def suggest(payload: SuggestRequest, _=Depends(require_api_key)):
         "fallbackUsed": False,
         "createdAt": _now_iso(),
         "suggestion": suggestion,
+        "renderPromptEn": render_prompt,
+        # 舊渲染端仍讀這個相容欄位；新渲染端以 renderPromptEn 為準。
+        "fluxPromptEn": render_prompt,
+        "promptSignature": sign_render_prompt(render_prompt),
+        "promptSignatureVersion": "hmac-sha256-v1" if PROMPT_SIGNING_SECRET else None,
+        "renderPromptSource": "ollama" if ollama_render_prompt else "style_fallback",
+        "contractVersion": SUGGESTION_CONTRACT_VERSION,
     }
 
 
@@ -395,7 +490,9 @@ async def suggest_stream(payload: SuggestRequest, _=Depends(require_api_key)):
             except Exception:
                 continue
 
-        yield f"data: {json.dumps({'done': True, 'suggestion': full_text.strip(), 'model': model})}\n\n"
+        suggestion, ollama_render_prompt = split_ollama_response(full_text)
+        render_prompt = ollama_render_prompt or build_render_prompt_fallback(payload)
+        yield f"data: {json.dumps({'done': True, 'suggestion': suggestion, 'renderPromptEn': render_prompt, 'promptSignature': sign_render_prompt(render_prompt), 'model': model, 'contractVersion': SUGGESTION_CONTRACT_VERSION}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         generate(),

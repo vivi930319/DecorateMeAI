@@ -73,6 +73,13 @@ BASIC_TRAINABLE_FIELDS = frozenset({"臉型", "眉型", "眼型", "鼻型", "嘴
 # 訓練機的心跳。後台需要它才能分辨「批次還在排隊是因為訓練機沒開」與
 # 「訓練失敗了」——兩者在畫面上長得一樣，處理方式卻完全不同。
 FACE_TRAINING_WORKERS_COL = "face_training_workers"
+# 換模型上線的請求。Gateway 只負責記下「要換哪個批次的哪些部位」——模型檔在訓練機
+# 的檔案系統上，雲端這裡碰不到，所以實際的複製、類別檢查與 manifest 更新都由
+# tools/promote_model.py 在本機執行，跟訓練批次是同一套「後台下單、本機執行」的模式。
+FACE_MODEL_PROMOTIONS_COL = "face_model_promotions"
+# 這份清單必須跟 tools/promote_model.py 的 PARTS 一致。兩邊都是寫死的中文部位名，
+# 因為後台、回饋表與訓練報告用的都是中文；不一致時 worker 會找不到對應檔名而整批失敗。
+PROMOTABLE_PARTS = ("臉型", "眉型", "眼型", "鼻型", "唇型")
 FACE_MODEL_METRICS_COL = "face_model_metrics"
 
 UPSTREAMS = {
@@ -137,7 +144,7 @@ UPSTREAMS = {
     # database URL and any upstream credential stay inside Cloud Run.
     "member-database": Upstream(
         base_url=_service_url("MEMBER_DATABASE_URL"),
-        api_key=os.getenv("UPSTREAM_MEMBER_API_KEY", ""),
+        api_key=os.getenv("UPSTREAM_MEMBER_API_KEY", "").strip(),
         client_api_key=os.getenv("GATEWAY_MEMBER_API_KEY", ""),
         allowed_paths=_patterns(
             r"api/recommend/personal",
@@ -1163,6 +1170,9 @@ def _guest_path_allowed(service: str, path: str, method: str) -> bool:
     """訪客能不能走這條路。讀取放行，寫入只放行明確列出的那幾條。"""
     if service not in GUEST_ALLOWED_SERVICES:
         return False
+    # 回饋沿用有效訪客票券，FACE 另驗 job token；不開放覆核或 PRO。
+    if service == "face-basic" and re.fullmatch(r"v1/face/jobs/[^/]+/feedback", path):
+        return str(method or "").upper() == "POST"
     if str(method or "").upper() not in STATE_CHANGING_METHODS:
         return True
     return any(pattern.fullmatch(path) for pattern in GUEST_WRITE_PATHS.get(service, ()))
@@ -1337,13 +1347,19 @@ async def _refresh_saved_look_media(request: Request, payload, owner_id: str):
     looks = payload.get("looks")
     if not isinstance(looks, list):
         return payload
+    # 舊收藏可能仍保存 GCS 的原始網址。妝後與妝前都是私人媒體，
+    # 兩邊都要在 Gateway 重新換成短效網址；只刷新 after 會讓收藏紀錄存在，
+    # 但管理員／會員打開妝前時拿著過期或被擋的 URL，畫面就像「妝前圖消失」。
+    media_fields = ("afterImageUrl", "after_image_url", "beforeImageUrl", "before_image_url")
     raw_urls = []
     for look in looks:
         if not isinstance(look, dict):
             continue
-        value = str(look.get("afterImageUrl") or look.get("after_image_url") or "")
-        if PRIVATE_RENDER_URL_RE.fullmatch(value):
-            raw_urls.append(value)
+        for field in media_fields:
+            value = str(look.get(field) or "")
+            if PRIVATE_RENDER_URL_RE.fullmatch(value):
+                raw_urls.append(value)
+    raw_urls = list(dict.fromkeys(raw_urls))
     signed_values = await asyncio.gather(*[_sign_legacy_media(request, value, owner_id) for value in raw_urls])
     replacements = dict(zip(raw_urls, signed_values))
     if not replacements:
@@ -1353,11 +1369,50 @@ async def _refresh_saved_look_media(request: Request, payload, owner_id: str):
     for look in looks:
         item = dict(look) if isinstance(look, dict) else look
         if isinstance(item, dict):
-            for key in ("afterImageUrl", "after_image_url"):
+            for key in media_fields:
                 if item.get(key) in replacements:
                     item[key] = replacements[item[key]]
         result["looks"].append(item)
     return result
+
+
+async def _rollback_saved_look_after_retain_failure(
+    request: Request,
+    upstream: Upstream,
+    path: str,
+    response: httpx.Response,
+    headers: dict[str, str],
+) -> None:
+    """Remove a just-created DB row if media retention failed afterwards.
+
+    The member database has no transaction spanning its row and Render's GCS
+    objects. If the row was written first and retain then failed, leaving it
+    in place creates the exact half-saved look that made the before image
+    appear to disappear. This is best-effort cleanup; the original error is
+    still returned so the caller can retry.
+    """
+    try:
+        created = response.json()
+    except ValueError:
+        created = {}
+    created_id = created.get("id") if isinstance(created, dict) else None
+    if created_id is None and isinstance(created, dict) and isinstance(created.get("look"), dict):
+        created_id = created["look"].get("id")
+    if created_id is None:
+        logging.getLogger(__name__).error("saved look retain failed but DB response had no row id")
+        return
+    try:
+        rollback = await request.app.state.http_client.delete(
+            f"{upstream.base_url}/{path}/{quote(str(created_id), safe='')}",
+            headers=headers,
+            timeout=upstream_timeout("member-database"),
+        )
+        if not rollback.is_success:
+            logging.getLogger(__name__).error(
+                "saved look rollback failed status=%s", rollback.status_code
+            )
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("saved look rollback failed")
 
 
 def _saved_media_urls(payload, saved_look_id: str | None = None) -> list[str]:
@@ -1529,15 +1584,23 @@ async def render_media(job_id: str, request: Request):
 async def _serve_render_media(job_id: str, request: Request, variant: str = "after"):
     """Authenticate a member, then redirect to a ten-minute private GCS URL.
 
-    兩件 2026-07-29 加上的事：
+    ## 妝前圖對管理員開放（2026-08-29，專案負責人決定）
 
-    1. **妝前圖不給管理員看。** 妝後圖是產品功能的一部分（後台要看得到使用者收藏了什麼），
-       但妝前圖是使用者自己上傳的**原始臉部照片**，那是生物特徵資料。管理員需要它的
-       正當理由不存在，所以這裡不送 admin 旗標，讓渲染服務照擁有者規則擋下來。
-       渲染服務自己也擋了一次——只靠呼叫端自律不算防線。
+    2026-07-29 這裡刻意把妝前圖擋在管理員之外，理由是它是使用者上傳的原始臉部
+    照片、屬於生物特徵資料，而管理員需要它的正當理由不存在。
 
-    2. **管理員讀圖一律留稽核。** 先前這條路完全不寫 admin_audit_events，
-       等於管理員看了誰的臉、看了幾次，系統裡查不到任何痕跡。成功與失敗都記。
+    那個「正當理由不存在」的判斷被推翻了：渲染結果的好壞只看妝後圖判斷不了——
+    沒有妝前圖就不知道那張臉本來長什麼樣，也就分不出「模型畫得很好」與
+    「模型把人換掉了」。負責人兩次明確要求後台要看得到。
+
+    **放寬的是「誰看得到」，不是「看了有沒有痕跡」。** 管理員讀圖一律寫進
+    admin_audit_events，成功與失敗都記，`variant` 欄位註明這一次讀的是妝前還是
+    妝後——查得出「誰、什麼時候、看了哪一個 job 的原始照片」。這是這種資料唯一
+    該有的代價，不要因為「後台本來就看得到」而把它省掉。
+
+    ⚠️ 渲染服務端（`_require_job_owner`）必須同時放行。只改一邊的話，gateway 送了
+    admin 旗標而渲染服務照擋，畫面顯示的是「此妝容圖已過期」——那句話跟權限一個字
+    都沒關係，會把人帶去完全錯的方向查。
     """
     if not re.fullmatch(RENDER_JOB_ID, job_id):
         raise HTTPException(status_code=404, detail={"error": {"code": "MEDIA_NOT_FOUND", "message": "Render image was not found."}})
@@ -1554,8 +1617,9 @@ async def _serve_render_media(job_id: str, request: Request, variant: str = "aft
         claims = require_member_access(request)
         is_admin = str(claims.get("role") or "").strip().lower() == "admin"
         owner_id = opaque_actor_id(str(claims.get("sub") or ""))
-    # 妝前圖不套用管理員豁免：本人以外誰都不能看。
-    admin_bypass = is_admin and variant != "before"
+    # 妝前妝後都套用管理員豁免（2026-08-29 決定，見上面的 docstring）。
+    # 讀取放行，但底下的 _audit 會把這一次讀取記下來，含 variant。
+    admin_bypass = is_admin
 
     audited = False
 
@@ -1940,6 +2004,11 @@ async def register(request: Request):
 @app.post("/auth/send-otp")
 async def send_otp(request: Request):
     return await proxy_public_member_request(request, "/api/send-otp")
+
+
+@app.post("/auth/forgot-password")
+async def forgot_password(request: Request):
+    return await proxy_public_member_request(request, "/api/forgot-password")
 
 
 @app.post("/auth/verify-otp")
@@ -2667,6 +2736,280 @@ async def admin_create_face_training_run(request: Request):
     return JSONResponse(status_code=202, content={"status": "queued", **run})
 
 
+@app.post("/admin-api/face-training/runs/{run_id}/retry")
+async def admin_retry_face_training_run(run_id: str, request: Request):
+    """把失敗批次以新的 queued 批次重送，保留原批次作為不可變歷史證據。
+
+    一般建立批次會排除已有 trainingRunId 的回饋；失敗批次正好已經有這個欄位，
+    所以不能讓前端把原本的 feedbackIds 再送進一般 POST。這條路徑只接受 failed，
+    重新檢查樣本後建立新的 run，並用 retryOf／retryRunId 防止連按造成重複訓練。
+    """
+    enforce_csrf(request)
+    if MULTI_SESSION_ENABLED:
+        _require_admin_claims(select_account(request, for_write=True)["claims"])
+    else:
+        claims = require_admin_access(request)
+        enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+
+    source_run_id = str(run_id or "").strip()
+    source = await asyncio.to_thread(job_store.get, FACE_TRAINING_RUNS_COL, source_run_id)
+    if not source:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": {"code": "FACE_TRAINING_RUN_NOT_FOUND",
+                               "message": "找不到這個訓練批次。"}},
+        )
+    if str(source.get("status") or "") != "failed":
+        raise HTTPException(
+            status_code=409,
+            detail={"error": {"code": "TRAINING_RETRY_NOT_ALLOWED",
+                               "message": "只有失敗的訓練批次可以重新訓練。"}},
+        )
+
+    # 先查 retryOf，再看來源上的 retryRunId。前者可以補救「新批次已建立，
+    # 但 Firestore 回寫來源標記短暫失敗」的情況，避免再按一次又排一批。
+    #
+    # 失敗的重試批次是例外：它不是「已經處理完」，而是使用者要求再給一次機會。
+    # 如果只要看到 retryOf 就永遠去重，第一次重試也失敗時，原批次就會被永久鎖死。
+    # queued/running/done 繼續去重；failed 則沿著失敗的子批次開下一個新批次。
+    existing_retries = await asyncio.to_thread(
+        job_store.find_by_field, FACE_TRAINING_RUNS_COL, "retryOf", source_run_id, 1)
+    existing_retry = existing_retries[0] if existing_retries else None
+    previous_retry_id = str(source.get("retryRunId") or "").strip()
+    if existing_retry is None and previous_retry_id:
+        existing_retry = await asyncio.to_thread(
+            job_store.get, FACE_TRAINING_RUNS_COL, previous_retry_id)
+    retry_source = source
+    if existing_retry:
+        existing_status = str(existing_retry.get("status") or "queued")
+        if existing_status != "failed":
+            return JSONResponse(
+                status_code=202,
+                content={"status": existing_retry.get("status") or "queued",
+                         **existing_retry, "deduped": True},
+            )
+        retry_source = existing_retry
+    if existing_retry is None and previous_retry_id:
+        # 上面的 get 已經查過 marker 指向的文件。走到這裡代表 marker 有值但文件
+        # 真的不存在；若直接建立，可能跟尚未讀到的 Firestore 文件撞批次，所以保留
+        # 明確錯誤，讓管理員先重新載入確認，而不是假裝安全。
+        raise HTTPException(
+            status_code=409,
+            detail={"error": {"code": "TRAINING_RETRY_RECORD_MISSING",
+                               "message": "這個批次已建立重試紀錄，但目前讀不到重試批次，請重新載入後再試。"}},
+        )
+    if existing_retry and str(existing_retry.get("status") or "") == "failed":
+        # retry_source 會在下方決定 selections 與 feedback 所屬批次；新的關聯也
+        # 直接指向這個失敗子批次，歷史鏈會是 source -> failed retry -> new retry。
+        source_run_id = str(retry_source.get("runId") or source_run_id)
+
+    raw_selections = retry_source.get("selections")
+    if not isinstance(raw_selections, dict) or not raw_selections:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": {"code": "NO_TRAINABLE_SAMPLES",
+                               "message": "這個失敗批次沒有可重新訓練的資料。"}},
+        )
+
+    selections: dict[str, dict[str, str]] = {}
+    excluded: list[dict] = []
+    for raw_feedback_id, raw_fields in raw_selections.items():
+        feedback_id = str(raw_feedback_id or "").strip()
+        job_id = feedback_id[3:] if feedback_id.startswith("FB-") else feedback_id
+        row = await asyncio.to_thread(job_store.get, FACE_FEEDBACK_COL, job_id)
+        if not row:
+            excluded.append({"feedbackId": feedback_id, "reason": "找不到回饋紀錄"})
+            continue
+        if not row.get("contributed"):
+            excluded.append({"feedbackId": feedback_id, "reason": "沒有使用者同意保存的影像"})
+            continue
+        current_run_id = str(row.get("trainingRunId") or "").strip()
+        if current_run_id and current_run_id != source_run_id:
+            excluded.append({"feedbackId": feedback_id,
+                             "reason": f"已被其他批次 {current_run_id} 佔用"})
+            continue
+
+        fields: dict[str, str] = {}
+        if isinstance(raw_fields, dict):
+            for raw_field, raw_label in raw_fields.items():
+                field = str(raw_field or "").strip()
+                label = str(raw_label or "").strip()
+                if field in BASIC_TRAINABLE_FIELDS and label:
+                    fields[field] = label
+        if fields:
+            selections[feedback_id] = fields
+        else:
+            excluded.append({"feedbackId": feedback_id, "reason": "沒有可訓練的部位"})
+
+    if not selections:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": {"code": "NO_TRAINABLE_SAMPLES",
+                               "message": "這個失敗批次目前沒有可重新訓練的影像部位"},
+                    "excluded": excluded},
+        )
+
+    retry_id = "TR-" + secrets.token_hex(8)
+    now = datetime.now(timezone.utc).isoformat()
+    retry_run = {
+        "runId": retry_id,
+        "status": "queued",
+        "model": retry_source.get("model") or "ConvNeXt-Tiny",
+        "createdAt": now,
+        "queuedAt": now,
+        "feedbackIds": sorted(selections),
+        "selections": selections,
+        "sampleCount": sum(len(fields) for fields in selections.values()),
+        "excluded": excluded,
+        "source": "admin-face-feedback-retry",
+        "retryOf": source_run_id,
+    }
+    await asyncio.to_thread(job_store.create, FACE_TRAINING_RUNS_COL, retry_id, retry_run)
+
+    # 批次本身已經寫入才回寫來源標記；即使這次標記短暫失敗，下一次請求仍會
+    # 透過 retryOf 找到已建立的批次，不會因為管理員多按一次而重訓兩次。
+    try:
+        await asyncio.to_thread(
+            job_store.patch, FACE_TRAINING_RUNS_COL, source_run_id,
+            {"retryRunId": retry_id, "retriedAt": now},
+        )
+    except Exception:
+        logging.exception("寫入訓練重試標記失敗 source=%s retry=%s", source_run_id, retry_id)
+
+    def _stamp_retry() -> None:
+        for feedback_id in selections:
+            job_id = feedback_id[3:] if feedback_id.startswith("FB-") else feedback_id
+            try:
+                job_store.patch(FACE_FEEDBACK_COL, job_id,
+                                {"trainingRunId": retry_id, "trainingQueuedAt": now})
+            except Exception:
+                logging.exception("寫入重試 trainingRunId 失敗 job_id=%s run=%s", job_id, retry_id)
+
+    await asyncio.to_thread(_stamp_retry)
+    return JSONResponse(status_code=202, content={"status": "queued", **retry_run})
+
+
+@app.post("/admin-api/face-training/promotions")
+async def admin_create_model_promotion(request: Request):
+    """登記一次「把某批次的某些部位換上線」的請求，等訓練機撿走執行。
+
+    Gateway 不換模型，也換不了：模型檔是 111MB 一個、打包進 face 服務的 image，
+    換一次要複製檔案、重算 sha256、更新 manifest、重新 build 與部署。那些都需要
+    訓練機的檔案系統與 gcloud 認證，Cloud Run 上的這支程式兩者都沒有。
+
+    所以這裡只寫下決定。真正的動作分成兩段：訓練機的 worker 做得到的本機部分
+    （複製、類別檢查、manifest），以及需要人明確執行的部署——後者刻意不自動化，
+    因為它會動到線上服務。
+    """
+    enforce_csrf(request)
+    if MULTI_SESSION_ENABLED:
+        claims = select_account(request, for_write=True)["claims"]
+        _require_admin_claims(claims)
+    else:
+        claims = require_admin_access(request)
+        enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    run_id = str(body.get("runId") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", run_id):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": {"code": "PROMOTION_RUN_ID_INVALID",
+                              "message": "請提供有效的訓練批次編號。"}},
+        )
+
+    requested = body.get("parts")
+    parts = [str(p).strip() for p in requested] if isinstance(requested, list) else []
+    if not parts or [p for p in parts if p not in PROMOTABLE_PARTS]:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": {"code": "PROMOTION_PARTS_INVALID",
+                              "message": "請選擇要換上線的部位。"}},
+        )
+    # 去重但保留順序：同一個部位送兩次不是錯誤，只是沒有意義。
+    parts = list(dict.fromkeys(parts))
+
+    # 同一批次還有沒做完的請求就不要再開一張。連按會讓訓練機重複複製同一組檔案，
+    # 而每複製一次就多備份一份 111MB。
+    try:
+        existing = await asyncio.to_thread(
+            job_store.find_by_field, FACE_MODEL_PROMOTIONS_COL, "runId", run_id, 20)
+    except Exception:
+        logging.exception("讀取換模型請求失敗 run=%s", run_id)
+        existing = []
+    if any(str(row.get("status") or "") in {"queued", "claimed"} for row in existing):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": {"code": "PROMOTION_ALREADY_QUEUED",
+                              "message": "這個批次已經有一筆換上線請求還沒完成。"}},
+        )
+
+    promotion_id = "PM-" + secrets.token_hex(8)
+    record = {
+        "promotionId": promotion_id,
+        "runId": run_id,
+        "parts": parts,
+        "status": "queued",
+        # 記操作者的不可逆 id，不記 email——這張表要能回答「誰換的」，
+        # 不需要能回答「他的信箱是什麼」。
+        "requestedBy": opaque_actor_id(str(claims.get("sub") or "")),
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await asyncio.to_thread(job_store.create, FACE_MODEL_PROMOTIONS_COL,
+                                promotion_id, record)
+    except Exception:
+        logging.exception("建立換模型請求失敗 run=%s", run_id)
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "PROMOTION_STORE_UNAVAILABLE",
+                              "message": "暫時無法登記換上線請求，請稍後再試。"}},
+        )
+    record_admin_action(
+        "model_promotion.request",
+        actor_id=record["requestedBy"],
+        target_ref=promotion_id,
+        status_code=201,
+        request_id=request.headers.get("x-request-id", "")[:128],
+    )
+    return JSONResponse(status_code=201, content={"promotion": record})
+
+
+@app.get("/admin-api/face-training/promotions")
+async def admin_model_promotions(request: Request):
+    """列出換模型請求與各自走到哪一步，供後台顯示。"""
+    enforce_csrf(request)
+    if MULTI_SESSION_ENABLED:
+        _require_admin_claims(select_account(request, for_write=False)["claims"])
+    else:
+        claims = require_admin_access(request)
+        enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+    try:
+        limit = max(1, min(50, int(request.query_params.get("limit") or 10)))
+    except (TypeError, ValueError):
+        limit = 10
+    # 讀不到要說「暫時讀不到」。空清單會被讀成「從來沒換過模型」，
+    # 而那正好是這一頁要回答的問題，不能讓故障冒充答案。
+    try:
+        rows = await asyncio.to_thread(
+            job_store.all_jobs, FACE_MODEL_PROMOTIONS_COL, limit=limit,
+            order_by="createdAt", descending=True)
+    except Exception:
+        logging.exception("讀取換模型請求失敗")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "PROMOTION_STORE_UNAVAILABLE",
+                              "message": "暫時讀不到換上線請求，請稍後再試。"}},
+        )
+    return {"promotions": rows, "promotableParts": list(PROMOTABLE_PARTS)}
+
+
 @app.get("/admin-api/face-training/runs")
 async def admin_face_training_runs(request: Request):
     """回傳最近五次訓練與最新 ConvNeXt 指標，供後台顯示可驗證的狀態。"""
@@ -2844,6 +3187,8 @@ async def proxy(service: str, path: str, request: Request):
         if upstream.requires_cloud_run_iam:
             identity_token = await asyncio.to_thread(TOKEN_CACHE.get, upstream.base_url)
         upstream_headers = build_upstream_headers(request, upstream, identity_token)
+        if service == "member-database":
+            upstream_headers = with_member_gateway_key(upstream_headers)
         if upstream_member_cookie:
             upstream_headers["Cookie"] = upstream_member_cookie
         if service == "render-service":
@@ -2971,6 +3316,13 @@ async def proxy(service: str, path: str, request: Request):
                     admin=is_admin,
                 )
                 if retained is None or not retained.is_success:
+                    await _rollback_saved_look_after_retain_failure(
+                        request,
+                        upstream,
+                        path,
+                        response,
+                        upstream_headers,
+                    )
                     raise HTTPException(
                         status_code=503,
                         detail={"error": {"code": "MEDIA_RETAIN_INCOMPLETE", "message": "妝前與妝後圖片尚未完整保存，請稍後重試。"}},
