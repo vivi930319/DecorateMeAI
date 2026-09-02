@@ -212,6 +212,7 @@ const ApiConfig = {
             sessionPath: '/auth/session',
             registerPath: '/auth/register',
             sendOtpPath: '/auth/send-otp',
+            forgotPasswordPath: '/auth/forgot-password',
             verifyOtpPath: '/auth/verify-otp',
             configPath: '/public-config'
         },
@@ -332,7 +333,16 @@ const Api = {
     _guestTrialPath(input) {
         try {
             const url = new URL(String(input), window.location.origin);
-            if (url.origin !== window.location.origin) return false;
+            // 本機開發時前端在 5500、Gateway 在 8015；兩者不同 origin，
+            // 但仍然是同一個受信任的 Gateway。原本只接受同源網址，導致
+            // `_protectedFetch` 把本機的臉部分析／渲染請求當成一般外連，
+            // 不帶 X-Guest-Ticket，結果工作可能建起來，後續輪詢或圖片讀取卻
+            // 回 401/403，畫面就只剩「已完成」但沒有成果圖。
+            const gatewayOrigin = new URL(
+                this.config?.services?.aiGateway?.baseUrl || window.location.origin,
+                window.location.origin,
+            ).origin;
+            if (url.origin !== window.location.origin && url.origin !== gatewayOrigin) return false;
             return ['/face-basic/', '/render-service/'].some(prefix => url.pathname.startsWith(prefix));
         } catch (_) {
             return false;
@@ -414,7 +424,13 @@ const Api = {
     _isProtectedGatewayUrl(input) {
         try {
             const url = new URL(String(input), window.location.origin);
-            if (url.origin !== window.location.origin) return false;
+            // 正式站是同源路徑；本機開發則是 5500 → 8015 的跨埠 Gateway。
+            // 兩種情況都必須套用 credentials、session abort 與票券邏輯。
+            const gatewayOrigin = new URL(
+                this.config?.services?.aiGateway?.baseUrl || window.location.origin,
+                window.location.origin,
+            ).origin;
+            if (url.origin !== window.location.origin && url.origin !== gatewayOrigin) return false;
             return ['/member-database/', '/face-basic/', '/face-pro/', '/render-service/', '/text-suggestion/', '/admin-api/']
                 .some(prefix => url.pathname.startsWith(prefix));
         } catch (_) {
@@ -426,7 +442,11 @@ const Api = {
     _speaksForMemberSession(input) {
         try {
             const url = new URL(String(input), window.location.origin);
-            if (url.origin !== window.location.origin) return false;
+            const gatewayOrigin = new URL(
+                this.config?.services?.aiGateway?.baseUrl || window.location.origin,
+                window.location.origin,
+            ).origin;
+            if (url.origin !== window.location.origin && url.origin !== gatewayOrigin) return false;
             return ['/member-database/', '/admin-api/'].some(prefix => url.pathname.startsWith(prefix));
         } catch (_) {
             return false;
@@ -818,21 +838,97 @@ const Api = {
         } catch (err) {
             throw new Error('無法連線到渲染服務：' + err.message);
         }
-        const data = await res.json().catch(() => ({}));
+        const data = this._normalizeRenderJob(await res.json().catch(() => ({})));
         if (!res.ok) {
             if (res.status === 401) {
                 throw new Error('登入狀態已失效，請重新登入後再試一次。');
             }
-            throw new Error(data?.error?.message || data?.error || `Render API HTTP ${res.status}`);
+            throw this._renderApiError(data, res.status, `Render API HTTP ${res.status}`);
         }
         if (data.status !== 'completed' || !data.afterImageUrl) {
-            throw new Error(data?.error?.message || data?.error || '妝容渲染失敗');
+            throw this._renderApiError(data, res.status, '妝容渲染失敗');
         }
         if (data.renderQuota && Auth.getProfile) {
             const current = Auth.getProfile() || {};
             Auth.setProfile({ ...current, renderQuota: data.renderQuota });
         }
         return data;
+    },
+
+    // 渲染服務正式契約使用 camelCase，但本機代理、舊版服務或測試 stub 可能把
+    // 結果包在 result/data/job 裡，或回傳 snake_case。所有消費端先走這個正規化，
+    // 這樣「工作已完成」與「畫面有可讀的圖片網址」不會因為回應包裝不同而脫鉤。
+    _qualifyRenderMediaUrl(value) {
+        const raw = String(value || '').trim();
+        if (!raw || !raw.startsWith('/')) return raw;
+        try {
+            const gatewayBase = this.config?.services?.render?.baseUrl || window.location.origin;
+            const gatewayUrl = new URL(gatewayBase, window.location.origin);
+            // 正式站前端與 Gateway 同源，保留相對網址讓 cookie／部署路徑照原本方式工作；
+            // 本機前端通常在 5500，而 Gateway 在 8015，這時相對網址若不補綴會被
+            // 瀏覽器送到 5500/media/render，靜態伺服器當然找不到圖片。
+            if (gatewayUrl.origin === window.location.origin) return raw;
+            return new URL(raw, gatewayUrl.origin).href;
+        } catch (_) {
+            return raw;
+        }
+    },
+
+    _normalizeRenderJob(payload) {
+        const root = payload && typeof payload === 'object' ? payload : {};
+        const nestedSources = [root.result, root.data, root.job, root.detail]
+            .filter(value => value && typeof value === 'object' && !Array.isArray(value));
+        const nested = nestedSources.reduce((merged, source) => ({ ...merged, ...source }), {});
+        const sources = [root, ...nestedSources];
+        const pick = keys => {
+            for (const source of sources) {
+                for (const key of keys) {
+                    if (source[key] != null && String(source[key]).trim() !== '') return source[key];
+                }
+            }
+            return undefined;
+        };
+        return {
+            ...root,
+            ...(nested && typeof nested === 'object' ? nested : {}),
+            status: pick(['status']) || root.status,
+            jobId: pick(['jobId', 'job_id', 'id']) || root.jobId,
+            resultToken: pick(['resultToken', 'result_token', 'token']) || root.resultToken,
+            progress: pick(['progress', 'percent', 'percentage']) ?? root.progress,
+            afterImageUrl: this._qualifyRenderMediaUrl(pick(['afterImageUrl', 'after_image_url', 'afterUrl', 'after_url', 'outputUrl', 'output_url', 'imageUrl', 'image_url'])),
+            beforeImageUrl: this._qualifyRenderMediaUrl(pick(['beforeImageUrl', 'before_image_url', 'beforeUrl', 'before_url'])),
+            replicateTempUrl: pick(['replicateTempUrl', 'replicate_temp_url']),
+            renderPrompt: pick(['renderPrompt', 'render_prompt']),
+            promptSource: pick(['promptSource', 'prompt_source']),
+            error: pick(['error']) ?? root.error,
+        };
+    },
+
+    // 渲染服務的錯誤可能來自 Gateway、舊版服務或工作本身；不論外層包法，
+    // 都要保留 code／retryAfterSeconds，交給同一套中文錯誤訊息處理，不能把
+    // 「Render rate limit exceeded. Try again in 530 seconds.」原樣丟給使用者。
+    _renderApiError(payload, status = 0, fallback = '妝容渲染失敗') {
+        const detail = payload?.error && typeof payload.error === 'object'
+            ? payload.error
+            : payload?.detail?.error && typeof payload.detail.error === 'object'
+                ? payload.detail.error
+                : null;
+        const raw = typeof payload?.error === 'string'
+            ? payload.error
+            : detail?.message || payload?.message || payload?.detail?.message || fallback;
+        const code = String(detail?.code || payload?.code || '').trim().toUpperCase();
+        const retryMatch = String(raw).match(/(?:in|after)\s+(\d+)\s*seconds?/i);
+        const details = detail || retryMatch
+            ? { ...(detail || {}), ...(retryMatch && detail?.retryAfterSeconds == null
+                ? { retryAfterSeconds: Number(retryMatch[1]) }
+                : {}) }
+            : null;
+        const error = new Error(localizeUserError(raw, code, status, details));
+        error.code = code;
+        error.status = Number(status) || 0;
+        error.retryable = details?.retryable !== false;
+        error.details = details || {};
+        return error;
     },
 
     // 渲染時間較長，因此建立工作後以 jobId 輪詢進度。
@@ -863,7 +959,7 @@ const Api = {
             throw new Error('無法連線到渲染服務：' + err.message);
         }
 
-        let submitted = await submitRes.json().catch(() => ({}));
+        let submitted = this._normalizeRenderJob(await submitRes.json().catch(() => ({})));
         if (!submitRes.ok) {
             if (submitRes.status === 401) {
                 throw new Error('登入狀態已失效，請重新登入後再試一次。');
@@ -881,12 +977,12 @@ const Api = {
             if (dup) {
                 submitted = { jobId: dup.jobId, resultToken: dup.resultToken, status: 'running', progress: 1 };
             } else {
-                throw new Error(submitted?.error?.message || submitted?.error || `Render API HTTP ${submitRes.status}`);
+                throw this._renderApiError(submitted, submitRes.status, `Render API HTTP ${submitRes.status}`);
             }
         }
 
         const jobId = submitted.jobId;
-        if (!jobId) throw new Error(submitted?.error?.message || '渲染服務沒有回傳 jobId');
+        if (!jobId) throw this._renderApiError(submitted, submitRes.status, '渲染服務沒有回傳 jobId');
         emit(submitted.progress || 1);
 
         // 快取命中時後端會直接回 completed，不用輪詢
@@ -909,7 +1005,7 @@ const Api = {
             let job;
             try {
                 const pollRes = await this._protectedFetch(pollUrl, { method: 'GET', headers, cache: 'no-store' });
-                job = await pollRes.json().catch(() => ({}));
+                job = this._normalizeRenderJob(await pollRes.json().catch(() => ({})));
                 if (!pollRes.ok) {
                     // 輪詢途中的暫時性錯誤不該直接判死，繼續等下一輪
                     if (pollRes.status === 404) throw new Error('渲染工作不存在或已過期');
@@ -939,7 +1035,7 @@ const Api = {
                 return job;
             }
             if (job.status === 'failed') {
-                throw new Error(job?.error?.message || job?.error || '妝容渲染失敗');
+                throw this._renderApiError(job, job?.error?.status || 0, '妝容渲染失敗');
             }
         }
         throw new Error('渲染逾時（超過 5 分鐘）。請稍後再試一次。');
@@ -2238,7 +2334,17 @@ const Api = {
                 });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
-            return { ok: true, reviewStatus: data.reviewStatus, reviewDecisions: data.reviewDecisions || {} };
+            // corrected 的管理員標籤是送訓時真正使用的標籤。若只回傳
+            // reviewDecisions、不把 reviewLabels 帶回前端，畫面重畫後會把
+            // corrected 視為「沒有標籤」，於是這筆回饋會從可送訓清單消失。
+            // 後端已驗證過 labels，這裡要完整保留它，讓管理員改判後可以直接
+            // 勾選／全選並送進訓練批次。
+            return {
+                ok: true,
+                reviewStatus: data.reviewStatus,
+                reviewDecisions: data.reviewDecisions || {},
+                reviewLabels: data.reviewLabels || {},
+            };
         } catch (err) {
             return { ok: false, error: '連線失敗：' + err.message };
         }
@@ -2263,6 +2369,47 @@ const Api = {
     },
 
     // 將管理員已採用的回饋登記成可追蹤的 ConvNeXt 訓練批次；實際訓練由後端腳本執行。
+    // 換模型上線是「登記」不是「執行」：模型檔在訓練機的檔案系統上，Gateway 跑在
+    // Cloud Run 上碰不到它，也沒有部署用的認證。這支只把決定寫進佇列，實際的複製、
+    // 類別檢查與 manifest 更新由訓練機的 promotion_worker 做，部署仍要人執行。
+    async requestModelPromotion(runId, parts) {
+        const baseUrl = gatewayService('admin-api');
+        if (!baseUrl) return { ok: false, error: 'admin-api 未設定' };
+        const id = String(runId || '').trim();
+        if (!id) return { ok: false, error: '缺少訓練批次編號' };
+        if (!Array.isArray(parts) || !parts.length) {
+            return { ok: false, error: '請至少選擇一個要換上線的部位' };
+        }
+        try {
+            const res = await this._protectedFetch(`${baseUrl}/face-training/promotions`, {
+                method: 'POST', credentials: 'include',
+                headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
+                body: JSON.stringify({ runId: id, parts }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
+            return { ok: true, ...data };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    async fetchModelPromotions(limit = 20) {
+        const baseUrl = gatewayService('admin-api');
+        if (!baseUrl) return { ok: false, error: 'admin-api 未設定' };
+        try {
+            const res = await this._protectedFetch(
+                `${baseUrl}/face-training/promotions?limit=${encodeURIComponent(limit)}`, {
+                credentials: 'include', cache: 'no-store', headers: this._adminProductHeaders(),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
+            return { ok: true, ...data };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
     async queueFaceTraining(feedbackIds) {
         const baseUrl = gatewayService('admin-api');
         if (!baseUrl) return { ok: false, error: 'admin-api 未設定' };
@@ -2274,6 +2421,28 @@ const Api = {
                 method: 'POST', credentials: 'include',
                 headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({ feedbackIds }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
+            return { ok: true, ...data };
+        } catch (err) {
+            return { ok: false, error: '連線失敗：' + err.message };
+        }
+    },
+
+    // 失敗批次不能再走一般送訓：原本的 feedback 已經掛了 trainingRunId。
+    // 後端會建立一個新的 queued 批次，保留舊批次的失敗原因與歷史證據。
+    async retryFaceTraining(runId) {
+        const baseUrl = gatewayService('admin-api');
+        if (!baseUrl) return { ok: false, error: 'admin-api 未設定' };
+        const id = String(runId || '').trim();
+        if (!id) return { ok: false, error: '缺少訓練批次編號' };
+        try {
+            const res = await this._protectedFetch(
+                `${baseUrl}/face-training/runs/${encodeURIComponent(id)}/retry`, {
+                method: 'POST', credentials: 'include',
+                headers: this._adminProductHeaders({ 'Content-Type': 'application/json' }),
+                body: '{}',
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) return { ok: false, ...this._productApiError(data, res.status) };
@@ -2678,6 +2847,24 @@ const Api = {
                 // 粉底的相鄰色階（契約 §5）。null 代表沒有這個區塊，畫面要整個隱藏——
                 // 不要自己補商品湊出「淺一階／深一階」，那是編造的。
                 shadeRecommendation: this._normalizeShadeRecommendation(rec.shadeRecommendation),
+                // 主推薦粉底的跨品牌近似色號；沿用後端排序與色差，不在前端重算。
+                foundationCrossBrandAlternatives: (Array.isArray(rec.foundationCrossBrandAlternatives)
+                    ? rec.foundationCrossBrandAlternatives : [])
+                    .map(item => {
+                        if (!item || typeof item !== 'object') return null;
+                        const product = item.product ? this._normalizeProduct(item.product) : null;
+                        const brand = String(item.brand || product?.brand || '').trim();
+                        if (!brand || !product) return null;
+                        const deltaRaw = item.anchorDeltaE ?? item.anchor_delta_e;
+                        return {
+                            brand,
+                            shadeCode: String(item.shadeCode ?? item.shade_code
+                                ?? product.shadeCode ?? product.shadeName ?? '').trim(),
+                            anchorDeltaE: (deltaRaw == null || deltaRaw === ''
+                                || !Number.isFinite(Number(deltaRaw))) ? null : Number(deltaRaw),
+                            product,
+                        };
+                    }).filter(Boolean),
                 // 兩組門檻（膚色 0～2、替代色 0～5）與粉底的判定結果。
                 // 前端不自己算門檻也不自己放寬——顯示的數字與界線一律以後端為準，
                 // 兩邊各判一次遲早會不一致，而不一致的樣子是「卡片說通過、說明說沒通過」。
@@ -2769,6 +2956,21 @@ const Api = {
                 body: JSON.stringify({ email })
             });
             if (!res.ok) throw await this._memberApiError(res, '驗證碼寄送失敗');
+            return res.json();
+        } catch (err) {
+            if (err?.status) throw err;
+            throw new Error('無法連線到會員服務，請稍後再試。');
+        }
+    },
+
+    async sendForgotPasswordOTP(email) {
+        const gateway = this.config.services.aiGateway;
+        try {
+            const res = await fetch(`${gateway.baseUrl}${gateway.forgotPasswordPath}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                credentials: 'include', body: JSON.stringify({ email })
+            });
+            if (!res.ok) throw await this._memberApiError(res, '密碼重設驗證碼寄送失敗');
             return res.json();
         } catch (err) {
             if (err?.status) throw err;

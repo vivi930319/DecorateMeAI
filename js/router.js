@@ -293,8 +293,13 @@ function pointReasonLabel(reason) {
     return raw;
 }
 
-// 最多讀取 30 頁，避免後端重複回傳同一個游標時無限請求。
-const PRODUCT_MAX_PAGES = 30;
+// 商品 API 每頁最多取 100 筆。第一次只取一頁，讓使用者先看到商品；
+// 完整目錄會在背景依游標補齊，避免 3,000 多筆資料與 8 MB 以上的回應
+// 阻塞商品頁首次呈現。
+const PRODUCT_API_PAGE_SIZE = 100;
+// 最多讀取 50 頁，避免後端重複回傳同一個游標時無限請求；目前正式資料量
+// 約 3,800 筆，50 頁仍保留後續成長空間。
+const PRODUCT_MAX_PAGES = 50;
 
 // 商品清單載入過了嗎。
 //
@@ -317,7 +322,11 @@ function loadGeneralProductCatalog(onDone) {
     }
     if (Router?.generalProductLoading) return;
     Router.generalProductLoading = true;
-    // 第一次不限制筆數；若後端回 nextCursor，再依游標讀取後續頁面。
+    // 第一次固定只取一頁。第一頁完成後立即回呼，後續頁面在背景補齊；
+    // 這個回呼可能被呼叫兩次（第一頁、完整清單），呼叫端都已經有目前頁面
+    // 與 currentPage 守衛，不會把使用者帶離正在看的畫面。
+    let firstPageNotified = false;
+    let hasMorePages = false;
     (async () => {
         const all = [];
         const seen = new Set();
@@ -326,7 +335,9 @@ function loadGeneralProductCatalog(onDone) {
         let anyPageOk = false;
         let anyPageFailed = false;
         for (let page = 0; page < PRODUCT_MAX_PAGES; page++) {
-            const rec = await Api.listProducts(cursor ? { cursor } : {});
+            const rec = await Api.listProducts(cursor
+                ? { cursor, limit: PRODUCT_API_PAGE_SIZE }
+                : { limit: PRODUCT_API_PAGE_SIZE });
             if (!rec || !rec.ok) { anyPageFailed = true; break; }
             anyPageOk = true;
             for (const p of rec.products || []) {
@@ -336,9 +347,17 @@ function loadGeneralProductCatalog(onDone) {
                 seen.add(key);
                 all.push(p);
             }
+            // 讓商品頁先畫出第一批，不必等整份目錄翻完。
+            Router.generalProductCatalog = all;
+            if (page === 0 && !firstPageNotified) {
+                firstPageNotified = true;
+                Router.generalProductError = false;
+                if (typeof onDone === 'function') onDone();
+            }
             const next = rec.nextCursor || null;
             // 沒有下一頁、這頁空的、或後端把同一個 cursor 回第二次（等於原地打轉）就停。
             if (!next || !(rec.products || []).length || usedCursors.has(next)) break;
+            if (page === 0) hasMorePages = true;
             usedCursors.add(next);
             cursor = next;
         }
@@ -352,8 +371,58 @@ function loadGeneralProductCatalog(onDone) {
         })
         .finally(() => {
             Router.generalProductLoading = false;
-            if (typeof onDone === 'function') onDone();
+            // 第一頁成功且還有後續資料時，這次回呼讓搜尋、品牌篩選與商品總數
+            // 切換到完整清單；若第一頁就是完整結果，前面已經畫過，不必重畫一次。
+            if (typeof onDone === 'function' && (!firstPageNotified || hasMorePages)) onDone();
         });
+}
+
+// 首頁商品資料在背景補齊時，只更新商品推薦區，不重新執行整個 dashboard 初始化。
+// 重新初始化會重掛首頁所有 onclick；使用者剛好在背景回呼時按下按鈕，就會看到
+// 第一次像重新整理、第二次才有反應。這個函式只處理它真正負責的那一塊 DOM。
+function renderDashboardProductArea() {
+    const glow = document.getElementById('dashGlow');
+    if (!glow) return;
+    const picks = getFeaturedProducts(6);
+    if (!picks.length && !productCatalogLoaded() && !Router.generalProductLoading) {
+        loadGeneralProductCatalog(() => {
+            if (Router.currentPage === 'dashboard') renderDashboardProductArea();
+        });
+    }
+    if (!picks.length) {
+        glow.innerHTML = Router.generalProductLoading
+            ? Array.from({ length: 4 }).map(() => `
+                <div class="glow-card">
+                    <div class="gc-img"><div class="skel-block" style="width:100%;height:100%;"></div></div>
+                    <div class="skel-block" style="width:72%;height:16px;margin-bottom:10px;"></div>
+                    <div class="skel-block" style="width:38%;height:12px;"></div>
+                </div>`).join('')
+            : '<div class="empty-state compact">目前沒有商品資料</div>';
+    } else {
+        glow.innerHTML = picks.map((p) => `
+        <div class="glow-card reveal-in" data-pid="${p.id}">
+            <div class="gc-img">
+                ${phBox('', p.name, p.img)}
+                <button class="heart-btn gc-heart ${Fav.has(p.id)?'fav':''}" data-fav="${p.id}" aria-label="收藏">${HEART_SVG}</button>
+            </div>
+            <div class="gc-meta">
+                <div class="gc-top"><span class="gc-name">${escapeHtml(p.name)}</span><span class="gc-price">${escapeHtml(p.price)}</span></div>
+                <div class="gc-rating"><span class="stars">★★★★★</span><span class="gc-rev">${p.brand ? escapeHtml(p.brand) : (p.score != null ? `推薦分數 ${Math.round(p.score)}` : '商品資料庫')}</span></div>
+            </div>
+        </div>`).join('');
+    }
+    glow.querySelectorAll('.glow-card[data-pid]').forEach(card => {
+        card.onclick = (e) => { if (!e.target.closest('.heart-btn')) Router.go('products', { productId: card.dataset.pid }); };
+    });
+    glow.querySelectorAll('.gc-heart').forEach(btn => {
+        btn.onclick = (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.fav; const wasFav = Fav.has(id);
+            Fav.toggle(id, picks.find(x => String(x.id) === String(id))); btn.classList.toggle('fav', !wasFav);
+            btn.classList.remove('swap'); void btn.offsetWidth; btn.classList.add('swap');
+            if (!wasFav) showToast('已加入收藏');
+        };
+    });
 }
 
 function getProductCatalog(){
@@ -456,6 +525,8 @@ const RecommendationNotice = {
         // 粉底相鄰色階存在 Router 上，讓商品詳情頁畫得出來——它跟著這一次推薦，
         // 不屬於任何單一商品。null 就是「沒有這個區塊」，畫面要整個隱藏。
         Router.shadeRecommendation = rec.shadeRecommendation || null;
+        Router.foundationCrossBrandAlternatives = Array.isArray(rec.foundationCrossBrandAlternatives)
+            ? rec.foundationCrossBrandAlternatives : [];
         // 粉底門檻的判定結果（契約 2026-08-27 §4）。no_match 時不能拿最接近但
         // 超標的色號硬補——那正是這個門檻要防的事：2.54 的色差上臉看得出來，
         // 而「系統推薦的」這五個字會讓人以為它已經檢查過了。
@@ -476,6 +547,7 @@ const RecommendationNotice = {
         this.reasons = []; this.error = null; this.isEmpty = false; this.personalization = null;
         this.foundationStatus = null;
         Router.shadeRecommendation = null;
+        Router.foundationCrossBrandAlternatives = [];
     },
 
     // 這批推薦是依什麼推的。措辭要能區分「只用了這次的臉部分析」與
@@ -551,7 +623,6 @@ const RecommendationNotice = {
         return `<div class="empty-state">
             目前沒有符合的商品
             <div class="rec-empty-actions">
-                <button type="button" class="btn-outline btn-sm" data-rec-reanalyze="1">重新分析</button>
                 <button type="button" class="btn-outline btn-sm" data-rec-browse="1">瀏覽所有商品</button>
             </div>
         </div>`;
@@ -566,8 +637,6 @@ const RecommendationNotice = {
             this.clear();
             if (fn) fn();
         };
-        const again = root.querySelector('[data-rec-reanalyze]');
-        if (again) again.onclick = () => Router.go('analysis');
         const browse = root.querySelector('[data-rec-browse]');
         if (browse) browse.onclick = () => {
             // 一律走 Router.go：`renderShop` 是 PageInit.products 裡面的區域函式，
@@ -706,27 +775,25 @@ const RecFilter = {
 // 分數說「色彩適配 0.66」，但 0.66 是什麼感覺沒有人知道。把兩個顏色並排放，
 // 使用者自己一眼就能判斷準不準——這比任何數字都直接，也讓她能不同意系統。
 //
-// ⚠️ 比對的對象必須依品類選對：粉底比膚色、唇彩比唇色。配錯的話色塊會並排
-// 顯示兩個不相干的顏色，看起來像系統算錯了。這個對應與後端實測的行為一致
-// （換膚色時眼影 colorScore 會變、唇彩不會變）。
+// 個人化推薦卡只在粉底液旁邊顯示使用者的個人膚色色號。其他品項雖然也可能有
+// LAB 或 shade 欄位，但那不是使用者要拿來選粉底的個人色號；全部畫出來會讓
+// 眼影、腮紅、唇彩等卡片被同一組膚色／唇色色塊佔位，也容易被誤讀成選色結論。
+// 因此這裡刻意只保留 foundations，並且所有推薦卡、推薦彈窗、商品詳情共用同一
+// 個入口，避免改到一個畫面卻漏掉另一個畫面。
 const COMPARE_SOURCE = Object.freeze({
     foundations: 'skin',
-    blushes: 'skin',
-    contouring: 'skin',
-    highlighters: 'skin',
-    eyeshadows: 'skin',
-    eyeliner_mascara: 'skin',
-    lipsticks: 'lip',
+    foundation: 'skin',
+    base: 'skin',
     // eyebrows 沒有對應：臉部分析端不產出眉色，拿膚色比是契約明文禁止的。
-    // 中文分類也要認得。理由見 compareKindOf。
+    // 中文分類也要認得。理由見 compareKindOf；只保留粉底，避免資料尚未正規化時
+    // 用中文分類繞過「只顯示粉底」的限制。
     '底妝': 'skin',
-    '腮紅': 'skin',
-    '修容': 'skin',
-    '打亮': 'skin',
-    '眼影': 'skin',
-    '眼線/睫毛': 'skin',
-    '唇彩': 'lip',
 });
+
+function isFoundationProduct(p) {
+    const kind = String(p?.apiType || p?.type || p?.coverageCategory || p?.category || p?.cat || '').trim().toLowerCase();
+    return kind === 'foundations' || kind === 'foundation' || kind === 'base' || kind === '底妝';
+}
 
 // 這件商品要跟使用者的哪個顏色比。
 //
@@ -737,6 +804,7 @@ const COMPARE_SOURCE = Object.freeze({
 // 都對不到鍵，色塊比對整個不顯示**，而畫面上不會有任何錯誤。
 //
 // 2026-08-29 使用者回報「粉底液出來的時候沒有膚色色塊」，就是這個。
+// 2026-08-29 追加：個人色號只屬於粉底液，其他推薦品項不顯示。
 // tests/color_compare_check.js 一直是綠的，因為它餵的是自己組的物件（帶 `type`），
 // 沒有走過 _normalizeProduct——測試通過與功能可用之間差的就是這一步。
 function compareKindOf(p) {
@@ -786,6 +854,29 @@ function colorCompareHtml(p) {
         </div>
         ${warn}
     </div>`;
+}
+
+// 商品詳情頁的「你的膚色」色塊，跟推薦卡一樣共用 userLabFor。
+// 分析資料的 LAB 可能是 [L, a, b]，也可能是 {L, a, b}；如果詳情頁只接受陣列，
+// 就會出現「推薦卡有色塊，點進商品詳情卻消失」的資料格式落差。
+function skinCompareHtml() {
+    const skin = Router.analysisPackage?.faceAnalysis?.skinTone;
+    const lab = userLabFor('skin');
+    if (!skin || !lab) return '';
+    const color = Api.labToRgb(lab[0], lab[1], lab[2]);
+    if (!color) return '';
+    const meta = [skin.season, skin.level].filter(Boolean).join(' · ');
+    const unreliable = skin.labReliable === false;
+    return `<div class="pd-color pd-skin-compare">`
+        + `<div class="pd-color-label">你的膚色 <span>Your Skin</span></div>`
+        + `<div class="pd-shades">`
+        + `<span class="shade active" style="background:${escapeHtml(color)}" aria-label="你的膚色"></span>`
+        + (meta ? `<span class="pd-skin-meta">${escapeHtml(meta)}</span>` : '')
+        + `</div>`
+        + (unreliable
+            ? `<p class="pd-skin-warning">這次的膚色取樣被判定不可信（臉頰可能被頭髮或陰影蓋住），僅供參考。</p>`
+            : '')
+        + `</div>`;
 }
 
 // 推薦標籤只有一個來源。
@@ -1071,8 +1162,8 @@ function hasMatch(node) {
 }
 
 // 這一次推薦的粉底相鄰色階。記憶體裡沒有就回草稿——重新整理之後
-// Router.analysisPackage 不會被還原（見 3424 附近的說明），
-// 而商品清單早就靠 AnalysisDraft.load() 撐過重載，色號沒有理由不一樣。
+// 由 restoreAnalysisDraft() 還原的 Router.analysisPackage 仍可能尚未帶到
+// 最新推薦欄位，因此要保留 AnalysisDraft.load() 的最後一道 fallback。
 function currentShadeRecommendation() {
     // ⚠️ 三個來源存的都**已經是正規化過的**（Api.recommendProducts 就正規化了）。
     // 這裡再跑一次 _normalizeShadeRecommendation 的話，product 會被 _normalizeProduct
@@ -1084,6 +1175,44 @@ function currentShadeRecommendation() {
     if (fromPackage) return fromPackage;
     const draft = typeof AnalysisDraft !== 'undefined' ? AnalysisDraft.load() : null;
     return draft?.recommendations?.shadeRecommendation || null;
+}
+
+function currentFoundationCrossBrandAlternatives() {
+    if (Array.isArray(Router.foundationCrossBrandAlternatives)
+        && Router.foundationCrossBrandAlternatives.length) return Router.foundationCrossBrandAlternatives;
+    const fromPackage = Router?.analysisPackage?.recommendations?.foundationCrossBrandAlternatives;
+    if (Array.isArray(fromPackage)) return fromPackage;
+    const draft = typeof AnalysisDraft !== 'undefined' ? AnalysisDraft.load() : null;
+    const saved = draft?.recommendations?.foundationCrossBrandAlternatives;
+    return Array.isArray(saved) ? saved : [];
+}
+
+function crossBrandFoundationCard(item) {
+    const product = item?.product || {};
+    const image = product.img
+        ? `<img src="${escapeHtml(String(product.img))}" alt="${escapeHtml(`${item.brand} ${item.shadeCode || ''}`)}" loading="lazy">` : '';
+    const delta = item?.anchorDeltaE == null ? ''
+        : `<span>與主推薦色號的色差 ${escapeHtml(Number(item.anchorDeltaE).toFixed(1))}</span>`;
+    return `<button type="button" class="xcb-card" data-cross-brand-go="${escapeHtml(String(product.id || ''))}">
+        ${image}<span class="xcb-copy"><em>${escapeHtml(String(item?.brand || ''))}</em>
+        <strong>${escapeHtml(String(item?.shadeCode || product.shadeCode || '色號未提供'))}</strong>
+        <span>${escapeHtml(String(product.name || ''))}</span>${delta}</span></button>`;
+}
+
+function crossBrandFoundationHtml(p) {
+    const sr = currentShadeRecommendation();
+    const anchorId = String(sr?.anchor?.product?.id ?? '');
+    if (!anchorId || String(p?.id ?? '') !== anchorId) return '';
+    const alternatives = currentFoundationCrossBrandAlternatives().filter(item => item?.product && item?.brand);
+    if (!alternatives.length) return '';
+    const options = alternatives.map((item, index) =>
+        `<option value="${index}">${escapeHtml(String(item.brand))}</option>`).join('');
+    return `<section class="cross-brand-foundation" aria-label="不同品牌相近粉底色號">
+        <div class="xcb-head"><strong>選擇品牌，查看最相近色號</strong>
+        <select data-cross-brand-select aria-label="選擇粉底品牌">${options}</select></div>
+        <div data-cross-brand-result>${crossBrandFoundationCard(alternatives[0])}</div>
+        <p>色號為相近比較，不能保證完全相同；請以實際至實體專櫃試色與購買體驗為準。</p>
+    </section>`;
 }
 
 // 使用者自己的膚色，擺在三欄上面當比較基準。
@@ -1786,13 +1915,15 @@ function renderAnalysisFeedback(result, packageId) {
     const consent = document.getElementById('afAllowTraining');
     if (consent) consent.onchange = () => { allowTraining = consent.checked; };
     const submit = document.getElementById('afSubmit');
-    if (submit) submit.onclick = () => {
+    if (submit) submit.onclick = async () => {
+      if (submit.disabled) return;
+      submit.disabled = true;
       AnalysisFeedback.save(packageId, predicted, corrections);
       applyAnalysisCorrections(corrections, predicted);
-      // 回報給臉部分析服務。訪客沒有 pinned actor，_protectedFetch 會擋下寫入，
-      // 送出去也只是被靜默吞掉——乾脆不送，本機那份修正照樣立刻生效。
-      if (Api.sendAnalysisFeedback && !(typeof isGuest === 'function' && isGuest())) {
-          Api.sendAnalysisFeedback({
+      // 訪客走既有票券與 job token，會員沿用原本身分驗證；都送至後台覆核。
+      let delivery = { ok: false };
+      if (Api.sendAnalysisFeedback) {
+          delivery = await Api.sendAnalysisFeedback({
               mode: Router.analyzeMode,
               jobId: Router.analysisPackage?.async?.jobId,
               resultToken: Router.analysisPackage?.async?.resultToken,
@@ -1810,12 +1941,15 @@ function renderAnalysisFeedback(result, packageId) {
                   ? (Router.analysisPackage?.images?.side?.compressedDataUrl
                      || Router.analysisPackage?.images?.side?.dataUrl || '')
                   : ''
-          }).catch(() => {});
+          }).catch(() => ({ ok: false }));
       }
       const changed = Object.keys(corrections).length;
       showToast(changed ? `已套用 ${changed} 項修正，之後的建議與收藏都會以你的答案為準` : '已記錄「判斷正確」，謝謝');
       const note = document.getElementById('afNote');
-      if (note) note.textContent = '已送出，可再修改';
+      if (note) note.textContent = delivery?.ok
+          ? (changed ? '回饋已送至模型修正複核，可再修改' : '已送出判斷正確紀錄')
+          : '修正已套用於本機，但未送達後台，請再按送出回饋重試';
+      submit.disabled = false;
     };
   };
 
@@ -2037,6 +2171,41 @@ function hasStartedJourney(){
     } catch (_) { return false; }
 }
 
+// 重新整理後把本分頁仍在有效期限內的分析資料包接回來。
+// 分析／渲染結果會寫進 sessionStorage 草稿（照片與妝後圖也在裡面），但只恢復
+// Router.analysisPackage 不恢復 Router.analysisResult 的話，hasStartedJourney()
+// 仍會判定尚未分析，妝容建議頁就只顯示「先完成臉部分析」，看起來像渲染結果消失。
+// 這裡只在 Router 尚未有工作時恢復，避免覆蓋使用者目前正在進行的新分析。
+function restoreAnalysisDraft(){
+    if (Router.analysisPackage || typeof AnalysisDraft === 'undefined' || !AnalysisDraft.load) return false;
+    const draft = AnalysisDraft.load();
+    if (!draft || typeof draft !== 'object') return false;
+
+    const mode = draft.mode === 'pro' ? 'pro' : 'basic';
+    const raw = draft.analysis?.[mode]
+        || draft.analysis?.basic
+        || draft.analysis?.pro
+        || draft.faceAnalysis?.raw
+        || null;
+    Router.analysisPackage = draft;
+    Router.analyzeMode = mode;
+    Router.analysisResult = (raw && typeof raw === 'object') ? raw : null;
+
+    const savedStyle = draft.render?.styleId || draft.recommendations?.styleId || '';
+    const savedStyleName = draft.recommendations?.style || '';
+    Router.selectedStyleId = savedStyle
+        || STYLES.find(style => style.name === savedStyleName)?.id
+        || Router.selectedStyleId
+        || null;
+    Router.latestRenderedAfter = Boolean(
+        draft.render?.afterImageUrl
+        || draft.render?.afterImageDataUrl
+        || draft.render?.makeupOutput?.imageUrl
+        || draft.render?.makeupOutput?.imageDataUrl
+    );
+    return true;
+}
+
 function getLatestAnalysisResult(){
     try {
         return Router.analysisResult || null;
@@ -2241,36 +2410,37 @@ function renderAnalysisGate(featureName){
 
 function getPageFallback(page){
     const fallbacks = {
-dashboard: `
-<div class="arch-hero" data-nav="analysis">
-    <div class="arch-corner">Maison Decorate Me</div>
-    <span class="arch-eyebrow">A Platform Created for the Love of Beauty</span>
-    <div class="arch-stage"><div class="arch-word-base">妝識你的美</div></div>
-    <div class="arch-tagline"><div class="at-text">為你打造的<em>美學旅程</em> · 從臉部分析開始</div></div>
-</div>
-<div class="dash-greet">
-    <div class="greet-l">
-        <span class="eyebrow">Welcome</span>
-        <h1 id="dashGreet">歡迎回來，<span class="accent">訪客</span></h1>
-        <div class="greet-actions">
-            <button type="button" class="btn-gold greet-cta" data-nav="analysis" id="dashPrimaryCta">
-                <b>看看什麼適合我　→</b><small>只要一張正面照</small></button>
-            <!-- 「重新分析」與五種膚色基準色階都已移除（2026-08-29 使用者要求）；
-                 pages/dashboard.html 那份也一起拿掉，兩份樣板必須同步。 -->
+  dashboard: `
+<section class="home-hero">
+    <div class="hh-copy">
+        <span class="hh-kicker">A PLATFORM CREATED<br>FOR THE LOVE OF BEAUTY</span>
+        <h1 class="hh-title">妝識你的美</h1>
+        <p class="hh-sub">為你打造的美學旅程，從臉部分析開始</p>
+        <div class="hh-actions">
+            <button type="button" class="btn-gold hh-cta" data-page="analysis" id="dashPrimaryCta">開始臉部分析　→</button>
+        </div>
+        <div class="tone-scale" aria-label="五種膚色基準">
+            <div class="swatches"><span style="background:#F0D7BD"></span><span style="background:#E5BD98"></span><span style="background:#CC9B70"></span><span style="background:#A8754C"></span><span style="background:#7D5437"></span></div>
+            <em>五種膚色基準</em>
         </div>
     </div>
-    <div class="greet-r"><div class="greet-meta">Your Beauty Atelier</div></div>
+    <div class="hh-art" aria-hidden="true"><img src="assets/brand/home-hero-line.png" alt="" loading="eager" decoding="async"></div>
+</section>
+<div class="home-greet" data-nav="style">
+    <span class="hg-moon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg></span>
+    <div class="hg-copy"><h1 id="dashGreet">歡迎回來，<span class="accent">訪客</span></h1><p>探索專屬於你的美妝靈感</p></div>
+    <span class="hg-cta">立即探索　→</span>
 </div>
 <section id="dashPersonalSection" style="display:none;">
     <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">❧</span><h2>猜你喜歡</h2></div></div>
     <div class="glow-row" id="dashPersonal"></div>
 </section>
-<div class="dash-sec-head"><div class="sh-l"><span class="sh-no">01</span><h2>風格靈感</h2></div></div>
+<div class="dash-sec-head"><div class="sh-l"><span class="sh-no">01</span><h2>風格靈感</h2></div><span class="sh-link" data-nav="style">查看全部　→</span></div>
 <div class="insp-row" id="dashInsp"></div>
-<div class="dash-sec-head"><div class="sh-l"><span class="sh-no">02</span><h2>為你精選</h2></div></div>
+<div class="dash-sec-head"><div class="sh-l"><span class="sh-no">02</span><h2>為你精選</h2></div><span class="sh-link" data-nav="products">查看更多　→</span></div>
 <div class="glow-row" id="dashGlow"></div>
-<!-- 首頁的「關於我們」整段已移除（2026-08-29 使用者要求）；
-     pages/dashboard.html 那份也一起拿掉，兩份樣板必須同步。 -->`,
+<!-- 備援樣板要和 pages/dashboard.html 保持同一個骨架，避免頁面檔案暫時取不到時
+     又退回舊版 arch-hero，進而讓共用初始化程式與畫面再次不一致。 -->`,
 analysis: `
 <div class="page-header analysis-signal-header"><div class="ash-copy"><span class="eyebrow">FACE ANALYSIS</span><h1>臉部分析</h1><div class="divider"></div><p>上傳正面照片，分析五官特徵</p></div><div class="ash-art" aria-hidden="true"><img src="assets/feature/analysis-head.webp" alt="" loading="eager" decoding="async"></div></div>
 <div class="analyze-grid">
@@ -2336,7 +2506,7 @@ analysis: `
         </div>
         <div class="loading-bar" id="loadingBar"><div class="fill" id="loadingFill"></div></div>
         <div class="loading-status" id="loadingStatus">等待圖片</div>
-        <div class="package-status" id="packageStatus"><img class="ps-ico" src="assets/feature/ico-progress.webp" alt="" aria-hidden="true" loading="lazy"><b>分析進度</b><span>尚未開始</span></div>
+         <div class="package-status" id="packageStatus"><b>分析進度</b><span>尚未開始</span></div>
         <ol class="analysis-steps" id="analysisSteps" aria-label="分析進度">
             <li data-step="1"><span class="as-dot" aria-hidden="true"></span><span class="as-name">上傳照片</span></li>
             <li data-step="2"><span class="as-dot" aria-hidden="true"></span><span class="as-name">生成中</span></li>
@@ -2684,18 +2854,9 @@ function closeProductRecommendationModal(){document.getElementById('productRecom
 function openProductRecommendationModal(){
     const modal=document.createElement('div');
     modal.id='productRecommendationModal';modal.className='makeup-style-modal open';modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');
-    // 膚色色塊放在推薦視窗的標題區：粉底液是最需要對照膚色的品項，而商品端目前
-    // 沒有色碼（見《給資料庫端_商品顏色資料遺失回報》），系統無法自動比對。
-    // 把使用者自己量到的膚色擺在推薦旁邊，至少讓他用眼睛比。
-    // 值來自 analysisPackage.faceAnalysis.skinTone，沒有分析結果就整塊不出現。
-    const skinTone = Router.analysisPackage?.faceAnalysis?.skinTone;
-    const skinLab = Array.isArray(skinTone?.lab) && skinTone.lab.length === 3 ? skinTone.lab.map(Number) : null;
-    const skinRow = skinLab ? `<div class="reco-skin-row">
-        <span class="reco-skin-swatch" style="background:${escapeHtml(Api.labToRgb(skinLab[0], skinLab[1], skinLab[2]))}" aria-label="你的膚色"></span>
-        <span class="reco-skin-text">你的膚色${[skinTone.season, skinTone.level].filter(Boolean).length ? ' · ' + escapeHtml([skinTone.season, skinTone.level].filter(Boolean).join(' / ')) : ''}</span>
-        ${skinTone.labReliable === false ? '<span class="reco-skin-warn">取樣可信度不足，僅供參考</span>' : ''}
-    </div>` : '';
-    modal.innerHTML=`<div class="makeup-style-dialog product-recommendation-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Products</span><h2>個人化商品推薦</h2><p>依照臉部分析與選擇的妝容風格，從現有商品中整理推薦。</p>${skinRow}</div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="prod-grid recommendation-modal-grid"></div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-close>稍後再看</button><button class="btn-gold" type="button" data-all>查看所有商品</button></div></div>`;
+    // 使用者個人膚色色號改放在粉底卡片旁邊；推薦視窗標題不再對所有品項共用
+    // 一列膚色資訊，避免使用者以為唇彩、眼影等也要依膚色色號挑選。
+    modal.innerHTML=`<div class="makeup-style-dialog product-recommendation-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Products</span><h2>個人化商品推薦</h2><p>粉底液會顯示您的個人膚色色號；其他品項不顯示色號對照。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="prod-grid recommendation-modal-grid"></div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-close>稍後再看</button><button class="btn-gold" type="button" data-all>查看所有商品</button></div></div>`;
     document.body.appendChild(modal);
     const grid=modal.querySelector('.recommendation-modal-grid');
 
@@ -2811,6 +2972,8 @@ async function runMakeupSuggestion(onProgress) {
                 error: null,
                 fallbackUsed: false,
                 ollamaRenderPromptEn: ollamaRenderPromptEn || null,
+                promptSignature: response.promptSignature || null,
+                promptSignatureVersion: response.promptSignatureVersion || null,
                 renderPromptEn: buildRenderPrompt(
                     pkg?.faceAnalysis || Router.analysisPackage?.faceAnalysis,
                     Router.selectedStyleId,
@@ -2838,6 +3001,7 @@ async function runMakeupSuggestion(onProgress) {
                     // 於是使用者重載一次，整個色號區塊就從商品頁上消失，
                     // 看起來像功能壞掉。商品清單早就有草稿 fallback，這裡照同一個模式。
                     shadeRecommendation: rec.shadeRecommendation || null,
+                    foundationCrossBrandAlternatives: rec.foundationCrossBrandAlternatives || [],
                 }
             });
             AnalysisDraft.save(Router.analysisPackage);
@@ -2893,10 +3057,21 @@ async function runMakeupRender(onProgress) {
     // faceJobId 是給重訓用的：臉部分析那端存標註但不存照片，渲染這端存照片。
     // 兩邊 job id 不同，不帶這個就永遠 join 不起來，標註也就接不回它對應的那張臉。
     const styleId = Router.selectedStyleId || pkg?.render?.styleId || 'natural';
+    const generativeText = pkg?.generativeText || {};
+    const signedPromptReady = generativeText.ollamaRenderPromptEn
+        && generativeText.promptSignature
+        && generativeText.promptSignatureVersion === 'hmac-sha256-v1';
     const renderPackage = {
         faceAnalysis: pkg?.faceAnalysis || null,
         faceJobId: pkg?.async?.jobId || null,
-        render: { styleId }
+        render: { styleId },
+        // Ollama 回應的原始英文指令與簽章不含照片，可安全隨這次渲染送出。
+        // 後端只有在 HMAC 驗證通過時才會採用，否則不會信任瀏覽器自行改寫的 prompt。
+        generativeText: {
+            ollamaRenderPromptEn: signedPromptReady ? generativeText.ollamaRenderPromptEn : null,
+            promptSignature: signedPromptReady ? generativeText.promptSignature : null,
+            promptSignatureVersion: signedPromptReady ? generativeText.promptSignatureVersion : null,
+        }
     };
 
     try {
@@ -3018,6 +3193,48 @@ const Router = {
     generalProductCatalog: null,
     generalProductLoading: false,
     favoriteSyncState: 'idle',
+    _navigationPromise: null,
+    _navigationTarget: '',
+    _pageTemplateCache: new Map(),
+    _pageTemplateRequests: new Map(),
+    _pagePrefetchStarted: false,
+
+    // pages/*.html 使用帶版本的 URL；同一版本內直接共用模板，換頁時不必每次
+    // 等待網路。部署腳本會同步更新 router.js 的版本號，因此不會把舊模板帶到新程式。
+    _fetchPageTemplate(page) {
+        const key = String(page || '');
+        if (this._pageTemplateCache.has(key)) return Promise.resolve(this._pageTemplateCache.get(key));
+        if (this._pageTemplateRequests.has(key)) return this._pageTemplateRequests.get(key);
+        const request = fetch(`pages/${key}.html?v=${PAGE_ASSET_VERSION}`, { cache: 'default' })
+            .then(res => {
+                if (!res.ok) throw new Error('Page not found');
+                return res.text();
+            })
+            .then(html => {
+                this._pageTemplateCache.set(key, html);
+                return html;
+            })
+            .finally(() => this._pageTemplateRequests.delete(key));
+        this._pageTemplateRequests.set(key, request);
+        return request;
+    },
+
+    // 不阻塞目前頁面。瀏覽器有空時先取下一批頁面模板，第一次點擊時通常已在快取中。
+    _prefetchPageTemplates(currentPage) {
+        if (this._pagePrefetchStarted) return;
+        this._pagePrefetchStarted = true;
+        const pages = NAV_ORDER.filter(page => page !== currentPage);
+        const run = async () => {
+            for (const page of pages) {
+                try { await this._fetchPageTemplate(page); } catch (_) { /* 正式換頁時再顯示錯誤 */ }
+            }
+        };
+        if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+            window.requestIdleCallback(run, { timeout: 1500 });
+        } else {
+            setTimeout(run, 200);
+        }
+    },
 
     stopAnalysisCameras() {
         if (this.proScanTimer) clearInterval(this.proScanTimer);
@@ -3030,7 +3247,27 @@ const Router = {
         this.proCameraStream = null;
     },
 
-    async go(page, opts) {
+    // 同一個頁面正在載入時共用同一個 Promise。除了防止快速連點，也防止某個舊頁面
+    // 還留著第二個 click handler 時平行載入兩份 HTML；後完成的初始化會把分析頁的
+    // selectedFile 清掉，使用者就會看到「要點兩次」或「照片明明選了卻不見」。
+    go(page, opts) {
+        const target = String(page || '');
+        if (this._navigationPromise && this._navigationTarget === target) {
+            return this._navigationPromise;
+        }
+        this._navigationTarget = target;
+        const promise = this._go(page, opts);
+        const tracked = promise.finally(() => {
+            if (this._navigationPromise === tracked) {
+                this._navigationPromise = null;
+                this._navigationTarget = '';
+            }
+        });
+        this._navigationPromise = tracked;
+        return tracked;
+    },
+
+    async _go(page, opts) {
         opts = opts || {};
         // 換頁前先收掉五官圖鑑的浮層。它是掛在 body 上的，不跟著頁面內容換掉——
         // 留著的話會浮在下一頁上，而且 body 的 overflow:hidden 也解不開，整頁捲不動。
@@ -3073,9 +3310,7 @@ const Router = {
             }
             const back = (NAV_ORDER.indexOf(page) > -1 && NAV_ORDER.indexOf(this.currentPage) > -1
                           && NAV_ORDER.indexOf(page) < NAV_ORDER.indexOf(this.currentPage));
-            const res = await fetch(`pages/${page}.html?v=${PAGE_ASSET_VERSION}`, { cache: 'no-store' });
-            if (!res.ok) throw new Error('Page not found');
-            const html = await res.text();
+            const html = await this._fetchPageTemplate(page);
             const mc = document.getElementById('mainContent');
             mc.innerHTML = html;
             // 頁面轉場 · side-by-side
@@ -3083,6 +3318,7 @@ const Router = {
             void mc.offsetWidth;
             mc.classList.add(back ? 'page-back' : 'page-enter');
             this.currentPage = page;
+            document.body.dataset.page = page;
             // 更新導覽 active
             document.querySelectorAll('.topbar-nav a, .tabbar a').forEach(a => {
                 a.classList.toggle('active', a.dataset.page === page);
@@ -3097,6 +3333,7 @@ const Router = {
             }
             // 頁面初始化
             if (typeof PageInit[page] === 'function') PageInit[page](opts);
+            this._prefetchPageTemplates(page);
             // 每次進入收藏頁都重新同步，讓短暫連線失敗後仍可重試。
             if (page === 'favorites') refreshFavoritesPage();
         } catch (e) {
@@ -3108,12 +3345,14 @@ const Router = {
                 void mc.offsetWidth;
                 mc.classList.add('page-enter');
                 this.currentPage = page;
+                document.body.dataset.page = page;
                 document.querySelectorAll('.topbar-nav a, .tabbar a').forEach(a => {
                     a.classList.toggle('active', a.dataset.page === page);
                 });
                 updateAdminNav();
                 refreshMemberTheme();
                 if (typeof PageInit[page] === 'function') PageInit[page](opts);
+                this._prefetchPageTemplates(page);
                 if (page === 'favorites') refreshFavoritesPage();
                 return;
             }
@@ -3220,53 +3459,9 @@ const PageInit = {
             insp.querySelectorAll('.insp-card').forEach(c => c.onclick = () => Router.go('style', { styleId: c.dataset.style }));
         }
 
-        // 首頁商品推薦：與商品頁共用商品 API 真資料；若無熱門度欄位，照 API 回傳前幾筆顯示。
-        const glow = document.getElementById('dashGlow');
-        if (glow) {
-            const picks = getFeaturedProducts(6);
-            // 守衛看的是「載過沒有」，不是「有沒有東西」。用 picks.length 的話，
-            // 商品全下架後 loadGeneralProductCatalog 會立刻同步回呼、重畫 dashboard、
-            // 再次進到這裡——每一輪都是同步的，堆疊直接爆掉。
-            if (!picks.length && !productCatalogLoaded() && !Router.generalProductLoading) {
-                loadGeneralProductCatalog(() => {
-                    if (Router.currentPage === 'dashboard') PageInit.dashboard();
-                });
-            }
-            if (!picks.length) {
-                glow.innerHTML = Router.generalProductLoading
-                    ? Array.from({ length: 4 }).map(() => `
-                        <div class="glow-card">
-                            <div class="gc-img"><div class="skel-block" style="width:100%;height:100%;"></div></div>
-                            <div class="skel-block" style="width:72%;height:16px;margin-bottom:10px;"></div>
-                            <div class="skel-block" style="width:38%;height:12px;"></div>
-                        </div>`).join('')
-                    : '<div class="empty-state compact">目前沒有商品資料</div>';
-            } else {
-                glow.innerHTML = picks.map((p) => `
-                <div class="glow-card reveal-in" data-pid="${p.id}">
-                    <div class="gc-img">
-                        ${phBox('', p.name, p.img)}
-                        <button class="heart-btn gc-heart ${Fav.has(p.id)?'fav':''}" data-fav="${p.id}" aria-label="收藏">${HEART_SVG}</button>
-                    </div>
-                    <div class="gc-meta">
-                        <div class="gc-top"><span class="gc-name">${escapeHtml(p.name)}</span><span class="gc-price">${escapeHtml(p.price)}</span></div>
-                        <div class="gc-rating"><span class="stars">★★★★★</span><span class="gc-rev">${p.brand ? escapeHtml(p.brand) : (p.score != null ? `推薦分數 ${Math.round(p.score)}` : '商品資料庫')}</span></div>
-                    </div>
-                </div>`).join('');
-            }
-            glow.querySelectorAll('.glow-card[data-pid]').forEach(card => {
-                card.onclick = (e) => { if (!e.target.closest('.heart-btn')) Router.go('products', { productId: card.dataset.pid }); };
-            });
-            glow.querySelectorAll('.gc-heart').forEach(btn => {
-                btn.onclick = (e) => {
-                    e.stopPropagation();
-                    const id = btn.dataset.fav; const wasFav = Fav.has(id);
-                    Fav.toggle(id, picks.find(x => String(x.id) === String(id))); btn.classList.toggle('fav', !wasFav);
-                    btn.classList.remove('swap'); void btn.offsetWidth; btn.classList.add('swap');
-                    if (!wasFav) showToast('已加入收藏');
-                };
-            });
-        }
+        // 首頁商品推薦：與商品頁共用商品 API 真資料；資料在背景補齊時只更新商品區，
+        // 不重跑整個首頁初始化，避免剛按下的首頁操作被重新掛事件蓋掉。
+        renderDashboardProductArea();
 
         // 導航（hero / feat-card / sh-link / greet-actions）
         document.querySelectorAll('[data-nav]').forEach(el => {
@@ -3422,7 +3617,7 @@ const PageInit = {
                 preview.style.display = 'block';
                 uploadBox.classList.add('has-preview');
                 preview.title = '點擊更換照片';
-                preview.onclick = () => fileInput.click();
+                preview.onclick = () => openFilePicker(fileInput);
             };
             reader.readAsDataURL(file);
         };
@@ -3585,7 +3780,8 @@ const PageInit = {
             await bpApplyMode();
         }
 
-        document.getElementById('bpReset').onclick = async () => {
+        const bpReset = document.getElementById('bpReset');
+        if (bpReset) bpReset.onclick = async () => {
             bpSlider.value = 0;
             bpRefreshPanel();
             await bpApplyMode();
@@ -3660,7 +3856,16 @@ const PageInit = {
         proModeBtn.onclick = () => setMode('pro');
         setMode((Router.analyzeMode === 'pro' && !isProUnlocked) ? 'basic' : Router.analyzeMode);
 
-        uploadBox.onclick = () => fileInput.click();
+        // 每次開啟檔案選擇器前清空 value，否則使用者分析失敗後重新選同一張照片，
+        // 瀏覽器可能不觸發 change，畫面就會像「不能上傳」一樣沒有任何反應。
+        const openFilePicker = (input) => {
+            if (!input) return;
+            input.value = '';
+            input.click();
+        };
+        uploadBox.onclick = (event) => {
+            if (event.target !== fileInput) openFilePicker(fileInput);
+        };
         fileInput.onchange = async (e) => {
             const file = e.target.files[0];
             if (!file) return;
@@ -3674,7 +3879,9 @@ const PageInit = {
             const key = slot.dataset.proSlot;
             const input = document.getElementById(`${key}Input`);
             const nameEl = document.getElementById(`${key}FileName`);
-            slot.onclick = () => input.click();
+            slot.onclick = (event) => {
+                if (event.target !== input) openFilePicker(input);
+            };
             input.onchange = async (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -3982,9 +4189,9 @@ const PageInit = {
                         // 所以要放進資料包帶著走——不存的話那一支就沒有東西可以證明
                         // 「這個 job 是我的」。
                         //
-                        // 注意：只在同一個分頁的這一輪有效。草稿雖然寫進 sessionStorage，
-                        // 但重新整理後沒有任何地方用 AnalysisDraft.load() 還原
-                        // Router.analysisPackage，所以重整之後回饋就送不出去了。
+                        // 注意：token 只在同一個分頁的這一輪有效；雖然草稿會寫進
+                        // sessionStorage，重新整理後仍由 restoreAnalysisDraft() 接回
+                        // Router.analysisPackage，讓回饋流程保留這個 job 的身分證明。
                         resultToken: job.resultToken || null,
                         progress: job.progress || 0,
                         stage: job.stage || 'upload'
@@ -4058,19 +4265,28 @@ const PageInit = {
                 setLoadingStatus('分析完成', false);
                 setTimeout(() => { bar.style.display = 'none'; fill.style.width = '0'; }, 400);
 
-                document.getElementById('r-face').textContent = data['臉型'] || '—';
-                document.getElementById('r-brow').textContent = data['眉型'] || '—';
-                document.getElementById('r-eye').textContent = data['眼型'] || '—';
+                // 分析是非同步流程；使用者可能在回應回來前離開分析頁，或頁面
+                // 正在被重新掛載。結果已經寫入 History／analysisPackage，呈現層
+                // 缺少節點不應把成功結果誤判成「分析失敗」。
+                const paintResultText = (id, value) => {
+                    const el = document.getElementById(id);
+                    if (el) el.textContent = value || '—';
+                };
+                paintResultText('r-face', data['臉型']);
+                paintResultText('r-brow', data['眉型']);
+                paintResultText('r-eye', data['眼型']);
                 paintNoseCell(data);
-                document.getElementById('r-lip').textContent = data['嘴型'] || '—';
-                document.getElementById('r-season').textContent = data['膚色']?.['四季型'] || '—';
+                paintResultText('r-lip', data['嘴型']);
+                paintResultText('r-season', data['膚色']?.['四季型']);
                 setResultState(true);
 
                 const skin = data['膚色'] || {}, lab = skin['LAB'] || {};
-                document.getElementById('skinName').textContent = skin['膚色分級'] || '—';
+                const skinName = document.getElementById('skinName');
+                if (skinName) skinName.textContent = skin['膚色分級'] || '—';
                 // LAB 數值不對使用者顯示：那是色彩科學的座標，色塊本身已經表達了顏色。
                 //（值仍在 analysisPackage 裡，推薦端與渲染端照常使用。）
-                document.getElementById('skinSwatch').style.background = Api.labToRgb(lab.L||50, lab.a||0, lab.b||0);
+                const skinSwatch = document.getElementById('skinSwatch');
+                if (skinSwatch) skinSwatch.style.background = Api.labToRgb(lab.L||50, lab.a||0, lab.b||0);
 
                 // 膚色不可靠時顯示重拍提示；舊版後端沒有旗標時視為可靠。
                 const skinWarn = document.getElementById('skinReliabilityWarn');
@@ -4085,9 +4301,11 @@ const PageInit = {
 
                 const lipLab = data['嘴唇_LAB'] || {};
                 // 同上：唇色 LAB 不顯示，只留色塊。
-                document.getElementById('lipSwatch').style.background = Api.labToRgb(lipLab.L||40, lipLab.a||0, lipLab.b||0);
+                const lipSwatch = document.getElementById('lipSwatch');
+                if (lipSwatch) lipSwatch.style.background = Api.labToRgb(lipLab.L||40, lipLab.a||0, lipLab.b||0);
 
-                document.getElementById('goStyleBtn').style.display = 'inline-block';
+                const goStyleBtn = document.getElementById('goStyleBtn');
+                if (goStyleBtn) goStyleBtn.style.display = 'inline-block';
                 renderAnalysisFeedback(data, Router.analysisPackage.id);
             } catch (err) {
                 bar.style.display = 'none'; fill.style.width = '0';
@@ -4111,7 +4329,8 @@ const PageInit = {
             }
         };
 
-        document.getElementById('goStyleBtn').onclick = () => Router.go('style');
+        const goStyleButton = document.getElementById('goStyleBtn');
+        if (goStyleButton) goStyleButton.onclick = () => Router.go('style');
         updatePackageStatus();
     },
 
@@ -4350,7 +4569,7 @@ const PageInit = {
                                  而在名稱裡它只是結尾的四個字元（「…SPF 48/ PA++ - PO-02」）。
                                  詳情頁早就有「色號 Shade」那一格，卡片沒有——但看清單的時候
                                  才是最需要它的時候：要比較好幾支。 -->
-                            ${p.shadeCode ? `<div class="pc-shade"><span>色號</span><b>${escapeHtml(String(p.shadeCode))}</b></div>` : ''}
+                            ${isFoundationProduct(p) && p.shadeCode ? `<div class="pc-shade"><span>色號</span><b>${escapeHtml(String(p.shadeCode))}</b></div>` : ''}
                             ${(!p.recommendationPresentation?.headline && p.matchReason) ? `<div class="pc-reason">${escapeHtml(p.matchReason)}</div>` : ''}
                             ${colorCompareHtml(p)}
                             ${recommendationCardHtml(p)}
@@ -4471,12 +4690,14 @@ const PageInit = {
                     Api.recommendProducts(Router.analysisPackage, Router.selectedStyleId)
                         .then(rec => {
                             RecommendationNotice.record(rec, runRecommend);
-                            if (rec?.products?.length) {
+                            if (rec?.products?.length || rec?.shadeRecommendation?.anchor) {
                                 Router.productRecommendationError = false;
                                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
                                     recommendations: {
                                         ...(Router.analysisPackage.recommendations || {}),
-                                        products: rec.products
+                                        ...(rec?.products?.length ? { products: rec.products } : {}),
+                                        shadeRecommendation: rec?.shadeRecommendation || null,
+                                        foundationCrossBrandAlternatives: rec?.foundationCrossBrandAlternatives || []
                                     }
                                 });
                                 AnalysisDraft.save(Router.analysisPackage);
@@ -4617,6 +4838,18 @@ const PageInit = {
             Api.recommendProducts(pkg, Router.selectedStyleId).then(rec => {
                 if (rec?.shadeRecommendation) {
                     RecommendationNotice.record(rec);
+                    // 補抓回來的資料也要落到分析草稿；只寫 Router 暫存值的話，
+                    // 使用者一重新整理，三色階仍會消失。
+                    if (Router.analysisPackage) {
+                        Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
+                            recommendations: {
+                                ...(Router.analysisPackage.recommendations || {}),
+                                shadeRecommendation: rec.shadeRecommendation,
+                                foundationCrossBrandAlternatives: rec.foundationCrossBrandAlternatives || []
+                            }
+                        });
+                        AnalysisDraft.save(Router.analysisPackage);
+                    }
                     onDone();
                 }
             }).catch(() => {}).finally(() => { _shadeRefetching = false; });
@@ -4688,24 +4921,7 @@ const PageInit = {
             //   1. 這是**你的膚色**，不是商品顏色，也不是系統的推薦結論
             //   2. 取樣被判定不可信時（頭髮或陰影蓋住臉頰）要講出來，
             //      不可信的膚色拿去比色，比不比還糟
-            const renderSkinCompare = () => {
-                const skin = Router.analysisPackage?.faceAnalysis?.skinTone;
-                const lab = skin?.lab;
-                if (!Array.isArray(lab) || lab.length !== 3) return '';
-                const color = Api.labToRgb(Number(lab[0]), Number(lab[1]), Number(lab[2]));
-                const meta = [skin.season, skin.level].filter(Boolean).join(' · ');
-                const unreliable = skin.labReliable === false;
-                return `<div class="pd-color" style="margin-top:10px;">`
-                    + `<div class="pd-color-label">你的膚色 <span>Your Skin</span></div>`
-                    + `<div class="pd-shades">`
-                    + `<span class="shade active" style="background:${escapeHtml(color)}" aria-label="你的膚色"></span>`
-                    + (meta ? `<span style="margin-left:10px;font-family:var(--cjk);font-size:13.5px;color:var(--ink-2);">${escapeHtml(meta)}</span>` : '')
-                    + `</div>`
-                    + (unreliable
-                        ? `<p style="margin:6px 0 0;font-size:12px;color:var(--mid);">這次的膚色取樣被判定不可信（臉頰可能被頭髮或陰影蓋住），僅供參考。</p>`
-                        : '')
-                    + `</div>`;
-            };
+            const renderSkinCompare = () => skinCompareHtml();
             const renderRelatedGrid = (items, heading) => `
                 <div class="pd-related">
                     <div class="dash-sec-head"><div class="sh-l"><span class="sh-no">❧</span><h2>${escapeHtml(heading)}</h2></div><span class="sh-link" onclick="PageInit.products();">查看全部</span></div>
@@ -4747,12 +4963,13 @@ const PageInit = {
                         <div class="pd-name">${escapeHtml(p.name)}</div>
                         ${p.brand ? `<div class="pd-en">${escapeHtml(p.brand)}</div>` : ''}
                         <div class="pd-price-lg">${escapeHtml(p.price)}</div>
-                        <div id="pdColorBox">${renderColorBox(swatchColor, p.hex || '', shadeName)}${renderSkinCompare()}</div>
+                        <div id="pdColorBox">${renderColorBox(swatchColor, p.hex || '', shadeName)}${isFoundationProduct(p) ? renderSkinCompare() : ''}</div>
                         <!-- 鄰近色號緊接在「色號」那一格底下。
                              先前它排在整頁最後、連「查看商品原頁」都在它上面——
                              使用者看著自己的色號時，最想知道的就是旁邊還有哪幾支，
                              那個問題不該要捲到頁尾才回答得到。 -->
                         ${shadeRecommendationHtml(p)}
+                        ${crossBrandFoundationHtml(p)}
                         <div class="pd-actions">
                             <button class="add-bag" data-bag="${p.id}">加入購物袋</button>
                             <button class="heart-btn pd-heart ${Fav.has(p.id)?'fav':''}" data-fav-detail="${p.id}" aria-label="收藏">${HEART_SVG}</button>
@@ -4793,6 +5010,21 @@ const PageInit = {
                     Router.shadeReturnTo = id;
                     Router.go('products', { productId: btn.dataset.shadeGo });
                 };
+            });
+            const crossBrandSelect = area.querySelector('[data-cross-brand-select]');
+            const crossBrandResult = area.querySelector('[data-cross-brand-result]');
+            if (crossBrandSelect && crossBrandResult) {
+                const alternatives = currentFoundationCrossBrandAlternatives();
+                crossBrandSelect.onchange = () => {
+                    const item = alternatives[Number(crossBrandSelect.value) || 0];
+                    if (!item?.product) return;
+                    crossBrandResult.innerHTML = crossBrandFoundationCard(item);
+                    const go = crossBrandResult.querySelector('[data-cross-brand-go]');
+                    if (go) go.onclick = () => Router.go('products', { productId: go.dataset.crossBrandGo });
+                };
+            }
+            area.querySelectorAll('[data-cross-brand-go]').forEach(btn => {
+                btn.onclick = () => Router.go('products', { productId: btn.dataset.crossBrandGo });
             });
             // 這件是粉底、通過了膚色門檻，卻沒有色階區塊——那多半是資料掉了，
             // 不是後端沒給。補一次再重畫。
@@ -6665,6 +6897,41 @@ const PageInit = {
             </tr>`).join('');
         };
 
+        // 編輯既有商品時，伺服器已經回傳成功結果；把這一筆合併回目前清單即可。
+        // 之前不論只是改季節標籤或改一個字，都會重新翻完整份商品清單，畫面因此
+        // 先清空、顯示載入中，再讓管理員回到原本的位置。新增商品仍然需要重新載入，
+        // 但單筆編輯不應該把整個後台當成重新整理。
+        const updateAdminProductInPlace = (target, result, payload) => {
+            if (!target || !Array.isArray(dbProducts)) return;
+            const serverProduct = result?.product && typeof result.product === 'object'
+                ? result.product : {};
+            const responseId = serverProduct.rawId ?? serverProduct.id;
+            const rawId = responseId != null && !(typeof responseId === 'string' && responseId.startsWith('api-'))
+                ? responseId : target.rawId;
+            const merged = {
+                ...target,
+                ...serverProduct,
+                id: rawId,
+                type: serverProduct.type || serverProduct.apiType || target.apiType,
+                category: serverProduct.category || target.cat,
+                imageUrl: serverProduct.imageUrl || serverProduct.image_url || target.imgFull || target.img,
+                seasonTags: serverProduct.seasonTags || serverProduct.season_tags || payload.seasonTags,
+                version: serverProduct.version ?? (Number(target.version || 1) + 1),
+            };
+            const updated = typeof Api !== 'undefined' && typeof Api._normalizeProduct === 'function'
+                ? Api._normalizeProduct(merged) : null;
+            const replacement = updated || {
+                ...target,
+                ...serverProduct,
+                seasonTags: payload.seasonTags,
+                version: merged.version,
+            };
+            const index = dbProducts.findIndex(p => String(p.id) === String(target.id));
+            if (index >= 0) dbProducts[index] = replacement;
+            syncAdminBrandOptions(dbProducts);
+            renderProducts();
+        };
+
         const loadAdminProducts = () => {
             const reloadBtn = document.getElementById('adminReloadProductsBtn');
             if (reloadBtn) reloadBtn.disabled = true;
@@ -7025,7 +7292,8 @@ const PageInit = {
             };
             const actionBtn = editingProductId ? editBtn : createBtn;
             actionBtn.disabled = true;
-            const finish = (result, okMsg) => {
+            const finish = (result, okMsg, options = {}) => {
+                const reload = options.reload !== false;
                 actionBtn.disabled = false;
                 if (!result.ok) {
                     if (result.code === 'VERSION_CONFLICT') {
@@ -7063,7 +7331,8 @@ const PageInit = {
                 // 排序回到「最新在上」，讓剛動過的那一筆直接出現在第一列。
                 const sortEl = document.getElementById('adminProductSort');
                 if (sortEl && !editingProductId) sortEl.value = 'newest';
-                loadAdminProducts();
+                if (typeof options.onSuccess === 'function') options.onSuccess();
+                if (reload) loadAdminProducts();
                 loadProductAuditLogs();
                 return true;
             };
@@ -7071,7 +7340,10 @@ const PageInit = {
                 const target = (dbProducts || []).find(p => String(p.id) === String(editingProductId));
                 delete payload.type;
                 Api.patchRemoteProduct(target?.rawId, payload, target?.version).then(result => {
-                    if (finish(result, '產品已更新並寫入資料庫')) exitEditMode();
+                    if (finish(result, '產品已更新並寫入資料庫', {
+                        reload: false,
+                        onSuccess: () => updateAdminProductInPlace(target, result, payload),
+                    })) exitEditMode();
                 });
             } else {
                 Api.createRemoteProduct(payload).then(result => {
@@ -7106,6 +7378,7 @@ const PageInit = {
             const fbTrain = document.getElementById('adminFeedbackTrain');
             const fbPickAll = document.getElementById('adminFeedbackPickAll');
             const fbTrainingPanel = document.getElementById('adminFeedbackTraining');
+            const fbRetryFailed = document.getElementById('adminFeedbackRetryFailed');
             const fbCurrentScore = document.getElementById('adminFeedbackCurrentScore');
             const fbRuns = document.getElementById('adminFeedbackRuns');
             const FB_HINT = '使用者修正過的五官判斷。每一筆都會成為重訓的標籤，請逐筆確認合理再採用。';
@@ -7127,6 +7400,27 @@ const PageInit = {
             // 重畫，而不必再打一次 API——重打會讓剛按下的那一筆閃一下才更新。
             let fbItems = [];
             const fbSelected = new Set();
+            const fbSelectable = () => fbItems.filter(it => it.hasSample && !it.trainingRunId && fbBucket(it) === 'pending');
+            const fbJumpReview = document.getElementById('adminFeedbackJumpReview');
+            const fbJumpTraining = document.getElementById('adminFeedbackJumpTraining');
+            if (fbJumpTraining) fbJumpTraining.onclick = () => {
+                const target = document.getElementById('adminFeedbackTraining');
+                if (!target) return;
+                target.setAttribute('tabindex', '-1');
+                target.style.scrollMarginTop = '100px';
+                const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+                target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+                target.focus({ preventScroll: true });
+            };
+            if (fbJumpReview) fbJumpReview.onclick = () => {
+                const target = feedbackBody.closest('.acp-deck');
+                if (target) {
+                    target.setAttribute('tabindex', '-1');
+                    target.style.scrollMarginTop = '100px';
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    target.focus({ preventScroll: true });
+                }
+            };
 
             // 卡片右上角那個標籤。跟分頁是同一組語彙，不然同一筆在分頁叫「送訓中」、
             // 卡片上叫「已採用」，看的人得自己在腦中對應。
@@ -7169,16 +7463,23 @@ const PageInit = {
                 (it.reviewStatus === 'accepted' || it.reviewStatus === 'partial')
                 && it.hasSample && !it.trainingRunId && fbApprovedFields(it).length);
 
-            const fbTrainTargets = () => (fbSelected.size
-                ? [...fbSelected]
-                : fbTrainable().map(it => it.feedbackId || it.jobId));
+            const fbTrainTargets = () => {
+                // 明確勾選待覆核圖片並按送訓，等同管理員採用該筆修正；送出時會先
+                // 寫入採用決定，再建立 queued 批次。已有其他批次執行中也不影響登記。
+                if (fbSelected.size) {
+                    return fbItems.filter(it => it.hasSample && !it.trainingRunId
+                        && fbSelected.has(it.feedbackId || it.jobId))
+                        .map(it => it.feedbackId || it.jobId);
+                }
+                return fbTrainable().map(it => it.feedbackId || it.jobId);
+            };
 
             // 全選框的三態：全勾打勾、全空清掉、勾一部分顯示 indeterminate。
             // 少了中間那個狀態，勾兩筆時全選框看起來像「沒勾」，
             // 直覺會再按一下想全選，實際上那一下是取消——按了反而更少。
             const fbSyncPickAll = () => {
                 if (!fbPickAll) return;
-                const all = fbTrainable().map(it => it.feedbackId || it.jobId);
+                const all = fbSelectable().map(it => it.feedbackId || it.jobId);
                 const picked = all.filter(id => fbSelected.has(id)).length;
                 fbPickAll.disabled = all.length === 0;
                 fbPickAll.checked = all.length > 0 && picked === all.length;
@@ -7197,11 +7498,11 @@ const PageInit = {
                 if (!fbLoaded) { fbTrain.textContent = '送去訓練'; fbTrain.disabled = true; return; }
                 const n = fbTrainTargets().length;
                 fbTrain.textContent = fbSelected.size
-                    ? `送去訓練（已選 ${n}）`
+                    ? `送去訓練（已選 ${fbSelected.size}，可送 ${n}）`
                     : `送去訓練（已採用未送訓 ${n}）`;
                 fbTrain.disabled = n === 0;
                 fbTrain.title = fbSelected.size
-                    ? '只送出你勾選的這幾筆'
+                    ? '送出勾選資料；待覆核資料會先登記為採用，再排入新的訓練批次'
                     : '把所有已採用、有影像、還沒送過訓練的修正送出成一個批次';
             };
 
@@ -7330,7 +7631,7 @@ const PageInit = {
                     const decisions = it.reviewDecisions || {};
                     const decided = changes.filter(c => decisions[c.field]).length;
                     const approvedFields = fbApprovedFields(it);
-                    const selectable = Boolean(it.hasSample && approvedFields.length);
+                    const selectable = Boolean(it.hasSample && !it.trainingRunId && fbBucket(it) === 'pending');
                     return `
                     <!-- awaiting：已採用但還沒進任何批次。這一類在畫面上要跟「已送訓」分得開，
                          否則一百張卡片長一樣，而其中只有二十張還需要動作。 -->
@@ -7422,6 +7723,11 @@ const PageInit = {
             // 批次 id → 批次狀態。loadTrainingRuns 拿到資料後填進來，
             // 讓每一筆回饋知道自己那一批跑完了沒。
             const fbRunStatus = new Map();
+            // 批次卡片的重訓按鈕需要完整 run，而不是只有 status 字串。
+            const fbRunRecords = new Map();
+            let fbRetryableRuns = [];
+            let fbRetryingRunId = '';
+            let fbRetryingBatch = false;
 
             // 四個分頁對應四個**還在進行中的位置**，不是三個覆核決定。
             //
@@ -7432,6 +7738,10 @@ const PageInit = {
             // 現在「待覆核」的定義是**還需要你動手的**：沒覆核過的，加上覆核了卻還沒送出的。
             // 送出之後那一格就會清空，這正是使用者要的行為。
             const fbBucket = (item) => {
+                // 進入批次是已送訓的事實，不依賴可能尚未同步的覆核狀態。
+                if (item.trainingRunId) {
+                    return fbRunStatus.get(item.trainingRunId) === 'done' ? 'trained' : 'training';
+                }
                 const status = item.reviewStatus || 'pending';
                 if (status === 'rejected') return 'rejected';
                 if (status === 'accepted' || status === 'partial') {
@@ -7454,12 +7764,12 @@ const PageInit = {
             const fbJustDecided = new Set();
 
             const fbVisible = () => fbItems.filter(it =>
-                fbBucket(it) === fbTab || fbJustDecided.has(it.feedbackId || it.jobId));
+                fbBucket(it) === fbTab || (!it.trainingRunId && fbJustDecided.has(it.feedbackId || it.jobId)));
 
             const fbRepaint = () => {
                 [...fbSelected].forEach(id => {
                     const item = fbItems.find(it => (it.feedbackId || it.jobId) === id);
-                    if (!item || !item.hasSample || !fbApprovedFields(item).length) fbSelected.delete(id);
+                    if (!item || !item.hasSample || item.trainingRunId || fbBucket(item) !== 'pending') fbSelected.delete(id);
                 });
                 const n = fbRender(fbVisible());
                 const pending = fbItems.filter(it => fbBucket(it) === 'pending').length;
@@ -7484,7 +7794,7 @@ const PageInit = {
                         // 講清楚採用的那些會怎麼被用掉：這是唯一會改到訓練集的動作。
                         ? `${FB_HINT}（共 ${fbItems.length} 筆／待覆核 ${pending}、送訓中 ${training}、`
                           + `送訓完成 ${trained}、已退回 ${rejected}；`
-                          + `已採用的會被 training/import_feedback_samples.py 收進下一次重訓）`
+                          + `按「送去訓練」後才會由 training/import_feedback_samples.py 收進這次重訓）`
                         : '目前沒有使用者修正紀錄。等有人按過「這判斷不準」之後，紀錄會出現在這裡。';
                 }
                 return n;
@@ -7495,7 +7805,17 @@ const PageInit = {
                 nose_shape: '鼻型', lip_shape: '唇型',
             };
             const TRAIN_STATUS_ZH = {
-                queued: '已登記', running: '訓練中', done: '已完成', failed: '失敗',
+                queued: '已登記', running: '訓練中', done: '已完成', failed: '失敗', retried: '已重訓',
+            };
+
+            // 失敗批次本身要保留 failed，因為那是不可竄改的歷史結果；
+            // 但管理員按下重新訓練後，原卡片在操作上已經不是「尚未處理的失敗」。
+            // 來源批次有 retryRunId 就改用顯示狀態 retried，讓畫面寫「已重訓」，
+            // 新的 queued 批次則另外顯示目前進度。
+            const trainDisplayStatus = (run) => {
+                const status = String(run?.status || 'queued');
+                return status === 'failed' && String(run?.retryRunId || '').trim()
+                    ? 'retried' : status;
             };
 
             // read_model_metrics() 回的是 { architecture, parts: { 部位: {...} } }，
@@ -7508,10 +7828,58 @@ const PageInit = {
                     TRAIN_PART_ZH[key] && value && typeof value === 'object'));
             };
             const trainMacro = (entry) => {
-                const raw = Number(entry?.macroAccuracy ?? entry?.accuracy);
-                return Number.isFinite(raw) ? raw : null;
+                // accuracy 不等於 macro，缺 macro 時不可用另一種指標冒充。
+                const value = entry?.macroAccuracy;
+                if (value == null || value === '' || typeof value === 'boolean') return null;
+                const raw = Number(value);
+                return Number.isFinite(raw) && raw >= 0 && raw <= 1 ? raw : null;
             };
             const trainPct = (value) => `${(value * 100).toFixed(1)}%`;
+
+            // 只產生畫面用副本，絕不寫回批次或改變模型。
+            const trainHistoricalBefore = (run, records = Array.from(fbRunRecords.values())) => {
+                const parts = { ...trainParts(run.modelBefore) };
+                const started = Date.parse(run.startedAt || run.createdAt || '');
+                const architecture = (metrics, record) => String(metrics?.architecture || record?.architecture || record?.model || '')
+                    .toLowerCase().replace(/[^a-z0-9]/g, '');
+                const setId = (metrics, record) => String(metrics?.evaluationSetId || metrics?.validationSetHash
+                    || record?.evaluationSetId || record?.validationSetHash || '').trim();
+                const model = architecture(run.modelBefore || run.modelAfter, run);
+                const dataset = setId(run.modelBefore, run) || setId(run.modelAfter, run);
+                const history = records.filter(old =>
+                    old.runId !== run.runId && old.status === 'done'
+                    && Number.isFinite(started) && Date.parse(old.finishedAt || '') < started
+                    && model && architecture(old.modelAfter, old) === model
+                    && dataset && setId(old.modelAfter, old) === dataset
+                ).sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt));
+                Object.keys(TRAIN_PART_ZH).forEach(part => {
+                    if (trainMacro(parts[part]) != null) return;
+                    const old = history.find(item => trainMacro(trainParts(item.modelAfter)[part]) != null);
+                    if (old) {
+                        parts[part] = { ...trainParts(old.modelAfter)[part], historicalRunId: old.runId };
+                    }
+                });
+                return { parts };
+            };
+
+            // 上方「已登記 macro」是成果摘要，不拿來計算批次進步幅度。當目前指標缺值時，
+            // 每個部位各自往已完成批次找最近一筆有 macro 的成果；來源批次必須標出。
+            // 訓練前後比較仍走 trainHistoricalBefore 的同架構、同測試集嚴格條件。
+            const trainLatestRegisteredMetrics = (currentMetrics, records) => {
+                const parts = { ...trainParts(currentMetrics) };
+                const history = (Array.isArray(records) ? records : [])
+                    .filter(run => String(run?.status || '') === 'done')
+                    .sort((a, b) => Date.parse(b.finishedAt || b.startedAt || b.createdAt || 0)
+                        - Date.parse(a.finishedAt || a.startedAt || a.createdAt || 0));
+                Object.keys(TRAIN_PART_ZH).forEach(part => {
+                    if (trainMacro(parts[part]) != null) return;
+                    const source = history.find(run => trainMacro(trainParts(run.modelAfter)[part]) != null);
+                    if (source) parts[part] = {
+                        ...trainParts(source.modelAfter)[part], historicalRunId: source.runId,
+                    };
+                });
+                return { parts };
+            };
 
             // 訓練前後對照。只列出兩邊都有數字的部位——單邊有值算不出差距，
             // 硬是把缺的那邊當 0 會憑空生出一個 +65% 的假進步。
@@ -7521,18 +7889,18 @@ const PageInit = {
                 const rows = Object.keys(TRAIN_PART_ZH).map((part) => {
                     const mb = trainMacro(b[part]);
                     const ma = trainMacro(a[part]);
-                    if (mb == null && ma == null) return '';
+                    const source = b[part]?.historicalRunId
+                        ? `<small>歷史值｜來源批次：${escapeHtml(String(b[part].historicalRunId))}（非本批重測）</small>` : '';
                     if (mb == null || ma == null) {
-                        const only = ma == null ? mb : ma;
                         return `<div class="atb-delta-row"><span>${escapeHtml(TRAIN_PART_ZH[part])}</span>`
-                            + `<span class="atb-delta-only">${escapeHtml(trainPct(only))}（僅單邊有紀錄）</span></div>`;
+                            + `<span class="atb-delta-only">${mb == null ? '未記錄（未找到可比歷史）' : escapeHtml(trainPct(mb))} → ${ma == null ? '未記錄' : escapeHtml(trainPct(ma))}${source}</span></div>`;
                     }
                     const diff = ma - mb;
                     const dir = diff > 0.0005 ? 'up' : (diff < -0.0005 ? 'down' : 'flat');
                     const arrow = dir === 'up' ? '↑' : (dir === 'down' ? '↓' : '→');
                     return `<div class="atb-delta-row"><span>${escapeHtml(TRAIN_PART_ZH[part])}</span>`
                         + `<span class="atb-delta-nums">${escapeHtml(trainPct(mb))} <i>${arrow}</i> ${escapeHtml(trainPct(ma))}`
-                        + `<b class="atb-${dir}">${diff >= 0 ? '+' : ''}${(diff * 100).toFixed(1)}</b></span></div>`;
+                        + `<b class="atb-${dir}">${diff >= 0 ? '+' : ''}${(diff * 100).toFixed(1)}</b>${source}</span></div>`;
                 }).filter(Boolean).join('');
                 return rows || '';
             };
@@ -7561,19 +7929,83 @@ const PageInit = {
                 return min ? `${min} 分 ${sec} 秒` : `${sec} 秒`;
             };
 
+            // 只登記「比線上好」的部位。
+            //
+            // 眉型與眼型在最近幾批一路往下掉，臉型在 ±2 之間跳——把一整批無差別換上去
+            // 等於拿運氣賭。training_worker 的註解已經寫過這件事：「要不要換是決策，
+            // 不是計算」，所以這裡把決策攤開給人看，但預設不勾會讓系統變差的部位。
+            const promoteRun = async (runId) => {
+                const run = fbRunRecords.get(String(runId));
+                if (!run) { showAlert('找不到這個批次的資料，請重新整理後再試', { type: 'error' }); return; }
+                const before = trainParts(trainHistoricalBefore(run));
+                const after = trainParts(run.modelAfter);
+                const rows = [];
+                Object.keys(TRAIN_PART_ZH).forEach((part) => {
+                    const ma = trainMacro(after[part]);
+                    if (ma == null) return;
+                    const mb = trainMacro(before[part]);
+                    rows.push({ zh: TRAIN_PART_ZH[part], after: ma, delta: mb == null ? null : (ma - mb) * 100 });
+                });
+                const improved = rows.filter((row) => row.delta != null && row.delta > 0);
+                if (!improved.length) {
+                    showAlert('這一批沒有任何部位比線上模型好，換上去只會讓分析變差。',
+                              { type: 'error' });
+                    return;
+                }
+                const listed = improved
+                    .map((row) => `${row.zh} ${(row.after * 100).toFixed(1)}%（+${row.delta.toFixed(1)}）`)
+                    .join('\n');
+                const skipped = rows.filter((row) => !improved.includes(row)).map((row) => row.zh);
+                const skippedText = skipped.length ? `\n\n不換（沒有比線上好）：${skipped.join('、')}` : '';
+                showConfirm(
+                    `要把這些部位換上線嗎？\n\n${listed}${skippedText}\n\n`
+                    + '登記之後由訓練機準備檔案。**準備好不等於已上線**——還要有人在訓練機'
+                    + '執行上傳與部署，分析結果才會真的改變。',
+                    {
+                        title: '換模型上線',
+                        okText: '登記換上線',
+                        cancelText: '取消',
+                        onOk: async () => {
+                            const res = await Api.requestModelPromotion(runId, improved.map((row) => row.zh));
+                            if (!res.ok) {
+                                showAlert(res.error || '登記失敗，請稍後再試',
+                                          { type: 'error', code: res.code, status: res.status });
+                                return;
+                            }
+                            showAlert('已登記。訓練機會準備檔案，完成後仍需要有人執行部署。');
+                            loadTrainingRuns();
+                        },
+                    }
+                );
+            };
+
             const renderTrainingRuns = (data) => {
                 if (fbTrainingPanel) fbTrainingPanel.hidden = false;
-                const currentParts = trainParts(data?.currentMetrics);
-                const currentEntries = Object.entries(currentParts)
-                    .map(([part, value]) => [part, trainMacro(value)])
-                    .filter(([, macro]) => macro != null);
-                if (fbCurrentScore) {
-                    fbCurrentScore.textContent = currentEntries.length
-                        ? `線上模型：${currentEntries.map(([part, macro]) => `${TRAIN_PART_ZH[part]} ${trainPct(macro)}`).join('／')}`
-                        : '尚無已登記的線上模型指標';
-                }
                 const runs = Array.isArray(data?.runs) ? data.runs : [];
+                const currentParts = trainParts(trainLatestRegisteredMetrics(data?.currentMetrics || {}, runs));
+                if (fbCurrentScore) {
+                    // currentMetrics 是已登記指標，不是部署憑證；歷史批次也可能未上線。
+                    fbCurrentScore.textContent = `已登記 macro（不代表已上線）：${Object.keys(TRAIN_PART_ZH).map(part => {
+                        const entry = currentParts[part];
+                        const macro = trainMacro(entry);
+                        const source = entry?.historicalRunId ? `（歷史值｜來源批次：${entry.historicalRunId}）` : '';
+                        return `${TRAIN_PART_ZH[part]} ${macro == null ? '未記錄' : trainPct(macro)}${source}`;
+                    }).join('／')}`;
+                }
                 if (!fbRuns) return;
+                const retryableFailedRuns = runs.filter(run =>
+                    String(run?.status || '') === 'failed' && !String(run?.retryRunId || '').trim());
+                fbRetryableRuns = retryableFailedRuns;
+                if (fbRetryFailed) {
+                    fbRetryFailed.disabled = !retryableFailedRuns.length
+                        || Boolean(fbRetryingRunId || fbRetryingBatch);
+                    fbRetryFailed.textContent = retryableFailedRuns.length
+                        ? `重新訓練失敗批次（${retryableFailedRuns.length}）`
+                        : '重新訓練失敗批次';
+                    fbRetryFailed.title = retryableFailedRuns.length
+                        ? '會依序建立新的 queued 訓練批次，原本的失敗紀錄會保留。'
+                        : '目前沒有尚未重試的失敗批次。';
+                }
                 // 訓練機狀態放在批次清單的最前面：所有「為什麼還沒開始」的問題，
                 // 答案都在這一行。
                 const worker = trainWorkerInfo(data?.worker);
@@ -7591,6 +8023,15 @@ const PageInit = {
                 if (!fbRuns.dataset.bound) {
                     fbRuns.dataset.bound = '1';
                     const openFromEvent = (ev) => {
+                        // 失敗批次的「重新訓練」按鈕在卡片裡；按它只能送出重訓，
+                        // 不能再同時打開這張卡片的進度視窗。
+                        const retry = ev.target.closest('[data-atb-retry]');
+                        if (retry) {
+                            ev.preventDefault();
+                            ev.stopPropagation();
+                            if (!retry.disabled) requestRetry(retry.dataset.atbRetry);
+                            return;
+                        }
                         // 「重新檢查」要先攔下來：它長在同一個容器裡，
                         // 不擋的話點它會順便去開下面那張卡片的進度視窗。
                         const recheck = ev.target.closest('[data-worker-recheck]');
@@ -7600,33 +8041,62 @@ const PageInit = {
                             loadTrainingRuns();
                             return;
                         }
+                        const promoteBtn = ev.target.closest('[data-atb-promote]');
+                        if (promoteBtn && promoteBtn.dataset.atbPromote) {
+                            ev.stopPropagation();
+                            promoteRun(promoteBtn.dataset.atbPromote);
+                            return;
+                        }
                         const card = ev.target.closest('[data-atb-run]');
                         if (card && card.dataset.atbRun) openTrainingProgress(card.dataset.atbRun);
                     };
                     fbRuns.addEventListener('click', openFromEvent);
                     fbRuns.addEventListener('keydown', (ev) => {
+                        // 原生 button 會自己處理 Enter／Space；這裡不要讓外層
+                        // role="button" 卡片也把同一次按鍵解讀成「開啟進度」。
+                        if (ev.target.closest('[data-atb-retry]')) return;
+                        if (ev.target.closest('[data-atb-promote]')) return;
                         if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openFromEvent(ev); }
                     });
                 }
                 fbRuns.innerHTML = workerHtml + runs.map((run) => {
                     const status = String(run.status || 'queued');
-                    const statusZh = TRAIN_STATUS_ZH[status] || status;
-                    const delta = trainDeltaHtml(run.modelBefore, run.modelAfter);
+                    const displayStatus = trainDisplayStatus(run);
+                    const statusZh = TRAIN_STATUS_ZH[displayStatus] || status;
+                    const delta = trainDeltaHtml(trainHistoricalBefore(run), run.modelAfter);
                     const chips = trainFieldChips(run);
                     const excluded = Array.isArray(run.excluded) ? run.excluded : [];
                     const duration = trainDuration(run);
+                    const retryable = status === 'failed'
+                        && Boolean(String(run.runId || '').trim())
+                        && !String(run.retryRunId || '').trim();
+                    const retrying = String(fbRetryingRunId || '') === String(run.runId || '');
+                    const retryButton = retryable
+                        ? `<button type="button" class="atb-retry-run" data-atb-retry="${escapeHtml(run.runId || '')}"`
+                          + `${retrying || fbRetryingRunId || fbRetryingBatch ? ' disabled' : ''} title="保留原失敗紀錄，建立新的訓練批次">`
+                          + `${retrying ? '重新訓練中…' : '重新訓練'}</button>`
+                        : '';
+                    // 只有訓練完成而且回寫了指標的批次才換得上線——沒有指標就無從判斷
+                    // 換上去是變好還是變差，那種情況要走 CLI 自己指定部位。
+                    const promotable = status === 'done' && run.modelAfter
+                        && Boolean(String(run.runId || '').trim());
+                    const promoteButton = promotable
+                        ? `<button type="button" class="atb-retry-run" data-atb-promote="${escapeHtml(run.runId || '')}"`
+                          + ' title="把這一批比線上好的部位登記換上線">換上線</button>'
+                        : '';
                     // 時間鏈刻意分三格顯示：建立是後台寫的，開始與完成是訓練腳本寫的。
                     // 一個只有「建立」有時間的批次，就是還沒有人真的去訓練——這件事要一眼看得出來。
                     // 整張卡可以點開進度視窗。訓練跑好幾分鐘，人會想中途回來看一眼，
                     // 而批次編號本身就是那個視窗要追的東西。
                     return `
-                        <article class="atb-run atb-${escapeHtml(status)}" role="button" tabindex="0"
+                        <article class="atb-run atb-${escapeHtml(displayStatus)}" role="button" tabindex="0"
                                  data-atb-run="${escapeHtml(run.runId || '')}"
                                  title="點開看這個批次的進度">
                             <header class="atb-run-head">
                                 <b>${escapeHtml(run.runId || '—')}</b>
-                                <span class="atb-badge atb-badge-${escapeHtml(status)}">${escapeHtml(statusZh)}</span>
+                                <span class="atb-badge atb-badge-${escapeHtml(displayStatus)}">${escapeHtml(statusZh)}</span>
                                 <span class="atb-model">${escapeHtml(run.model || 'ConvNeXt-Tiny')}</span>
+                                ${retryButton}${promoteButton}
                             </header>
                             <div class="atb-steps">
                                 <div class="atb-step"><span>建立（後台）</span><b>${escapeHtml(fbTime(run.createdAt))}</b></div>
@@ -7639,9 +8109,11 @@ const PageInit = {
                                 ${chips ? `<div class="atb-chips">${chips}</div>` : ''}
                             </div>
                             ${delta ? `<div class="atb-delta"><span class="atb-delta-title">訓練前 → 訓練後（按人切分 macro）</span>${delta}</div>`
-                                : `<div class="atb-pending">${escapeHtml(status === 'done'
-                                    ? '這次沒有回寫指標'
-                                    : '尚未有訓練前後指標——要等本機訓練腳本帶著這個批次編號跑完才會出現。')}</div>`}
+                                : `<div class="atb-pending">${escapeHtml(displayStatus === 'retried'
+                                    ? `已建立新的訓練批次 ${run.retryRunId || '—'}；原失敗原因仍保留在這筆歷史紀錄。`
+                                    : status === 'done'
+                                        ? '這次沒有回寫指標'
+                                        : '尚未有訓練前後指標——要等本機訓練腳本帶著這個批次編號跑完才會出現。')}</div>`}
                             ${excluded.length ? `<details class="atb-excluded"><summary>${excluded.length} 筆未納入</summary><ul>`
                                 + excluded.map(item => `<li>${escapeHtml(item.feedbackId || '—')}：${escapeHtml(item.reason || '未說明')}</li>`).join('')
                                 + '</ul></details>' : ''}
@@ -7675,7 +8147,13 @@ const PageInit = {
                 // 每一筆回饋要知道自己那一批跑完了沒，分頁才分得出「送訓中」與「送訓完成」。
                 if (Array.isArray(res?.runs)) {
                     fbRunStatus.clear();
-                    res.runs.forEach(r => { if (r && r.runId) fbRunStatus.set(r.runId, r.status); });
+                    fbRunRecords.clear();
+                    res.runs.forEach(r => {
+                        if (r && r.runId) {
+                            fbRunStatus.set(r.runId, r.status);
+                            fbRunRecords.set(String(r.runId), r);
+                        }
+                    });
                     // 狀態可能剛從 running 變 done，卡片要跟著換分頁
                     if (fbItems.length) fbRepaint();
                 }
@@ -7783,8 +8261,16 @@ const PageInit = {
                         return;
                     }
                     const status = String(run.status || 'queued');
+                    if (status === 'failed' && String(run.retryRunId || '').trim()) {
+                        body.innerHTML = '<div class="tp-line tp-good">已重訓</div>'
+                            + `<div class="tp-hint">原本的失敗批次已建立新的訓練批次 `
+                            + `<code>${escapeHtml(run.retryRunId)}</code>，請回到批次紀錄查看新批次進度。</div>`
+                            + `<pre class="tp-error">原失敗原因：${escapeHtml(run.error || '沒有取得錯誤訊息')}</pre>`;
+                        stop();
+                        return;
+                    }
                     if (status === 'done') {
-                        const delta = trainDeltaHtml(run.modelBefore, run.modelAfter);
+                        const delta = trainDeltaHtml(trainHistoricalBefore(run), run.modelAfter);
                         body.innerHTML = '<div class="tp-line tp-good">訓練完成</div>'
                             + `<div class="tp-hint">共 ${escapeHtml(String(run.sampleCount ?? 0))} 個部位標註，`
                             + `耗時 ${escapeHtml(trainDuration(run) || '—')}。</div>`
@@ -7794,9 +8280,18 @@ const PageInit = {
                         return;
                     }
                     if (status === 'failed') {
+                        // 失敗批次不必回到下方清單重新勾選。這裡就是「這一批」的
+                        // 重新送訓入口；後端會對 queued/running/done 的既有重試去重，
+                        // 對 failed 的重試則沿著歷史鏈建立下一批。
+                        const canRetry = true;
                         body.innerHTML = '<div class="tp-line tp-bad">訓練失敗</div>'
                             + `<pre class="tp-error">${escapeHtml(run.error || '沒有取得錯誤訊息')}</pre>`
-                            + '<div class="tp-hint">修正之後可以重新勾選同一批資料再送一次。</div>';
+                            + (canRetry
+                                ? '<div class="tp-hint">不用重新勾選；按下後會用同一批資料建立新的排隊批次，原本的失敗紀錄會保留。</div>'
+                                  + '<div class="tp-actions"><button type="button" class="tp-retry" data-tp-retry>重新送訓這一批</button></div>'
+                                : '');
+                        const retryButton = body.querySelector('[data-tp-retry]');
+                        if (retryButton) retryButton.onclick = () => requestRetry(run.runId);
                         stop();
                         return;
                     }
@@ -7970,7 +8465,7 @@ const PageInit = {
             });
 
             if (fbPickAll) fbPickAll.onchange = () => {
-                const all = fbTrainable().map(it => it.feedbackId || it.jobId);
+                const all = fbSelectable().map(it => it.feedbackId || it.jobId);
                 if (fbPickAll.checked) all.forEach(id => fbSelected.add(id));
                 else all.forEach(id => fbSelected.delete(id));
                 fbRepaint();
@@ -7979,6 +8474,25 @@ const PageInit = {
             const fbSubmitTraining = async (ids) => {
                 fbTrain.disabled = true;
                 fbTrain.textContent = '登記中…';
+                // 勾選待覆核資料就是管理員明確表示採用。後端訓練端只接受已覆核資料，
+                // 因此先寫覆核，再排隊；既有 running/queued 批次不會被取消或覆蓋。
+                const pendingIds = ids.filter(id => {
+                    const item = fbItems.find(it => (it.feedbackId || it.jobId) === id);
+                    return item && item.reviewStatus !== 'accepted' && item.reviewStatus !== 'partial';
+                });
+                for (const id of pendingIds) {
+                    const reviewed = await Api.reviewFaceFeedback(id, 'accepted');
+                    if (!reviewed.ok) {
+                        fbTrain.textContent = `送訓失敗：覆核 ${id} 未成功`;
+                        setTimeout(fbUpdateTrainButton, 2200);
+                        return;
+                    }
+                    const item = fbItems.find(it => (it.feedbackId || it.jobId) === id);
+                    if (item) {
+                        item.reviewStatus = reviewed.reviewStatus || 'accepted';
+                        item.reviewDecisions = reviewed.reviewDecisions || item.reviewDecisions;
+                    }
+                }
                 const res = await Api.queueFaceTraining(ids);
                 if (!res.ok) {
                     fbTrain.textContent = `送訓失敗：${res.error || '未知錯誤'}`;
@@ -8006,6 +8520,116 @@ const PageInit = {
                 openTrainingProgress(res.runId);
             };
 
+            const fbRetryTraining = async (run, {
+                refresh = true, openProgress = true, fromBatch = false,
+            } = {}) => {
+                if (!run?.runId || fbRetryingRunId || (fbRetryingBatch && !fromBatch)) {
+                    return { ok: false, error: '目前已有重訓批次正在登記' };
+                }
+                fbRetryingRunId = String(run.runId);
+                if (fbRetryFailed) {
+                    fbRetryFailed.disabled = true;
+                    fbRetryFailed.textContent = '重新訓練登記中…';
+                }
+                if (fbRuns) fbRuns.querySelectorAll('[data-atb-retry]').forEach((button) => {
+                    button.disabled = true;
+                    if (button.dataset.atbRetry === fbRetryingRunId) button.textContent = '重新訓練中…';
+                });
+                let res;
+                try {
+                    res = await Api.retryFaceTraining(fbRetryingRunId);
+                } catch (err) {
+                    res = { ok: false, error: err && err.message || String(err) };
+                }
+                if (!res.ok) {
+                    fbRetryingRunId = '';
+                    if (fbSummary) fbSummary.textContent = `重新訓練失敗：${res.error || '未知錯誤'}`;
+                    if (refresh) await loadTrainingRuns();
+                    return res;
+                }
+                const newRunId = res.runId;
+                fbRetryingRunId = '';
+                if (fbSummary) {
+                    fbSummary.textContent = `${run.runId} 已保留失敗紀錄，並重新建立訓練批次 ${newRunId || '—'}。`;
+                }
+                if (refresh) await loadAdminFeedback();
+                if (openProgress) openTrainingProgress(newRunId);
+                return res;
+            };
+
+            const fbRetryAllTraining = async (runs) => {
+                const candidates = (Array.isArray(runs) ? runs : []).filter(run =>
+                    String(run?.status || '') === 'failed'
+                    && Boolean(String(run?.runId || '').trim())
+                    && !String(run?.retryRunId || '').trim());
+                if (!candidates.length || fbRetryingBatch || fbRetryingRunId) return;
+                fbRetryingBatch = true;
+                const results = [];
+                try {
+                    for (let index = 0; index < candidates.length; index += 1) {
+                        const run = candidates[index];
+                        if (fbRetryFailed) {
+                            fbRetryFailed.disabled = true;
+                            fbRetryFailed.textContent = `重新訓練中（${index + 1}/${candidates.length}）…`;
+                        }
+                        // 一批一批登記，避免一次佔滿唯一的本機訓練機；API 本身仍以
+                        // retryOf 做冪等保護，重整頁面或重按也不會複製同一批。
+                        const res = await fbRetryTraining(run, {
+                            refresh: false, openProgress: false, fromBatch: true,
+                        });
+                        results.push({ run, res });
+                    }
+                } finally {
+                    fbRetryingBatch = false;
+                    fbRetryingRunId = '';
+                }
+                const succeeded = results.filter(({ res }) => res && res.ok);
+                const failed = results.filter(({ res }) => !res || !res.ok);
+                if (fbSummary) {
+                    fbSummary.textContent = failed.length
+                        ? `已重新建立 ${succeeded.length} 個訓練批次；${failed.length} 個批次登記失敗，請查看錯誤後再重試。`
+                        : `已重新建立 ${succeeded.length} 個訓練批次，原本的失敗紀錄均已保留。`;
+                }
+                // 重新載入回饋與批次，讓原失敗卡片顯示已建立 retryRunId，
+                // 新的 queued 批次也會立刻出現在同一個訓練區塊。
+                await loadAdminFeedback();
+            };
+
+            const requestRetry = (runId) => {
+                const id = String(runId || '').trim();
+                const run = id ? (fbRunRecords.get(id) || null) : null;
+                // 失敗批次可以從進度視窗直接重送，即使它以前已有一個失敗的重試子批次。
+                // 後端會在 queued/running/done 時去重，在 failed 時建立下一個子批次；
+                // 這裡只擋非 failed 與前端同時送出的重複點擊。
+                if (!run || String(run.status || '') !== 'failed'
+                    || fbRetryingRunId || fbRetryingBatch) return;
+                showConfirm(
+                    `要重新訓練失敗批次 ${run.runId} 嗎？`
+                    + `這會保留原本的失敗紀錄，並建立一個新的 queued 批次（${run.sampleCount ?? 0} 個部位標註）。`,
+                    {
+                        title: '確認重新訓練',
+                        okText: '重新訓練',
+                        cancelText: '先不要',
+                        onOk: () => fbRetryTraining(run),
+                    });
+            };
+
+            if (fbRetryFailed) fbRetryFailed.onclick = () => {
+                const runs = fbRetryableRuns.slice();
+                if (!runs.length || fbRetryingRunId || fbRetryingBatch) return;
+                const preview = runs.slice(0, 4).map(run => run.runId).join('、');
+                showConfirm(
+                    `要重新訓練目前 ${runs.length} 個失敗批次嗎？`
+                    + `系統會依序建立新的排隊批次，原失敗紀錄不會被覆蓋。`
+                    + (preview ? `（批次：${preview}${runs.length > 4 ? '…' : ''}）` : ''),
+                    {
+                        title: '確認批次重新訓練',
+                        okText: `重新訓練 ${runs.length} 批`,
+                        cancelText: '先不要',
+                        onOk: () => fbRetryAllTraining(runs),
+                    });
+            };
+
             if (fbTrain) fbTrain.onclick = () => {
                 const ids = fbTrainTargets();
                 if (!ids.length) return;
@@ -8015,7 +8639,7 @@ const PageInit = {
                 // 勾選狀態可能早就捲出視野了，按鈕上的數字是唯一的線索。
                 showConfirm(
                     `要把 ${ids.length} 筆修正送去訓練嗎？`
-                    + (fbSelected.size ? '（你勾選的那幾筆）' : '（所有已採用、有影像、還沒送過的）')
+                    + (fbSelected.size ? '（你勾選的待覆核資料會先登記為採用）' : '（所有已採用、有影像、還沒送過的）')
                     + ' 送出後會建立一個訓練批次，訓練機會從頭重訓一次，需要數十分鐘到數小時。',
                     {
                         title: '確認送出訓練',
@@ -8235,7 +8859,8 @@ function watchPasswordFields() {
     };
 
     document.addEventListener('click', (e) => {
-        const pageLink = e.target.closest('[data-page]');
+        // body[data-page] 只供樣式使用，不能把一般點擊當成重新導覽。
+        const pageLink = e.target.closest('a[data-page], button[data-page]');
         if (!pageLink) return;
         const page = pageLink.dataset.page;
         if (!page) return;
@@ -8278,10 +8903,9 @@ function watchPasswordFields() {
         } catch (_) {}
     }
 
-    // 頂部導覽
-    document.querySelectorAll('.topbar-nav a, .topbar-user').forEach(a => {
-        a.onclick = (e) => { e.preventDefault(); Router.go(a.dataset.page); };
-    });
+    // 頂部導覽、底部導覽與動態頁面按鈕統一由上面的 document click delegation 處理。
+    // 不能再為 .topbar-nav a／.topbar-user 個別掛 onclick，否則一次點擊會同時走兩條
+    // Router.go：兩個頁面請求競速，後完成的那次會重新初始化分析頁並清掉剛選的照片。
 
     // 先向 Gateway 取得資料庫網址，再開始任何會打 API 的流程。
     // 資料庫網址由 Gateway 統一發布，前端不再寫死（見 issue #23）；取不到就沿用內建值，
@@ -8374,6 +8998,7 @@ function showApp(preferredPage) {
     document.getElementById('sidebarUsername').textContent = `${getMemberDisplayName()} · ${getCurrentRoleLabel(profile)}`;
     updateCartBadge();
     refreshMemberTheme();
+    restoreAnalysisDraft();
     syncRemoteFavorites();
     syncRemoteCart();
     const landing = (typeof AdminStore !== 'undefined' && AdminStore.isAdmin()) ? 'admin' : 'dashboard';
@@ -8819,18 +9444,26 @@ async function doVerifyOTP() {
 
 async function resendOTP() {
     const email = Router.pendingRegister?.email;
-    if (!email) return;
-    try { await Api.sendOTP(email); } catch (_) {}
-    showToast('驗證碼已重新發送');
+    if (!email) { showAlert('註冊資料已過期，請重新填寫註冊資料', { type:'error', onOk: showRegister }); return; }
+    try {
+        await Api.sendOTP(email);
+        showToast('驗證碼已重新發送');
+    } catch (err) {
+        showAlert(err?.status === 409
+            ? '目前沒有待驗證的註冊資料，請返回註冊頁重新提交完整資料。'
+            : (err?.message || '驗證碼寄送失敗'), { type:'error', onOk: err?.status === 409 ? showRegister : undefined });
+    }
 }
 
 async function sendForgotOTP() {
     const email = document.getElementById('forgotEmail').value.trim();
     if (!email) { showAlert('請輸入 Email'); return; }
-    try { await Api.sendOTP(email); } catch (_) {}
-    Router.forgotEmail = email;
-    showToast('驗證碼已發送');
-    showForgotVerify(email);
+    try {
+        await Api.sendForgotPasswordOTP(email);
+        Router.forgotEmail = email;
+        showToast('驗證碼已發送');
+        showForgotVerify(email);
+    } catch (err) { showAlert(err?.message || '密碼重設驗證碼寄送失敗', {type:'error'}); }
 }
 
 function showForgotVerify(email){
@@ -8868,8 +9501,10 @@ async function verifyOtp(email, code) {
 
 async function resendForgotOTP(){
     if (!Router.forgotEmail) return;
-    try { await Api.sendOTP(Router.forgotEmail); } catch (_) {}
-    showToast('驗證碼已重新發送');
+    try {
+        await Api.sendForgotPasswordOTP(Router.forgotEmail);
+        showToast('驗證碼已重新發送');
+    } catch (err) { showAlert(err?.message || '密碼重設驗證碼寄送失敗', {type:'error'}); }
 }
 
 function showResetPassword(){
