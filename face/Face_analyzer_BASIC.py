@@ -743,6 +743,19 @@ class FaceAnalyzer:
     SKIN_TEXTURE_WINDOW   = int(os.getenv("FACE_SKIN_TEXTURE_WINDOW", "7"))
     SKIN_SPREAD_UNRELIABLE = float(os.getenv("FACE_SKIN_SPREAD_UNRELIABLE", "9.5"))
 
+    #   3. 分割模型認出「臉部皮膚」。上面的紋理過濾是靠粗糙度**猜**哪些像素不是皮膚，
+    #      而 selfie_multiclass 直接把頭髮標成 hair。實測一張長髮照片裡頭髮佔 28.3%，
+    #      那些垂在臉頰旁邊的像素正好落在頰部取樣區內，顏色又跟膚色重疊（棕髮、染髮），
+    #      紋理未必攔得住。分割是目前唯一分得乾淨的手段。
+    #      設 FACE_SKIN_SEGMENTATION=0 可以關掉，行為完全退回先前的紋理啟發式。
+    SKIN_SEGMENTATION_ENABLED = os.getenv("FACE_SKIN_SEGMENTATION", "1") != "0"
+    SKIN_SEGMENTATION_MODEL   = os.getenv("FACE_SKIN_SEGMENTATION_MODEL", "")
+    # selfie_multiclass 的類別索引：0 背景 1 頭髮 2 身體皮膚 3 臉部皮膚 4 衣服 5 其他
+    SKIN_SEGMENTATION_FACE_CLASS = 3
+    # 建立一次 segmenter 要幾百毫秒，而每一次分析都會走到這裡，所以快取在類別上。
+    # False 代表試過而且失敗——不要每張照片都重試一次載入，那會把每次分析都拖慢。
+    _skin_segmenter = None
+
     def __init__(self, image_input, strict_angle=True, brightness_mode="none", brightness_level=1.0, require_insight=True):
         if isinstance(image_input, str):
             self.frame = cv2.imdecode(np.fromfile(image_input, dtype=np.uint8), cv2.IMREAD_COLOR)
@@ -1226,6 +1239,75 @@ class FaceAnalyzer:
 
         return (float(np.median(l_vals)), float(np.median(a_vals)), float(np.median(b_vals)))
 
+    @classmethod
+    def _get_skin_segmenter(cls):
+        """取得（必要時建立）臉部皮膚分割器。不可用時回 None，呼叫端要能接受。"""
+        if cls._skin_segmenter is False:
+            return None
+        if cls._skin_segmenter is not None:
+            return cls._skin_segmenter
+        if not cls.SKIN_SEGMENTATION_ENABLED:
+            cls._skin_segmenter = False
+            return None
+        path = cls.SKIN_SEGMENTATION_MODEL
+        if not path:
+            # 容器裡是扁平佈局（Dockerfile 用 COPY face/x.py .，models/ 直接在工作目錄
+            # 底下），本機則是 face/ 的上一層。兩種都找，找不到就安靜退回紋理。
+            here = os.path.dirname(os.path.abspath(__file__))
+            for candidate in (
+                os.path.join(here, "models", "mediapipe", "selfie_multiclass_256x256.tflite"),
+                os.path.join(os.path.dirname(here), "models", "mediapipe",
+                             "selfie_multiclass_256x256.tflite"),
+            ):
+                if os.path.exists(candidate):
+                    path = candidate
+                    break
+        if not path or not os.path.exists(path):
+            logging.info("找不到臉部皮膚分割模型，膚色取樣改用紋理過濾")
+            cls._skin_segmenter = False
+            return None
+        try:
+            from mediapipe.tasks import python as mp_tasks
+            from mediapipe.tasks.python import vision as mp_vision
+
+            # 用 buffer 而不是 model_asset_path：MediaPipe 在 Windows 上會把絕對路徑
+            # 當成相對路徑接在 site-packages 後面（errno=22），而失敗訊息長得像
+            # 「檔案不存在」，看不出真正的原因是路徑解析。自己讀進來就沒有那一層。
+            with open(path, "rb") as handle:
+                model_bytes = handle.read()
+            cls._skin_segmenter = mp_vision.ImageSegmenter.create_from_options(
+                mp_vision.ImageSegmenterOptions(
+                    base_options=mp_tasks.BaseOptions(model_asset_buffer=model_bytes),
+                    output_category_mask=True,
+                )
+            )
+        except Exception:
+            # mediapipe 版本不合、模型檔壞掉、記憶體不足都會走到這裡。膚色算得出來
+            # 比算得準更重要——這一層是加強，不是前提。
+            logging.exception("臉部皮膚分割器建立失敗，膚色取樣改用紋理過濾")
+            cls._skin_segmenter = False
+            return None
+        return cls._skin_segmenter
+
+    def _face_skin_mask(self):
+        """回傳「這些像素是臉部皮膚」的遮罩；這條路不可用時回 None。"""
+        segmenter = self._get_skin_segmenter()
+        if segmenter is None:
+            return None
+        try:
+            rgb = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
+            image = mp.Image(image_format=mp.ImageFormat.SRGB,
+                             data=np.ascontiguousarray(rgb))
+            categories = segmenter.segment(image).category_mask.numpy_view()
+        except Exception:
+            logging.exception("臉部皮膚分割推論失敗，這一張改用紋理過濾")
+            return None
+        mask = (categories == self.SKIN_SEGMENTATION_FACE_CLASS).astype(np.uint8) * 255
+        if mask.shape[:2] != (self.h, self.w):
+            # 用最近鄰而不是內插：這是類別遮罩，插出來的中間值不屬於任何類別。
+            mask = cv2.resize(mask, (self.w, self.h), interpolation=cv2.INTER_NEAREST)
+        return mask
+
     def _skin_texture_mask(self):
         """回傳「夠平滑，像皮膚」的遮罩。頭髮的高頻方向性紋理在這裡會被剔掉。
 
@@ -1346,12 +1428,29 @@ class FaceAnalyzer:
         if cv2.countNonZero(combined_mask) < 100:
             raise UnusableImageError("膚色區域不足，請使用光線均勻、臉部清楚的正面照片")
 
-        # 顏色分不開棕髮與皮膚，紋理可以——完整理由與實測數字見 SKIN_TEXTURE_STD_MAX。
-        textured = cv2.bitwise_and(combined_mask, self._skin_texture_mask())
-        # 紋理過濾不能反過來把樣本殺光：粗顆粒、對焦不準或高 ISO 的照片整張都是高頻
-        # 雜訊，那種照片上這一層會濾掉幾乎所有像素。剩太少就退回沒濾的版本——
-        # 寧可污染風險照舊（下面的可信度標記還會抓），也不要沒有樣本可算。
-        shade_mask = textured if cv2.countNonZero(textured) >= 150 else combined_mask
+        # 排除頭髮有兩條路：分割模型直接認得「臉部皮膚」，紋理啟發式靠粗糙度猜。
+        # 分割準得多，所以優先；缺模型或推論失敗時退回紋理，行為與先前完全相同。
+        skin_only = self._face_skin_mask()
+        if skin_only is not None:
+            textured = cv2.bitwise_and(combined_mask, skin_only)
+            source = "segmentation"
+        else:
+            # 顏色分不開棕髮與皮膚，紋理可以——完整理由與實測數字見 SKIN_TEXTURE_STD_MAX。
+            textured = cv2.bitwise_and(combined_mask, self._skin_texture_mask())
+            source = "texture"
+        # 分割在側臉、重度遮擋或戴口罩時可能只剩一小塊，那時紋理反而還有樣本可用。
+        if source == "segmentation" and cv2.countNonZero(textured) < 150:
+            textured = cv2.bitwise_and(combined_mask, self._skin_texture_mask())
+            source = "texture"
+        # 兩條路都把樣本殺光就不過濾：粗顆粒、對焦不準或高 ISO 的照片整張都是高頻
+        # 雜訊，紋理那一層會濾掉幾乎所有像素。寧可污染風險照舊（下面的可信度標記
+        # 還會抓），也不要沒有樣本可算。
+        if cv2.countNonZero(textured) < 150:
+            textured, source = combined_mask, "unfiltered"
+        # 走了哪一條要留下來。先前這三條退路全是靜默的——同一個人拍兩張，一張走正路
+        # 一張走退路，色差就差很多，而畫面上看不出差在哪。
+        self.skin_mask_source = source
+        shade_mask = textured
 
         # 可信度只量頰部這塊幾何取樣區。門檻 9.5 是在頰部上校準的（乾淨照片 p95 = 9.55），
         # 而 sample_mask 在頰部太小時會退回整臉凸包——那塊含額頭反光與下顎陰影，
@@ -1459,6 +1558,10 @@ class FaceAnalyzer:
                 # 頭髮／陰影遮住臉頰時這裡會是 reliable:false。值照樣給——它仍是最好的
                 # 估計，但下游要拿它去算 ΔE 比色號之前應該先看這個旗標。
                 "可信度": getattr(self, "skin_reliability", {"measured": False, "reliable": True, "hint": ""}),
+                # 這次的膚色是走哪一條取樣路徑算出來的：segmentation（分割模型認出
+                # 臉部皮膚）、texture（退回紋理啟發式）、unfiltered（兩條都濾太兇）。
+                # 沒有這個欄位就查不出「為什麼這張的色差特別大」。
+                "取樣來源": getattr(self, "skin_mask_source", "texture"),
             },
             "嘴唇_LAB": {"L": float(lip_L), "a": float(lip_a), "b": float(lip_b)},
             "臉部對稱性": self.get_face_symmetry(),

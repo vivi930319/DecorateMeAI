@@ -37,6 +37,12 @@
       "object": "pro_nose_side/nose_shape_side.onnx",
       "size": 111380414,
       "sha256": "af3e1df0389472dee874e89e59362b8a7a9c90ec6fde61fa1590a879e7461ff4"
+    },
+    {
+      "path": "models/mediapipe/selfie_multiclass_256x256.tflite",
+      "object": "mediapipe/selfie_multiclass_256x256.tflite",
+      "size": 16371837,
+      "sha256": "c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0"
     }
   ]
 }

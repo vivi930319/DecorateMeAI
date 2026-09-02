@@ -70,6 +70,9 @@ COPY face/rule_features.py .
 COPY face/eye_features.py .
 # 五個 BASIC ConvNeXt-Tiny ONNX（每個約 106MB）是正式答案。
 COPY models/basic_features_roi/ ./models/basic_features_roi/
+# 膚色取樣的臉部皮膚分割模型。缺了不會讓服務起不來——FaceAnalyzer 找不到檔案時
+# 會退回原本的紋理啟發式，只是排不掉垂在臉頰旁的頭髮。
+COPY models/mediapipe/ ./models/mediapipe/
 # PRO 側臉鼻型的 ConvNeXt-Tiny。程式與模型必須一起進映像，否則 PRO 會靜默降級。
 COPY models/pro_nose_side/ ./models/pro_nose_side/
 # ONNX 不進 Git；部署前由版本化 GCS bundle 補齊。Docker build 再驗一次大小與 SHA-256，
