@@ -149,11 +149,7 @@
             // Journey 流程載入本檔後會覆蓋 router.js 的同名核心函式，導致下一步
             // 渲染只能退回固定風格，甚至再次呼叫 Ollama。保留原始 prompt 與簽章，
             // 渲染端才能驗證後使用同一份指令。
-            // 對接文件 v4 §6：renderPromptEn 與 fluxPromptEn 目前回同一份內容。
-            // 兩個都讀，是因為這個專案已經踩過兩次「後端補了、前端只讀舊欄位」——
-            // 那種漏接不會報錯，只會安靜地退回固定風格的 prompt。
-            const ollamaRenderPromptEn = String(
-                response?.renderPromptEn || response?.fluxPromptEn || '').trim();
+            const ollamaRenderPromptEn = String(response?.renderPromptEn || '').trim();
 
             Router.analysisPackage = AnalysisPackage.update(pkg, {
                 generativeText: {
@@ -215,7 +211,7 @@
     function paletteHtml(structured) {
         const colors = safeColors(structured);
         if (!colors.length) return '';
-        const label = structured.overall.paletteSource === 'response' ? '為你分析的色系' : '所選風格色系';
+        const label = structured.overall.paletteSource === 'response' ? 'Ollama 回傳色系' : '所選風格色系';
         return `<div class="journey-palette" aria-label="${escapeHtml(label)}">${colors
             .map(color => `<span style="background:${color}"></span>`).join('')}</div>`;
     }
@@ -404,69 +400,10 @@
         modal.classList.add('open');
     };
 
-    // 個人化區塊（對接文件 v4 §4）。兩塊各有各的用途：
-    //   B「為你調整」給使用者讀，講的是這套妝為什麼適合他；
-    //   C「分析依據」證明那些話不是套版——所以預設收起來，想看的人才展開。
-    const PERSONA_FEATURE_ZH = {
-        faceShape: '臉型', browShape: '眉型', eyeShape: '眼型',
-        noseShape: '鼻型', lipShape: '唇型', season: '四季型',
-    };
-
-    function personalizationHtml(persona) {
-        if (!persona) return '';
-
-        let storyHtml = '';
-        if (persona.hasStory) {
-            const paragraphs = persona.story.paragraphs
-                .map(line => `<p>${escapeHtml(line)}</p>`).join('');
-            storyHtml = `<section class="persona-story">
-                <span class="eyebrow">FOR YOU</span>
-                <h2>${escapeHtml(persona.story.headline || persona.title)}</h2>
-                ${persona.story.intro ? `<p class="persona-intro">${escapeHtml(persona.story.intro)}</p>` : ''}
-                <div class="persona-body">${paragraphs}</div>
-                ${persona.story.closing && persona.story.paragraphs.includes(persona.story.closing)
-                    ? '' : (persona.story.closing ? `<p class="persona-closing">${escapeHtml(persona.story.closing)}</p>` : '')}
-            </section>`;
-        }
-
-        let evidenceHtml = '';
-        if (persona.hasEvidence) {
-            // v4 §5：sourceFeatures 有 null 時那一列顯示「未提供」，
-            // 不要整列消失——看得到「未提供」才知道系統確實看過這個部位。
-            const features = Object.keys(PERSONA_FEATURE_ZH)
-                .map(key => `<div class="persona-feat"><span>${escapeHtml(PERSONA_FEATURE_ZH[key])}</span>`
-                    + `<b>${escapeHtml(persona.sourceFeatures[key] || '未提供')}</b></div>`)
-                .join('');
-            const adjustments = persona.featureAdjustments.length
-                ? `<ul class="persona-adjust">${persona.featureAdjustments.map(item => `
-                    <li>
-                        <div class="persona-adjust-head"><b>${escapeHtml(item.part)}</b>
-                            ${item.detected ? `<span>${escapeHtml(item.detected)}</span>` : ''}</div>
-                        <p>${escapeHtml(item.adjustment)}</p>
-                        ${item.reason ? `<small>${escapeHtml(item.reason)}</small>` : ''}
-                    </li>`).join('')}</ul>`
-                : '';
-            const notes = [
-                persona.combinationNote ? `<p>${escapeHtml(persona.combinationNote)}</p>` : '',
-                persona.styleConnection ? `<p>${escapeHtml(persona.styleConnection)}</p>` : '',
-            ].join('');
-            evidenceHtml = `<details class="persona-evidence">
-                <summary>分析依據</summary>
-                <div class="persona-evidence-body">
-                    <div class="persona-feats">${features}</div>
-                    ${adjustments}
-                    ${notes ? `<div class="persona-notes">${notes}</div>` : ''}
-                </div>
-            </details>`;
-        }
-
-        return storyHtml + evidenceHtml;
-    }
-
     function partFallbackText(label, field) {
-        if (field === 'analysis') return `這次的建議沒有針對${label}的個別分析。`;
-        if (field === 'steps') return `這次的建議沒有針對${label}的個別步驟。`;
-        return `這次的建議沒有針對${label}的注意事項。`;
+        if (field === 'analysis') return `本次 Ollama 回傳沒有獨立的${label}分析說明。`;
+        if (field === 'steps') return `本次 Ollama 回傳沒有可對應到${label}的獨立操作步驟。`;
+        return `本次 Ollama 回傳沒有可對應到${label}的避免事項。`;
     }
 
     function openPartAdviceModal(partKey) {
@@ -478,7 +415,7 @@
         const partAvoid = Array.isArray(advice.avoid) ? advice.avoid.filter(Boolean) : [];
         const globalAvoid = Array.isArray(structured.globalAvoid) ? structured.globalAvoid.filter(Boolean) : [];
         const avoidList = partAvoid.length ? partAvoid : globalAvoid;
-        const avoidTitle = partAvoid.length ? '注意' : (globalAvoid.length ? '整體注意事項' : '注意');
+        const avoidTitle = partAvoid.length ? '避免' : (globalAvoid.length ? '整體避免事項' : '避免');
         const stepsHtml = steps.length
             ? `<ol>${steps.map(step => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`
             : `<p>${escapeHtml(partFallbackText(advice.label, 'steps'))}</p>`;
@@ -506,20 +443,7 @@
         }
     }
 
-    // router.js 的 PageInit.suggestion 已經會處理「從收藏點進來看當時那一次結果」
-    // （它的 viewLook 分支，見 router.js 的 `const viewLook = ...`）。這個檔案在它之後
-    // 載入並覆蓋同名函式，於是那條路徑整個消失——收藏裡的「查看妝容建議」帶著
-    // { look } 進來，卻直接撞上底下的 hasStartedJourney gate，被送去臉部分析。
-    //
-    // 保留原版並在帶 look 時委派回去，比在這裡重寫一份 viewLook 安全：那段邏輯
-    // 要從收藏紀錄還原風格、妝前妝後圖與各部位建議，重寫一次就是兩份會分岔的實作。
-    const baseSuggestionPage = PageInit.suggestion;
-
-    PageInit.suggestion = function (opts) {
-        if (opts && opts.look && typeof opts.look === 'object'
-            && typeof baseSuggestionPage === 'function') {
-            return baseSuggestionPage.call(this, opts);
-        }
+    PageInit.suggestion = function () {
         resetSuggestionViewport();
         if (!hasStartedJourney()) { renderAnalysisGate('妝容建議'); return; }
         const area = document.getElementById('suggestionArea');
@@ -577,14 +501,13 @@
                     <button type="button" data-photo="before" ${before ? '' : 'disabled'}>妝前</button>
                     <button type="button" class="active" data-photo="after">妝後</button>
                 </div>
-                <p class="look-pin-hint">點選人像兩側的妝容部位，即可查看詳細的上妝建議。</p>
+                <p class="look-pin-hint">點選人像兩側的部位標籤，查看本次 Ollama 回傳所對應的妝容做法。</p>
                 <div class="lookbook-actions">
                     <button class="btn-outline" type="button" data-prev-style>上一步：重新選擇風格</button>
                     <button class="btn-outline" type="button" data-save-look>收藏這次妝容</button>
                     <button class="btn-gold" type="button" data-products>查看推薦商品 →</button>
                 </div>
-            </section>
-            ${personalizationHtml(structured.personalization)}`;
+            </section>`;
 
         const portrait = area.querySelector('#lookPortrait');
         const portraitBefore = area.querySelector('#lookPortraitBefore');

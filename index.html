@@ -3,15 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>妝識你的美 · BeautyLens</title>
+<title>妝識你的美 · DECORATE ME</title>
 <link rel="icon" href="/favicon.ico?v=20260826-211024" sizes="16x16 32x32 48x48 64x64">
 <link rel="icon" href="/favicon-512.png?v=20260826-211024" type="image/png" sizes="512x512">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=20260826-211024">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Serif+TC:wght@300;400;500;700&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/main.css?v=20260903-011806">
-<link rel="stylesheet" href="css/makeup-flow.css?v=20260903-011806">
+<link rel="stylesheet" href="css/main.css?v=20260829-195946">
+<link rel="stylesheet" href="css/makeup-flow.css?v=20260829-195946">
 <script>
 (function(){
     try {
@@ -33,7 +33,7 @@
     </div>
     <div class="intro-glint"></div>
     <div class="intro-rule"></div>
-    <div class="intro-sub">BeautyLens · Beauty Atelier</div>
+    <div class="intro-sub">Decorate Me · Beauty Atelier</div>
     <div class="intro-skip">點擊或按 ESC 跳過</div>
 </div>
 
@@ -53,7 +53,7 @@
                 <span class="brand-round-mark" aria-hidden="true"><img src="assets/brand/decorate-me-round-source.jpg" alt=""></span>
                 <span class="topbar-brand-copy">
                     <span class="sb-name">妝識你的美</span>
-                    <span class="sb-sub">BeautyLens</span>
+                    <span class="sb-sub">DECORATE ME</span>
                 </span>
             </div>
             <nav class="topbar-nav" id="topbarDrawer" aria-label="主要選單">
@@ -62,7 +62,7 @@
                 <div class="drawer-head" aria-hidden="true">
                     <span class="drawer-mark"><img src="assets/brand/decorate-me-round-source.jpg" alt=""></span>
                     <span class="drawer-brand">
-                        <span class="db-en">BeautyLens</span>
+                        <span class="db-en">DECORATE ME</span>
                         <span class="db-zh">妝識你的美</span>
                     </span>
                 </div>
@@ -89,7 +89,7 @@
                     <span class="cart-symbol" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 4h2.2l2 11.2a1.5 1.5 0 0 0 1.5 1.2h8.6a1.5 1.5 0 0 0 1.5-1.2L20.5 8H6.2"/><circle cx="10" cy="19.5" r="1.3"/><circle cx="17" cy="19.5" r="1.3"/></svg></span>
                     <span class="cart-count" id="cartCount">0</span>
                 </button>
-                <button type="button" class="topbar-user" data-page="profile">
+                <button type="button" class="topbar-user" data-page="profile" onclick="Router.go('profile');">
                     <span class="tu-icon">✦</span>
                     <span id="sidebarUsername">訪客</span>
                 </button>
@@ -155,8 +155,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     }
     function onKey(event){ if (event.key === 'Escape' || event.key === 'Enter' || event.key === ' ') dismiss(); }
     timer = setTimeout(dismiss, DUR);
-    // 開場動畫只負責視覺呈現，不攔截首頁第一個操作；否則使用者的首擊
-    // 只會先關閉遮罩，第二次點擊才會真的進入分析／商品頁。
+    intro.addEventListener('click', dismiss);
     document.addEventListener('keydown', onKey);
 })();
 
@@ -188,7 +187,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     }, { passive: true });
 })();
 </script>
-<script defer src="js/config.js?v=20260903-011806"></script>
+<script defer src="js/config.js?v=20260829-195946"></script>
 <script>
 // config.local.js 只存在於開發機：firebase.json 明確把它排除在部署之外（它是本機覆寫用的，
 // 而且 deploy.ps1 會斷言這件事，因為那個檔案可能含有不該公開的設定）。
@@ -211,13 +210,13 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     document.currentScript.parentNode.insertBefore(local, document.currentScript.nextSibling);
 })();
 </script>
-<script defer src="js/service-endpoints.js?v=20260903-011806"></script>
-<script defer src="js/data.js?v=20260903-011806"></script>
-<script defer src="js/api.js?v=20260903-011806"></script>
+<script defer src="js/service-endpoints.js?v=20260829-195946"></script>
+<script defer src="js/data.js?v=20260829-195946"></script>
+<script defer src="js/api.js?v=20260829-195946"></script>
 <!-- 五官圖鑑：要在 router.js 之前，router 初始化分析頁時會呼叫 FeatureAtlas.attach -->
-<script defer src="js/feature-atlas.js?v=20260903-011806"></script>
-<script defer src="js/makeup-contract.js?v=20260903-011806"></script>
-<script defer src="js/router.js?v=20260903-011806"></script>
-<script defer src="js/makeup-flow.js?v=20260903-011806"></script>
+<script defer src="js/feature-atlas.js?v=20260829-195946"></script>
+<script defer src="js/makeup-contract.js?v=20260829-195946"></script>
+<script defer src="js/router.js?v=20260829-195946"></script>
+<script defer src="js/makeup-flow.js?v=20260829-195946"></script>
 </body>
 </html>
