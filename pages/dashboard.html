@@ -5,13 +5,16 @@
     <div class="hh-copy">
         <span class="hh-kicker">A PLATFORM CREATED<br>FOR THE LOVE OF BEAUTY</span>
         <h1 class="hh-title">妝識你的美</h1>
-        <p class="hh-sub">為你打造的美學旅程，從臉部分析開始</p>
-        <button type="button" class="btn-gold hh-cta" data-nav="analysis" id="dashPrimaryCta">開始臉部分析　→</button>
-        <!-- 「重新分析」按鈕已移除（2026-08-29 使用者要求）。設計稿圖 2 只有一顆行動按鈕；
-             要重跑分析，上面那顆「開始臉部分析」走的是同一條路。 -->
-        <!-- 五種膚色基準色階已移除：設計稿圖 2 沒有這一塊。
-             先前留著的理由是「它說明分析會分到什麼程度」——那是我自己加的判斷，
-             不是設計稿要的。 -->
+        <p class="hh-sub">從臉部分析開始，探索適合你的妝容，遇見專屬於你的美。</p>
+        <div class="hh-actions">
+            <!-- 首頁主入口使用全域 data-page 導覽。它不依賴 dashboard 動態樣板
+                 初始化完成，按下後一定進入臉部分析頁。 -->
+            <button type="button" class="btn-gold hh-cta" data-page="analysis" id="dashPrimaryCta">開始臉部分析　→</button>
+        </div>
+        <div class="tone-scale" aria-label="五種膚色基準">
+            <div class="swatches"><span style="background:#F0D7BD"></span><span style="background:#E5BD98"></span><span style="background:#CC9B70"></span><span style="background:#A8754C"></span><span style="background:#7D5437"></span></div>
+            <em>五種膚色基準</em>
+        </div>
     </div>
     <!-- 線稿直接用設計稿那張（裁切＋去背）。先前是我用幾條 SVG path 湊的，
          比例與筆觸都跟設計師畫的差很遠——與其畫一個近似的，不如用原圖。 -->

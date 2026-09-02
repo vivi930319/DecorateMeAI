@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════════
-   妝識你的美 · DECORATE ME — Luxury Beauty System
+   妝識你的美 · BeautyLens — Luxury Beauty System
    Palette : rose-espresso × rose-gold × blush
    Type    : Playfair Display + Noto Serif TC (display) / Jost (labels)
    Motion  : shimmer entrance · page fade-rise · hover lift · img reveal
@@ -308,7 +308,7 @@ body {
 #brand-intro {
     position:fixed; inset:0; z-index:400; background:var(--ink);
     display:flex; flex-direction:column; align-items:center; justify-content:center;
-    overflow:hidden;
+    overflow:hidden; pointer-events:none;
 }
 #brand-intro.done { animation:introOut 1.1s var(--ease) forwards; }
 @keyframes introOut { to{ opacity:0; visibility:hidden; } }
@@ -431,9 +431,13 @@ body {
 .dash-sec-head .sh-link { flex:0 0 auto; white-space:nowrap; }
 .dash-sec-head .sh-no { font-family:var(--serif); font-style:italic; font-size:18px; color:var(--gold); }
 .dash-sec-head h2 { font-family:var(--cjk); font-size:20px; font-weight:500; letter-spacing:.08em; }
-.dash-sec-head .sh-link { font-family:var(--sans); font-size:10.5px; letter-spacing:.22em; text-transform:uppercase;
-    color:var(--gold-deep); cursor:pointer; transition:color .3s var(--ease); }
-.dash-sec-head .sh-link:hover { color:var(--ink-soft); }
+.dash-sec-head .sh-link { font-family:var(--sans); font-size:13px; font-weight:600; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--gold-deep); cursor:pointer;
+    transition:color .3s var(--ease), background .3s var(--ease);
+    padding:6px 12px; border-radius:999px; }
+.dash-sec-head .sh-link:hover { color:var(--ink); background:color-mix(in srgb, var(--gold) 14%, transparent); }
+/* 鍵盤操作也要看得出焦點在哪；先前只有 hover 有回饋。 */
+.dash-sec-head .sh-link:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; }
 
 /* 三大功能編輯卡 */
 .feat-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-bottom:44px; }
@@ -1836,7 +1840,16 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .atb-head { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:12px; }
 .atb-title span { display:block; color:var(--admin-muted); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; }
 .atb-title h3 { margin:2px 0 0; color:var(--admin-ink); font-size:15px; font-weight:600; }
+.atb-head-actions { display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; }
 .atb-current { color:var(--admin-ink); font-size:11.5px; }
+.atb-retry-failed { padding:5px 11px; border:1px solid #c9a7a8; border-radius:999px;
+    background:#fff6f6; color:var(--admin-red); font-size:10.5px; cursor:pointer; }
+.atb-retry-failed:hover:not(:disabled) { border-color:var(--admin-red); background:#fff0f0; }
+.atb-retry-failed:disabled { opacity:.48; cursor:default; }
+.atb-retry-run { padding:4px 10px; border:1px solid #c9a7a8; border-radius:999px;
+    background:#fff6f6; color:var(--admin-red); font-size:10.5px; cursor:pointer; white-space:nowrap; }
+.atb-retry-run:hover:not(:disabled) { border-color:var(--admin-red); background:#fff0f0; }
+.atb-retry-run:disabled { opacity:.48; cursor:default; }
 .atb-runs { display:grid; gap:10px; }
 .atb-empty { padding:18px; border:1px dashed var(--admin-line); border-radius:8px; color:var(--admin-muted); font-size:12px; text-align:center; }
 .atb-run { padding:12px 14px; border:1px solid var(--admin-line); border-radius:8px; background:#fff; font-size:11.5px; cursor:pointer; text-align:left; }
@@ -1850,6 +1863,7 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .atb-badge-running { color:#1d5f88; background:#e8f2f9; }
 .atb-badge-done { color:var(--admin-green); background:#f2faf7; }
 .atb-badge-failed { color:var(--admin-red); background:#fff6f6; }
+.atb-badge-retried { color:#6b4f8f; background:#f7f0fb; }
 /* 時間鏈分三格：第一格是後台寫的，後兩格只有訓練腳本寫得進去。
    還沒被撿走的批次，後兩格會是灰的破折號——那一眼就看得出「還沒真的訓練」。 */
 .atb-steps { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin-bottom:10px; }
@@ -1880,6 +1894,12 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .atb-note { margin:12px 0 0; padding-top:11px; border-top:1px solid var(--admin-line); color:var(--admin-muted); font-size:11px; line-height:1.7; }
 .atb-note code { padding:1px 5px; border-radius:4px; background:#eef1f2; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10.5px; }
 .atb-note b { color:var(--admin-ink); }
+
+.tp-actions { display:flex; justify-content:flex-start; margin-top:14px; }
+.tp-retry { padding:8px 15px; border:1px solid #c9a7a8; border-radius:999px;
+    background:#fff6f6; color:var(--admin-red); font-size:12px; cursor:pointer; }
+.tp-retry:hover { border-color:var(--admin-red); background:#fff0f0; }
+.tp-retry:focus-visible { outline:2px solid var(--admin-red); outline-offset:2px; }
 
 /* 覆核狀態分頁：待覆核／已送訓／已退回。用分頁而不是勾選框，是因為這三堆的
    意義不同——待覆核是待辦，已送訓是已經變成訓練標籤，已退回的影像已經刪掉了。 */
@@ -2084,6 +2104,25 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
 .sc2-code { font-size:22px; font-weight:600; color:var(--ink-soft); letter-spacing:.02em; }
 .sc2-match { color:var(--gold-deep); font-size:11px; font-variant-numeric:tabular-nums; }
 .sc2-desc { margin:4px 0 0; color:var(--mid); font-size:11.5px; line-height:1.65; }
+.cross-brand-foundation { margin-top:18px; padding:16px; border:1px solid var(--line);
+    border-radius:14px; background:rgba(255,255,255,.34); }
+.xcb-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.xcb-head strong { color:var(--ink-soft); font-size:13px; }
+.xcb-head select { min-width:130px; padding:8px 30px 8px 10px; border:1px solid var(--line);
+    border-radius:999px; background:var(--paper); color:var(--ink-soft); }
+.xcb-card { width:100%; display:flex; align-items:center; gap:14px; padding:10px; text-align:left;
+    border:1px solid var(--line); border-radius:12px; background:var(--paper); cursor:pointer; }
+.xcb-card:hover { border-color:var(--gold-soft); transform:translateY(-1px); }
+.xcb-card img { width:82px; height:82px; object-fit:cover; border-radius:9px; }
+.xcb-copy { min-width:0; display:flex; flex-direction:column; gap:4px; color:var(--mid); font-size:11.5px; }
+.xcb-copy em { color:var(--gold-deep); font-style:normal; letter-spacing:.08em; }
+.xcb-copy strong { color:var(--ink-soft); font-size:20px; }
+.cross-brand-foundation > p { margin:10px 0 0; color:var(--mid); font-size:11px; line-height:1.6; }
+@media (max-width:600px) {
+    .xcb-head { align-items:flex-start; flex-direction:column; }
+    .xcb-head select { width:100%; }
+    .xcb-card img { width:70px; height:70px; }
+}
 
 /* 手機：三欄擠成一排會看不清色號，改成單欄堆疊，主推薦排最前面 */
 /* 手機也維持三欄。堆疊起來就不是「並排比較」了，而那正是這一區存在的理由。
@@ -3586,7 +3625,7 @@ html.intro-off #brand-intro{display:none}
 /* Selective new layout. Legacy IDs and handlers are intentionally unchanged. */
 .auth-overlay{padding:0;background:var(--paper)}.auth-editorial{width:100%;min-height:100vh;display:grid;grid-template-columns:1.08fr .92fr;background:var(--paper);color:var(--ink-soft)}
 .auth-brand-panel,.auth-form-panel{position:relative;display:flex;flex-direction:column;justify-content:center;padding:clamp(42px,8vw,130px)}.auth-brand-panel{overflow:hidden;background:var(--paper-deep)}
-.auth-brand-panel:before{content:"DECORATE ME";position:absolute;inset:auto -4vw -7vw;font:700 clamp(90px,17vw,280px)/.7 Georgia,serif;color:var(--gold);opacity:.055;white-space:nowrap}.auth-brand-panel:after{content:"";position:absolute;width:65%;aspect-ratio:1;right:-18%;top:-20%;border:1px solid var(--gold);border-radius:50%;opacity:.25}
+.auth-brand-panel:before{content:"BeautyLens";position:absolute;inset:auto -4vw -7vw;font:700 clamp(90px,17vw,280px)/.7 Georgia,serif;color:var(--gold);opacity:.055;white-space:nowrap}.auth-brand-panel:after{content:"";position:absolute;width:65%;aspect-ratio:1;right:-18%;top:-20%;border:1px solid var(--gold);border-radius:50%;opacity:.25}
 .auth-kicker{font-size:11px;letter-spacing:.28em;color:var(--gold-deep)}.auth-brand-panel h1{position:relative;margin:14px 0 24px;font:500 clamp(68px,9vw,150px)/.8 Georgia,var(--cjk),serif;letter-spacing:-.07em}.auth-brand-panel p{max-width:510px;line-height:1.9;color:var(--mid)}
 .auth-form-panel{border-left:1px solid var(--line)}.auth-form-panel .auth-card{width:min(100%,430px);padding:0;margin:auto;background:transparent;border:0;box-shadow:none;text-align:center}.auth-form-panel .auth-card h2{margin:10px 0;font-size:clamp(36px,4vw,56px)}.auth-description{margin:0 0 30px;color:var(--mid);line-height:1.7}.auth-form-panel .input-group input{background:transparent;border-width:0 0 1px;border-radius:0;padding-left:0}
 
@@ -3690,6 +3729,31 @@ html.intro-off #brand-intro{display:none}
     /* 這條在檔案後面，會蓋掉上面 768px 區塊的左右內距，兩處要一起改，
        否則 ≤760px 又被拉回 18px（2026-08-13 手機留白調整）。 */
     .main-content { padding-left:26px; padding-right:26px; }
+}
+
+/* 個人化推薦卡：商品圖之後的資訊不是同一行，必須有可預期的呼吸空間。
+   這一層只套推薦區，不改一般商品清單與商品推薦頁以外的版型。 */
+.recommended-grid { align-items:stretch; gap:34px 28px; }
+.recommended-grid .prod-card { min-width:0; padding:0 4px 7px; }
+.recommended-grid .pc-name { min-height:2.8em; overflow-wrap:anywhere; }
+.recommended-grid .pc-shade { margin-top:2px; }
+.recommended-grid .rec-sys { margin-top:13px; line-height:1.55; min-height:1.55em; }
+.recommended-grid .rec-match { margin-top:5px; }
+.recommended-grid .rec-headline { margin-top:8px; line-height:1.7; min-height:1.7em; }
+.recommended-grid .rec-traits { margin-top:10px; }
+.recommended-grid .pc-foot { margin-top:auto; padding-top:14px; }
+
+/* 商品詳情頁的個人膚色資訊：不再用 inline style，避免和商品色號列擠在一起。 */
+.pd-skin-compare { margin-top:12px; }
+.pd-skin-meta { margin-left:10px; font-family:var(--cjk); font-size:13.5px; color:var(--ink-2); }
+.pd-skin-warning { margin:6px 0 0; font-size:12px; color:var(--mid); line-height:1.6; }
+
+@media (max-width:1180px) and (min-width:981px) {
+    .recommended-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+}
+@media (max-width:760px) {
+    .recommended-grid { gap:26px 16px; }
+    .recommended-grid .prod-card { padding-inline:0; }
 }
 
 /* ═══ 品牌浮水印與金色流標 ═══
@@ -4407,10 +4471,10 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
       在手機上整塊糊成一片灰，連「臉型」兩個字都要瞇著眼看。設計稿的鎖定態
       是**清楚的**——粉色卡、看得見的插圖、右上角一把鎖；它靠鎖頭表達「還沒
       解鎖」，不是靠把畫面弄暗。暗掉的版本傳達的是「這裡壞了」。 */
-.analysis-workbench .result-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.analysis-workbench .result-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .result-panel:not(.is-ready) { filter:grayscale(.55); opacity:.9; }
 @media (max-width:620px) {
-    .analysis-workbench .result-cell { padding:12px 6px; min-height:0; }
+    .analysis-workbench .result-cell { padding:20px; min-height:150px; }
     .analysis-workbench .result-cell .rlabel { font-size:12px; letter-spacing:.02em; }
 }
 
@@ -4655,3 +4719,152 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     .home-hero { grid-template-columns:minmax(0,1fr) 30%; }
     .hh-title { font-size:clamp(24px,6.6vw,32px); }
 }
+
+/* 2026-08-31 使用者提供的手機分析稿：無外層圓角卡、兩欄六格。 */
+@media (max-width:760px) {
+    .analysis-workbench > div {
+        padding:0; min-height:0; border:0; border-radius:0;
+        background:transparent; box-shadow:none;
+    }
+    .analysis-workbench { gap:36px; }
+    .analysis-workbench .mode-tabs { position:static; width:100%; margin-bottom:16px; }
+    .analysis-workbench .section-label { padding-right:0; }
+    .analysis-workbench .upload-box {
+        min-height:245px; border-radius:0; background:rgba(255,240,234,.35);
+    }
+    .analysis-workbench .result-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .analysis-workbench .result-cell { padding:20px; min-height:150px; }
+    .analysis-workbench .skin-box { border-radius:0; }
+}
+
+/* 會員中心獨立樣式；其他頁面沿用 2026-08-29 的設計。 */
+@media (max-width:760px) {
+    /* 會員中心的手機稿是沉浸式內容頁：不保留桌機頂部列與頁面大標，
+       讓第一眼直接落在會員卡；底部四項導覽仍保留。這只套 profile，
+       商品推薦頁與其他頁面的頂部導覽不受影響。 */
+    body[data-page="profile"] .topbar,
+    body[data-page="profile"] .page-header { display:none; }
+    body[data-page="profile"] .main-content {
+        position:relative; padding-top:74px;
+    }
+    body[data-page="profile"] .main-content::before {
+        content:''; position:absolute; top:50px; left:26px; width:46px; height:1px;
+        background:var(--gold);
+    }
+    body[data-page="profile"] .member-dashboard-hero,
+    body[data-page="profile"] .member-wrap {
+        display:block; margin:0; border-radius:24px; overflow:hidden;
+        border-color:var(--line-gold); background:var(--line-gold);
+    }
+    body[data-page="profile"] .member-dashboard-hero .member-id,
+    body[data-page="profile"] .member-wrap .member-id {
+        min-height:368px; padding:36px 28px 30px; border-radius:24px 24px 0 0;
+        background:var(--glass); color:var(--ink-soft);
+    }
+    body[data-page="profile"] .member-dashboard-hero .member-stats,
+    body[data-page="profile"] .member-wrap .member-stats {
+        grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; border:0;
+        border-radius:0 0 24px 24px; background:var(--line-gold);
+    }
+    body[data-page="profile"] .member-stats .stat-cell {
+        min-height:224px; padding:28px 12px 24px; background:var(--glass);
+    }
+    body[data-page="profile"] .member-stats .stat-en {
+        margin-bottom:20px; font-size:10px; letter-spacing:.28em;
+    }
+    body[data-page="profile"] .member-stats .stat-num { font-size:56px; }
+    body[data-page="profile"] .member-stats .stat-label { margin-top:18px; font-size:13px; }
+    body[data-page="profile"] .member-stats .stat-go { margin-top:12px; }
+    body[data-page="profile"] .member-tabs {
+        width:100%; margin:34px 0 22px; padding:4px; justify-content:space-between;
+    }
+    body[data-page="profile"] .member-tab {
+        flex:1 1 0; padding:13px 8px; font-size:16px; text-align:center;
+    }
+    body[data-page="profile"] .member-tier,
+    body[data-page="profile"] .member-suggestions { margin-top:30px; padding:24px 18px; border-radius:24px; }
+    body[data-page="profile"] .member-section-head { margin-bottom:20px; }
+    body[data-page="profile"] .member-section-head span { font-size:11px; }
+    body[data-page="profile"] .member-section-head h2 { font-size:28px; }
+    body[data-page="profile"] .tier-card,
+    body[data-page="profile"] .member-action-card,
+    body[data-page="profile"] .theme-card { border-radius:0; }
+    body[data-page="profile"] .theme-shop-grid { grid-template-columns:1fr; gap:14px; }
+}
+
+/* ── 橫排的左右箭頭（需求 5～8）──────────────────────────────
+   捲軸在觸控裝置上是隱藏的，滑鼠使用者也不會直覺去「滑」一排圖片，
+   所以兩側各給一顆看得見的箭頭。維持粉金語彙與玻璃感。 */
+.row-scroller { position:relative; }
+.row-arrow {
+    position:absolute; top:38%; transform:translateY(-50%); z-index:3;
+    width:40px; height:40px; border-radius:999px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    font-size:24px; line-height:1; padding-bottom:3px;
+    color:var(--gold-deep);
+    background:color-mix(in srgb, var(--paper) 92%, transparent);
+    border:1px solid var(--line-gold);
+    box-shadow:0 4px 16px color-mix(in srgb, var(--ink) 12%, transparent);
+    backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);
+    transition:background .25s var(--ease), color .25s var(--ease), opacity .25s var(--ease);
+}
+.row-arrow-prev { left:-6px; }
+.row-arrow-next { right:-6px; }
+.row-arrow:hover:not(:disabled) { background:var(--gold); color:var(--paper); }
+.row-arrow:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; }
+.row-arrow:active:not(:disabled) { transform:translateY(-50%) scale(.94); }
+/* disabled 要看得出是「這個方向沒有了」，而不是「按鈕壞了」——
+   保留形狀與邊框，只降低對比並移除游標提示。 */
+.row-arrow:disabled { opacity:.32; cursor:default; box-shadow:none; }
+/* 整排放得下時整組箭頭收起來，留著會讓人以為右邊還有內容。 */
+.row-scroller-static .row-arrow { display:none; }
+
+@media (max-width:640px) {
+    .row-arrow { width:34px; height:34px; font-size:20px; }
+    .row-arrow-prev { left:-2px; }
+    .row-arrow-next { right:-2px; }
+}
+
+/* ── 子頁返回會員中心（需求 31、32）──────────────────────────
+   收藏與分析紀錄都是從會員中心進來的，但進來後沒有回去的路：
+   手機沒有瀏覽器返回鍵可依賴，底部導覽也沒有「會員中心」這一格。 */
+.page-back {
+    display:inline-flex; align-items:center; gap:6px; margin:0 0 18px;
+    padding:8px 16px; border-radius:999px; cursor:pointer;
+    font-family:var(--sans); font-size:13px; font-weight:600; letter-spacing:.06em;
+    color:var(--gold-deep);
+    background:color-mix(in srgb, var(--paper) 90%, transparent);
+    border:1px solid var(--line-gold);
+    transition:background .25s var(--ease), color .25s var(--ease);
+}
+.page-back:hover { background:var(--gold); color:var(--paper); }
+.page-back:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; }
+
+/* 空狀態的出口按鈕：只寫「目前尚無收藏商品」會把人留在死路上。 */
+.empty-state .empty-actions { margin-top:16px; display:flex; justify-content:center; }
+
+/* ── 會員等級：兩種方案分開列（需求 33、34）────────────────── */
+.tier-head { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:16px; }
+.tier-progress { list-style:none; margin:0; padding:0; font-size:13px; color:var(--ink-soft); }
+.tier-plans { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:14px; }
+.tier-plan {
+    padding:18px 18px 16px; border-radius:18px;
+    background:color-mix(in srgb, var(--paper) 84%, transparent);
+    border:1px solid var(--line-gold);
+    display:flex; flex-direction:column; gap:10px;
+}
+/* PRO 要一眼分得出來，但不能搶掉整頁的粉金調性——用較深的金邊而不是換色系。 */
+.tier-plan-pro { border-color:var(--gold-deep); box-shadow:0 6px 20px color-mix(in srgb, var(--gold) 18%, transparent); }
+.tier-plan h3 {
+    font-family:var(--cjk); font-size:16px; font-weight:600; letter-spacing:.06em; margin:0;
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+}
+.tier-plan ul { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:7px; }
+.tier-plan li { font-size:13.5px; line-height:1.7; color:var(--ink); padding-left:16px; position:relative; }
+.tier-plan li::before { content:'·'; position:absolute; left:4px; color:var(--gold-deep); font-weight:700; }
+.tier-plan-note { font-size:12.5px; line-height:1.7; color:var(--ink-soft); margin:2px 0 0; }
+.tier-plan-state {
+    font-size:11px; font-weight:600; letter-spacing:.08em; padding:2px 9px; border-radius:999px;
+    background:color-mix(in srgb, var(--ink) 8%, transparent); color:var(--ink-soft);
+}
+.tier-plan-state.on { background:var(--gold); color:var(--paper); }

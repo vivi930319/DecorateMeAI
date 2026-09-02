@@ -222,14 +222,73 @@
         };
     }
 
+    // 個人化區塊（對接文件 v4 §2）。這一段的用途是讓使用者看得出建議**不是寫死的**，
+    // 所以缺值時寧可少顯示一塊，也不要顯示一個空殼——空標題底下什麼都沒有，
+    // 比沒有那個標題更像壞掉。
+    function normalizePersonalization(response) {
+        const source = isObject(response?.suggestion) ? response.suggestion : response;
+        const raw = isObject(source?.personalization) ? source.personalization : null;
+        if (!raw) return null;
+
+        const story = isObject(raw.personalizedStory) ? raw.personalizedStory : {};
+        const paragraphs = textList(story.paragraphs);
+        const intro = text(story.intro);
+        const closing = text(story.closing);
+        // v4 §5：paragraphs 不是陣列或長度 0 時，用 intro + closing 頂替，
+        // 這樣至少還有話可說，不會只剩一個標題。
+        const body = paragraphs.length ? paragraphs : [intro, closing].filter(Boolean);
+
+        const featuresRaw = isObject(raw.sourceFeatures) ? raw.sourceFeatures : {};
+        const features = {};
+        for (const key of ['faceShape', 'browShape', 'eyeShape', 'noseShape', 'lipShape', 'season']) {
+            features[key] = text(featuresRaw[key]);
+        }
+
+        const adjustments = (Array.isArray(raw.featureAdjustments) ? raw.featureAdjustments : [])
+            .filter(isObject)
+            .map(item => ({
+                part: text(item.part),
+                detected: text(item.detected),
+                adjustment: text(item.adjustment),
+                reason: text(item.reason)
+            }))
+            // 只有部位名而沒有調整內容的項目對使用者沒有意義。
+            .filter(item => item.part && item.adjustment);
+
+        const hasStory = Boolean(text(story.headline) || intro || body.length || closing);
+        const hasEvidence = Object.values(features).some(Boolean) || adjustments.length
+            || text(raw.combinationNote) || text(raw.styleConnection);
+        if (!hasStory && !hasEvidence) return null;
+
+        return {
+            // headline 空值時用固定標題，不要留一個空的 <h2>。
+            title: text(raw.title) || '你的專屬調整',
+            profileSummary: text(raw.profileSummary),
+            story: {
+                headline: text(story.headline),
+                intro,
+                paragraphs: body,
+                closing
+            },
+            sourceFeatures: features,
+            featureAdjustments: adjustments,
+            combinationNote: text(raw.combinationNote),
+            styleConnection: text(raw.styleConnection),
+            hasStory,
+            hasEvidence
+        };
+    }
+
     function normalize(response, context) {
+        // 兩條解析路徑都要帶上個人化區塊：走 legacy 不代表後端沒有回這一段。
+        const personalization = normalizePersonalization(response);
         const structured = normalizeStructured(response, context);
-        if (structured?.valid) return structured;
+        if (structured?.valid) return { ...structured, personalization };
 
         const legacy = parseLegacy(response, context);
         if (legacy?.valid) {
             if (structured?.issues?.length) legacy.issues = [...structured.issues, ...legacy.issues];
-            return legacy;
+            return { ...legacy, personalization };
         }
 
         const missing = structured?.issues?.length ? structured.issues.join(', ') : 'suggestion';
@@ -241,6 +300,7 @@
     root.MakeupSuggestionContract = {
         EXPECTED_PART_KEYS: [...EXPECTED_PART_KEYS],
         normalize,
+        normalizePersonalization,
         normalizeStructured,
         parseLegacy,
         parseSections,

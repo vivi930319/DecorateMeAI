@@ -1242,3 +1242,63 @@ body[data-member-theme="noir"] .topbar-nav a:focus-visible { background: linear-
 .pd-img .ph img.loaded {
     object-fit: contain;
 }
+
+/* ── 個人化區塊（對接文件 v4 §4）─────────────────────────────
+   沿用成果頁既有的語彙：圓角卡片、柔和陰影、玻璃感底、金色細節。
+   這兩塊接在妝容成果之後，所以外距與 .lookbook-result 對齊。 */
+.persona-story {
+    margin-top: 22px; padding: 26px 24px; border-radius: 22px;
+    background: color-mix(in srgb, var(--paper) 88%, transparent);
+    border: 1px solid var(--line-gold);
+    box-shadow: 0 10px 30px color-mix(in srgb, var(--ink) 6%, transparent);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    display: flex; flex-direction: column; gap: 12px;
+}
+.persona-story .eyebrow { font-size: 10.5px; letter-spacing: .22em; color: var(--gold-deep); }
+.persona-story h2 { font-family: var(--cjk); font-size: 21px; font-weight: 500; letter-spacing: .04em; margin: 0; }
+.persona-intro { font-size: 15px; color: var(--ink); }
+/* 內文放寬行高：這一段是要讓人讀完的，不是掃過去的。 */
+.persona-body { display: flex; flex-direction: column; gap: 10px; }
+.persona-body p, .persona-closing { font-size: 14.5px; line-height: 1.85; color: var(--ink-soft); }
+.persona-closing { padding-top: 4px; border-top: 1px solid var(--line-gold); }
+
+.persona-evidence {
+    margin-top: 14px; border-radius: 18px; border: 1px solid var(--line-gold);
+    background: color-mix(in srgb, var(--paper) 72%, transparent); overflow: hidden;
+}
+.persona-evidence > summary {
+    cursor: pointer; padding: 14px 20px; font-size: 13px; font-weight: 600;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--gold-deep);
+    list-style: none;
+}
+.persona-evidence > summary::-webkit-details-marker { display: none; }
+.persona-evidence > summary::after { content: '＋'; float: right; }
+.persona-evidence[open] > summary::after { content: '－'; }
+.persona-evidence > summary:hover { color: var(--ink); }
+.persona-evidence > summary:focus-visible { outline: 2px solid var(--gold-deep); outline-offset: -2px; }
+.persona-evidence-body { padding: 4px 20px 20px; display: flex; flex-direction: column; gap: 16px; }
+
+.persona-feats { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 10px; }
+.persona-feat {
+    display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 12px;
+    background: color-mix(in srgb, var(--gold) 8%, transparent);
+}
+.persona-feat span { font-size: 11px; letter-spacing: .1em; color: var(--ink-soft); }
+.persona-feat b { font-size: 14px; font-weight: 600; }
+
+.persona-adjust { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.persona-adjust li { padding-left: 13px; border-left: 2px solid var(--line-gold); display: flex; flex-direction: column; gap: 4px; }
+.persona-adjust-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.persona-adjust-head b { font-size: 14.5px; }
+.persona-adjust-head span {
+    font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
+    background: color-mix(in srgb, var(--gold) 14%, transparent); color: var(--gold-deep);
+}
+.persona-adjust p { font-size: 14px; line-height: 1.75; }
+.persona-adjust small { font-size: 12.5px; color: var(--ink-soft); }
+.persona-notes { display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; color: var(--ink-soft); }
+
+@media (max-width: 560px) {
+    .persona-story { padding: 20px 17px; border-radius: 18px; }
+    .persona-evidence-body { padding: 4px 16px 16px; }
+}

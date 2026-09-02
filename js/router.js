@@ -481,9 +481,13 @@ const RecommendationNotice = {
     // 契約 §4 的四個降級碼。措辭的重點是「不要宣稱做了沒做的事」——
     // 尤其 BROW_COLOR_UNAVAILABLE，那條就是為了防止畫面說「眉彩已依膚色精準比對」。
     _REASON_TEXT: {
-        BROW_COLOR_UNAVAILABLE: '眉彩依風格排序（不以膚色比對眉彩色號）',
-        SKIN_TONE_LAB_UNRELIABLE: '底妝以季型與膚色分級排序，未使用色差比對',
-        STYLE_KEYWORD_NO_MATCH: '未命中風格關鍵字，已改用合格商品綜合排序',
+        // 措辭要白話，但**不能把依據省掉**：這幾句話的職責是說明「這次沒有做什麼、
+        // 改用什麼代替」。只寫「依風格推薦」而不說清楚換成哪一種排序，
+        // 使用者就無從判斷這份推薦有多貼近他自己。
+        BROW_COLOR_UNAVAILABLE: '眉彩依風格排序，沒有比對你的眉毛顏色。',
+        SKIN_TONE_LAB_UNRELIABLE: '目前沒有找到與你膚色接近的色號，最接近的色號差異仍較大，'
+            + '因此底妝改以四季型與膚色分級排序，不使用色差比對。',
+        STYLE_KEYWORD_NO_MATCH: '這個風格沒有對應到特定商品，已改用合格商品的綜合排序。',
     },
 
     // 契約 §5 的錯誤碼。使用者看得懂的話，且只有真的可以重試的才給重試。
@@ -943,9 +947,16 @@ function recommendationCardHtml(p) {
     if (p?.showMatchPercent !== false
         && (pr.matchLabel || Number.isFinite(Number(pr.matchPercent)))) {
         const label = pr.matchLabel || `${Math.round(Number(pr.matchPercent))}% MATCH`;
+        // 需求 24：同一個百分比，可能算過膚色色號，也可能只依妝容風格。
+        // 分不出來的話，使用者會以為每一項都比對過自己的膚色——粉底比對過，
+        // 唇彩與眼影多半沒有，因為那些品類本來就不是靠膚色距離挑的。
+        const method = String(pr.colorMethod || '');
+        const byShade = (method && !/unavailable|no_match/i.test(method))
+            || Boolean(p && p.foundationSkinMatch);
+        const basis = byShade ? '推薦匹配度 · 含色號比對' : '推薦匹配度 · 依妝容風格';
         // 「推薦匹配度」這四個字是契約要求的，不能省：少了它，95% MATCH
         // 會被讀成「95% 準確」或「95% 會適合」，而那兩個都不是它的意思。
-        parts.push(`<div class="rec-match"><b>${escapeHtml(label)}</b><small>推薦匹配度</small></div>`);
+        parts.push(`<div class="rec-match"><b>${escapeHtml(label)}</b><small>${escapeHtml(basis)}</small></div>`);
     }
     if (pr.headline) parts.push(`<div class="rec-headline">${escapeHtml(pr.headline)}</div>`);
     const traits = Array.isArray(pr.suitedTraits) ? pr.suitedTraits.filter(Boolean).slice(0, 4) : [];
@@ -1442,17 +1453,40 @@ function recommendationEvidenceHtml(p) {
     </details>`;
 }
 
-// 每個分類先放入最高分商品，再依分數補上其餘推薦。
+// 每個分類先放入匹配度最高的商品，再依匹配度補上其餘推薦。
+//
+// 分類優先是刻意的：只照分數排的話，粉底可能連續佔滿前六格，而使用者看不到
+// 任何一支唇彩。所以先讓每個分類出一個代表，代表之間與其餘商品**各自**再依
+// 匹配度由高到低排。
 function orderRecommendedProducts(list) {
     const items = Array.isArray(list) ? list : [];
-    const best = new Map();
+    // 同一支商品可能因為風格命中與色號命中各被回一次。先去重，
+    // 否則畫面上會出現兩張一模一樣的卡片，看起來像系統壞了。
+    const seen = new Set();
+    const unique = [];
     for (const p of items) {
-        if (!p?.cat) continue;
-        if (!best.has(p.cat) || (p.score ?? 0) > (best.get(p.cat).score ?? 0)) best.set(p.cat, p);
+        const id = String(p?.id ?? '');
+        if (!id || seen.has(id)) continue;
+        seen.add(id);
+        unique.push(p);
     }
-    const firsts = [...best.values()];
+    // 排序要用**卡片上印的那個數字**。先前用 score，而卡片標的是 matchPercent——
+    // 兩者不一致時，使用者會看到 92% MATCH 排在 85% 後面，像是排序壞掉。
+    const rank = (p) => {
+        const pct = Number(p?.matchPercent);
+        if (Number.isFinite(pct)) return pct;
+        const score = Number(p?.score);
+        // score 有時是 0–1、有時已經是百分比，換算過才能跟 matchPercent 比大小。
+        return Number.isFinite(score) ? (score <= 1 ? score * 100 : score) : -1;
+    };
+    const best = new Map();
+    for (const p of unique) {
+        if (!p?.cat) continue;
+        if (!best.has(p.cat) || rank(p) > rank(best.get(p.cat))) best.set(p.cat, p);
+    }
+    const firsts = [...best.values()].sort((a, b) => rank(b) - rank(a));
     const picked = new Set(firsts.map(p => String(p.id)));
-    const rest = items.filter(p => !picked.has(String(p.id))).sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    const rest = unique.filter(p => !picked.has(String(p.id))).sort((a, b) => rank(b) - rank(a));
     return [...firsts, ...rest];
 }
 
@@ -1478,6 +1512,21 @@ function getRecommendedProductCatalog() {
 // 把本機收藏清單解析成「真的畫得出來的商品」。收藏可能來自 demo 資料、真實商品 API、
 // 或分析後的個人化推薦，三邊都要查，不然收藏了也看不到。
 //
+// 收藏與分析紀錄都是從會員中心點進來的，但進來之後沒有任何回去的路——
+// 手機上沒有瀏覽器返回鍵可依賴，而下方導覽列並沒有「會員中心」這一格。
+// 按鈕掛在內容容器的父層，頁面重畫時不會被 innerHTML 清掉。
+function ensureMemberBack(areaId) {
+    const area = document.getElementById(areaId);
+    const host = area && area.parentNode;
+    if (!host || host.querySelector('.page-back')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'page-back';
+    btn.textContent = '← 返回會員中心';
+    btn.onclick = () => Router.go('profile');
+    host.insertBefore(btn, area);
+}
+
 // 為什麼要獨立成一支：會員中心的「收藏商品」數字原本直接數 Fav.list()（本機存了幾個 id），
 // 收藏頁卻只畫得出查得到的那幾件，於是兩邊對不上——會員中心說 12 件，點進去只有 9 件，
 // 沒有任何說明。差額的來源是商品下架，或資料庫重匯後 id 被重編號（見 S68：id 只是匯入時的
@@ -1968,7 +2017,10 @@ function markLookImageUnavailable(img){
 }
 if (typeof window !== 'undefined') window.markLookImageUnavailable = markLookImageUnavailable;
 
-function openLookModal(item){
+function openLookModal(item, options){
+  // allowOpenSuggestion=false 用在後台：那裡看的是別人的收藏，
+  // 跳去妝容建議頁只會顯示管理員自己的資料，按鈕沒有意義。
+  var allowOpenSuggestion = !(options && options.allowOpenSuggestion === false);
   if(!item) return;
   var old=document.getElementById('lookModal'); if(old) old.remove();
   var advice=item.advice||{};
@@ -1997,7 +2049,7 @@ function openLookModal(item){
     // 同一份妝前妝後，兩個地方長得不一樣，會被當成兩個不同的東西。
     // 這裡不把長按互動複製一份進浮層：那等於同一套互動維護兩份，
     // 改一邊忘另一邊。改成把這筆資料交給既有的那一頁。
-    +((beforeSrc&&afterSrc)?'<button type="button" class="btn-gold lm-open-compare">查看妝容建議</button>':'')
+    +((allowOpenSuggestion&&beforeSrc&&afterSrc)?'<button type="button" class="btn-gold lm-open-compare">查看妝容建議</button>':'')
     +'</div></div>';
   document.body.appendChild(ov); void ov.offsetWidth; ov.classList.add('show');
   function close(){ ov.classList.remove('show'); setTimeout(function(){ ov.remove(); },350); }
@@ -2094,7 +2146,7 @@ function showCartPanel(){
                 <div class="cart-qty"><button data-cart-remove="${escapeHtml(item.id)}">移除</button></div>
             </article>`).join('')}</div>
             ${gone.length ? `<div class="cart-gone-note">有 ${gone.length} 件商品已下架，結帳時不會計入。可以自行移除。</div>` : ''}
-            <footer><span>共 ${rows.reduce((n, r) => n + (parseInt(r.qty, 10) || 0), 0)} 件商品</span><button class="cart-checkout" ${rows.length ? '' : 'disabled'}>前往結帳</button></footer>
+            <footer><span>共 ${rows.reduce((n, r) => n + (parseInt(r.qty, 10) || 0), 0)} 件商品</span><button class="cart-checkout" disabled title="結帳功能尚未開放">結帳功能開發中，敬請期待</button></footer>
         </section>`;
         overlay.querySelector('.cart-close').onclick = () => overlay.remove();
         overlay.querySelectorAll('[data-cart-minus]').forEach(btn => btn.onclick = () => { Cart.change(btn.dataset.cartMinus, -1); updateCartBadge(); render(); });
@@ -2415,7 +2467,7 @@ function getPageFallback(page){
     <div class="hh-copy">
         <span class="hh-kicker">A PLATFORM CREATED<br>FOR THE LOVE OF BEAUTY</span>
         <h1 class="hh-title">妝識你的美</h1>
-        <p class="hh-sub">為你打造的美學旅程，從臉部分析開始</p>
+        <p class="hh-sub">從臉部分析開始，探索適合你的妝容，遇見專屬於你的美。</p>
         <div class="hh-actions">
             <button type="button" class="btn-gold hh-cta" data-page="analysis" id="dashPrimaryCta">開始臉部分析　→</button>
         </div>
@@ -2685,7 +2737,7 @@ profile: `
                 aria-label="更換大頭貼">✦<span class="ma-edit" aria-hidden="true">更換</span></button>
         <input type="file" id="profileAvatarInput" accept="image/*" style="display:none;">
         <div class="member-name" id="profileName">訪客</div>
-        <div class="member-role" id="profileRole">Decorate Me Member</div>
+        <div class="member-role" id="profileRole">BeautyLens Member</div>
         <div class="member-actions">
             <button type="button" class="ma-cell" id="changePwdBtn" style="display:none;">
                 <span class="ma-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 10V7.5a4 4 0 0 1 8 0V10"/><rect x="5.5" y="10" width="13" height="9.5" rx="2"/></svg></span>
@@ -2959,7 +3011,9 @@ async function runMakeupSuggestion(onProgress) {
         });
         const { suggestion: cleanSuggestion, leakedEnglishPart } = splitOllamaTwoPartSuggestion(response.suggestion);
         const fullText = cleanSuggestion || '';
-        const ollamaRenderPromptEn = response.renderPromptEn || leakedEnglishPart || '';
+        // v4 §6：兩個欄位回同一份內容，兩個都接才不會在後端只留一個時安靜失效。
+        const ollamaRenderPromptEn = response.renderPromptEn || response.fluxPromptEn
+            || leakedEnglishPart || '';
         notify(100, '建議已產生');
 
         Router.analysisPackage = AnalysisPackage.update(pkg || Router.analysisPackage, {
@@ -3442,6 +3496,52 @@ const PageInit = {
         }
 
         // 風格靈感 · 人像卡橫排（真實 STYLES）
+        //
+        // 需求 5～8：只靠橫向捲動的話，桌機使用者多半不知道右邊還有卡片——
+        // 捲軸在觸控裝置上是隱藏的，而滑鼠使用者不會直覺去「滑」一排圖片。
+        // 這裡把整排包進一層 shell，兩側各放一顆箭頭，並在到頭／到尾時 disabled。
+        const attachRowArrows = (row) => {
+            if (!row || row.dataset.arrowsReady) return;
+            row.dataset.arrowsReady = '1';
+            const shell = document.createElement('div');
+            shell.className = 'row-scroller';
+            row.parentNode.insertBefore(shell, row);
+            shell.appendChild(row);
+
+            const make = (dir, label) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = `row-arrow row-arrow-${dir}`;
+                btn.setAttribute('aria-label', label);
+                btn.innerHTML = dir === 'prev' ? '‹' : '›';
+                shell.appendChild(btn);
+                return btn;
+            };
+            const prev = make('prev', '看前一組風格');
+            const next = make('next', '看後一組風格');
+
+            // 一次捲一張卡加間距，而不是捲固定像素：卡片在手機上比較窄，
+            // 固定像素會在小螢幕上一次跳過兩張、在大螢幕上只動半張。
+            const step = () => {
+                const card = row.querySelector('.insp-card, .trend-card, [class*="-card"]');
+                const gap = parseFloat(getComputedStyle(row).columnGap || getComputedStyle(row).gap || '0') || 0;
+                return card ? card.getBoundingClientRect().width + gap : Math.round(row.clientWidth * 0.8);
+            };
+            const sync = () => {
+                const max = row.scrollWidth - row.clientWidth;
+                // 留 2px 容差：捲到底時 scrollLeft 常差一點點，嚴格比較會讓箭頭永遠亮著。
+                prev.disabled = row.scrollLeft <= 2;
+                next.disabled = row.scrollLeft >= max - 2;
+                // 整排放得下就不需要箭頭，留著只會佔位並讓人以為還有內容。
+                shell.classList.toggle('row-scroller-static', max <= 2);
+            };
+            prev.onclick = () => row.scrollBy({ left: -step(), behavior: 'smooth' });
+            next.onclick = () => row.scrollBy({ left: step(), behavior: 'smooth' });
+            row.addEventListener('scroll', sync, { passive: true });
+            window.addEventListener('resize', sync);
+            sync();
+        };
+
         const insp = document.getElementById('dashInsp');
         if (insp && typeof STYLES !== 'undefined') {
             insp.innerHTML = STYLES.map((s, i) => `
@@ -3457,6 +3557,9 @@ const PageInit = {
                     </div>
                 </div>`).join('');
             insp.querySelectorAll('.insp-card').forEach(c => c.onclick = () => Router.go('style', { styleId: c.dataset.style }));
+            // 內容填完才掛箭頭：scrollWidth 要有卡片才算得出來，
+            // 空的時候算出來會是 0，箭頭一開始就全部 disabled。
+            attachRowArrows(insp);
         }
 
         // 首頁商品推薦：與商品頁共用商品 API 真資料；資料在背景補齊時只更新商品區，
@@ -4971,7 +5074,7 @@ const PageInit = {
                         ${shadeRecommendationHtml(p)}
                         ${crossBrandFoundationHtml(p)}
                         <div class="pd-actions">
-                            <button class="add-bag" data-bag="${p.id}">加入購物袋</button>
+                            <button class="add-bag" data-bag="${p.id}">加入購物車</button>
                             <button class="heart-btn pd-heart ${Fav.has(p.id)?'fav':''}" data-fav-detail="${p.id}" aria-label="收藏">${HEART_SVG}</button>
                         </div>
                         <div class="pd-desc">${escapeHtml(p.desc || p.matchReason || '商品詳細說明區域。可放入完整描述、使用方式、成分說明等資訊。')}</div>
@@ -5085,6 +5188,7 @@ const PageInit = {
     },
 
     favorites() {
+        ensureMemberBack('favArea');
         // 三個來源的解析與「查不到的件數」跟會員中心共用 resolveFavoriteProducts()，
         // 否則兩邊各算各的就會再次分岔。
         const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
@@ -5113,8 +5217,16 @@ const PageInit = {
         // unavailable.length，於是那種情況會落到下面，畫出一張寫著
         // 「0 件收藏」的統計列和一個空格子，而不是「目前尚無收藏商品」。
         if (!items.length) {
-            const emptyText = syncState === 'loading' ? '正在讀取收藏商品' : '目前尚無收藏商品';
-            area.innerHTML = syncNote + `<div class="empty-state">${emptyText}</div>`;
+            const loading = syncState === 'loading';
+            const emptyText = loading ? '正在讀取收藏商品' : '目前尚無收藏商品';
+            // 還在讀取時不要給出口——那時「沒有收藏」還不是結論。
+            const exit = loading ? '' :
+                '<div class="empty-actions">'
+                + '<button class="btn-gold" type="button" data-empty-go="products">去看商品推薦</button>'
+                + '</div>';
+            area.innerHTML = syncNote + `<div class="empty-state">${emptyText}${exit}</div>`;
+            const go = area.querySelector('[data-empty-go]');
+            if (go) go.onclick = () => Router.go(go.dataset.emptyGo);
             bindRetry();
             return;
         }
@@ -5535,6 +5647,7 @@ const PageInit = {
     },
 
     history() {
+        ensureMemberBack('historyArea');
         const records = History.list();
         const area = document.getElementById('historyArea');
         if (!records.length) { area.innerHTML = '<div class="empty-state">尚無分析紀錄</div>'; return; }
@@ -5607,18 +5720,47 @@ const PageInit = {
             const tierProgressLine = nextTier
                 ? `<li>距離「${nextTier.name}」還差 ${nextTier.min - tier.lifetime} 點累計點數</li>`
                 : (tier.autoTier ? `<li>已達目前等級制度的最高等級</li>` : '');
+            // 需求 33、34：把兩種等級分開列，並寫清楚各自能用什麼、怎麼升級。
+            //
+            // 先前四條清單混在一起，「PRO 臉部分析（升級 VIP 解鎖）」夾在中間——
+            // 使用者看得到那一行，卻不知道 PRO 還有什麼、也不知道要怎麼升。
+            // 這裡只列程式碼裡確實存在的功能，不寫還沒做的東西。
+            const proStatus = isVip
+                ? '<span class="tier-plan-state on">已開通</span>'
+                : '<span class="tier-plan-state">尚未開通</span>';
+            const proHowTo = isVip
+                ? '你目前可以使用 PRO PLAN 的所有功能。'
+                : (pending
+                    ? '你的升級申請正在審核中，通過後這一區會自動開通。'
+                    : 'PRO PLAN 目前由管理員手動開通，需要升級請與管理員聯繫。');
             tierCard.innerHTML = `
                 <div class="tier-card">
-                    <div>
-                    <span class="tier-badge ${isVip ? 'vip' : 'general'}">${tier.name}</span>
-                    <ul class="tier-benefits">
-                        <li>BASIC 臉部分析</li>
-                        <li>${isVip ? 'PRO 臉部分析（已開通）' : 'PRO 臉部分析（升級 VIP 解鎖）'}</li>
-                        <li>${renderQuotaLine}</li>
-                        ${tierProgressLine}
-                    </ul>
-                    ${pending ? `<div class="tier-pending">你的 VIP 升級申請審核中</div>` : ''}
+                    <div class="tier-head">
+                        <span class="tier-badge ${isVip ? 'vip' : 'general'}">${tier.name}</span>
+                        ${tierProgressLine ? `<ul class="tier-progress">${tierProgressLine}</ul>` : ''}
                     </div>
+                    <div class="tier-plans">
+                        <section class="tier-plan">
+                            <h3>一般會員</h3>
+                            <ul>
+                                <li>BASIC 臉部分析（臉型、五官、膚色與四季型）</li>
+                                <li>${renderQuotaLine}</li>
+                                <li>個人化妝容建議與商品推薦</li>
+                                <li>收藏妝容與商品、查看分析紀錄</li>
+                                <li>打卡累積點數，兌換介面主題</li>
+                            </ul>
+                            <p class="tier-plan-note">註冊完成即可使用，不需要點數。</p>
+                        </section>
+                        <section class="tier-plan tier-plan-pro">
+                            <h3>PRO PLAN ${proStatus}</h3>
+                            <ul>
+                                <li>一般會員的所有功能</li>
+                                <li>PRO 臉部分析：加測側臉，鼻型判斷更完整</li>
+                            </ul>
+                            <p class="tier-plan-note">${proHowTo}</p>
+                        </section>
+                    </div>
+                    ${pending ? `<div class="tier-pending">你的 VIP 升級申請審核中</div>` : ''}
                 </div>
             `;
         }
@@ -6565,7 +6707,7 @@ const PageInit = {
                     const item = records[index];
                     if (!item) return;
                     ov.remove();
-                    openLookModal(item);
+                    openLookModal(item, { allowOpenSuggestion: false });
                 };
             });
             ov.querySelectorAll('[data-admin-del-look]').forEach(button => {
@@ -7464,14 +7606,24 @@ const PageInit = {
                 && it.hasSample && !it.trainingRunId && fbApprovedFields(it).length);
 
             const fbTrainTargets = () => {
-                // 明確勾選待覆核圖片並按送訓，等同管理員採用該筆修正；送出時會先
-                // 寫入採用決定，再建立 queued 批次。已有其他批次執行中也不影響登記。
+                // 勾選決定「送哪幾筆」，不決定「那幾筆算不算已採用」。
+                //
+                // 決策文件《後台待覆核全選與捷徑_2026-08-31》第 5 條：
+                //   勾選不呼叫採用 API、不自動送訓。
+                //   送訓目標仍與已採用／部分採用且有有效標籤的資料取交集。
+                //
+                // 先前這裡只濾 hasSample 與 trainingRunId，沒有跟 fbTrainable() 取交集，
+                // 於是勾到待覆核的圖片就會被送進訓練批次——未經人工覆核的標籤混進
+                // 訓練資料，而且事後從批次紀錄看不出哪幾筆是這樣進去的。
+                // tests/feedback_pick_all_check.js 一直守著這條，但它的原始碼擷取
+                // 在區塊函式上會截斷成 SyntaxError，所以那個守衛從來沒有真的跑起來。
+                const trainable = fbTrainable();
                 if (fbSelected.size) {
-                    return fbItems.filter(it => it.hasSample && !it.trainingRunId
-                        && fbSelected.has(it.feedbackId || it.jobId))
+                    return trainable
+                        .filter(it => fbSelected.has(it.feedbackId || it.jobId))
                         .map(it => it.feedbackId || it.jobId);
                 }
-                return fbTrainable().map(it => it.feedbackId || it.jobId);
+                return trainable.map(it => it.feedbackId || it.jobId);
             };
 
             // 全選框的三態：全勾打勾、全空清掉、勾一部分顯示 indeterminate。
@@ -9114,8 +9266,8 @@ function showLogin() {
     if (location.hash) history.replaceState(null, '', `${location.pathname}${location.search}`);
     document.getElementById('auth-layer').innerHTML = `
         <div class="auth-overlay">
-            <section class="auth-editorial" aria-label="Decorate Me 登入">
-              <div class="auth-brand-panel"><span class="auth-kicker">DECORATE ME</span><h1>妝識<br>你的美</h1><p>從臉部分析開始，保存每一次妝容建議、收藏與專屬風格。</p></div>
+            <section class="auth-editorial" aria-label="BeautyLens 登入">
+              <div class="auth-brand-panel"><span class="auth-kicker">BeautyLens</span><h1>妝識<br>你的美</h1><p>從臉部分析開始，保存每一次妝容建議、收藏與專屬風格。</p></div>
               <div class="auth-form-panel"><div class="auth-card"><span class="auth-kicker">會員登入</span><h2>歡迎回來</h2><p class="auth-description">登入後同步分析紀錄、收藏商品與會員主題。</p>
                 <div class="input-group"><label>電子郵件</label>
                   <div class="ig-field">
