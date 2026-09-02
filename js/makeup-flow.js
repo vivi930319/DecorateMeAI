@@ -34,7 +34,44 @@
             .slice(0, 6);
     }
 
+    // 每一次流程都領一個號碼牌，非同步工作回來時要先確認自己還是最新的那一次。
+    //
+    // 先前是用 `document.getElementById('journeyModal')` 判斷「這次流程還算數嗎」，
+    // 但那個 id 是所有流程視窗共用的：使用者點掉第一個視窗、改選另一個風格之後，
+    // 畫面上會有第二個同名視窗，於是第一次的檢查照樣通過，把舊風格的結果接到
+    // 新流程上，湊出「男士白開水妝容建議 ／ 以千金風格打造⋯⋯」這種標題與內文
+    // 互相矛盾的畫面。
+    //
+    // 號碼牌與下面的 resultStyleId 都只活在這個檔案裡，不寫進 analysisPackage，
+    // 所以不會跟著推薦或渲染的請求送出去，也不動任何既有的資料結構。
+    let journeyToken = 0;
+
+    // 最近一次成功回來的建議是用哪個風格產生的。標題要跟內文出自同一次請求，
+    // 不能跟著「使用者現在選中哪張卡」跑。
+    let resultStyleId = null;
+
+    function nextJourneyToken() {
+        return ++journeyToken;
+    }
+
+    function journeyIsCurrent(token) {
+        return token === journeyToken && !!document.getElementById('journeyModal');
+    }
+
+    // getStyle() 讀的是 Router.selectedStyleId，也就是「現在選中哪張卡」，會隨著
+    // 使用者重新開啟風格視窗而改變；而畫面上的內文來自 analysisPackage，是「上一次
+    // 成功回來的建議」。兩份各自更新，中斷重選之後標題與內文就會對不起來。
+    // 這裡優先用產生這份建議時記下的風格；沒有紀錄時（例如重新整理過）才退回
+    // 目前選中的風格，行為與先前相同。
+    function resultStyle(fallbackStyle) {
+        return STYLES.find(style => style.id === resultStyleId) || fallbackStyle;
+    }
+
     function removeJourneyModal() {
+        // 關掉視窗等於放棄這次流程：號碼牌往前跳一號，仍在飛的請求回來時就認得出
+        // 自己已經過期。請求本身不會被取消（這裡沒有 AbortSignal 可傳），
+        // 但它的結果不會再改到畫面。
+        journeyToken += 1;
         document.getElementById('journeyModal')?.remove();
     }
 
@@ -52,7 +89,7 @@
         }
     }
 
-    function journeyShell(kicker, title, body, actions) {
+    function journeyShell(kicker, title, body, actions, dismissible = true) {
         removeJourneyModal();
         const modal = document.createElement('div');
         modal.id = 'journeyModal';
@@ -70,7 +107,15 @@
         document.body.appendChild(modal);
         // 手機上內容可能超過視窗高度;右上角 ✕ 一律可關,不必捲到底部按鈕。
         modal.querySelector('.journey-dialog-close')?.addEventListener('click', removeJourneyModal);
-        modal.addEventListener('click', event => { if (event.target === modal) removeJourneyModal(); });
+        // 只有「已經有結果」的視窗才允許點背景關閉。
+        //
+        // 進行中的兩個視窗（產生建議、妝容渲染）不給這個出口：backdrop 是一整片
+        // 沒有任何提示的可點區域，使用者要按按鈕或風格卡時很容易掃到，一掃就把
+        // 跑到一半的流程丟掉。右上角的 ✕ 一律保留，要離開仍然離得開，
+        // 只是必須是一個明確的動作。
+        if (dismissible) {
+            modal.addEventListener('click', event => { if (event.target === modal) removeJourneyModal(); });
+        }
         return modal;
     }
 
@@ -180,7 +225,7 @@
         }
         const body = `<div class="journey-ready-card">
             <span class="journey-ready-check">✓</span>
-            <div><b>${escapeHtml(style.name)}妝容建議已完成</b><p>${escapeHtml(structured.overall.summary)}</p></div>
+            <div><b>${escapeHtml(resultStyle(style).name)}妝容建議已完成</b><p>${escapeHtml(structured.overall.summary)}</p></div>
         </div>
         ${paletteHtml(structured)}
         <p class="journey-next-note">下一步會根據這份建議產生妝容圖片，通常需要 60–150 秒。</p>`;
@@ -215,20 +260,25 @@
         // 等於把同一件事再問一次；而失敗時真正有用的動作是回上一步換個風格
         // 或重新分析，那顆按鈕本來就在旁邊。
         const modal = journeyShell('MAKEUP SUGGESTION', '正在產生妝容建議', body,
-            '<button class="btn-outline" type="button" data-back>上一步</button>');
+            '<button class="btn-outline" type="button" data-back>上一步</button>', false);
         modal.querySelector('[data-back]').onclick = () => {
             removeJourneyModal();
             openMakeupStyleModal(Router.selectedStyleId);
         };
+        // 號碼牌要在 journeyShell 之後領：那支函式會先關掉前一個視窗，
+        // 而關閉本身就會把號碼往前跳一號。
+        const token = nextJourneyToken();
         const painter = modal.querySelector('#journeyProgress');
         const timer = setInterval(() => {
+            // 流程被放棄之後 painter 已經從畫面上移除，再畫也只是空轉。
+            if (!journeyIsCurrent(token)) { clearInterval(timer); return; }
             active = Math.min(2, active + 1);
             if (painter) painter.innerHTML = progressTimeline(steps, active);
         }, 1200);
 
         runMakeupSuggestion().then(result => {
             clearInterval(timer);
-            if (!document.getElementById('journeyModal')) return;
+            if (!journeyIsCurrent(token)) return;
             if (!result.ok) {
                 // 失敗就把原因寫在說明那一行，出口是旁邊的「上一步」。
                 const note = modal.querySelector('.journey-wait-note');
@@ -237,6 +287,9 @@
                     : `目前無法完成建議：${result.error?.message || '服務暫時無法使用'}`;
                 return;
             }
+            // 這份建議是哪個風格產生的，跟著結果一起記下來，後面的標題就不會
+            // 跟著「現在選中哪張卡」跑掉。
+            resultStyleId = Router.selectedStyleId;
             if (painter) painter.innerHTML = progressTimeline(steps, steps.length);
             setTimeout(openAdviceReadyModal, 350);
         });
@@ -264,12 +317,14 @@
         // 額度本身由 runMakeupRender 裡的 UsageQuota 擋（訪客每天 2 次、會員 4 次，
         // 與妝容建議分開計算），那是每一次渲染都會走到的地方，不分入口。
         // 所以拿掉這顆按鈕不是在補額度的漏洞，是在減少「按了也沒用的重試」。
-            '<button class="btn-outline" type="button" data-back>上一步</button>');
+            '<button class="btn-outline" type="button" data-back>上一步</button>', false);
         modal.querySelector('[data-back]').onclick = openAdviceReadyModal;
+        const token = nextJourneyToken();
         const painter = modal.querySelector('#renderJourneyProgress');
         const pct = modal.querySelector('#renderJourneyPct');
 
         runMakeupRender(progress => {
+            if (!journeyIsCurrent(token)) return;
             const value = Number.isFinite(Number(progress)) ? Number(progress) : 1;
             const nextActive = value < 35 ? 0 : value < 75 ? 1 : 2;
             if (nextActive !== active) {
@@ -278,7 +333,7 @@
             }
             if (pct) pct.textContent = `${Math.max(1, Math.round(value))}%`;
         }).then(outcome => {
-            if (!document.getElementById('journeyModal')) return;
+            if (!journeyIsCurrent(token)) return;
             if (!outcome.ok && handleRenderBlocked(outcome.reason)) {
                 removeJourneyModal();
                 return;
@@ -382,7 +437,7 @@
             return;
         }
         if (!hasRender) {
-            area.innerHTML = `<section class="lookbook-result journey-resume-card"><span class="eyebrow">MAKEUP SUGGESTION</span><h2>${escapeHtml(style.name)}妝容建議已完成</h2><p>${escapeHtml(structured.overall.summary)}</p>${paletteHtml(structured)}<div class="lookbook-actions"><button class="btn-outline" type="button" data-resume-style>重新選擇風格</button><button class="btn-gold" type="button" data-resume-render>開始妝容渲染 →</button></div></section>`;
+            area.innerHTML = `<section class="lookbook-result journey-resume-card"><span class="eyebrow">MAKEUP SUGGESTION</span><h2>${escapeHtml(resultStyle(style).name)}妝容建議已完成</h2><p>${escapeHtml(structured.overall.summary)}</p>${paletteHtml(structured)}<div class="lookbook-actions"><button class="btn-outline" type="button" data-resume-style>重新選擇風格</button><button class="btn-gold" type="button" data-resume-render>開始妝容渲染 →</button></div></section>`;
             area.querySelector('[data-resume-style]').onclick = () => openMakeupStyleModal(Router.selectedStyleId);
             area.querySelector('[data-resume-render]').onclick = openRenderJourneyModal;
         }
@@ -425,7 +480,7 @@
             return `<button class="look-pin ${item.side} ${item.slot}" type="button" data-look-part="${item.key}"><span>${escapeHtml(label)}</span><i aria-hidden="true"></i></button>`;
         };
         const colors = safeColors(structured);
-        const title = structured.overall.title || `${style.name}妝容建議`;
+        const title = structured.overall.title || `${resultStyle(style).name}妝容建議`;
         area.innerHTML = `
             <section class="lookbook-result">
                 <div class="lookbook-heading">
