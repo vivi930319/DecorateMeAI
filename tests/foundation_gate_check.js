@@ -140,6 +140,10 @@ console.log('=== 4b. closest_available：可以顯示，但不能背書（§5、
 // 「系統推薦的」與「系統找到最接近的」差在哪，除非畫面自己講清楚。
 const closestProduct = {
     id: 'api-foundations-968',
+    // colorDiffInfo 現在只對粉底回傳資料（色差只有粉底有意義）。這筆測試資料
+    // 是那個限制加入之前寫的，沒有 type 就會被判成非粉底，色差入口整個消失——
+    // 而失敗的樣子是「入口不見了」，看起來像入口壞掉，不像資料少一個欄位。
+    type: 'foundations',
     showMatchPercent: false,
     foundationSkinMatch: { deltaE: 2.54, accepted: false, displayEligible: true,
                            displayStatus: 'closest_available', displayMaxInclusive: 5 },
@@ -154,11 +158,17 @@ const cardOut = cardFn(closestProduct);
 const panelOut = panelFn(closestProduct);
 check('卡片標成「目前最接近的可比較色號」', cardOut.includes('目前最接近的可比較色號'));
 check('卡片不寫「根據系統演算法推薦」', !cardOut.includes('根據系統演算法推薦'));
-check('卡片不印 MATCH', !cardOut.includes('MATCH'));
-check('卡片說明未達門檻', cardOut.includes('未達正式匹配門檻'));
-check('卡片標明比較對象是膚色', cardOut.includes('與您的膚色的色差 2.5'));
-check('詳情面板同樣不背書',
-  !panelOut.includes('根據系統演算法推薦') && !panelOut.includes('MATCH'));
+// 契合度照常顯示——隱藏它會讓使用者以為這件商品沒有被評估過。
+// 「不背書」現在靠但書達成：數字旁邊必須說清楚這只是目前最接近的色號。
+check('卡片仍顯示契合度', cardOut.includes('MATCH') || cardOut.includes('推薦契合度'));
+check('顯示契合度時一定附但書',
+  !(cardOut.includes('MATCH') || cardOut.includes('推薦契合度'))
+  || cardOut.includes('目前最接近的可比較色號'));
+check('卡片不寫成已通過門檻', !cardOut.includes('已達') && !cardOut.includes('精準比對'));
+// 色差那句由 foundationSkinLines 統一產生，只出現在詳情面板——
+// 先前卡片與面板各寫一次，同一個判斷講兩遍不會更有說服力。
+check('詳情面板標明比較對象是膚色', panelOut.includes('與您的膚色'));
+check('詳情面板不寫舊措辭', !panelOut.includes('根據系統演算法推薦'));
 check('詳情面板仍給色差說明入口', panelOut.includes('data-color-diff'));
 // showMatchPercent 只在後端明確給 false 時才隱藏，其他商品維持原本行為
 const normalOut = cardFn({ id: 'p9',
@@ -239,8 +249,12 @@ const times = (hay, needle) => hay.split(needle).length - 1;
 check('✦ 推薦標示全頁只有一次', times(both, '根據臉部分析結果推薦') === 1,
   `出現 ${times(both, '根據臉部分析結果推薦')} 次`);
 check('全站不再出現舊措辭', !both.includes('根據系統演算法推薦'));
-check('% MATCH 全頁只有一次', times(both, '% MATCH') === 1,
-  `出現 ${times(both, '% MATCH')} 次`);
+// 卡片與面板各顯示一次契合度是合理的（兩個地方、兩個用途）；
+// 重複要防的是**同一個地方**印兩遍，所以分開數。
+check('卡片裡的契合度不重複', times(cardOut, '% MATCH') <= 1,
+  `卡片出現 ${times(cardOut, '% MATCH')} 次`);
+check('面板裡的契合度不重複', times(panelOut, '% MATCH') <= 1,
+  `面板出現 ${times(panelOut, '% MATCH')} 次`);
 // 「與您的膚色」在合併後仍會出現兩次，而那兩次不是重複：
 //   推薦面板  「與您的膚色接近（色差 1.3）」——結論
 //   主推薦欄  「與您的膚色的色差 1.3」——標示這一欄的數字是跟什麼比的

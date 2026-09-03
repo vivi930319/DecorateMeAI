@@ -27,7 +27,14 @@ const css = read('css/main.css');
 const profile = read('pages/profile.html');
 const index = read('index.html');
 // 掃描時把註解拿掉：這些檢查會誤中自己的說明文字。
-const noComment = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+//
+// `/*` 前面必須不是字母、數字或引號，否則 `accept="image/*"` 會被當成註解開頭。
+// router.js 裡有兩處那樣的 input（fileInput 與 profileAvatarInput），而 `*/` 只有
+// 三處——非貪婪匹配會從 image/* 一路吃到幾千行後的下一個 `*/`，刪掉 23% 的檔案，
+// 連同會員中心的備援樣板。症狀是「備援樣板少了分頁」，看起來像樣板沒同步，
+// 實際上是這一行的正則太寬。
+const noComment = (s) => s.replace(/(?<![\w"'])\/\*[\s\S]*?\*\//g, '')
+                          .replace(/^\s*\/\/.*$/gm, '')
                           .replace(/<!--[\s\S]*?-->/g, '');
 const routerCode = noComment(router);
 const cssCode = noComment(css);

@@ -109,7 +109,10 @@ N.record(ok([], { fallbackReasons: [{ code: 'RECOMMENDATION_EMPTY' }] }));
 check('標記為空結果', N.isEmpty === true);
 check('RECOMMENDATION_EMPTY 不混進降級提示列', !N.html().includes('RECOMMENDATION_EMPTY'));
 h = N.emptyHtml();
-check('空狀態有「重新分析」', h.includes('data-rec-reanalyze') && h.includes('重新分析'));
+// 「重新分析」已經從空狀態移除：使用者到這一頁是想看商品，重跑臉部分析
+// 不會讓商品變多，只會把人送回起點。home_navigation_check 正在守著它不要回來，
+// 所以這裡不能再要求它出現——兩支各守相反的事，就會永遠有一支是紅的。
+check('空狀態不再有「重新分析」', !h.includes('data-rec-reanalyze'));
 check('空狀態有「瀏覽所有商品」', h.includes('data-rec-browse'));
 
 N.record(ok([]));

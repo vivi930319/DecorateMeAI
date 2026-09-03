@@ -77,18 +77,26 @@ const setPkg = (over = {}) => {
 };
 const rgbOf = (L, a, b) => sandbox.Api.labToRgb(L, a, b);
 
-console.log('\n=== 1. 品類要配對到正確的使用者顏色 ===');
+// 跟 router.js 的 COMPARE_SOURCE／isFoundationProduct 對齊。這裡列一份是為了讓
+// 第 7 節能對真實資料判斷「這件是不是粉底」；兩邊不一致時這支測試會先紅。
+const FOUNDATION_TYPES = new Set(['foundations', 'foundation', 'base', '底妝']);
+
+console.log('\n=== 1. 只有粉底做色彩比對 ===');
 setPkg();
 const foundation = html({ type: 'foundations', lab: [70, 10, 20] });
 check('粉底 → 比膚色', foundation.includes('您的膚色') && foundation.includes(rgbOf(...SKIN)));
 check('粉底不會拿唇色來比', !foundation.includes(rgbOf(...LIP)));
 
+// 色彩比對只做粉底。其他品類即使帶了 lab 也不顯示色塊——
+// 見 COMPARE_SOURCE 的註解：粉底之外的品類，商品色與使用者膚色之間沒有
+// 「應該接近」的關係（唇彩、眼影是選色，不是配色），比出來的數字會被讀成
+// 「這支適不適合你」，而那不是它的意思。
 const lipstick = html({ type: 'lipsticks', lab: [50, 40, 15] });
-check('唇彩 → 比唇色', lipstick.includes('您的唇色') && lipstick.includes(rgbOf(...LIP)));
-check('唇彩不會拿膚色來比', !lipstick.includes(rgbOf(...SKIN)));
+check('唇彩不比色', lipstick === '', '唇彩是選色不是配色，比出來的 ΔE 會被誤讀');
+check('唇彩也不會拿膚色來比', !lipstick.includes(rgbOf(...SKIN)));
 
 for (const t of ['blushes', 'contouring', 'highlighters', 'eyeshadows']) {
-  check(`${t} → 比膚色`, html({ type: t, lab: [70, 10, 20] }).includes('您的膚色'));
+  check(`${t} 不比色`, html({ type: t, lab: [70, 10, 20] }) === '');
 }
 
 console.log('\n=== 2. 眉彩不比色（臉部分析端不產出眉色）===');
@@ -139,9 +147,13 @@ if (fs.existsSync(livePath)) {
   const withLab = ps.filter(p => Array.isArray(p.lab) && p.lab.length === 3);
   const shown = withLab.filter(p => html(p) !== '');
   const brows = ps.filter(p => p.type === 'eyebrows');
-  console.log(`     有 lab 的商品 ${withLab.length} 件，其中 ${shown.length} 件顯示色塊`);
-  check('有 lab 的非眉彩商品都能顯示',
-    shown.length === withLab.filter(p => p.type !== 'eyebrows').length);
+  // 只有粉底會顯示。用真實資料驗這一條，是因為線上商品的 type 欄位不一定正規化過
+  // （有中文、有英文、有 apiType 與 type 不一致），而那正是色彩比對最容易漏接的地方。
+  const foundations = withLab.filter(p => FOUNDATION_TYPES.has(String(p.apiType || p.type || p.cat || '').toLowerCase()));
+  console.log(`     有 lab 的商品 ${withLab.length} 件，其中 ${shown.length} 件顯示色塊`
+    + `（粉底 ${foundations.length} 件）`);
+  check('顯示色塊的都是粉底', shown.every(p =>
+    FOUNDATION_TYPES.has(String(p.apiType || p.type || p.cat || '').toLowerCase())));
   check('眉彩即使有 lab 也不顯示', brows.every(p => html(p) === ''), `${brows.length} 件眉彩`);
 } else {
   console.log('  (略過：沒有 _live_recommend_sample.json)');
@@ -169,8 +181,10 @@ check('用的是商品自己的 lab', shippedFoundation.includes(rgbOf(75.78, 5.
 
 const apiLipstick = { id: 2, type: 'lipsticks', category: '唇彩', name: '唇膏', lab: [45.88, 34, 26] };
 const shippedLipstick = asShipped(apiLipstick);
-check('正規化後的唇膏比的是唇色',
-  shippedLipstick.includes('您的唇色') && !shippedLipstick.includes('您的膚色'));
+// 正規化過的唇膏一樣不比色。這一條守的是「正規化不能變成繞過限制的後門」——
+// 商品經過 asShipped() 之後欄位會補齊，如果 COMPARE_SOURCE 哪天多收了唇彩，
+// 這裡會先紅。
+check('正規化後的唇膏仍然不比色', shippedLipstick === '');
 
 // 正規化後的物件身上就是沒有 `type`。這一項把那個事實釘住——
 // 哪天有人「順手」把 compareKindOf 改回只讀 p.type，這裡會紅。
@@ -180,8 +194,10 @@ check('正規化後沒有 type 欄位（英文 slug 在 apiType）',
 check('cat 是中文，單獨拿它查英文表會落空', normalized.cat === '底妝');
 check('compareKindOf 認得 apiType', sandbox.compareKindOf(normalized) === 'skin');
 // 中文分類也要認得：推薦端有時只給 category 不給 type。
-check('compareKindOf 也認得中文分類', sandbox.compareKindOf({ cat: '底妝' }) === 'skin'
-  && sandbox.compareKindOf({ cat: '唇彩' }) === 'lip');
+// 中文分類只放行底妝。唇彩回 null 是刻意的：留著中文鍵會讓未正規化的資料
+// 從分類名繞過「只比粉底」的限制。
+check('中文分類只放行底妝', sandbox.compareKindOf({ cat: '底妝' }) === 'skin'
+  && sandbox.compareKindOf({ cat: '唇彩' }) === null);
 // 眉彩不能因為新增了中文鍵就被放行——臉部分析端不產出眉色。
 check('眉彩仍然沒有對應', !sandbox.compareKindOf({ cat: '眉毛彩妝' })
   && !sandbox.compareKindOf({ apiType: 'eyebrows' }));

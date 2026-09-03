@@ -95,8 +95,9 @@ check('顯示「根據臉部分析結果推薦」', out.includes('根據臉部�
 check('不再顯示舊措辭', !out.includes('根據系統演算法推薦'));
 check('整段沒有「AI 推薦」', !/AI\s*推薦/.test(out));
 check('顯示 matchLabel', out.includes('95% MATCH'));
-// 少了「推薦匹配度」這四個字，95% MATCH 會被讀成 95% 準確
-check('matchLabel 旁邊標示「推薦匹配度」', out.includes('推薦匹配度'));
+// 少了這個限定詞，95% MATCH 會被讀成 95% 準確。措辭在 2026-08 改成「契合度」，
+// 用途不變：它是排序的綜合結果，不是上妝成功率。
+check('matchLabel 旁邊標示契合度', out.includes('推薦契合度') || out.includes('推薦匹配度'));
 check('沒有把 MATCH 說成準確率', !out.includes('準確率'));
 check('顯示 headline', out.includes('與你的膚色高度匹配'));
 check('顯示 suitedTraits', out.includes('暖色調膚色') && out.includes('千金妝'));

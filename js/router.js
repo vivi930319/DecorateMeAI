@@ -7647,14 +7647,24 @@ const PageInit = {
                 && it.hasSample && !it.trainingRunId && fbApprovedFields(it).length);
 
             const fbTrainTargets = () => {
-                // 明確勾選待覆核圖片並按送訓，等同管理員採用該筆修正；送出時會先
-                // 寫入採用決定，再建立 queued 批次。已有其他批次執行中也不影響登記。
+                // 勾選決定「送哪幾筆」，不決定「那幾筆算不算已採用」。
+                //
+                // 決策文件《後台待覆核全選與捷徑_2026-08-31》第 5 條：
+                //   勾選不呼叫採用 API、不自動送訓。
+                //   送訓目標仍與已採用／部分採用且有有效標籤的資料取交集。
+                //
+                // 先前這裡只濾 hasSample 與 trainingRunId，沒有跟 fbTrainable() 取交集，
+                // 於是勾到待覆核的圖片就會被送進訓練批次——未經人工覆核的標籤混進
+                // 訓練資料，而且事後從批次紀錄看不出哪幾筆是這樣進去的。
+                // tests/feedback_pick_all_check.js 一直守著這條，但它的原始碼擷取
+                // 在區塊函式上會截斷成 SyntaxError，所以那個守衛從來沒有真的跑起來。
+                const trainable = fbTrainable();
                 if (fbSelected.size) {
-                    return fbItems.filter(it => it.hasSample && !it.trainingRunId
-                        && fbSelected.has(it.feedbackId || it.jobId))
+                    return trainable
+                        .filter(it => fbSelected.has(it.feedbackId || it.jobId))
                         .map(it => it.feedbackId || it.jobId);
                 }
-                return fbTrainable().map(it => it.feedbackId || it.jobId);
+                return trainable.map(it => it.feedbackId || it.jobId);
             };
 
             // 全選框的三態：全勾打勾、全空清掉、勾一部分顯示 indeterminate。

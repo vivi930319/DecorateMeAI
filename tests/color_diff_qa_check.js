@@ -36,7 +36,11 @@ const check = (name, cond, detail) => {
     console.log((cond ? '  PASS ' : '  FAIL ') + name + (detail ? `  ${detail}` : ''));
     cond ? pass++ : fail++;
 };
-const make = (cde) => ({ id: 'p1', recommendationPresentation: { colorDifferenceExplanation: cde } });
+// type 是必要的：colorDiffInfo 只對粉底回傳資料（色差只有粉底有意義），
+// 少了它整組檢查會因為「這不是粉底」而全部落空——而失敗的樣子是
+// 「入口不見了」，看起來像入口壞掉，不像測試資料少一個欄位。
+const make = (cde) => ({ id: 'p1', type: 'foundations',
+    recommendationPresentation: { colorDifferenceExplanation: cde } });
 
 console.log('');
 console.log('=== 1. 什麼時候該出現、什麼時候不該 ===');
