@@ -10,17 +10,25 @@
 
 做到哪裡為止
 ------------
-只做 tools/promote_model.py 做得到的部分：複製、類別檢查、備份、manifest。
-做完把狀態寫成 ``prepared``，**不會自動部署**。上傳 GCS 與 deploy 要人明確執行——
-那一步會動到線上服務，而且要跑好幾分鐘，不該是背景任務偷偷完成的事。
+預設一路做到上線：複製、類別檢查、備份、更新 manifest、上傳 GCS、build 與部署。
 
-後台看到 ``prepared`` 就知道「檔案備妥了，等你部署」。
+「決定」仍然是人做的——後台那顆按鈕就是決定，而且它只會提出比線上好的部位。
+worker 做的是執行，不是判斷。把部署留在終端機並不會讓決定更謹慎，只會讓換模型
+這件事因為麻煩而不做——37 個批次擺著沒上線就是那樣來的。
+
+每個階段都回寫 Firestore，後台看得到走到哪：
+    queued → claimed → running → deployed
+失敗停在 ``failed``，並附上看得懂的原因；模型檔與 manifest 已經換好的話，
+修掉原因後只要重跑部署腳本，不必重新 promote。
+
+--prepare-only 保留舊行為：只換檔案，停在 ``prepared``，部署自己來。
 
 用法
 ----
-    python tools/promotion_worker.py              # 一直守著，每 20 秒看一次
-    python tools/promotion_worker.py --once       # 處理完目前排隊的就結束
-    python tools/promotion_worker.py --dry-run    # 只顯示會做什麼
+    python tools/promotion_worker.py                 # 一直守著，每 20 秒看一次
+    python tools/promotion_worker.py --once          # 處理完目前排隊的就結束
+    python tools/promotion_worker.py --prepare-only  # 換完就停，不上傳也不部署
+    python tools/promotion_worker.py --dry-run       # 只顯示會做什麼
 """
 from __future__ import annotations
 
@@ -106,11 +114,15 @@ def _fail(project: str, promotion_id: str, message: str) -> None:
     patch_document(project, PROMOTIONS_COLLECTION, promotion_id, {
         "status": "failed",
         "finishedAt": now_iso(),
+        # note 要一起清掉。它在開始執行時被寫成「正在上傳並重新部署」，
+        # 失敗後如果留著，後台就會同時顯示「進行中」與「失敗」——看的人
+        # 不知道該信哪一個，而那正是他唯一能判斷狀況的兩個欄位。
+        "note": "這次沒有換上線，線上仍是原本的模型。原因見下方。",
         "error": message[:1500],
     })
 
 
-def process(promotion: dict, project: str, dry_run: bool) -> bool:
+def process(promotion: dict, project: str, dry_run: bool, prepare_only: bool = False) -> bool:
     promotion_id = str(promotion.get("promotionId") or "")
     run_id = str(promotion.get("runId") or "")
     parts = [str(p) for p in (promotion.get("parts") or [])]
@@ -122,11 +134,22 @@ def process(promotion: dict, project: str, dry_run: bool) -> bool:
     cmd = [sys.executable, str(ROOT / "tools" / "promote_model.py"), "--run", run_id]
     for part in parts:
         cmd += ["--part", part]
+    if not prepare_only:
+        cmd.append("--deploy")
 
-    print(f"[{promotion_id}] {run_id} → {'、'.join(parts)}")
+    print(f"[{promotion_id}] {run_id} → {'、'.join(parts)}"
+          + ("（只準備檔案）" if prepare_only else "（含上傳與部署）"))
     if dry_run:
         print("  --dry-run：不執行")
         return True
+
+    # build 與部署要好幾分鐘。先把狀態寫成 running，否則後台在這段期間看到的
+    # 還是 claimed，會被讀成「卡住了」而有人跑去按第二次。
+    if not prepare_only:
+        patch_document(project, PROMOTIONS_COLLECTION, promotion_id, {
+            "status": "running",
+            "note": "正在上傳模型並重新部署 face 服務，需要數分鐘。",
+        })
 
     # promote_model.py 印的是中文。Windows 主控台預設不是 UTF-8，不指定的話
     # 失敗訊息回寫到後台會變成一串問號，而那正是管理員唯一看得到的線索。
@@ -143,17 +166,18 @@ def process(promotion: dict, project: str, dry_run: bool) -> bool:
 
     entry = _last_ledger_entry(run_id) or {}
     patch_document(project, PROMOTIONS_COLLECTION, promotion_id, {
-        "status": "prepared",
+        # prepared 與 deployed 要分得開。混成同一個「完成」，就會重演
+        # 「已登記 macro 但其實沒上線」那個誤會——那正是這整套要解決的問題。
+        "status": "prepared" if prepare_only else "deployed",
         "finishedAt": now_iso(),
         "version": entry.get("version"),
         "backup": entry.get("backup"),
         "results": entry.get("parts"),
-        # 說清楚還沒上線。後台如果把 prepared 顯示成「完成」，就會重演
-        # 「已登記 macro 但其實沒上線」那個誤會。
-        "note": "檔案已備妥，尚未部署。請在訓練機執行 GCS 上傳與 deploy_face_cloudrun.ps1。",
+        "note": ("檔案已備妥，尚未部署。請執行 deploy_face_cloudrun.ps1。" if prepare_only
+                 else "已上線。face-basic 與 face-pro 都換成這個版本的模型。"),
         "error": None,
     })
-    print(f"  已備妥，版本 {entry.get('version')}——尚未部署。")
+    print(f"  {'已備妥' if prepare_only else '已上線'}，版本 {entry.get('version')}。")
     return True
 
 
@@ -164,6 +188,8 @@ def main() -> int:
     parser.add_argument("--worker-id", default=os.environ.get("COMPUTERNAME") or "local")
     parser.add_argument("--interval", type=int, default=20, help="幾秒看一次有沒有新請求")
     parser.add_argument("--once", action="store_true", help="把目前排隊中的做完就結束")
+    parser.add_argument("--prepare-only", action="store_true",
+                        help="只換檔案與 manifest，不上傳也不部署（舊行為）")
     parser.add_argument("--dry-run", action="store_true", help="只顯示會做什麼")
     args = parser.parse_args()
 
@@ -183,7 +209,7 @@ def main() -> int:
                 if not claim(args.project, promotion_id, args.worker_id):
                     continue
             try:
-                process(promotion, args.project, args.dry_run)
+                process(promotion, args.project, args.dry_run, args.prepare_only)
             except Exception as exc:
                 print(f"[{promotion_id}] 執行失敗：{type(exc).__name__}: {exc}")
                 if not args.dry_run and promotion_id:

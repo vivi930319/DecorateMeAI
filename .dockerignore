@@ -64,6 +64,13 @@ models/basic_features_roi/*
 models/pro_nose_side/*
 !models/pro_nose_side/*.onnx
 !models/pro_nose_side/*_classes.json
+# 膚色取樣的臉部皮膚分割模型（selfie_multiclass，16MB）。少了這幾行，models/* 會把
+# 整個 mediapipe 目錄排除，source 上傳不含它，Dockerfile 的 COPY models/mediapipe/
+# 就會以 "file not found in build context" 失敗——而那個訊息看起來像檔案沒建好，
+# 不像被忽略規則擋掉。
+!models/mediapipe
+models/mediapipe/*
+!models/mediapipe/*.tflite
 # DINOv2 線性分類器的權重（npz）。分類頭只存 coef／intercept，很小，留著不佔空間。
 #
 # ⚠️ 2026-07-31 起 backbone（dinov2_vits14.onnx，88MB）**不再放行**：

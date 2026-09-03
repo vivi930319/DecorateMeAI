@@ -107,6 +107,10 @@
 !deploy_render_cloudrun.ps1
 !tools/
 !tools/*.py
+# 換模型機的啟動包裝（工作排程器呼叫的就是它）。訓練機那支已經在版控裡，
+# 這支少了的話，搬機之後排程指向一個不存在的檔案——而排程本身仍顯示「就緒」，
+# 看起來一切正常，實際上後台按下的每一筆換上線都不會有人執行。
+!tools/start_promotion_worker.ps1
 !tools/face_models_manifest.json
 # 訓練機的啟動器。它是被 Windows 工作排程器叫起來的，換一台電腦要重新設排程，
 # 所以這支必須跟著 repo 走，不能只留在本機。
