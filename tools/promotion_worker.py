@@ -74,6 +74,62 @@ def list_queued(project: str, limit: int = 10) -> list[dict]:
     return sorted(rows, key=lambda row: str(row.get("createdAt") or ""))
 
 
+STALE_MINUTES = 30
+
+
+def requeue_stale(project: str) -> int:
+    """把上次沒做完的請求排回佇列。
+
+    換模型中途關機（或斷電、或 worker 被殺）時，那筆請求會停在 claimed 或
+    running——而 list_queued 只找 queued，所以沒有人會再碰它。後台顯示「進行中」
+    而實際上沒有任何程序在跑，跟訓練那邊踩過的十一小時是同一種壞法。
+
+    重做是安全的：複製檔案、上傳 GCS、build 與部署都是冪等的，而且 promote_model
+    會用執行當下的線上分數重新判斷——如果上一次其實已經換完，這次會看到
+    live 等於 new，不算退步，照樣通過。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=STALE_MINUTES)
+    recovered = 0
+    for status in ("claimed", "running"):
+        query = {
+            "from": [{"collectionId": PROMOTIONS_COLLECTION}],
+            "where": {"fieldFilter": {
+                "field": {"fieldPath": "status"},
+                "op": "EQUAL",
+                "value": {"stringValue": status},
+            }},
+            "limit": 20,
+        }
+        try:
+            rows = _run_query(project, {"structuredQuery": query})
+        except Exception:
+            return recovered
+        for row in rows:
+            started = str(row.get("claimedAt") or row.get("createdAt") or "")
+            try:
+                when = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            if when > cutoff:
+                continue  # 還在合理時間內，可能真的正在跑
+            pid = str(row.get("promotionId") or "")
+            if not pid:
+                continue
+            patch_document(project, PROMOTIONS_COLLECTION, pid, {
+                "status": "queued",
+                "note": f"上一次沒有做完（訓練機可能中途關機），已重新排隊。"
+                        f"停在 {status} 超過 {STALE_MINUTES} 分鐘。",
+                "error": None,
+            })
+            print(f"[{pid}] 回收：停在 {status} 太久，重新排隊")
+            recovered += 1
+    return recovered
+
+
 def claim(project: str, promotion_id: str, worker_id: str) -> dict | None:
     """收下一筆 queued 請求。已經被收走就回 None。
 
@@ -153,11 +209,33 @@ def process(promotion: dict, project: str, dry_run: bool, prepare_only: bool = F
 
     # promote_model.py 印的是中文。Windows 主控台預設不是 UTF-8，不指定的話
     # 失敗訊息回寫到後台會變成一串問號，而那正是管理員唯一看得到的線索。
+    # 逐行讀而不是等結束：換一次模型要好幾分鐘，等到最後才知道走到哪，
+    # 後台那段時間只能顯示「進行中」。
+    STAGE_NOTE = {
+        "swapping": "正在換檔案並備份舊模型。",
+        "uploading": "正在把模型上傳到雲端儲存。",
+        "deploying": "正在重新建置並部署 face 服務，這一步最久。",
+    }
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
-    proc = subprocess.run(cmd, cwd=str(ROOT), capture_output=True,
-                          text=True, encoding="utf-8", errors="replace", env=env)
-    output = (proc.stdout or "") + (proc.stderr or "")
-    print(output.rstrip())
+    proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True,
+                            encoding="utf-8", errors="replace", env=env, bufsize=1)
+    lines = []
+    for line in proc.stdout:
+        lines.append(line)
+        print(line.rstrip())
+        if line.startswith("[STAGE] "):
+            name = line[8:].strip()
+            if name in STAGE_NOTE:
+                try:
+                    patch_document(project, PROMOTIONS_COLLECTION, promotion_id, {
+                        "stage": name, "note": STAGE_NOTE[name],
+                    })
+                except Exception:
+                    # 寫不進去不該讓換模型停下來——那只是進度顯示。
+                    pass
+    proc.wait()
+    output = "".join(lines)
 
     if proc.returncode != 0:
         # 取尾端而不是開頭：擋下來的原因（類別不一致、找不到批次）印在最後。
@@ -175,6 +253,7 @@ def process(promotion: dict, project: str, dry_run: bool, prepare_only: bool = F
         "results": entry.get("parts"),
         "note": ("檔案已備妥，尚未部署。請執行 deploy_face_cloudrun.ps1。" if prepare_only
                  else "已上線。face-basic 與 face-pro 都換成這個版本的模型。"),
+        "stage": None,
         "error": None,
     })
     print(f"  {'已備妥' if prepare_only else '已上線'}，版本 {entry.get('version')}。")
@@ -194,6 +273,13 @@ def main() -> int:
     args = parser.parse_args()
 
     print(f"換模型 worker 啟動：專案 {args.project}，識別 {args.worker_id}")
+    if not args.dry_run:
+        try:
+            n = requeue_stale(args.project)
+            if n:
+                print(f"回收了 {n} 筆上次沒做完的請求")
+        except Exception as exc:
+            print(f"回收檢查失敗（{type(exc).__name__}），繼續正常輪詢")
     while True:
         try:
             queued = list_queued(args.project)

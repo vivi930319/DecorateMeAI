@@ -195,6 +195,16 @@ def _update_manifest(changed: list[str], version: str) -> None:
     return old_version
 
 
+def stage(name: str) -> None:
+    """印一行機器讀得懂的階段標記。
+
+    worker 逐行讀這支的輸出，看到標記就把狀態寫回 Firestore，後台才有進度可看。
+    先前整個換模型過程對後台是一個黑盒：狀態停在 running 好幾分鐘，看的人
+    分不出「正在 build」與「卡住了」，於是會跑去按第二次。
+    """
+    print(f"[STAGE] {name}", flush=True)
+
+
 def upload_to_gcs() -> bool:
     """把 manifest 列的**每一個**檔案上傳到新的版本 prefix。
 
@@ -204,6 +214,7 @@ def upload_to_gcs() -> bool:
     """
     manifest = _read_json(MANIFEST)
     prefix = manifest["gcsPrefix"]
+    stage("uploading")
     print(f"\n上傳到 {prefix}")
     for entry in manifest["files"]:
         source = ROOT / entry["path"]
@@ -232,6 +243,7 @@ def deploy_face() -> bool:
     if not script.exists():
         print(f"找不到 {script.name}")
         return False
+    stage("deploying")
     print(f"\n執行 {script.name}（build 與部署，需要數分鐘）")
     result = subprocess.run(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
@@ -347,6 +359,7 @@ def promote(run_id: str, parts: list[str], allow_change: bool, dry_run: bool,
     backup_dir.mkdir(parents=True, exist_ok=True)
 
     changed_paths = []
+    stage("swapping")
     print(f"\n備份舊模型到 {backup_dir.relative_to(ROOT)}")
     for part, stem, _live, _new in moves:
         for suffix in (".onnx", "_classes.json", "_metrics.json"):
