@@ -116,12 +116,76 @@ def load_events(limit: int):
     return [d.to_dict() for d in client.collection(EVAL_COL).limit(limit).stream()]
 
 
+def by_version(events: list) -> None:
+    """按模型版本分組，回答「換了模型之後使用者有沒有比較買單」。
+
+    線下的 macro accuracy 換了多少，跟使用者感覺變好沒有，是兩件事：
+    macro 每一類等權重，而使用者不會平均遇到每一類；macro 在我們蒐集的素材上算，
+    使用者拿的是自己的手機自拍。所以換模型的價值最後要由這張表回答。
+
+    modelVersion 取自 face_models_manifest.json，跟映像裡的模型檔對得起來
+    （見 face_feedback._model_version）。2026-08-26 之前的事件沒有這個欄位，
+    會被歸到「未記錄版本」——那些不能跟有版本的比，因為不知道當時跑的是哪一版。
+    """
+    groups = collections.defaultdict(lambda: {"agreed": collections.Counter(),
+                                              "corrected": collections.Counter(),
+                                              "n": 0})
+    for e in events:
+        key = str(e.get("modelVersion") or "").strip() or "（未記錄版本）"
+        g = groups[key]
+        g["n"] += 1
+        for f in e.get("agreed") or []:
+            g["agreed"][f] += 1
+        for f in e.get("corrected") or []:
+            g["corrected"][f] += 1
+
+    print("\n=== 依模型版本分組 ===")
+    if len(groups) == 1:
+        only = next(iter(groups))
+        print(f"目前只有一個版本（{only}），還沒有可以比較的對象。")
+        print("換一次模型之後再跑這支，就會出現兩組數字。")
+
+    # 版本名以日期開頭，字典序等於時間序；未記錄的排最前面（它們最舊）。
+    order = sorted(groups, key=lambda k: (k != "（未記錄版本）", k))
+    rows = {}
+    for key in order:
+        g = groups[key]
+        print(f"\n{key}　（{g['n']} 次回饋）")
+        print(f"  {'部位':<8}{'接受':>6}{'被改':>6}{'合計':>6}{'同意率':>9}{'95% 區間':>18}")
+        rows[key] = {}
+        for field in FIELD_TO_PART:
+            ok, ng = g["agreed"][field], g["corrected"][field]
+            total = ok + ng
+            if not total:
+                print(f"  {field:<8}{'—':>6}{'—':>6}{'—':>6}{'尚無資料':>9}")
+                continue
+            lo, hi = wilson_interval(ok, total)
+            rows[key][field] = ok / total
+            print(f"  {field:<8}{ok:>6}{ng:>6}{total:>6}{ok / total:>9.1%}"
+                  f"{f'{lo:.1%}–{hi:.1%}':>18}")
+
+    versioned = [k for k in order if k != "（未記錄版本）"]
+    if len(versioned) >= 2:
+        old, new = versioned[-2], versioned[-1]
+        print(f"\n--- {old} → {new} ---")
+        for field in FIELD_TO_PART:
+            a, b = rows[old].get(field), rows[new].get(field)
+            if a is None or b is None:
+                print(f"  {field:<8}其中一版沒有資料，無法比較")
+                continue
+            print(f"  {field:<8}{a:>7.1%} → {b:>7.1%}   {(b - a) * 100:+.1f} 個百分點")
+        print("\n樣本少的時候區間會很寬，差幾個百分點不代表真的變好——"
+              "看上面的 95% 區間有沒有重疊。")
+
+
 def main():
     p = argparse.ArgumentParser(description="用使用者修正回饋算線上信任分數")
     p.add_argument("--limit", type=int, default=5000)
     p.add_argument("--out", default=None)
     p.add_argument("--offline-label", default="B_合併後_ConvNeXt",
                    help="要拿來對照的線下評估標籤（models/holdout_scores.json 裡的鍵）")
+    p.add_argument("--by-version", action="store_true",
+                   help="按模型版本分組，比較換模型前後的使用者同意率")
     p.add_argument("--check-drift", action="store_true",
                    help="判斷各部位是否該重訓，並說明理由")
     p.add_argument("--min-n", type=int, default=30,
@@ -168,6 +232,9 @@ def main():
         score = ok / total
         online[part] = {"agreed": ok, "corrected": ng, "n": total, "trust": round(score, 4)}
         print(f"{field:<8}{ok:>6}{ng:>6}{total:>6}{score:>10.3f}")
+
+    if args.by_version:
+        by_version(events)
 
     print("\n最常被改掉的原始判斷（指出哪兩類分不開）：")
     for field, counter in confusion.items():

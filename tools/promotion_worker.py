@@ -54,6 +54,15 @@ from training_run_store import (  # noqa: E402
 )
 
 PROMOTIONS_COLLECTION = "face_model_promotions"
+DEPLOYMENTS_COLLECTION = "face_service_deployments"
+
+# 後台能觸發的部署。Ollama 建議服務不在裡面：它跑在另一台機器上，這支 worker
+# 碰不到，列進來只會做出一顆按了沒反應的按鈕。
+DEPLOY_SCRIPTS = {
+    "face": "deploy_face_cloudrun.ps1",
+    "gateway": "deploy_gateway_cloudrun.ps1",
+    "render": "deploy_render_cloudrun.ps1",
+}
 LEDGER = ROOT / "models" / "promotion_ledger.json"
 
 
@@ -128,6 +137,75 @@ def requeue_stale(project: str) -> int:
             print(f"[{pid}] 回收：停在 {status} 太久，重新排隊")
             recovered += 1
     return recovered
+
+
+def list_queued_in(project: str, collection: str, limit: int = 10) -> list[dict]:
+    """某個集合裡排隊中的請求，最舊的排前面。"""
+    query = {
+        "from": [{"collectionId": collection}],
+        "where": {"fieldFilter": {
+            "field": {"fieldPath": "status"},
+            "op": "EQUAL",
+            "value": {"stringValue": "queued"},
+        }},
+        "limit": int(limit),
+    }
+    rows = _run_query(project, {"structuredQuery": query})
+    return sorted(rows, key=lambda row: str(row.get("createdAt") or ""))
+
+
+def process_deployment(row: dict, project: str, dry_run: bool) -> bool:
+    """重新建置並部署指定的服務。不換模型，只把現在的程式碼送上去。"""
+    dep_id = str(row.get("deploymentId") or "")
+    services = [str(s) for s in (row.get("services") or []) if s in DEPLOY_SCRIPTS]
+    if not dep_id or not services:
+        if dep_id:
+            patch_document(project, DEPLOYMENTS_COLLECTION, dep_id, {
+                "status": "failed", "finishedAt": now_iso(),
+                "error": "請求沒有指定可部署的服務。"})
+        return False
+
+    print(f"[{dep_id}] 部署 {'、'.join(services)}")
+    if dry_run:
+        print("  --dry-run：不執行")
+        return True
+
+    patch_document(project, DEPLOYMENTS_COLLECTION, dep_id, {
+        "status": "claimed", "claimedAt": now_iso(), "error": None})
+
+    done = []
+    for name in services:
+        script = ROOT / DEPLOY_SCRIPTS[name]
+        if not script.exists():
+            patch_document(project, DEPLOYMENTS_COLLECTION, dep_id, {
+                "status": "failed", "finishedAt": now_iso(),
+                "error": f"找不到 {script.name}。已部署：{'、'.join(done) or '（無）'}"})
+            return False
+        patch_document(project, DEPLOYMENTS_COLLECTION, dep_id, {
+            "status": "running", "stage": name,
+            "note": f"正在建置並部署 {name}，需要數分鐘。已完成：{'、'.join(done) or '（無）'}"})
+        print(f"  → {script.name}")
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+            cwd=str(ROOT), capture_output=True, text=True,
+            encoding="utf-8", errors="replace")
+        tail = "\n".join(((proc.stdout or "") + (proc.stderr or "")).strip().splitlines()[-10:])
+        print(tail)
+        if proc.returncode != 0:
+            # 說清楚停在哪一個：多個服務時，「部署失敗」不講是哪一個等於沒說。
+            patch_document(project, DEPLOYMENTS_COLLECTION, dep_id, {
+                "status": "failed", "finishedAt": now_iso(), "stage": None,
+                "note": f"{name} 部署失敗。已完成：{'、'.join(done) or '（無）'}；"
+                        f"未處理：{'、'.join(s for s in services if s not in done and s != name) or '（無）'}",
+                "error": tail[-1500:]})
+            return False
+        done.append(name)
+
+    patch_document(project, DEPLOYMENTS_COLLECTION, dep_id, {
+        "status": "deployed", "finishedAt": now_iso(), "stage": None,
+        "note": f"已部署：{'、'.join(done)}。", "error": None})
+    print(f"  已部署：{'、'.join(done)}")
+    return True
 
 
 def claim(project: str, promotion_id: str, worker_id: str) -> dict | None:
@@ -301,6 +379,24 @@ def main() -> int:
                 if not args.dry_run and promotion_id:
                     _fail(args.project, promotion_id,
                           f"換模型時發生未預期的錯誤：{type(exc).__name__}: {exc}")
+
+        # 部署請求跟換模型共用這個迴圈：兩者都要動線上服務，同時跑會互相覆蓋
+        # revision，而排在同一條隊伍裡自然就不會。
+        try:
+            deployments = list_queued_in(args.project, DEPLOYMENTS_COLLECTION)
+        except Exception as exc:
+            print(f"讀取部署請求失敗（{type(exc).__name__}），下一輪再試")
+            deployments = []
+        for row in deployments:
+            try:
+                process_deployment(row, args.project, args.dry_run)
+            except Exception as exc:
+                dep_id = str(row.get("deploymentId") or "")
+                print(f"[{dep_id}] 部署失敗：{type(exc).__name__}: {exc}")
+                if not args.dry_run and dep_id:
+                    patch_document(args.project, DEPLOYMENTS_COLLECTION, dep_id, {
+                        "status": "failed", "finishedAt": now_iso(), "stage": None,
+                        "error": f"部署時發生未預期的錯誤：{type(exc).__name__}: {exc}"})
 
         if args.once:
             return 0

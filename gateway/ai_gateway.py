@@ -77,6 +77,12 @@ FACE_TRAINING_WORKERS_COL = "face_training_workers"
 # 的檔案系統上，雲端這裡碰不到，所以實際的複製、類別檢查與 manifest 更新都由
 # tools/promote_model.py 在本機執行，跟訓練批次是同一套「後台下單、本機執行」的模式。
 FACE_MODEL_PROMOTIONS_COL = "face_model_promotions"
+# 純部署請求：不換模型，只把目前的程式碼重新建置並部署。
+# 換模型那條路徑本來就會部署，這一條是給「只改了程式碼」的情況用的。
+FACE_DEPLOYMENTS_COL = "face_service_deployments"
+# 能從後台觸發的服務。Ollama 建議服務不在裡面——它跑在另一台機器上，
+# 這邊的訓練機碰不到，列進來只會做出一顆按了沒反應的按鈕。
+DEPLOYABLE_SERVICES = ("face", "gateway", "render")
 # 這份清單必須跟 tools/promote_model.py 的 PARTS 一致。兩邊都是寫死的中文部位名，
 # 因為後台、回饋表與訓練報告用的都是中文；不一致時 worker 會找不到對應檔名而整批失敗。
 PROMOTABLE_PARTS = ("臉型", "眉型", "眼型", "鼻型", "唇型")
@@ -3008,6 +3014,112 @@ async def admin_model_promotions(request: Request):
                               "message": "暫時讀不到換上線請求，請稍後再試。"}},
         )
     return {"promotions": rows, "promotableParts": list(PROMOTABLE_PARTS)}
+
+
+@app.post("/admin-api/face-training/deployments")
+async def admin_create_deployment(request: Request):
+    """登記一次「重新部署後端服務」的請求，等訓練機撿走執行。
+
+    跟換模型同一套「後台下單、本機執行」：建置與部署需要訓練機的 gcloud 認證，
+    Cloud Run 上的這支程式沒有。這裡只寫下決定。
+
+    ⚠️ 部署 gateway 會換掉所有 API 的入口。它跟 face 不同——face 換壞了只有臉部
+    分析不能用，gateway 換壞了整個網站都連不上。所以前端那顆按鈕要分開確認。
+    """
+    enforce_csrf(request)
+    if MULTI_SESSION_ENABLED:
+        claims = select_account(request, for_write=True)["claims"]
+        _require_admin_claims(claims)
+    else:
+        claims = require_admin_access(request)
+        enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    requested = body.get("services")
+    services = [str(s).strip().lower() for s in requested] if isinstance(requested, list) else []
+    if not services or [s for s in services if s not in DEPLOYABLE_SERVICES]:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": {"code": "DEPLOY_SERVICES_INVALID",
+                              "message": "請選擇要部署的服務。"}},
+        )
+    services = list(dict.fromkeys(services))
+
+    # 已經有一筆在排隊或執行中就不要再開。兩個部署同時跑會互相覆蓋 revision，
+    # 而且沒有人分得出線上最後是哪一次的產物。
+    try:
+        pending = await asyncio.to_thread(
+            job_store.all_jobs, FACE_DEPLOYMENTS_COL, limit=10,
+            order_by="createdAt", descending=True)
+    except Exception:
+        logging.exception("讀取部署請求失敗")
+        pending = []
+    if any(str(row.get("status") or "") in {"queued", "claimed", "running"} for row in pending):
+        raise HTTPException(
+            status_code=409,
+            detail={"error": {"code": "DEPLOY_ALREADY_QUEUED",
+                              "message": "已經有一筆部署還沒完成，請等它結束。"}},
+        )
+
+    deployment_id = "DP-" + secrets.token_hex(8)
+    record = {
+        "deploymentId": deployment_id,
+        "services": services,
+        "status": "queued",
+        "requestedBy": opaque_actor_id(str(claims.get("sub") or "")),
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await asyncio.to_thread(job_store.create, FACE_DEPLOYMENTS_COL,
+                                deployment_id, record)
+    except Exception:
+        logging.exception("建立部署請求失敗")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "DEPLOY_STORE_UNAVAILABLE",
+                              "message": "暫時無法登記部署請求，請稍後再試。"}},
+        )
+    record_admin_action(
+        "service_deployment.request",
+        actor_id=record["requestedBy"],
+        target_ref=deployment_id,
+        status_code=201,
+        request_id=request.headers.get("x-request-id", "")[:128],
+    )
+    return JSONResponse(status_code=201, content={"deployment": record})
+
+
+@app.get("/admin-api/face-training/deployments")
+async def admin_deployments(request: Request):
+    """列出部署請求與各自的進度。"""
+    enforce_csrf(request)
+    if MULTI_SESSION_ENABLED:
+        _require_admin_claims(select_account(request, for_write=False)["claims"])
+    else:
+        claims = require_admin_access(request)
+        enforce_expected_actor(request, opaque_actor_id(str(claims.get("sub") or "")))
+    try:
+        limit = max(1, min(50, int(request.query_params.get("limit") or 10)))
+    except (TypeError, ValueError):
+        limit = 10
+    try:
+        rows = await asyncio.to_thread(
+            job_store.all_jobs, FACE_DEPLOYMENTS_COL, limit=limit,
+            order_by="createdAt", descending=True)
+    except Exception:
+        logging.exception("讀取部署請求失敗")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "DEPLOY_STORE_UNAVAILABLE",
+                              "message": "暫時讀不到部署請求，請稍後再試。"}},
+        )
+    return {"deployments": rows, "deployableServices": list(DEPLOYABLE_SERVICES)}
 
 
 @app.get("/admin-api/face-training/runs")
