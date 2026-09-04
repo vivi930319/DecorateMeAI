@@ -2356,10 +2356,23 @@ const Api = {
         });
     },
 
-    async deleteSavedLook(email, id) {
+    async deleteSavedLook(email, id, opts) {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         if (!baseUrl || !email || id == null) return { ok: false };
-        return this._protectedWrite(email, async () => {
+        // 管理員代刪別人的收藏時，要斷言的是「你自己還登入著」，
+        // 不是「你就是這筆資料的主人」——後者對管理員必然不成立。
+        //
+        // 這支同時被兩種人呼叫：會員刪自己的（傳自己的 email，斷言成立），
+        // 以及後台刪別人的（傳對方的 email）。第二種先前必然被
+        // assertSessionOwner 擋在 SESSION_UNAVAILABLE，run() 從來沒被呼叫，
+        // 所以請求連送都沒送出去，而畫面顯示「資料庫刪除失敗，請確認 admin
+        // session 與資料庫連線」——兩個都沒有問題，但看的人會往那兩個方向查。
+        //
+        // 這不會放寬權限：能不能刪別人的收藏由 Gateway 判斷（admin 角色檢查、
+        // _authorize_member_path，以及對別人帳號的寫入稽核）。前端這道斷言問的
+        // 一直是「你的 session 還有效而且是你的」，不是「你有沒有權限」。
+        const actor = (opts && opts.asAdmin) ? this._writeActorEmail() : email;
+        return this._protectedWrite(actor, async () => {
             try {
                 const res = await this._fetchWithRelogin(`${baseUrl}/api/members/${encodeURIComponent(email)}/saved-looks/${encodeURIComponent(id)}`, {
                     method: 'DELETE',

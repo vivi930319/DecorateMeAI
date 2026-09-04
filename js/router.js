@@ -7050,10 +7050,17 @@ const PageInit = {
                         title: '刪除資料庫收藏', type: 'error', okText: '刪除', cancelText: '保留',
                         onOk: async () => {
                             button.disabled = true;
-                            const result = await Api.deleteSavedLook(email, target.id);
+                            const result = await Api.deleteSavedLook(email, target.id, { asAdmin: true });
                             if (!result || !result.ok) {
                                 button.disabled = false;
-                                showAlert('資料庫刪除失敗，這筆妝容仍然保留。請確認 admin session 與資料庫連線。', { type: 'error' });
+                                // 被前端自己擋下與被伺服器拒絕要分開講。 先前兩者
+                                // 共用同一句「請確認 admin session 與資料庫連線」，
+                                // 而管理員代刪時**必定**被前端擋下（見 deleteSavedLook），
+                                // 於是那句話把人指向兩個都沒問題的方向。
+                                showAlert(result && result.blocked
+                                    ? (result.error || '目前無法確認你的登入狀態，請重新登入後再試。')
+                                    : `資料庫刪除失敗，這筆妝容仍然保留${result && result.status ? `（HTTP ${result.status}）` : ''}。`,
+                                    { type: 'error' });
                                 return;
                             }
                             looksByEmail[email] = looks.filter((_, i) => i !== index);
