@@ -4125,8 +4125,18 @@ const UsageQuota = {
     limit(kind) {
         if (typeof AdminStore !== 'undefined') {
             const profile = Auth.getProfile();
-            // 管理員與 VIP 不受限：他們本來就是拿來展示與驗收的身分。
-            if (AdminStore.isAdminProfile?.(profile) || AdminStore.isVip?.(profile)) return Infinity;
+            // 用 hasUnlimitedRender，不要自己判 admin 與 VIP。
+            //
+            // 原本這裡只認 isAdminProfile 或 isVip，而那兩個看的都是 profile.level
+            // 與 role。後台的「渲染不限次數」勾選寫進的卻是 allowedPages——只有把
+            // 等級一起改成 VIP會員 才會連動勾選，單獨勾那一項對這裡完全沒有作用。
+            // 於是管理員在後台給了權限、資料也存進資料庫了，那個帳號重新登入之後
+            // 還是每天四次，而且畫面上找不到任何線索說明為什麼。
+            //
+            // hasUnlimitedRender 是這三個條件的唯一定義（admin、VIP、或勾了
+            // unlimitedRender），而且它會擋停權帳號。這裡跟著它走，三個地方就
+            // 不會再各自對「這個人能渲染幾次」給出不同答案。
+            if (AdminStore.hasUnlimitedRender?.(profile)) return Infinity;
         }
         const guest = (typeof isGuest === 'function') ? isGuest() : this._identity() === 'guest';
         return guest ? this.LIMITS.guest : this.LIMITS.member;
