@@ -1707,6 +1707,31 @@ function showToast(msg){
     setTimeout(()=>{ t.classList.remove('show'); t.style.opacity='0'; setTimeout(()=>t.remove(),500); }, 2400);
 }
 
+// 收藏寫回 localStorage。回傳實際存下來的那一份。
+//
+// 上限跟著資料庫走（100），但真正的限制是裝不裝得下：每一筆的 beforeImage 可能是
+// 一張壓縮後照片的 base64 data URL，一筆就好幾百 KB，而 localStorage 大約只有 5MB。
+// 先前是寫死 slice(0,20) 而且沒有 try/catch——存不下時 setItem 直接拋，
+// 整個 saveCurrentLook 跟著中斷，使用者按了收藏卻什麼都沒發生，畫面也不會報錯。
+//
+// 所以上限用「存得下幾筆」決定，不是用一個猜出來的數字。裝不下就丟最舊的再試，
+// 舊的那些本來就已經同步到資料庫了，換裝置時會從後端拉回來。
+const SAVED_LOOKS_MAX = 100;
+
+function persistSavedLooks(records) {
+    let list = Array.isArray(records) ? records.slice(0, SAVED_LOOKS_MAX) : [];
+    while (list.length) {
+        try {
+            localStorage.setItem(looksKey(), JSON.stringify(list));
+            return list;
+        } catch (_) {
+            if (list.length === 1) break;   // 連一筆都塞不下就放棄，不要無限迴圈
+            list = list.slice(0, list.length - 1);
+        }
+    }
+    return list;
+}
+
 function lookImageSrc(value){
   const raw = String(value || '').trim();
   if (!raw) return '';
@@ -2448,7 +2473,7 @@ function saveCurrentLook(){
     const stored = { ...record, timestamp: new Date().toISOString() };
     const records = JSON.parse(localStorage.getItem(looksKey()) || '[]');
     records.unshift(stored);
-    localStorage.setItem(looksKey(), JSON.stringify(records.slice(0, 20)));
+    persistSavedLooks(records);
     Router.pendingLook = null;
     Router.pendingLookSaved = true;
     // 盡力同步到後端（跨裝置持久化）；只有渲染後永久網址存在才送，失敗不影響本機收藏
@@ -2474,7 +2499,7 @@ function saveCurrentLook(){
                 try {
                     const recs = JSON.parse(localStorage.getItem(looksKey()) || '[]');
                     const hit = recs.find(x => x.timestamp === stored.timestamp);
-                    if (hit) { hit.remoteId = r.look.id; localStorage.setItem(looksKey(), JSON.stringify(recs)); }
+                    if (hit) { hit.remoteId = r.look.id; persistSavedLooks(recs); }
                 } catch (_) {}
                 if (typeof showToast === 'function') showToast('已同步到雲端資料庫');
             } else if (r && r.skipped) {
@@ -6428,7 +6453,7 @@ const PageInit = {
                                     return;
                                 }
                                 recs.splice(idx, 1);
-                                localStorage.setItem(looksKey(), JSON.stringify(recs));
+                                persistSavedLooks(recs);
                                 showToast(removed && removed.remoteId != null ? "妝容已從資料庫與本機刪除" : "已刪除本機收藏（此筆尚未同步資料庫）");
                                 paintSavedLooks(recs);
                             }).catch(function(){
@@ -6461,7 +6486,7 @@ const PageInit = {
                     const remoteIds = new Set(remote.map(rm => String(rm.remoteId)));
                     const localOnly = localAll.filter(x => x.remoteId == null || !remoteIds.has(String(x.remoteId)));
                     const merged = fromRemote.concat(localOnly).sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
-                    localStorage.setItem(looksKey(), JSON.stringify(merged.slice(0, 20)));
+                    persistSavedLooks(merged);
                     if (Router.currentPage === 'profile') paintSavedLooks(merged);
                 });
             }
