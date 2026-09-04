@@ -743,6 +743,24 @@ class FaceAnalyzer:
     SKIN_TEXTURE_WINDOW   = int(os.getenv("FACE_SKIN_TEXTURE_WINDOW", "7"))
     SKIN_SPREAD_UNRELIABLE = float(os.getenv("FACE_SKIN_SPREAD_UNRELIABLE", "9.5"))
 
+    #   4. 分塊共識取樣（見 _patch_consensus_mask）。上面三層處理的都是「這個像素
+    #      不是皮膚」；這一層處理的是「這片皮膚上有妝」。取樣區原本只有雙頰，而那
+    #      正是腮紅與修容的位置——選頰部是為了避開頭髮與陰影，那份考量裡沒有化妝。
+    #      門檻在 tools/compare_skin_sampling.py 上校準，數字見該檔輸出。
+    SKIN_PATCH_GRID       = float(os.getenv("FACE_SKIN_PATCH_GRID", "14"))    # 臉寬切幾塊
+    SKIN_PATCH_MIN_PX     = int(os.getenv("FACE_SKIN_PATCH_MIN_PX", "6"))
+    SKIN_PATCH_MAX_PX     = int(os.getenv("FACE_SKIN_PATCH_MAX_PX", "40"))
+    # 塊內 L 的標準差上限。超過代表這塊跨在邊界上（髮際、妝緣、陰影交界）。
+    SKIN_PATCH_STD_MAX    = float(os.getenv("FACE_SKIN_PATCH_STD_MAX", "5.0"))
+    # 一塊要有多少比例落在取樣區內才算數，避免邊緣殘塊用幾十個像素決定一個平均值。
+    SKIN_PATCH_MIN_COVERAGE = float(os.getenv("FACE_SKIN_PATCH_MIN_COVERAGE", "0.6"))
+    # 少於這個塊數就不算共識，退回整區——三塊算出來的中位數不是共識，是巧合。
+    SKIN_PATCH_MIN_COUNT  = int(os.getenv("FACE_SKIN_PATCH_MIN_COUNT", "8"))
+    SKIN_PATCH_CONSENSUS_K = float(os.getenv("FACE_SKIN_PATCH_CONSENSUS_K", "3.0"))
+    # MAD 為 0 時（塊與塊幾乎一模一樣）門檻不能跟著變 0，否則整批被判離群。
+    SKIN_PATCH_CONSENSUS_FLOOR = float(os.getenv("FACE_SKIN_PATCH_CONSENSUS_FLOOR", "3.0"))
+    SKIN_PATCH_ENABLED    = os.getenv("FACE_SKIN_PATCH_SAMPLING", "1") != "0"
+
     #   3. 分割模型認出「臉部皮膚」。上面的紋理過濾是靠粗糙度**猜**哪些像素不是皮膚，
     #      而 selfie_multiclass 直接把頭髮標成 hair。實測一張長髮照片裡頭髮佔 28.3%，
     #      那些垂在臉頰旁邊的像素正好落在頰部取樣區內，顏色又跟膚色重疊（棕髮、染髮），
@@ -755,6 +773,9 @@ class FaceAnalyzer:
     # 建立一次 segmenter 要幾百毫秒，而每一次分析都會走到這裡，所以快取在類別上。
     # False 代表試過而且失敗——不要每張照片都重試一次載入，那會把每次分析都拖慢。
     _skin_segmenter = None
+    # 分塊取樣的統計，關掉時維持 0。診斷工具與 compare_skin_sampling 會讀。
+    skin_patch_total = 0
+    skin_patch_kept = 0
 
     def __init__(self, image_input, strict_angle=True, brightness_mode="none", brightness_level=1.0, require_insight=True):
         if isinstance(image_input, str):
@@ -1321,6 +1342,126 @@ class FaceAnalyzer:
         std  = np.sqrt(np.maximum(sq - mean * mean, 0.0))
         return (std <= self.SKIN_TEXTURE_STD_MAX).astype(np.uint8) * 255
 
+    def _below_forehead_mask(self):
+        """眉線以下的臉部區域，去掉眉、眼、唇。
+
+        取樣區原本只有雙頰，而雙頰正是腮紅、修容、遮瑕最集中的地方——選頰部的
+        理由是避開頭髮與陰影，那份考量裡沒有化妝。範圍拉大到眉線以下，讓沒有上妝
+        的皮膚（鼻樑兩側、下顎、太陽穴）也進得來，單一塊被妝蓋住就不再主導結果。
+
+        額頭排除掉：瀏海、髮際線與最強的反光都在那裡，而且它跟腮紅不同——分塊共識
+        擋得住一片腮紅，擋不住一整片比臉還亮的額頭反光，那會把 L* 整體拉高。
+        """
+        face_points = np.array([self._pt(i) for i in range(len(self.lm))], dtype=np.int32)
+        mask = np.zeros((self.h, self.w), dtype=np.uint8)
+        cv2.fillConvexPoly(mask, cv2.convexHull(face_points), 255)
+
+        brow_indices = []
+        for region in (self.mp_face_mesh.FACEMESH_LEFT_EYEBROW,
+                       self.mp_face_mesh.FACEMESH_RIGHT_EYEBROW):
+            brow_indices += self._collect_landmark_indices(region)
+        if brow_indices:
+            brow_y = min(self._pt(i)[1] for i in brow_indices)
+            mask[:max(0, int(brow_y)), :] = 0
+
+        # 眉毛本身也要挖掉。先前不必處理是因為頰部取樣區根本碰不到眉毛。
+        for region in (self.mp_face_mesh.FACEMESH_LEFT_EYEBROW,
+                       self.mp_face_mesh.FACEMESH_RIGHT_EYEBROW):
+            indices = self._collect_landmark_indices(region)
+            if not indices:
+                continue
+            pts = np.array([self._pt(i) for i in indices], dtype=np.int32)
+            hull = cv2.convexHull(pts)
+            # 眉毛的 landmark 只描出一條細線，直接填滿留不住眉毛的厚度，
+            # 眉峰上下那圈眉色會留在取樣區裡。撐開一點再挖。
+            cv2.fillConvexPoly(mask, hull, 0)
+            cv2.polylines(mask, [hull], True, 0, thickness=max(3, self.h // 90))
+        return mask
+
+    def _patch_consensus_mask(self, lab_img, region_mask):
+        """把取樣區切成小塊，丟掉不像「這個人的皮膚」的塊。回傳存活塊組成的遮罩。
+
+        為什麼像素層級的修剪不夠
+        ------------------------
+        _lab_robust_from_mask 已經做了百分位修剪，但那是**全域、像素層級**的。
+        腮紅不是雜訊——它是一整片同調的顏色。占取樣區三成的腮紅，像素數量夠多、
+        彼此夠一致，中位數會被整片拉過去；百分位修剪削的是分布兩端，削不掉一個
+        第二眾數。分塊之後那片腮紅是「幾個平均值一致地偏離其他塊」的塊，抓得到。
+
+        兩個判準缺一不可
+        ----------------
+        塊內離散度高 → 這塊跨在邊界上（髮際、妝的邊緣、陰影交界），它的平均值
+                       不代表任何一種東西。
+        塊平均離共識遠 → 這塊整片是別的東西（腮紅、修容、痣、反光）。
+
+        只做第一個會漏掉腮紅：一片均勻的腮紅塊內離散度很低，看起來是完美樣本。
+        只做第二個會被邊界塊污染共識本身。
+        """
+        ys, xs = np.nonzero(region_mask)
+        if ys.size == 0:
+            return region_mask
+        # 塊大小跟著臉寬走，否則同一組像素門檻在手機高解析與縮圖上意義完全不同。
+        face_w = float(xs.max() - xs.min() + 1)
+        step = int(round(face_w / self.SKIN_PATCH_GRID))
+        step = max(self.SKIN_PATCH_MIN_PX, min(step, self.SKIN_PATCH_MAX_PX))
+
+        l_plane = lab_img[:, :, 0].astype(np.float32) / 2.55
+        a_plane = lab_img[:, :, 1].astype(np.float32) - 128.0
+        b_plane = lab_img[:, :, 2].astype(np.float32) - 128.0
+
+        patches = []  # (y0, x0, mean_lab, 塊內 L 的離散度)
+        min_pixels = max(16, int(step * step * self.SKIN_PATCH_MIN_COVERAGE))
+        for y0 in range(int(ys.min()), int(ys.max()) + 1, step):
+            for x0 in range(int(xs.min()), int(xs.max()) + 1, step):
+                sub = region_mask[y0:y0 + step, x0:x0 + step] > 0
+                if int(np.count_nonzero(sub)) < min_pixels:
+                    continue  # 邊緣殘塊，樣本太少，平均值不穩
+                l_vals = l_plane[y0:y0 + step, x0:x0 + step][sub]
+                spread = float(np.std(l_vals))
+                if spread > self.SKIN_PATCH_STD_MAX:
+                    continue  # 判準一：塊內就不均勻，跨在邊界上
+                patches.append((
+                    y0, x0,
+                    np.array([float(np.mean(l_vals)),
+                              float(np.mean(a_plane[y0:y0 + step, x0:x0 + step][sub])),
+                              float(np.mean(b_plane[y0:y0 + step, x0:x0 + step][sub]))],
+                             dtype=np.float32),
+                    spread,
+                ))
+
+        self.skin_patch_total = len(patches)
+        if len(patches) < self.SKIN_PATCH_MIN_COUNT:
+            # 塊數太少時共識沒有意義（一張側臉、一張大特寫都會這樣）。
+            # 這時退回整個區域，讓既有的像素層修剪去處理——比拿三塊算共識可靠。
+            self.skin_patch_kept = 0
+            return region_mask
+
+        means = np.stack([p[2] for p in patches])
+        consensus = np.median(means, axis=0)
+        dist = np.sqrt(((means - consensus) ** 2).sum(axis=1))
+        # 門檻用 MAD 而不是標準差：離群值本來就會把標準差自己撐大，
+        # 那正是我們要偵測的東西，不能拿它當尺。
+        mad = float(np.median(np.abs(dist - np.median(dist))))
+        cutoff = max(self.SKIN_PATCH_CONSENSUS_FLOOR,
+                     float(np.median(dist)) + self.SKIN_PATCH_CONSENSUS_K * mad)
+
+        kept = np.zeros((self.h, self.w), dtype=np.uint8)
+        survivors = 0
+        for (y0, x0, mean_lab, _spread), d in zip(patches, dist):
+            if d > cutoff:
+                continue  # 判準二：整塊偏離共識
+            kept[y0:y0 + step, x0:x0 + step] = 255
+            survivors += 1
+        self.skin_patch_kept = survivors
+        kept = cv2.bitwise_and(kept, region_mask)
+
+        if survivors < self.SKIN_PATCH_MIN_COUNT or cv2.countNonZero(kept) < 100:
+            # 全部被判成離群通常代表共識本身建立失敗（極端光線、濾鏡），
+            # 這時整個區域反而是比較誠實的估計。
+            self.skin_patch_kept = 0
+            return region_mask
+        return kept
+
     def _skin_sample_reliability(self, lab_img, roi_mask) -> dict:
         """頰部取樣區的亮度離散程度——遮擋的偵測訊號，門檻由實測決定。
 
@@ -1367,16 +1508,29 @@ class FaceAnalyzer:
                 if dist < best_dist: best_dist = dist; matched = name
         return matched, l_mean, a_axis, b_axis
 
-    def _classify_season(self, lab, hsv, combined_mask):
-        _, s_mean, v_mean, _ = cv2.mean(hsv, mask=combined_mask)
+    def _classify_season(self, lab, hsv, colour_mask, spread_mask=None):
+        """四季型。顏色與離散度要**分別**從兩個遮罩取，不能共用一個。
+
+        undertone 與 bright 問的是「這個人的膚色是什麼」——那要去掉妝、去掉頭髮，
+        用分塊共識過的遮罩。clear 問的是「這張臉的明暗分佈有多散」，而分塊共識的
+        工作**正是剔除高變異的塊**，拿它去量離散度等於先把要量的東西刪掉：實測
+        v_std 中位數從 36.55 掉到 17.99，剛好跌破 18.0 的門檻，於是 60 張裡有 23 張
+        被從春季改判成秋季——而那個門檻是為未過濾資料校準的。
+
+        這跟 2026-08 那次是同一種錯（當時是紋理過濾，這次是分塊共識），所以這裡
+        改成用型別擋住：兩個遮罩分開傳，共用要寫得出來才做得到。
+        """
+        if spread_mask is None:
+            spread_mask = colour_mask
+        _, s_mean, v_mean, _ = cv2.mean(hsv, mask=colour_mask)
         s_mean = float(s_mean); v_mean = float(v_mean)
-        l_mean, a_axis, b_axis = self._lab_robust_from_mask(lab, combined_mask)
+        l_mean, a_axis, b_axis = self._lab_robust_from_mask(lab, colour_mask)
         l_mean_cv = l_mean * 2.55
 
         undertone = "warm" if b_axis >= 12.0 else "cool" if b_axis <= 8.5 else "neutral"
         bright    = (l_mean_cv >= 158.0) or (v_mean >= 168.0)
         soft      = s_mean <= 110.0
-        mask_bool = combined_mask.astype(bool)
+        mask_bool = spread_mask.astype(bool)
         v_std     = float(np.std(hsv[:,:,2][mask_bool].astype(np.float32))) if np.any(mask_bool) else 0.0
         clear     = (v_std >= 18.0) or (s_mean >= 125.0)
 
@@ -1392,13 +1546,29 @@ class FaceAnalyzer:
         face_mask   = np.zeros((self.h, self.w), dtype=np.uint8)
         cv2.fillConvexPoly(face_mask, cv2.convexHull(face_points), 255)
 
-        # Cheek-side sampling is more stable than averaging the whole face:
-        # it avoids forehead shine, jaw shadows, hairline, brows, lips, and background bleed.
+        # 頰部仍然算出來：可信度那一項的門檻是在這塊上校準的，換取樣區不能連
+        # 那個尺一起換掉，否則量到的東西跟門檻對不上（見 _skin_sample_reliability）。
         cheek_mask = cv2.bitwise_or(
             self._landmark_poly_mask([50, 101, 118, 117, 123, 205, 187, 147, 177, 137]),
             self._landmark_poly_mask([280, 330, 347, 346, 352, 425, 411, 376, 401, 366]),
         )
-        sample_mask = cheek_mask if cv2.countNonZero(cheek_mask) >= 180 else face_mask.copy()
+        # 取樣區從雙頰擴到眉線以下的整張臉。 舊註解說頰部「比平均整張臉穩定，
+        # 避開額頭反光、下顎陰影、髮際、眉毛、嘴唇與背景」——那是對的，但它防的
+        # 全是遮蔽物，沒有一項是化妝。而雙頰正是腮紅、修容與遮瑕最集中的地方，
+        # 等於專挑最可能不是本人膚色的那一塊來量。
+        #
+        # 擴大範圍本身會把鼻頭反光、下顎陰影放回來，所以它不能單獨做——
+        # 後面的分塊共識才是讓大範圍可用的前提，順序反過來會比原本更差。
+        # 擴大範圍與分塊共識綁在同一個開關：分開切換沒有意義，而且危險——
+        # 大範圍沒有共識過濾會比原本的雙頰更糟（鼻頭反光、下顎陰影全進來）。
+        # 關掉這個旗標會完整回到雙頰取樣，A/B 比較與緊急回退都靠它。
+        below_forehead = self._below_forehead_mask() if self.SKIN_PATCH_ENABLED else None
+        if below_forehead is not None and cv2.countNonZero(below_forehead) >= 180:
+            sample_mask = below_forehead
+        elif cv2.countNonZero(cheek_mask) >= 180:
+            sample_mask = cheek_mask
+        else:
+            sample_mask = face_mask.copy()
 
         lip_mask = self._landmark_region_mask(self.mp_face_mesh.FACEMESH_LIPS)
         lip_L, lip_a, lip_b = self._bgr_mean_to_lab(cv2.mean(self.frame, mask=lip_mask)[:3])
@@ -1450,7 +1620,15 @@ class FaceAnalyzer:
         # 走了哪一條要留下來。先前這三條退路全是靜默的——同一個人拍兩張，一張走正路
         # 一張走退路，色差就差很多，而畫面上看不出差在哪。
         self.skin_mask_source = source
-        shade_mask = textured
+
+        # 分塊共識：上面三層挑掉的是「不是皮膚的像素」，這一層挑掉的是「有妝的皮膚」。
+        # 季型與膚色分級各算一次，因為兩者的輸入本來就不同——季型吃紋理過濾**前**的
+        # 遮罩（它的 clear 判定要看完整的明暗離散度），膚色分級吃過濾後的。
+        if self.SKIN_PATCH_ENABLED:
+            shade_mask = self._patch_consensus_mask(lab, textured)
+            season_mask = self._patch_consensus_mask(lab, combined_mask)
+        else:
+            shade_mask, season_mask = textured, combined_mask
 
         # 可信度只量頰部這塊幾何取樣區。門檻 9.5 是在頰部上校準的（乾淨照片 p95 = 9.55），
         # 而 sample_mask 在頰部太小時會退回整臉凸包——那塊含額頭反光與下顎陰影，
@@ -1465,7 +1643,8 @@ class FaceAnalyzer:
         # 先前兩者共用過濾後的遮罩，等於把「專門剔除高變異像素」的結果餵進一個為未過濾
         # 資料校準的門檻：實測 40 張乾淨照片，v_std 平均 28.42 掉到 24.57，**12%（5/40）
         # 的四季型被改掉**（夏季→秋季、冬季→夏季），而使用者與我們都看不出來。
-        season               = self._classify_season(lab, hsv, combined_mask)
+        # 顏色取分塊共識後的，離散度取共識前的——理由見 _classify_season。
+        season               = self._classify_season(lab, hsv, season_mask, combined_mask)
         shade_label, L, a, b = self._classify_shade_12grid(lab, shade_mask)
         return lip_L, lip_a, lip_b, season, shade_label, L, a, b
 
