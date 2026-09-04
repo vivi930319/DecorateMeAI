@@ -3635,9 +3635,18 @@ const AdminStore = {
     getDailyRenderLimit(profile) {
         const p = profile || Auth.getProfile();
         if (this._isGuestProfile(p)) return 0;
+        // 權限要排在 renderQuota 前面。
+        //
+        // 這兩行原本是反的：只要會員資料庫在登入時回了一個 renderQuota.dailyLimit，
+        // 第一個 return 就成立，hasUnlimitedRender() 永遠跑不到——於是管理員在後台
+        // 把某個帳號改成無限渲染、資料也確實存進資料庫了，重新登入之後畫面上的
+        // 每日上限還是原本那個數字，而且沒有任何錯誤可以讓人追。
+        //
+        // getRemainingRenders 本來就是權限優先，兩者順序相反還會湊出
+        // 「剩餘 ∞ 次 / 每日上限 3 次」這種自相矛盾的顯示。
+        if (this.hasUnlimitedRender(p)) return Infinity;
         const quota = this.permissionSnapshot(p).renderQuota;
         if (quota && Number.isFinite(Number(quota.dailyLimit))) return Number(quota.dailyLimit);
-        if (this.hasUnlimitedRender(p)) return Infinity;
         return null;
     },
     canRender(profile) {
