@@ -88,6 +88,15 @@ DEPLOYABLE_SERVICES = ("face", "gateway", "render")
 PROMOTABLE_PARTS = ("臉型", "眉型", "眼型", "鼻型", "唇型")
 FACE_MODEL_METRICS_COL = "face_model_metrics"
 
+# 「這筆還沒做完」的狀態。換模型與部署共用同一組，因為兩邊的生命週期一樣：
+#   queued → claimed → running → deployed / prepared / failed
+#
+# running 一定要在裡面。 換模型那條路徑原本只擋 queued 與 claimed，而 running
+# 正是 build 加部署那幾分鐘——一筆請求絕大部分的時間都待在那裡。漏掉它等於
+# 「只有在訓練機還沒撿走的那幾秒內」才擋得住連按，而人會連按的時機恰恰是
+# 進度看起來停住的時候，也就是 running。
+IN_FLIGHT_STATUSES = {"queued", "claimed", "running"}
+
 UPSTREAMS = {
     "face-basic": Upstream(
         base_url=_service_url("FACE_BASIC_URL"),
@@ -1473,9 +1482,19 @@ async def _delete_saved_media(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # retries 放在傳輸層：httpx 只在**連線還沒建立**時重試，請求根本沒送出去，
+    # 所以對 POST 也是安全的——這跟 request_upstream 那層「只重放讀取」不衝突，
+    # 兩者處理的是不同的失敗點（連不上 vs 連上了但邊緣回 5xx）。
+    #
+    # limits 必須跟著搬到 transport。 給了自訂 transport 之後，AsyncClient 上的
+    # limits 會被忽略——留在原地等於預設值悄悄變回 httpx 的 100/20 以外的東西，
+    # 而連線池爆掉的症狀（間歇性逾時）跟 tunnel 抖幾乎分不出來。
     app.state.http_client = httpx.AsyncClient(
         follow_redirects=False,
-        limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+        transport=httpx.AsyncHTTPTransport(
+            retries=2,
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+        ),
         timeout=httpx.Timeout(UPSTREAM_TIMEOUT_SECONDS, connect=10),
     )
     try:
@@ -1959,6 +1978,83 @@ def _upstream_error_code(response) -> str:
     return str(payload.get("code") or "")
 
 
+# Cloudflare 的邊緣錯誤碼（520–530）跟一般 5xx 一樣，都代表「上游這次沒回答」。
+# tunnel 斷線是 1033，也就是 530——它是一個**成功抵達**的 HTTP 回應，所以 httpx
+# 不會拋例外，呼叫端那些 except httpx.HTTPError 一個都不會進。
+UPSTREAM_EDGE_FAILURE_STATUSES = frozenset(range(520, 531)) | {502, 503, 504}
+# 可以安全重放的方法。POST/PUT/PATCH/DELETE 一律不重試：上游可能已經處理完才斷線，
+# 重放會變成第二筆收藏、第二次扣點、第二張訂單。
+REPLAYABLE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+UPSTREAM_RETRY_BACKOFF_SECONDS = (0.25, 0.75)
+
+
+async def request_upstream(client, *, method: str, url: str, **kwargs):
+    """送出上游請求，可安全重放的方法在邊緣故障時重試。
+
+    自架上游走的是 trycloudflare 快速通道，斷線是常態不是例外：三天的日誌裡有
+    約四十筆 502/503/530。其中不少是**孤立的單筆**——tunnel 抖一下就自己回來了，
+    但 httpx 預設 retries=0，所以那一瞬間的每個請求都變成使用者看得到的錯誤。
+
+    這只減少雜訊，不能代替穩定的通道。 2026-09-04 那次斷了兩分半，重試救不了；
+    它救得了的是那種一筆就過去的閃斷。
+
+    只重試讀取。 重試寫入等於在「上游其實做完了，只是回應沒送到」的情況下再做一次，
+    而那正是收藏、扣點、下單會長出重複資料的路徑。
+    """
+    attempts = (len(UPSTREAM_RETRY_BACKOFF_SECONDS) + 1
+                if str(method or "").upper() in REPLAYABLE_METHODS else 1)
+    for attempt in range(attempts):
+        final = attempt + 1 >= attempts
+        try:
+            response = await client.request(method=method, url=url, **kwargs)
+        except httpx.HTTPError:
+            # 最後一次要把例外原樣丟回去，讓呼叫端既有的 except 照常決定
+            # 要回 502 還是 504——這裡不該自己發明新的錯誤形狀。
+            if final:
+                raise
+        else:
+            if final or response.status_code not in UPSTREAM_EDGE_FAILURE_STATUSES:
+                return response
+        await asyncio.sleep(UPSTREAM_RETRY_BACKOFF_SECONDS[attempt])
+
+
+def upstream_failure_payload(response) -> tuple[int, dict] | None:
+    """上游失敗而且回的不是它自己的 JSON 時，換一份乾淨的。照原樣轉就回 None。
+
+    Cloudflare 的 tunnel 錯誤頁（Error 1033）是一整頁 HTML，而且**頁面裡印著
+    tunnel 的主機名稱**。原樣轉出去會同時壞掉兩件事：
+
+      1. 前端在等 JSON，拿到的是 7KB 的 HTML。res.json() 直接爆，所以使用者看到
+         的永遠是一句沒有資訊的通用錯誤——即使上游其實把話講得很清楚。
+      2. 那個主機名稱會出現在瀏覽器裡。Gateway 存在的理由之一就是「瀏覽器永遠
+         不會知道上游網址」（見 proxy_public_member_request 的 docstring），
+         而那些 tunnel 沒有 Gateway 這一層的授權檢查。上游正常時這個保證成立，
+         上游一掛就破功——偏偏那正是有人會打開 F12 的時候。
+
+    上游自己的 JSON 錯誤要原樣保留。 「收藏妝容已達 50 筆上限」這種訊息是使用者
+    唯一能據以行動的東西；把它一起換成「服務暫時無法使用」等於把診斷資訊丟掉，
+    而那正是這次查了兩天才查到上限的原因。
+    """
+    if response.is_success:
+        return None
+    if "json" in str(response.headers.get("content-type") or "").lower():
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if isinstance(payload, (dict, list)):
+            return None
+    if response.status_code >= 500:
+        # 上游的 5xx 對前端沒有意義，尤其 530 這種 Cloudflare 專用碼。
+        # 一律收斂成 502，跟連不上時的既有行為一致。
+        return 502, {"error": {"code": "UPSTREAM_UNAVAILABLE",
+                               "message": "服務暫時無法使用，請稍後再試。",
+                               "retryable": True}}
+    return response.status_code, {"error": {"code": "UPSTREAM_ERROR",
+                                            "message": "上游服務無法處理這次請求。",
+                                            "retryable": False}}
+
+
 async def proxy_public_member_request(request: Request, upstream_path: str):
     """Forward only the three pre-login member operations.
 
@@ -2058,7 +2154,8 @@ async def proxy_admin_request(request: Request, upstream_path: str):
         headers["If-Match"] = request.headers["if-match"][:32]
 
     try:
-        response = await request.app.state.http_client.request(
+        response = await request_upstream(
+            request.app.state.http_client,
             method=request.method,
             url=f"{PRODUCT_DATABASE_URL}{upstream_path}",
             params=list(request.query_params.multi_items()),
@@ -2119,6 +2216,15 @@ async def proxy_admin_request(request: Request, upstream_path: str):
             upstream_error=(_upstream_error_code(response)
                             if response.status_code >= 400 else ""),
         )
+    sanitised = upstream_failure_payload(response)
+    if sanitised is not None:
+        status_code, payload = sanitised
+        response_headers["content-type"] = "application/json"
+        response_headers.pop("cache-control", None)
+        # 這條路徑的錯誤外層多包一層 detail，跟上面那兩個 JSONResponse 一致——
+        # 後台的錯誤解析讀的是 detail.error，少了它會變成「未知錯誤」。
+        return Response(content=json.dumps({"detail": payload}, ensure_ascii=False).encode("utf-8"),
+                        status_code=status_code, headers=response_headers)
     return Response(content=response.content, status_code=response.status_code, headers=response_headers)
 
 
@@ -2943,13 +3049,22 @@ async def admin_create_model_promotion(request: Request):
 
     # 同一批次還有沒做完的請求就不要再開一張。連按會讓訓練機重複複製同一組檔案，
     # 而每複製一次就多備份一份 111MB。
+    #
+    # 查不到就要擋下來，不能當成「沒有在跑」放行。 這裡原本把例外吞成空清單，
+    # 於是 Firestore 抖一下，去重就整個消失——而會讓查詢失敗的狀況（額度、權杖、
+    # 網路）跟會讓人連按的狀況高度重疊。放行的代價是重跑一次 111MB 的複製與部署，
+    # 擋下來的代價只是請他再按一次。
     try:
         existing = await asyncio.to_thread(
             job_store.find_by_field, FACE_MODEL_PROMOTIONS_COL, "runId", run_id, 20)
     except Exception:
         logging.exception("讀取換模型請求失敗 run=%s", run_id)
-        existing = []
-    if any(str(row.get("status") or "") in {"queued", "claimed"} for row in existing):
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "PROMOTION_STORE_UNAVAILABLE",
+                              "message": "暫時無法確認這個批次有沒有正在進行的換上線請求，請稍後再試。"}},
+        )
+    if any(str(row.get("status") or "") in IN_FLIGHT_STATUSES for row in existing):
         raise HTTPException(
             status_code=409,
             detail={"error": {"code": "PROMOTION_ALREADY_QUEUED",
@@ -3053,14 +3168,20 @@ async def admin_create_deployment(request: Request):
 
     # 已經有一筆在排隊或執行中就不要再開。兩個部署同時跑會互相覆蓋 revision，
     # 而且沒有人分得出線上最後是哪一次的產物。
+    #
+    # 跟換模型同樣的理由 fail-closed：查不到就說查不到，不要當成「沒有在跑」。
     try:
         pending = await asyncio.to_thread(
-            job_store.all_jobs, FACE_DEPLOYMENTS_COL, limit=10,
+            job_store.all_jobs, FACE_DEPLOYMENTS_COL, limit=50,
             order_by="createdAt", descending=True)
     except Exception:
         logging.exception("讀取部署請求失敗")
-        pending = []
-    if any(str(row.get("status") or "") in {"queued", "claimed", "running"} for row in pending):
+        raise HTTPException(
+            status_code=503,
+            detail={"error": {"code": "DEPLOY_STORE_UNAVAILABLE",
+                              "message": "暫時無法確認有沒有正在進行的部署，請稍後再試。"}},
+        )
+    if any(str(row.get("status") or "") in IN_FLIGHT_STATUSES for row in pending):
         raise HTTPException(
             status_code=409,
             detail={"error": {"code": "DEPLOY_ALREADY_QUEUED",
@@ -3192,7 +3313,8 @@ async def proxy_public_product_request(request: Request, path: str):
     if request.headers.get("content-type"):
         headers["Content-Type"] = request.headers["content-type"]
     try:
-        response = await request.app.state.http_client.request(
+        response = await request_upstream(
+            request.app.state.http_client,
             method=request.method,
             url=f"{PRODUCT_DATABASE_URL}/{path}",
             params=list(request.query_params.multi_items()),
@@ -3208,6 +3330,14 @@ async def proxy_public_product_request(request: Request, path: str):
     for header in ("content-type", "cache-control", "etag", "retry-after"):
         if response.headers.get(header):
             response_headers[header] = response.headers[header]
+    sanitised = upstream_failure_payload(response)
+    if sanitised is not None:
+        status_code, payload = sanitised
+        response_headers["content-type"] = "application/json"
+        response_headers.pop("cache-control", None)
+        response_headers.pop("etag", None)
+        return Response(content=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                        status_code=status_code, headers=response_headers)
     return Response(content=response.content, status_code=response.status_code, headers=response_headers)
 
 
@@ -3369,7 +3499,8 @@ async def proxy(service: str, path: str, request: Request):
                         status_code=503,
                         detail={"error": {"code": "MEMBER_MEDIA_DELETE_INCOMPLETE", "message": "會員圖片刪除尚未完成，請稍後重試。"}},
                     )
-        response = await request.app.state.http_client.request(
+        response = await request_upstream(
+            request.app.state.http_client,
             method=request.method,
             url=f"{upstream.base_url}/{path}",
             params=list(request.query_params.multi_items()),
@@ -3391,6 +3522,17 @@ async def proxy(service: str, path: str, request: Request):
         if response.headers.get(header):
             response_headers[header] = response.headers[header]
     response_content = response.content
+    # 上游失敗而且回的不是 JSON（Cloudflare 的 tunnel 錯誤頁就是這樣）時換掉。
+    # 底下的稽核與訪客扣次仍然看 response.status_code，也就是上游真正回的那個——
+    # 只有送回瀏覽器的那一份被換。
+    sanitised = upstream_failure_payload(response)
+    if sanitised is not None:
+        result_status, sanitised_body = sanitised
+        response_content = json.dumps(sanitised_body, ensure_ascii=False).encode("utf-8")
+        response_headers["content-type"] = "application/json"
+        response_headers.pop("cache-control", None)
+    else:
+        result_status = response.status_code
     if response.is_success and service == "render-service":
         try:
             response_content = json.dumps(
@@ -3462,7 +3604,7 @@ async def proxy(service: str, path: str, request: Request):
         response_headers["X-Guest-Trial-Remaining"] = str(guest_trial_remaining(guest_id))
         response_headers["X-Guest-Trial-Max"] = str(GUEST_TRIAL_MAX_RUNS)
 
-    result = Response(content=response_content, status_code=response.status_code, headers=response_headers)
+    result = Response(content=response_content, status_code=result_status, headers=response_headers)
     if service == "member-database":
         rotated_cookie = merge_upstream_cookies(upstream_member_cookie, response)
         if rotated_cookie and rotated_cookie != upstream_member_cookie:

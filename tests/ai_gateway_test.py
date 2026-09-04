@@ -1445,7 +1445,9 @@ class MemberDeleteClearsMediaFirstTest(unittest.TestCase):
         source = Path(__file__).resolve().parents[1].joinpath("gateway/ai_gateway.py").read_text(encoding="utf-8")
         block = source.split("Privacy-first deletion")[1]
         face_at = block.index("v1/face/users/")
-        forward_at = block.index("response = await request.app.state.http_client.request")
+        # 錨點跟著 2026-09-04 的改動走：轉發改成經過 request_upstream（可安全重放的
+        # 方法才重試）。這一項驗的仍然是順序，不是呼叫方式。
+        forward_at = block.index("response = await request_upstream(")
         self.assertLess(face_at, forward_at,
                         "臉部清除排在轉發刪除之後，那時帳號可能已經不見了")
 
