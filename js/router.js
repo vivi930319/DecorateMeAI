@@ -6113,7 +6113,14 @@ const PageInit = {
             });
         }
         if (anEl) { anEl.textContent = History.list().length; anEl.classList.add('num-pop'); anEl.style.animationDelay='.1s'; }
-        if (suggestionEl) { suggestionEl.textContent = suggestions.length; suggestionEl.classList.add('num-pop'); suggestionEl.style.animationDelay='.16s'; }
+        // 妝容收藏數要能在遠端合併回來之後重畫，理由跟正上方的商品收藏一模一樣：
+        // 這裡讀的是 localStorage，換裝置或本次 session 還沒同步時它一定落後。
+        // 舊版本機還寫死只留 20 筆，資料庫一超過 20，使用者端就必然比後台少，
+        // 而那個數字畫完之後沒有任何地方會再更新它。
+        const paintSavedLookCount = (list) => {
+            if (suggestionEl) suggestionEl.textContent = (list || []).length;
+        };
+        if (suggestionEl) { paintSavedLookCount(suggestions); suggestionEl.classList.add('num-pop'); suggestionEl.style.animationDelay='.16s'; }
         if (pointEl) { pointEl.textContent = MemberRewards.getPoints(profile.email); pointEl.classList.add('num-pop'); pointEl.style.animationDelay='.2s'; }
         // 先顯示本機點數；遠端失敗時標示為「本機」，避免誤認為已同步。
         const pointLabelEl = pointEl ? pointEl.parentElement?.querySelector('.stat-label') : null;
@@ -6484,10 +6491,23 @@ const PageInit = {
                         ? { ...localByRemote[rm.remoteId], ...rm }
                         : rm);
                     const remoteIds = new Set(remote.map(rm => String(rm.remoteId)));
-                    const localOnly = localAll.filter(x => x.remoteId == null || !remoteIds.has(String(x.remoteId)));
+                    // 只留「從來沒同步成功」的那些（remoteId 是 null）。
+                    //
+                    // 先前的條件是 `remoteId == null || !remoteIds.has(id)`，也就是
+                    // 「遠端沒有就保留」——那把**已經被刪除**誤判成**尚未同步**。
+                    // 兩者在資料上長得一樣（本機有、遠端沒有），而 remoteId 正好分得開：
+                    // 有 id 代表它曾經寫進資料庫過，現在遠端沒有就是被刪了。
+                    // 於是管理員在後台刪掉一筆之後，那筆會在會員的瀏覽器裡復活並被寫回快取，
+                    // 永遠刪不掉。清單是一次 GET 拿完的（沒有分頁），所以缺席就是真的缺席。
+                    const localOnly = localAll.filter(x => x.remoteId == null);
                     const merged = fromRemote.concat(localOnly).sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')));
-                    persistSavedLooks(merged);
-                    if (Router.currentPage === 'profile') paintSavedLooks(merged);
+                    const stored = persistSavedLooks(merged);
+                    if (Router.currentPage === 'profile') {
+                        paintSavedLooks(merged);
+                        // 數字用實際存下來的那一份，不是 merged——localStorage 裝不下時
+                        // persistSavedLooks 會丟掉最舊的，數字要跟重新整理之後看到的一致。
+                        paintSavedLookCount(stored);
+                    }
                 });
             }
         }
