@@ -647,19 +647,30 @@ def build_render_prompt(
     else:
         makeup_detail = ", ".join(filter(None, [style_hint, suggestion[:300]]))
     ollama_line = f"Makeup reference (translated from advisor): {suggestion[:300].strip()}." if suggestion else ""
+    # 這一段原本有八句「不要改」對上一句「上妝」——妝容描述只占整段 prompt 的 14%
+    # （226 字裡的 32 字，2026-09-04 實測）。擴散模型會把整段一起加權，所以那個比例
+    # 本身就是答案：使用者一直反映「妝太淡」，而 prompt 從頭到尾都在叫模型不要動。
+    #
+    # 收成三句，講的事情沒有少：
+    #   身分與膚質（原本第 8、9 句，兩句講的是同一件事的兩半）
+    #   人以外的一切（原本第 7、10、11 句，全是「保持原樣」的列舉）
+    #   照片感（原本第 2、3 句）
+    # 原本第 12 句是前面三件事的總結，刪掉不損失任何約束。
+    #
+    # "The ONLY change allowed is" 一併拿掉：它是這段裡壓抑力最強的一句，而
+    # 「只改妝」這件事在第一句與後面三句已經講滿了，留著只是再加一次權重。
+    #
+    # 這是刻意的取捨，不是純賺。 那八句當初就是為了擋「模型把人臉改掉、美肌、
+    # 換姿勢」才寫這麼滿；放鬆之後走鐘的機率會上升。妝濃度本身不在這裡調——
+    # 那由建議服務產出的 makeup_detail 決定。
     parts = [
         "This is a makeup-only edit on the exact person in the input photo.",
-        "Keep the output photorealistic, natural, and camera-like, with the same image quality as the input photo.",
-        "Do not make the person look like AI art, a beauty filter, a doll, an illustration, a painting, CGI, a 3D render, or a studio-generated portrait.",
         face_desc,
-        f"The ONLY change allowed is adding this makeup: {makeup_detail or 'natural everyday makeup'}.",
+        f"Apply this makeup: {makeup_detail or 'everyday makeup'}.",
         ollama_line,
-        "Do not change anything else in the image.",
-        "Keep this person's face shape, facial structure, eye shape, nose, lips, skin tone, skin texture, pores, fine lines, wrinkles, facial asymmetry, and hair completely identical to the original photo.",
-        "Do not smooth, airbrush, whiten, reshape, slim, enlarge eyes, alter age, alter ethnicity, or beautify facial features beyond applying visible makeup.",
-        "Keep the exact same pose, posture, body position, head angle, hand position, gesture, and action as the original photo — do not let the person move, turn, or change stance.",
-        "Keep clothing, background, lighting, camera angle, camera framing, and expression completely identical to the original photo.",
-        "This must look like the same person in the same moment, only wearing makeup — not a different person, not a different pose, not a different photo.",
+        "Keep the same face, skin texture and hair as the original photo — do not smooth, airbrush, whiten, reshape, slim or beautify.",
+        "Keep the same pose, expression, clothing, background, lighting and framing.",
+        "Keep it photorealistic and camera-like, like the original photo — not AI art, a beauty filter or a 3D render.",
     ]
     return " ".join(p for p in parts if p)
 

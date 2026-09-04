@@ -329,8 +329,37 @@ class RenderApiTest(unittest.TestCase):
         for label in ("Base:", "Brows and eyes:", "Cheeks and contour:", "Lips:"):
             self.assertIn(label, prompt)
         # identity lock 仍然疊在最後——分段只改「上什麼妝」，不動「不可以改長相」。
+        #
+        # 2026-09-04 把 lock 從八句收成三句（妝容描述原本只占整段 prompt 的 14%，
+        # 而使用者一直反映妝太淡）。所以這裡改成驗**它保護的三件事還在**，
+        # 不再釘在某一句的字面值上——那種寫法上次改字就紅了，卻不代表約束真的消失。
         self.assertIn("makeup-only edit", prompt)
-        self.assertIn("completely identical to the original", prompt)
+        for guard, missing in (
+            ("airbrush", "美肌與改臉的約束不見了，模型會把人磨皮磨到不像本人"),
+            ("same pose", "姿勢的約束不見了，妝前妝後會變成兩張不同的照片"),
+            ("photorealistic", "照片感的約束不見了，輸出會滑向 AI 插畫"),
+        ):
+            self.assertIn(guard, prompt, missing)
+
+    def test_the_makeup_instruction_is_not_buried_by_the_identity_lock(self):
+        """妝容描述不能被「不要改」的句子淹掉。
+
+        2026-09-04：整段 prompt 226 字，其中只有 32 字在講要上什麼妝（14%），
+        其餘八句全是 Do not / Keep。擴散模型把整段一起加權，所以那個比例本身
+        就是「妝太淡」的成因——調 guidance 沒有用（線上跑 gpt-image-2，
+        那條路徑根本不送 guidance），能動的只有這裡的配比。
+
+        門檻放寬鬆是刻意的：這支要擋的是「又有人往 lock 裡加五句」那種回歸，
+        不是把某個精確比例固定下來。
+        """
+        from replicate_render import (RENDER_STYLE_SECTIONS, build_server_render_prompt,
+                                      format_makeup_sections)
+
+        prompt = build_server_render_prompt("softBaddie")
+        makeup = format_makeup_sections(RENDER_STYLE_SECTIONS["softBaddie"])
+        share = len(makeup.split()) / len(prompt.split())
+        self.assertGreater(share, 0.20,
+                           f"妝容只占 prompt 的 {share:.0%}，identity lock 又把它壓下去了")
 
     def test_inflight_dedup_claim_is_single_owner(self):
         key = render_api._dedup_key(TINY_PNG, "same prompt", 0.35)
