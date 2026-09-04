@@ -711,5 +711,42 @@ class BeforeImageAccessTest(unittest.TestCase):
         render_api._require_job_owner(self._job(), "actor_someone_else", "1")
 
 
+class RenderFailureIsClassifiedTest(unittest.TestCase):
+    """「換一張照片」與「等一下再試」不能共用同一則訊息。
+
+    2026-09-04：使用者同一張照片連按兩次，兩次都被 OpenAI 的內容審查擋下（E005），
+    而畫面兩次都說「渲染服務暫時無法完成，請稍後再試」並標 retryable=True——
+    主動叫他去重試一件註定失敗的事。那天 36 次渲染裡只有那兩次失敗，其餘全部成功，
+    所以問題從頭到尾都在那一張照片，但沒有一個字說得出來。
+    """
+
+    def test_a_content_block_tells_the_user_to_change_the_photo(self):
+        exc = Exception(
+            "Prediction failed: Async prediction failed: ModelError: "
+            "The input or output was flagged as sensitive. "
+            "Please try again with different inputs. (E005) (uIJ6l3ruRD)")
+        code, message, retryable = render_api.classify_render_failure(exc)
+
+        self.assertEqual(code, "RENDER_CONTENT_BLOCKED")
+        self.assertFalse(retryable, "重試一百次也不會過，不能標成可重試")
+        self.assertIn("換一張", message)
+
+    def test_the_wording_alone_is_enough_to_recognise_it(self):
+        """SDK 換版時例外型別會變，訊息文字才是穩定的識別特徵。"""
+        code, _message, retryable = render_api.classify_render_failure(
+            RuntimeError("The input or output was FLAGGED AS SENSITIVE"))
+        self.assertEqual(code, "RENDER_CONTENT_BLOCKED")
+        self.assertFalse(retryable)
+
+    def test_everything_else_stays_retryable(self):
+        """真正的暫時性故障要維持原本的行為，否則會叫人放棄一次該重試的渲染。"""
+        for exc in (TimeoutError("read timed out"),
+                    ConnectionError("connection reset"),
+                    Exception("Prediction failed: internal server error")):
+            code, _message, retryable = render_api.classify_render_failure(exc)
+            self.assertEqual(code, "RENDER_PROVIDER_ERROR", repr(exc))
+            self.assertTrue(retryable, repr(exc))
+
+
 if __name__ == "__main__":
     unittest.main()

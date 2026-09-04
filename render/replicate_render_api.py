@@ -785,9 +785,10 @@ async def render(
         raise
     except Exception as exc:
         logging.exception("render provider failed")
+        code, message, retryable = classify_render_failure(exc)
         raise HTTPException(
             status_code=502,
-            detail=error_payload("RENDER_PROVIDER_ERROR", "渲染服務暫時無法完成，請稍後再試。", retryable=True),
+            detail=error_payload(code, message, retryable=retryable),
         ) from exc
     finally:
         _dedup_release(key)
@@ -888,8 +889,9 @@ def _run_render_job(
             # 之後也沒人會發現該刪。
             delete_permanent_storage_url(response.get("afterImageUrl"))
             delete_permanent_storage_url(response.get("beforeImageUrl"))
-    except Exception:  # 失敗要寫回 job，不能讓 thread 靜靜死掉
+    except Exception as exc:  # 失敗要寫回 job，不能讓 thread 靜靜死掉
         logging.exception("渲染失敗（job %s）", job_id)
+        code, message, retryable = classify_render_failure(exc)
         job_store.patch_if_status(
             RENDER_JOBS_COLLECTION,
             job_id,
@@ -898,9 +900,9 @@ def _run_render_job(
                 "status": "failed",
                 "afterImageUrl": None,
                 "error": {
-                    "code": "RENDER_PROVIDER_ERROR",
-                    "message": "渲染服務暫時無法完成，請稍後再試。",
-                    "retryable": True,
+                    "code": code,
+                    "message": message,
+                    "retryable": retryable,
                 },
                 "finishedAt": time.time(),
                 "updatedAt": time.time(),
@@ -908,6 +910,32 @@ def _run_render_job(
         )
     finally:
         _dedup_release(dedup_key)
+
+
+def classify_render_failure(exc: Exception) -> tuple[str, str, bool]:
+    """把供應商的例外分成「換張照片」與「等一下再試」。回傳 (code, message, retryable)。
+
+    這兩件事對使用者要做的下一步完全相反，而先前它們共用同一則訊息：
+    「渲染服務暫時無法完成，請稍後再試。」retryable=True。
+
+    內容審查擋下來的照片重試一百次也不會過——判定是確定性的，同一張圖同一個結果。
+    2026-09-04 實測就是這樣：使用者連按兩次、兩次都是 E005，而畫面主動叫他再試一次。
+    當天 36 次渲染裡只有那兩次失敗，其餘全部成功，所以問題從頭到尾都在那一張照片，
+    但沒有任何一個字告訴他這件事。
+
+    比對訊息文字而不是例外型別：E005 是 OpenAI 經由 Replicate 轉出來的字串，
+    replicate SDK 把它包成 ModelError，而那個包裝方式會隨 SDK 版本改變——
+    真正穩定的識別特徵是訊息本身。
+    """
+    text = str(exc)
+    if "E005" in text or "flagged as sensitive" in text.lower():
+        return (
+            "RENDER_CONTENT_BLOCKED",
+            "這張照片被 AI 服務的內容審查擋下來了，換一張照片再試一次。"
+            "同一張照片重試不會成功。",
+            False,
+        )
+    return ("RENDER_PROVIDER_ERROR", "渲染服務暫時無法完成，請稍後再試。", True)
 
 
 @app.post("/render/jobs")
