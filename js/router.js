@@ -2222,7 +2222,7 @@ function showCartPanel(){
                 <div class="cart-qty"><button data-cart-remove="${escapeHtml(item.id)}">移除</button></div>
             </article>`).join('')}</div>
             ${gone.length ? `<div class="cart-gone-note">有 ${gone.length} 件商品已下架，結帳時不會計入。可以自行移除。</div>` : ''}
-            <footer><span>共 ${rows.reduce((n, r) => n + (parseInt(r.qty, 10) || 0), 0)} 件商品</span><button class="cart-checkout" ${rows.length ? '' : 'disabled'}>前往結帳</button></footer>
+            <footer><span>共 ${rows.reduce((n, r) => n + (parseInt(r.qty, 10) || 0), 0)} 件商品</span><button class="cart-checkout" disabled>結帳功能開發中</button></footer>
         </section>`;
         overlay.querySelector('.cart-close').onclick = () => overlay.remove();
         overlay.querySelectorAll('[data-cart-minus]').forEach(btn => btn.onclick = () => { Cart.change(btn.dataset.cartMinus, -1); updateCartBadge(); render(); });
@@ -2239,8 +2239,9 @@ function showCartPanel(){
             overlay.remove();
             Router.go('products', { productId: id });
         });
-        const checkout = overlay.querySelector('.cart-checkout');
-        if (checkout && !checkout.disabled) checkout.onclick = () => showToast('結帳功能尚未開放，商品會先保留在購物車中');
+        // 結帳按鈕的標籤本身就說明了狀態，所以不掛任何 onclick——按下去跳一則
+        // 「尚未開放」的 toast，是讓人先以為按對了、再告訴他沒有用。
+        // 一律 disabled：可以按但沒反應的按鈕比停用的按鈕更難懂。
     };
     render();
     overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
@@ -5346,7 +5347,7 @@ const PageInit = {
                         ${shadeRecommendationHtml(p)}
                         ${crossBrandFoundationHtml(p)}
                         <div class="pd-actions">
-                            <button class="add-bag" data-bag="${p.id}">加入購物袋</button>
+                            <button class="add-bag" data-bag="${p.id}">加入購物車</button>
                             <button class="heart-btn pd-heart ${Fav.has(p.id)?'fav':''}" data-fav-detail="${p.id}" aria-label="收藏">${HEART_SVG}</button>
                         </div>
                         <div class="pd-desc">${escapeHtml(p.desc || p.matchReason || '商品詳細說明區域。可放入完整描述、使用方式、成分說明等資訊。')}</div>
