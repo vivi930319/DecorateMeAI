@@ -1707,6 +1707,30 @@ function showToast(msg){
     setTimeout(()=>{ t.classList.remove('show'); t.style.opacity='0'; setTimeout(()=>t.remove(),500); }, 2400);
 }
 
+// 一筆收藏在網址上的識別碼。
+//
+// 為什麼網址一定要記得住它： #suggestion 只講得出「哪一頁」，講不出「哪一筆」。
+// 所以除了「從收藏彈窗按下按鈕」那一條路以外，任何進入方式——按上一頁、重新整理、
+// 直接貼網址——都必然拿不到那一筆，於是建議頁退回「當前這次分析」：沒有分析就
+// 跳去做臉部分析，有分析就顯示最新那一筆。兩種症狀都是同一個原因。
+//
+// 優先用 remoteId（資料庫的 id，跨裝置都一樣）；還沒同步的收藏沒有 id，
+// 退回用 timestamp——那也是本機用來認同一筆的鍵（見 saveCurrentLook 寫回 remoteId 那段）。
+function lookRouteId(item) {
+    if (!item || typeof item !== 'object') return '';
+    if (item.remoteId != null && String(item.remoteId) !== '') return 'r' + String(item.remoteId);
+    if (item.timestamp) return 't' + String(item.timestamp);
+    return '';
+}
+
+function findLookByRouteId(id) {
+    const wanted = String(id || '').trim();
+    if (!wanted) return null;
+    let list = [];
+    try { list = JSON.parse(localStorage.getItem(looksKey()) || '[]'); } catch (_) { return null; }
+    return list.find(x => lookRouteId(x) === wanted) || null;
+}
+
 // 收藏寫回 localStorage。回傳實際存下來的那一份。
 //
 // 上限跟著資料庫走（100），但真正的限制是裝不裝得下：每一筆的 beforeImage 可能是
@@ -3680,8 +3704,11 @@ const Router = {
         if (this.currentPage === 'admin' && page !== 'admin') this.stopPromotionWatch();
         resetSpaViewport(() => navId === this._navigationSeq);
         try {
-            if (!opts.fromHash && location.hash !== `#${page}`) {
-                history.pushState(null, '', `#${page}`);
+            // 網址要帶上是哪一筆收藏，否則重整或按上一頁就找不回來了。
+            const lookSegment = opts.look ? lookRouteId(opts.look) : '';
+            const routeHash = lookSegment ? `#${page}/${lookSegment}` : `#${page}`;
+            if (!opts.fromHash && location.hash !== routeHash) {
+                history.pushState(null, '', routeHash);
             }
             const back = (NAV_ORDER.indexOf(page) > -1 && NAV_ORDER.indexOf(this.currentPage) > -1
                           && NAV_ORDER.indexOf(page) < NAV_ORDER.indexOf(this.currentPage));
@@ -5724,7 +5751,10 @@ const PageInit = {
         // ⚠️ 只用於顯示，不寫回 Router.analysisPackage——那份是渲染、推薦、
         // 回饋共用的，覆寫它會讓「看一眼舊收藏」把使用者正在做的新分析洗掉，
         // 而症狀會出現在別的頁面上。
-        const viewLook = (opts && opts.look && typeof opts.look === 'object') ? opts.look : null;
+        // 直接給的優先；沒有就用網址上的識別碼把那一筆找回來（重整、上一頁、貼網址）。
+        const viewLook = (opts && opts.look && typeof opts.look === 'object')
+            ? opts.look
+            : ((opts && opts.lookId) ? findLookByRouteId(opts.lookId) : null);
 
         // ⚠️ 分析門檻要排在**認出收藏之後**。
         //
@@ -9470,8 +9500,15 @@ function watchPasswordFields() {
 (function init() {
     watchPasswordFields();
     const routeFromHash = () => {
-        const page = location.hash.replace(/^#/, '');
-        if (ROUTE_PAGES.has(page) && Router.currentPage !== page) Router.go(page, { fromHash: true });
+        // 網址現在可能是 #suggestion/r123：前半是頁面，後半是哪一筆收藏。
+        const raw = location.hash.replace(/^#/, '');
+        const slash = raw.indexOf('/');
+        const page = slash > -1 ? raw.slice(0, slash) : raw;
+        const lookId = slash > -1 ? raw.slice(slash + 1) : '';
+        if (!ROUTE_PAGES.has(page)) return;
+        // 同一頁但換了另一筆收藏也要重畫——只比頁面的話，在兩筆收藏之間切換不會有反應。
+        if (Router.currentPage === page && lookRouteId(Router.viewingLook) === lookId) return;
+        Router.go(page, { fromHash: true, lookId });
     };
 
     document.addEventListener('click', (e) => {
@@ -9620,13 +9657,20 @@ function showApp(preferredPage) {
     const landing = (typeof AdminStore !== 'undefined' && AdminStore.isAdmin()) ? 'admin' : 'dashboard';
     // 管理員一律進後台（Router.go 內另有一道相同的守衛）；其餘情況才還原原本那一頁。
     const wanted = String(preferredPage || '').replace(/^#/, '');
-    const target = (landing === 'admin' || !ROUTE_PAGES.has(wanted)) ? landing : wanted;
-    updateAdminNav(target);
+    // 還原時要把 #suggestion/r123 拆開：ROUTE_PAGES 認的是前半段，
+    // 整串拿去比一定認不得，然後靜靜退回 dashboard——重整就丟失那一筆收藏。
+    const wantedSlash = wanted.indexOf('/');
+    const wantedPage = wantedSlash > -1 ? wanted.slice(0, wantedSlash) : wanted;
+    const target = (landing === 'admin' || !ROUTE_PAGES.has(wantedPage)) ? landing : wanted;
+    const targetSlash = target.indexOf('/');
+    const targetPage = targetSlash > -1 ? target.slice(0, targetSlash) : target;
+    const targetLookId = targetSlash > -1 ? target.slice(targetSlash + 1) : '';
+    updateAdminNav(targetPage);
     const targetUrl = `${location.pathname}${location.search}#${target}`;
     if (location.hash !== `#${target}`) history.replaceState(null, '', targetUrl);
     // Router.go 有自己的守衛（訪客的收藏／分析紀錄、權限不足）會直接 return 不換頁。
     // 還原 hash 時撞上守衛就會停在空白畫面，所以沒有渲染成任何一頁就退回 landing。
-    Promise.resolve(Router.go(target)).then(() => {
+    Promise.resolve(Router.go(targetPage, { fromHash: true, lookId: targetLookId })).then(() => {
         if (Router.currentPage) return;
         const homeUrl = `${location.pathname}${location.search}#${landing}`;
         if (location.hash !== `#${landing}`) history.replaceState(null, '', homeUrl);

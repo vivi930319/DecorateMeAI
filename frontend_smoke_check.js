@@ -286,8 +286,12 @@ const cssSource = fs.readFileSync(path.join(rootDir, 'css', 'main.css'), 'utf8')
 for (const invariant of [
   "const adminMode = admin && activePage === 'admin'",
   'updateAdminNav(page);',
-  // showApp() 會還原重新載入前的頁面，所以切外框的參數是 target（管理員時等於 landing）。
-  'updateAdminNav(target);'
+  // showApp() 會還原重新載入前的頁面，所以切外框的參數是還原的那一頁。
+  //
+  // 2026-09-05 起還原目標可能帶著收藏識別碼（#suggestion/r123），那個變數因此
+  // 拆成 target（完整 hash）與 targetPage（只有頁面）。切外框一定要用 targetPage：
+  // 把整串 'suggestion/r123' 丟給 updateAdminNav，它跟任何一個頁面名稱都對不上。
+  'updateAdminNav(targetPage);'
 ]) {
   if (!routerSource.includes(invariant)) throw new Error(`Admin/member shell separation missing: ${invariant}`);
 }
