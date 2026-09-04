@@ -37,6 +37,7 @@
                 <h1 id="adminSectionTitle">營運總覽</h1>
             </div>
             <div class="admin-topbar-actions">
+                <button class="admin-secondary-button" type="button" data-admin-jump="feedback">跳到模型複核區</button>
                 <span class="admin-sync-status" id="adminOverallStatus"><i></i>資料同步中</span>
                 <button class="admin-secondary-button" id="adminRefreshAllBtn" type="button">重新整理</button>
             </div>
@@ -73,6 +74,7 @@
                         <div class="admin-block-heading"><span>Actions</span><h3 id="adminQuickTitle">常用操作</h3></div>
                         <button type="button" data-admin-jump="members"><span>會員權限管理</span><b>前往</b></button>
                         <button type="button" data-admin-jump="products"><span>手動新增商品</span><b>前往</b></button>
+                        <button type="button" data-admin-jump="feedback"><span>模型修正複核</span><b>前往</b></button>
                     </section>
                 </div>
 
@@ -295,6 +297,8 @@
                                 <h3>模型訓練批次紀錄</h3>
                             </div>
                             <span class="atb-current" id="adminFeedbackCurrentScore">目前指標載入中…</span>
+                            <button class="admin-secondary-button atb-back" id="adminTrainingJumpReview"
+                                    type="button" title="回到上方的待覆核清單">↑ 回到待覆核</button>
                         </div>
                         <div class="atb-runs" id="adminFeedbackRuns">尚未載入訓練批次。</div>
                         <p class="atb-note">
@@ -304,7 +308,9 @@
                         </p>
                     </section>
 
-                    <section class="acp-deck acp-raised">
+                    <!-- id 是給「跳到模型複核區」用的落點。這一區最上面是訓練批次紀錄，
+                         而按那顆按鈕的人是要來審核照片的，落在區塊開頭等於還要再滑一次。 -->
+                    <section class="acp-deck acp-raised" id="adminFeedbackReview">
                         <div class="admin-staging-toolbar">
                             <p class="admin-crawler-message" id="adminFeedbackSummary" aria-live="polite">
                                 使用者修正過的五官判斷。每一筆都會成為重訓的標籤，請逐筆確認合理再送訓。
@@ -316,7 +322,7 @@
                             <div class="admin-feedback-actions">
                                 <label class="fb-pick-all" title="勾選所有可以送訓的（已採用、有影像、還沒送過）">
                                     <input type="checkbox" id="adminFeedbackPickAll">
-                                    <span>全選可送訓</span>
+                                    <span>全選待覆核</span>
                                 </label>
                                 <button class="admin-primary-button" id="adminFeedbackTrain" type="button" disabled>送去訓練</button>
                                 <button class="admin-primary-button" id="adminFeedbackRefresh" type="button">重新載入</button>
@@ -348,6 +354,10 @@
                              同一個地方看完再決定。表格會把一筆攤成好幾列，覆核的人得先在腦中
                              把它們拼回同一次分析。 -->
                         <div class="admin-feedback-list" id="adminFeedbackBody"></div>
+                        <div class="admin-feedback-jumps" aria-label="模型修正區塊快速導覽">
+                            <button class="admin-secondary-button" id="adminFeedbackJumpReview" type="button">回到待覆核</button>
+                            <button class="admin-secondary-button" id="adminFeedbackJumpTraining" type="button">查看訓練紀錄</button>
+                        </div>
                     </section>
                 </div>
             </section>

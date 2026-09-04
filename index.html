@@ -10,8 +10,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Serif+TC:wght@300;400;500;700&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/main.css?v=20260903-172237">
-<link rel="stylesheet" href="css/makeup-flow.css?v=20260903-172237">
+<link rel="stylesheet" href="css/main.css?v=20260904-131008">
+<link rel="stylesheet" href="css/makeup-flow.css?v=20260904-131008">
 <script>
 (function(){
     try {
@@ -129,11 +129,32 @@
 function toggleTopbarMenu(){
     var nav=document.getElementById('topbarDrawer'),btn=document.querySelector('.topbar-menu-toggle');
     var open=!document.body.classList.contains('menu-open');
+    if(open && window.matchMedia && window.matchMedia('(max-width: 760px)').matches){
+        portalTopbarMenu();
+    }
     document.body.classList.toggle('menu-open',open);
+    if(!open) restoreTopbarMenu();
     if(btn){btn.setAttribute('aria-expanded',String(open));btn.setAttribute('aria-label',open?'關閉選單':'開啟選單');}
     if(open) nav?.querySelector('a')?.focus();
 }
-function closeTopbarMenu(){document.body.classList.remove('menu-open');var btn=document.querySelector('.topbar-menu-toggle');if(btn){btn.setAttribute('aria-expanded','false');btn.setAttribute('aria-label','開啟選單');}}
+function portalTopbarMenu(){
+    var nav=document.getElementById('topbarDrawer'),backdrop=document.querySelector('.topbar-menu-backdrop');
+    if(!nav || !backdrop || nav.parentElement===document.body) return;
+    document.body.appendChild(backdrop);
+    document.body.appendChild(nav);
+}
+function restoreTopbarMenu(){
+    var nav=document.getElementById('topbarDrawer'),backdrop=document.querySelector('.topbar-menu-backdrop'),host=document.querySelector('.topbar-inner'),right=host?.querySelector('.topbar-right');
+    if(!nav || !backdrop || !host || nav.parentElement!==document.body) return;
+    if(right){host.insertBefore(nav,right);host.insertBefore(backdrop,right);}
+    else {host.appendChild(nav);host.appendChild(backdrop);}
+}
+function closeTopbarMenu(){document.body.classList.remove('menu-open');restoreTopbarMenu();var btn=document.querySelector('.topbar-menu-toggle');if(btn){btn.setAttribute('aria-expanded','false');btn.setAttribute('aria-label','開啟選單');}}
+window.addEventListener('resize',function(){
+    var mobile=window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
+    if(!mobile) restoreTopbarMenu();
+    else if(document.body.classList.contains('menu-open')) portalTopbarMenu();
+});
 document.addEventListener('click',function(e){if(e.target.closest&&e.target.closest('#topbarDrawer a'))setTimeout(closeTopbarMenu,0);});
 document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.body.classList.contains('menu-open')){closeTopbarMenu();document.querySelector('.topbar-menu-toggle')?.focus();}});
 (function(){
@@ -186,7 +207,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     }, { passive: true });
 })();
 </script>
-<script defer src="js/config.js?v=20260903-172237"></script>
+<script defer src="js/config.js?v=20260904-131008"></script>
 <script>
 // config.local.js 只存在於開發機：firebase.json 明確把它排除在部署之外（它是本機覆寫用的，
 // 而且 deploy.ps1 會斷言這件事，因為那個檔案可能含有不該公開的設定）。
@@ -209,13 +230,13 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     document.currentScript.parentNode.insertBefore(local, document.currentScript.nextSibling);
 })();
 </script>
-<script defer src="js/service-endpoints.js?v=20260903-172237"></script>
-<script defer src="js/data.js?v=20260903-172237"></script>
-<script defer src="js/api.js?v=20260903-172237"></script>
+<script defer src="js/service-endpoints.js?v=20260904-131008"></script>
+<script defer src="js/data.js?v=20260904-131008"></script>
+<script defer src="js/api.js?v=20260904-131008"></script>
 <!-- 五官圖鑑：要在 router.js 之前，router 初始化分析頁時會呼叫 FeatureAtlas.attach -->
-<script defer src="js/feature-atlas.js?v=20260903-172237"></script>
-<script defer src="js/makeup-contract.js?v=20260903-172237"></script>
-<script defer src="js/router.js?v=20260903-172237"></script>
-<script defer src="js/makeup-flow.js?v=20260903-172237"></script>
+<script defer src="js/feature-atlas.js?v=20260904-131008"></script>
+<script defer src="js/makeup-contract.js?v=20260904-131008"></script>
+<script defer src="js/router.js?v=20260904-131008"></script>
+<script defer src="js/makeup-flow.js?v=20260904-131008"></script>
 </body>
 </html>

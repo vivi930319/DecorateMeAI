@@ -182,6 +182,29 @@
 .part-advice-avoid { padding: 14px 16px; border: 1px dashed var(--gold); background: color-mix(in srgb, var(--blush-panel) 58%, transparent); }
 .part-advice-avoid b { color: var(--gold-deep); font-size: 13px; }
 .part-advice-avoid p { margin-top: 4px; color: var(--mid); }
+.part-advice-personal {
+    margin-top: 28px;
+    padding: 22px 20px 20px;
+    border: 1px solid var(--line-gold);
+    background: color-mix(in srgb, var(--glass-surface) 54%, transparent);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--gold) 24%, transparent);
+}
+.part-advice-personal-head { display:flex; align-items:baseline; gap:14px; margin-bottom:17px; }
+.part-advice-personal-head span { color:var(--gold-deep); font:600 11px/1 var(--sans); letter-spacing:.20em; }
+.part-advice-personal-head b { color:var(--ink-soft); font-family:var(--cjk); font-size:19px; font-weight:600; letter-spacing:.04em; }
+.part-advice-personal-source,
+.part-advice-personal-adjustments { margin-top:17px; }
+.part-advice-personal-source > b,
+.part-advice-personal-adjustments > b { display:block; margin-bottom:10px; color:var(--gold-deep); font-family:var(--cjk); font-size:14px; font-weight:600; letter-spacing:.08em; }
+.part-advice-personal-row { display:grid; grid-template-columns:78px minmax(0,1fr); gap:14px; padding:10px 0; border-bottom:1px solid color-mix(in srgb, var(--line-gold) 72%, var(--line)); color:var(--mid); font-family:var(--cjk); font-size:15px; line-height:1.85; }
+.part-advice-personal-row b { color:var(--ink-soft); font-weight:500; overflow-wrap:anywhere; }
+.part-advice-personal-item { padding:15px 0; border-top:1px solid color-mix(in srgb, var(--line-gold) 72%, var(--line)); }
+.part-advice-personal-item strong { display:inline-block; color:var(--ink-soft); font-family:var(--cjk); font-size:16px; font-weight:600; }
+.part-advice-personal-item span { margin-left:10px; color:var(--muted); font-family:var(--cjk); font-size:13px; }
+.part-advice-personal-item p,
+.part-advice-personal-item small { display:block; margin-top:7px; color:var(--mid); font-family:var(--cjk); font-size:15px; line-height:1.95; overflow-wrap:anywhere; }
+.part-advice-personal-item small { color:var(--muted); }
+.lookbook-personal-entry { position:relative; z-index:1; display:flex; justify-content:center; margin:18px auto 0; }
 
 .lookbook-result {
     position: relative;
@@ -221,6 +244,62 @@
 .lookbook-palette { display: flex; padding-bottom: 5px; }
 .lookbook-palette span { width: 32px; height: 32px; margin-left: -5px; border: 3px solid var(--paper); border-radius: 50%; box-shadow: 0 0 0 1px var(--line-gold); }
 .lookbook-summary { position: relative; z-index: 1; max-width: 760px; margin: 18px auto 34px; text-align: center; color: var(--mid); line-height: 1.9; }
+
+/* v4 妝容建議：保留原本人像互動，上下補上可直接閱讀的六部位建議、
+   真人語氣故事與可折疊的分析依據。所有欄位都允許長文字換行，避免手機被
+   後端回傳內容撐出水平捲軸。 */
+.v4-quick-advice,
+.v4-personalization {
+    position: relative;
+    z-index: 1;
+    width: min(1000px, 100%);
+    min-width: 0;
+    margin: 48px auto 0;
+    padding-top: 30px;
+    border-top: 1px solid var(--line);
+}
+.v4-section-heading { margin-bottom: 18px; }
+.v4-section-heading h3 { margin-top: 8px; font-family: var(--cjk); font-size: clamp(21px, 2.5vw, 28px); font-weight: 500; letter-spacing: .08em; color: var(--ink-soft); }
+.v4-overall-summary { margin: 0 0 18px; color: var(--mid); line-height: 1.9; overflow-wrap: anywhere; }
+.v4-advice-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.v4-advice-card { min-width: 0; padding: 20px; border: 1px solid var(--line-gold); background: color-mix(in srgb, var(--glass-surface) 82%, transparent); }
+.v4-advice-card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.v4-advice-card-head span { min-width: 0; font-family: var(--cjk); font-size: 17px; font-weight: 500; letter-spacing: .08em; color: var(--gold-deep); overflow-wrap: anywhere; }
+.v4-advice-card-head i { flex: 0 0 auto; font: 10px/1 var(--sans); font-style: normal; letter-spacing: .16em; color: var(--muted); }
+.v4-advice-analysis,
+.v4-advice-group { color: var(--mid); font-family: var(--cjk); font-size: 13.5px; line-height: 1.85; overflow-wrap: anywhere; }
+.v4-advice-group { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.v4-advice-group b,
+.v4-evidence-label { display: block; margin-bottom: 7px; color: var(--gold-deep); font-size: 12px; font-weight: 500; letter-spacing: .08em; }
+.v4-advice-group ol,
+.v4-advice-group ul { display: grid; gap: 5px; margin: 0; padding-left: 20px; }
+.v4-advice-group li { padding-left: 3px; overflow-wrap: anywhere; }
+.v4-advice-avoid { border-top-color: color-mix(in srgb, var(--gold) 55%, var(--line)); }
+.v4-advice-empty { color: var(--muted); font-size: 13px; }
+.v4-personalized-story { max-width: 760px; margin: 0 auto; padding: 24px; border: 1px solid var(--line-gold); background: color-mix(in srgb, var(--glass-surface) 84%, transparent); }
+.v4-profile-summary { margin: -3px 0 16px; color: var(--gold-deep); font-family: var(--cjk); font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; }
+.v4-story-copy { display: grid; gap: 12px; }
+.v4-story-copy p { margin: 0; color: var(--mid); font-family: var(--cjk); font-size: 14px; line-height: 2; overflow-wrap: anywhere; }
+.v4-personalization-evidence { max-width: 760px; margin: 16px auto 0; border: 1px solid var(--line); background: color-mix(in srgb, var(--glass-surface) 62%, transparent); }
+.v4-personalization-evidence summary { padding: 15px 18px; color: var(--ink-soft); cursor: pointer; font-family: var(--cjk); font-size: 14px; letter-spacing: .06em; }
+.v4-personalization-evidence summary::marker { color: var(--gold-deep); }
+.v4-evidence-body { display: grid; gap: 20px; padding: 0 18px 18px; }
+.v4-evidence-source { min-width: 0; }
+.v4-evidence-source .v4-evidence-label { padding-top: 15px; border-top: 1px solid var(--line); }
+.v4-evidence-row { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 14px; padding: 8px 0; border-bottom: 1px solid var(--line); font-family: var(--cjk); font-size: 13px; line-height: 1.7; }
+.v4-evidence-row span { color: var(--muted); }
+.v4-evidence-row b { min-width: 0; color: var(--ink-soft); font-weight: 400; overflow-wrap: anywhere; }
+.v4-adjustment-list { min-width: 0; }
+.v4-adjustment-item { min-width: 0; padding: 12px 0; border-top: 1px solid var(--line); }
+.v4-adjustment-item > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 9px; }
+.v4-adjustment-item strong { color: var(--ink-soft); font-family: var(--cjk); font-size: 14px; font-weight: 500; }
+.v4-adjustment-item span { color: var(--muted); font-family: var(--cjk); font-size: 12px; }
+.v4-adjustment-item p,
+.v4-adjustment-item small { display: block; margin-top: 6px; color: var(--mid); font-family: var(--cjk); font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+.v4-adjustment-item small { color: var(--muted); }
+.v4-evidence-note { min-width: 0; padding-top: 12px; border-top: 1px solid var(--line); }
+.v4-evidence-note b { color: var(--gold-deep); font-family: var(--cjk); font-size: 12px; font-weight: 500; }
+.v4-evidence-note p { margin-top: 6px; color: var(--mid); font-family: var(--cjk); font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
 
 .look-map-shell {
     position: relative;
@@ -1212,6 +1291,14 @@ body[data-member-theme="noir"] .topbar-nav a:focus-visible { background: linear-
     .look-pin-lane { grid-template-columns: 1fr 1fr; }
     .look-pin span { padding: 11px 10px; font-size: 18px; }
     .lookbook-actions { display: grid; grid-template-columns: 1fr; }
+    .v4-quick-advice,
+    .v4-personalization { margin-top: 34px; padding-top: 24px; }
+    .v4-advice-grid { grid-template-columns: 1fr; }
+    .v4-advice-card,
+    .v4-personalized-story { padding: 17px 15px; }
+    .v4-advice-card-head { align-items: flex-start; flex-direction: column; gap: 6px; }
+    .v4-evidence-body { padding-inline: 14px; }
+    .v4-evidence-row { grid-template-columns: 76px minmax(0, 1fr); gap: 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

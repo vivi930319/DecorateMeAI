@@ -94,6 +94,29 @@ console.log('\n=== 模型修正複核必須可用 ===');
 check('feedback 按鈕存在', setB.has('feedback'));
 check('feedback 區塊存在', setV.has('feedback'));
 check('feedback 在白名單裡（先前就是漏了這個）', setM.has('feedback'));
+check('總覽有模型修正複核快速入口', html.includes('data-admin-jump="feedback"'));
+check('上方有跳到模型複核區按鈕', /class="admin-topbar-actions"[\s\S]{0,300}data-admin-jump="feedback"/.test(html));
+// 「按鈕有綁事件」不等於「按下去看得出來」。
+//
+// 2026-09-04：切換區塊之後的捲動寫成 `.admin-stage.scrollTo({top:0})`，
+// 但 .admin-stage 是 overflow:visible、只有 min-height:100vh——它不是捲動容器，
+// 真正在捲的是整份文件。對不會捲的元素呼叫 scrollTo 不報錯也不動作，於是在
+// 營運總覽捲到一半按「跳到模型複核區」，內容換了、視窗卻停在原地。
+// 工具列是 sticky、捲到哪都按得到，所以這是這顆按鈕的常態用法。
+// 靜態檢查看不出「沒有效果的呼叫」，只能守住寫法本身。
+// 比對前要先剝掉 // 註解：上面那段說明本身就寫著舊寫法，
+// 直接搜原始碼會被自己的註解判成「還沒改」。
+const jsCode = js.replace(/^\s*\/\/.*$/gm, '');
+check('切區塊不對不會捲的 .admin-stage 下 scrollTo',
+  !/\.admin-stage'\)\?\.scrollTo/.test(jsCode));
+check('切區塊用 scrollIntoView 捲到新區塊開頭',
+  /const setAdminSection[\s\S]{0,3000}?scrollIntoView\(\{ behavior: reduceMotion/.test(js));
+// 落點錯了跟按不動一樣沒用：這一區由上到下是「標題 → 訓練批次紀錄 → 待覆核照片
+// 清單」，而按「跳到模型複核區」的人是要來審核照片的。落在區塊開頭的話批次一多
+// 就還要再滑一次，那正是這顆按鈕想省掉的事。
+check('照片審核清單有靜態落點 id', html.includes('id="adminFeedbackReview"'));
+check('跳到模型複核區落在照片審核清單',
+  /\[data-admin-jump\][\s\S]{0,1200}?getElementById\('adminFeedbackReview'\)[\s\S]{0,900}?scrollIntoView/.test(jsCode));
 
 console.log('\n=== 商品管理：品牌篩選 ===');
 // 2026-08-28 實測線上商品服務：minPrice/maxPrice 完全沒有作用（minPrice=99999

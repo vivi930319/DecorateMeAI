@@ -33,16 +33,16 @@ const fnBody = (header) => {
 };
 
 console.log('');
-console.log('=== 1. 進行中的視窗不給「點背景關閉」這個出口 ===');
+console.log('=== 1. 流程視窗不給「點背景關閉」這個出口 ===');
 // 右上角的 ✕ 一律保留：要離開仍然離得開，只是必須是一個明確的動作。
-check('journeyShell 讓呼叫端決定能不能點背景關閉',
-  /function journeyShell\(kicker, title, body, actions, dismissible = true\)/.test(src));
-check('backdrop 監聽被 dismissible 包住',
-  /if \(dismissible\) \{\s*\n\s*modal\.addEventListener\('click'/.test(src));
+check('journeyShell 預設鎖定視窗',
+  /function journeyShell\(kicker, title, body, actions\)/.test(src));
+check('流程視窗沒有 backdrop 關閉監聽',
+  !/modal\.addEventListener\('click'/.test(src));
 check('產生建議的視窗關掉這個出口',
-  /'正在產生妝容建議'[\s\S]{0,400}?data-back>上一步<\/button>', false\)/.test(src));
+  src.includes("journeyShell('MAKEUP SUGGESTION', '正在產生妝容建議'"));
 check('妝容渲染的視窗也關掉',
-  /'妝容渲染中'[\s\S]{0,1600}?data-back>上一步<\/button>', false\)/.test(src));
+  src.includes("journeyShell('MAKEUP RENDER', '妝容渲染中'"));
 check('✕ 仍然綁著關閉', src.includes(".journey-dialog-close')?.addEventListener('click', removeJourneyModal)"));
 
 console.log('');

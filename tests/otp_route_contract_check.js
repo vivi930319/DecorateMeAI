@@ -1,0 +1,13 @@
+const fs=require('fs'),assert=require('assert/strict'),path=require('path');
+const api=fs.readFileSync(path.join(__dirname,'../js/api.js'),'utf8');
+const router=fs.readFileSync(path.join(__dirname,'../js/router.js'),'utf8');
+const gateway=fs.readFileSync(path.join(__dirname,'../../PythonProject12/gateway/ai_gateway.py'),'utf8');
+assert(api.includes("forgotPasswordPath: '/auth/forgot-password'"));
+assert(/sendForgotPasswordOTP[\s\S]*forgotPasswordPath/.test(api));
+assert(/sendForgotOTP[\s\S]{0,300}sendForgotPasswordOTP/.test(router));
+assert(/resendForgotOTP[\s\S]{0,220}sendForgotPasswordOTP/.test(router));
+assert(!/resendOTP[\s\S]{0,180}catch \(_\) \{\}/.test(router));
+assert(router.includes('目前沒有待驗證的註冊資料'));
+assert(gateway.includes('@app.post("/auth/forgot-password")'));
+assert(gateway.includes('proxy_public_member_request(request, "/api/forgot-password")'));
+console.log('PASS OTP routes: registration resend errors visible; forgot-password isolated through Gateway');

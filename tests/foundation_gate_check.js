@@ -35,7 +35,11 @@ vm.runInContext(cut(src, 'function hasMatch(node) {') + '\n'
   // 色差與門檻兩句由 foundationSkinLines 統一產生，推薦面板與色號比較區共用；
   // 抽了用它的函式沒抽它，測試會在執行時炸 ReferenceError。
     + cut(src, 'function foundationSkinLines(skin) {') + '\n'
-    + cut(src, 'function currentShadeRecommendation() {') + '\n'
+    + cut(src, 'function currentShadeRecommendation(product = null) {') + '\n'
+    + cut(src, 'function currentFoundationMatchStatus(product = null) {') + '\n'
+    + cut(src, 'function foundationStatusMessage(status) {') + '\n'
+    + cut(src, 'function foundationStatusRawDeltaE(status) {') + '\n'
+    + cut(src, 'function foundationStatusHtml(product = null) {') + '\n'
     // shadeRecommendationHtml 會呼叫 userSkinRow（把使用者膚色擺在三欄上面）。
     // 抽了前者沒抽相依，測試會在執行時炸 ReferenceError。
     + cut(src, 'function userSkinRow() {') + ';\n'
@@ -65,18 +69,15 @@ const sr = {
     anchor: { label: '主推薦色號', shadeCode: 'PO-02', matchPercent: 92, anchorDeltaE: 0,
               description: '目前最接近你的膚色明暗與色調。',
               product: { id: 'api-foundations-968',
-                         foundationSkinMatch: { deltaE: 1.46, accepted: true,
-                                                minInclusive: 0, maxInclusive: 2 } } },
+                         foundationSkinMatch: { rawSkinDeltaE: 1.46, accepted: true } } },
     lighter: { label: '較明亮的替代色', shadeCode: 'PO-03', matchPercent: 41, anchorDeltaE: 4.59,
                description: '適合希望提亮膚色時比較。',
                product: { id: 'api-foundations-969',
-                          foundationSkinMatch: { deltaE: 4.59, accepted: false,
-                                                 minInclusive: 0, maxInclusive: 2 } } },
+                         foundationSkinMatch: { rawSkinDeltaE: 4.59, accepted: false } } },
     darker: { label: '較深的替代色', shadeCode: 'O-03', matchPercent: 44, anchorDeltaE: 4.27,
               description: '適合近期有日曬時比較。',
               product: { id: 'api-foundations-970',
-                         foundationSkinMatch: { deltaE: 4.27, accepted: false,
-                                                minInclusive: 0, maxInclusive: 2 } } },
+                         foundationSkinMatch: { rawSkinDeltaE: 4.27, accepted: false } } },
     disclaimer: '不代表品牌定義的淺一階或深一階。',
 };
 sb.Router.shadeRecommendation = sr;
@@ -84,7 +85,8 @@ const out = shade({ id: 'api-foundations-968' });
 
 console.log('');
 console.log('=== 1. 兩個門檻的比較對象不能混 ===');
-check('主推薦寫「與您的膚色」', /與您的膚色[^<]*色差 1\.5/.test(out));
+check('主推薦顯示後端回傳的推薦契合度', out.includes('推薦契合度 92%'));
+check('主推薦不直接顯示 foundationSkinMatch 色差', !out.includes('與您的膚色'));
 check('替代色寫「與主推薦色號」', out.includes('與主推薦色號的色差 4.6'));
 check('替代色也標明是跟主推薦比', out.includes('與主推薦色號的色差 4.3'));
 // 契約 §7 明文禁止：替代色本來就不必貼近膚色
@@ -96,14 +98,24 @@ check('替代色不用自己的膚色色差充數',
   /anchorDeltaE/.test(cut(src, 'function shadeRecommendationHtml(p) {')));
 
 console.log('');
-console.log('=== 2. 門檻要寫出來 ===');
-check('主推薦標示通過 0～2 門檻', out.includes('膚色色差 0～2 推薦門檻'));
+console.log('=== 2. 狀態分流由後端欄位決定 ===');
+sb.Router.foundationMatchStatus = {
+    code: 'FOUNDATION_CALIBRATED_SAME_LANE', status: 'matched',
+    rawSkinDeltaE: 1.46,
+    message: '主推薦先通過原始膚色比色，再套用同一底調的校正色階。'
+};
+const calibratedPanel = panelFn({ id: 'api-foundations-968', matchPercent: 92,
+    recommendationLabel: '主推薦色號',
+    foundationSkinMatch: { rawSkinDeltaE: 1.46, calibratedTargetDeltaE: 0 } });
+check('校正狀態顯示後端說明', calibratedPanel.includes('主推薦先通過原始膚色比色'));
+check('校正狀態顯示實體試色提醒', calibratedPanel.includes('請以實際至實體專櫃試色與購買體驗為準'));
+check('校正狀態不顯示原始色差', !calibratedPanel.includes('1.46') && !calibratedPanel.includes('rawSkinDeltaE'));
+sb.Router.foundationMatchStatus = null;
 // 未通過門檻的不會是主推薦，所以那句話不該出現在別的地方
 sb.Router.shadeRecommendation = { ...sr,
     anchor: { ...sr.anchor,
               product: { ...sr.anchor.product,
-                         foundationSkinMatch: { deltaE: 2.54, accepted: false,
-                                                minInclusive: 0, maxInclusive: 2 } } } };
+                         foundationSkinMatch: { rawSkinDeltaE: 2.54, accepted: false } } } };
 check('未通過門檻就不寫「通過門檻」',
   !shade({ id: 'api-foundations-968' }).includes('推薦門檻'));
 
@@ -145,10 +157,12 @@ const closestProduct = {
     // 而失敗的樣子是「入口不見了」，看起來像入口壞掉，不像資料少一個欄位。
     type: 'foundations',
     showMatchPercent: false,
-    foundationSkinMatch: { deltaE: 2.54, accepted: false, displayEligible: true,
-                           displayStatus: 'closest_available', displayMaxInclusive: 5 },
-    recommendationPresentation: { systemLabel: '根據系統演算法推薦', matchLabel: '78% MATCH',
-                                  matchPercent: 78, headline: '很適合你的整體妝容',
+    foundationMatchStatus: { code: 'FOUNDATION_CLOSEST_AVAILABLE', status: 'closest_available',
+                             rawSkinDeltaE: 2.54,
+                             message: '資料庫沒有 ΔE00 ≤ 2 的原始膚色近似粉底。' },
+    foundationSkinMatch: { rawSkinDeltaE: 2.54, accepted: false },
+    recommendationPresentation: { systemLabel: '根據系統演算法推薦', matchLabel: '資料庫目前最接近',
+                                  matchPercent: 78, headline: '資料庫目前最接近',
                                   summary: '這款底妝…', showMatchPercent: false,
                                   // 真實 API 的粉底都有這一包；沒有它色差入口本來就不該出現
                                   colorDifferenceExplanation: { value: 2.54, displayValue: '色差 2.5',
@@ -156,18 +170,19 @@ const closestProduct = {
 };
 const cardOut = cardFn(closestProduct);
 const panelOut = panelFn(closestProduct);
-check('卡片標成「目前最接近的可比較色號」', cardOut.includes('目前最接近的可比較色號'));
+check('卡片使用後端的 closest_available 標籤', cardOut.includes('資料庫目前最接近'));
 check('卡片不寫「根據系統演算法推薦」', !cardOut.includes('根據系統演算法推薦'));
 // 契合度照常顯示——隱藏它會讓使用者以為這件商品沒有被評估過。
 // 「不背書」現在靠但書達成：數字旁邊必須說清楚這只是目前最接近的色號。
 check('卡片仍顯示契合度', cardOut.includes('MATCH') || cardOut.includes('推薦契合度'));
 check('顯示契合度時一定附但書',
   !(cardOut.includes('MATCH') || cardOut.includes('推薦契合度'))
-  || cardOut.includes('目前最接近的可比較色號'));
+  || cardOut.includes('資料庫目前最接近'));
 check('卡片不寫成已通過門檻', !cardOut.includes('已達') && !cardOut.includes('精準比對'));
-// 色差那句由 foundationSkinLines 統一產生，只出現在詳情面板——
-// 先前卡片與面板各寫一次，同一個判斷講兩遍不會更有說服力。
-check('詳情面板標明比較對象是膚色', panelOut.includes('與您的膚色'));
+check('詳情面板標明資料庫目前最接近', panelOut.includes('資料庫目前最接近'));
+check('詳情面板顯示後端原始 ΔE00', panelOut.includes('原始膚色 ΔE00 2.54'));
+check('詳情面板顯示實體試色提醒', panelOut.includes('請以實際至實體專櫃試色與購買體驗為準'));
+check('詳情面板不沿用 matched 膚色文案', !panelOut.includes('與您的膚色'));
 check('詳情面板不寫舊措辭', !panelOut.includes('根據系統演算法推薦'));
 check('詳情面板仍給色差說明入口', panelOut.includes('data-color-diff'));
 // showMatchPercent 只在後端明確給 false 時才隱藏，其他商品維持原本行為
@@ -232,7 +247,15 @@ const mergedProduct = {
     reasonTexts: ['此色號與您的膚色相近（色差 1.3）', '色調與你的四季型一致'],
     disclaimer: '推薦匹配度是系統用於商品排序的綜合結果。',
   },
-  foundationSkinMatch: { deltaE: 1.3, accepted: true, minInclusive: 0, maxInclusive: 2 },
+  foundationMatchStatus: {
+    code: 'FOUNDATION_CALIBRATED_SAME_LANE', status: 'matched', rawSkinDeltaE: 1.3,
+    message: '後端校正成功說明'
+  },
+  foundationSkinMatch: {
+    rawSkinDeltaE: 1.3, calibratedTargetDeltaE: 0, accepted: true,
+    matchReason: '此色號與您的膚色相近（色差 1.3）',
+    thresholdReason: '後端提供的膚色色差門檻說明'
+  },
 };
 const mergedPanel = panelFn(mergedProduct);
 // 合併與否取決於**同一個商品物件**有沒有 recommendationPresentation：
@@ -261,20 +284,22 @@ check('面板裡的契合度不重複', times(panelOut, '% MATCH') <= 1,
 // 後者不能拿掉：三欄並排的意義就在於 1.3 / 4.7 / 4.6 放在一起看，
 // 而契約 §7 要求主推薦與替代色的比較對象在畫面上分得出來。
 // 會重複的是**結論句**，所以量的是結論句。
-check('膚色結論句只有一次', times(both, '與您的膚色接近（色差') === 1,
-  `出現 ${times(both, '與您的膚色接近（色差')} 次`);
-check('主推薦欄仍標明比較對象', mergedShade.includes('與您的膚色的色差'));
+check('後端膚色結論句只有一次', times(both, '此色號與您的膚色相近（色差') === 1,
+  `出現 ${times(both, '此色號與您的膚色相近（色差')} 次`);
+check('主推薦欄顯示推薦契合度而非 foundationSkinMatch 色差',
+  mergedShade.includes('推薦契合度 92%') && !mergedShade.includes('與您的膚色的色差'));
 check('替代色欄比的是主推薦色號', mergedShade.includes('與主推薦色號的色差'));
-check('門檻句只有一次', times(both, '推薦門檻') === 1);
+check('後端門檻句只有一次', times(both, '後端提供的膚色色差門檻說明') === 1);
 check('色差門檻落在推薦面板裡', mergedPanel.includes('rec-gate') && mergedPanel.includes('rec-skinline'));
-// 後端的 reasonTexts 常有一句就是在講色差，與 matchWord 同義
-check('同義的理由句被濾掉', !mergedPanel.includes('此色號與您的膚色相近'));
+// 後端的 reasonTexts 常有一句就是在講色差，與 matchWord 同義；
+// 它可以保留在唯一的 rec-skinline，但不能在理由清單再重複一次。
+check('同義的理由句只顯示一次', times(mergedPanel, '此色號與您的膚色相近') === 1);
 check('其他理由句照留', mergedPanel.includes('色調與你的四季型一致'));
 // 推薦面板不在（後端沒給 recommendationPresentation）時，比較區要自己撐起來
 // Router.shadeRecommendation 是模組層共用的，前面測試已經設好；
 // 沒有推薦面板時（p 不帶 presentation），比較區要自己撐起表頭。
 check('沒有推薦面板時比較區自己印',
-  out.includes('根據臉部分析結果推薦') && out.includes('與您的膚色'));
+  out.includes('根據臉部分析結果推薦') && out.includes('推薦契合度 92%'));
 check('讓出表頭時不留空的 sr-hero', !/<div class="sr-hero">\s*<\/div>/.test(mergedShade));
 check('讓出表頭後三欄比較還在', mergedShade.includes('sc2-row')
   && mergedShade.includes('主推薦色號'));

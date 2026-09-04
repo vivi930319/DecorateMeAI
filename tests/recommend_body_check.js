@@ -47,6 +47,7 @@ const sandbox = {
 };
 sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
+const defaultFetch = sandbox.fetch;
 
 vm.createContext(sandbox);
 try {
@@ -114,13 +115,33 @@ const body = () => JSON.parse(captured.opts.body);
         check(`lab=${name} → 不送出壞座標`, st.lab === null, JSON.stringify(st.lab));
     }
 
-    console.log('\n=== 3. P1 防禦：回應盲信檢查 ===');
+    console.log('\n=== 3. P1 防禦：後端回傳值原樣採用 ===');
+    // 模擬推薦後端自行驗證壞 LAB 後的正式回應。前端只能轉交後端的
+    // skinToneLabReliable 與 fallbackReasons，不能再產生 source=frontend。
+    sandbox.fetch = async (url, opts) => {
+        const response = await defaultFetch(url, opts);
+        const payload = await response.json();
+        payload.analysisPackage.recommendations.skinToneLabReliable = false;
+        payload.analysisPackage.recommendations.fallbackReasons = [{
+            code: 'SKIN_TONE_LAB_UNRELIABLE',
+            affected: ['foundations'],
+            message: '膚色取樣可信度不足，未使用 ΔE 比色，改以季型與膚色分級排序',
+            source: 'recommendation_backend'
+        }];
+        return { ...response, json: async () => payload };
+    };
+    Api._fetchWithRelogin = (u, o) => sandbox.fetch(u, o);
     const r = await Api.recommendProducts(
         pkg({ faceAnalysis: { skinTone: { season: '秋季', level: '中等', lab: 'nope', labReliable: true } } }), 'richGirl');
-    check('後端回 skinToneLabReliable=true，前端仍判定為 false', r.skinToneLabReliable === false, String(r.skinToneLabReliable));
-    check('前端自行補上 SKIN_TONE_LAB_UNRELIABLE',
-          r.fallbackReasons.some(x => x.code === 'SKIN_TONE_LAB_UNRELIABLE' && x.source === 'frontend'),
+    check('後端回 skinToneLabReliable=false，前端原樣保留', r.skinToneLabReliable === false, String(r.skinToneLabReliable));
+    check('降級原因由後端提供',
+          r.fallbackReasons.some(x => x.code === 'SKIN_TONE_LAB_UNRELIABLE' && x.source === 'recommendation_backend'),
           JSON.stringify(r.fallbackReasons));
+    check('前端不自行補降級原因',
+          !r.fallbackReasons.some(x => x.source === 'frontend'),
+          JSON.stringify(r.fallbackReasons));
+    sandbox.fetch = defaultFetch;
+    Api._fetchWithRelogin = (u, o) => sandbox.fetch(u, o);
 
     console.log('\n=== 4. browLab ===');
     await Api.recommendProducts(pkg({ faceAnalysis: { browLab: { L: 34, a: 5, b: 8 },

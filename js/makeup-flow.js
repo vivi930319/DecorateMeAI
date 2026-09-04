@@ -19,13 +19,195 @@
     function resolveStructured(pkg, style) {
         const saved = pkg?.generativeText?.structured;
         if (saved?.overall && saved?.parts) return saved;
-        const raw = pkg?.generativeText?.suggestion;
+        // v4 的 suggestion 是物件；suggestionData 讓重新整理後仍能保留原始
+        // 結構化資料，suggestion 字串則繼續供推薦與舊 render 流程使用。
+        const raw = pkg?.generativeText?.suggestionData
+            || pkg?.generativeText?.suggestion;
         if (!raw) return null;
         try {
             return Contract.normalize({ suggestion: raw }, contractContext(style));
         } catch (_) {
             return null;
         }
+    }
+
+    function suggestionText(response, structured) {
+        if (typeof response?.suggestion === 'string') return response.suggestion.trim();
+        return String(response?.suggestionText || structured?.rawSuggestion
+            || structured?.overall?.summary || '').trim();
+    }
+
+    function listValue(value) {
+        return Array.isArray(value) ? value.map(item => String(item || '').trim()).filter(Boolean) : [];
+    }
+
+    const QUICK_ADVICE_PARTS = [
+        ['base', '底妝'],
+        ['eyebrow', '眉型'],
+        ['eyes', '眼妝'],
+        ['contour', '修容'],
+        ['cheeks', '腮紅'],
+        ['lips', '唇妝']
+    ];
+
+    function quickAdviceHtml(structured) {
+        const parts = structured?.parts;
+        if (!parts || typeof parts !== 'object') return '';
+        const cards = QUICK_ADVICE_PARTS.map(([key, fallbackLabel]) => {
+            const advice = parts[key];
+            if (!advice || typeof advice !== 'object') return '';
+            const steps = listValue(advice.steps);
+            const avoid = listValue(advice.avoid);
+            return `<article class="v4-advice-card">
+                <div class="v4-advice-card-head"><span>${escapeHtml(advice.label || fallbackLabel)}</span><i>${escapeHtml(key.toUpperCase())}</i></div>
+                ${advice.analysis ? `<p class="v4-advice-analysis">${escapeHtml(advice.analysis)}</p>` : ''}
+                ${steps.length ? `<div class="v4-advice-group"><b>建議做法</b><ol>${steps.map(step => `<li>${escapeHtml(step)}</li>`).join('')}</ol></div>` : ''}
+                ${avoid.length ? `<div class="v4-advice-group v4-advice-avoid"><b>避免</b><ul>${avoid.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul></div>` : ''}
+                ${!advice.analysis && !steps.length && !avoid.length ? '<p class="v4-advice-empty">未提供</p>' : ''}
+            </article>`;
+        }).filter(Boolean).join('');
+        if (!cards) return '';
+        return `<section class="v4-quick-advice" aria-label="快速妝容建議">
+            <div class="v4-section-heading"><span class="eyebrow">QUICK MAKEUP ADVICE</span><h3>快速妝容建議</h3></div>
+            ${structured.overall?.summary ? `<p class="v4-overall-summary">${escapeHtml(structured.overall.summary)}</p>` : ''}
+            <div class="v4-advice-grid">${cards}</div>
+        </section>`;
+    }
+
+    // 指針不是另一份靜態文案；它要把同一份 v4 回應裡的「快速做法」和
+    // personalization.featureAdjustments 對到同一個部位。這樣使用者點「眼妝」時，
+    // 不只看到眼線怎麼畫，也會知道系統為什麼針對下垂眼這樣調整。
+    const PERSONALIZED_PART_RULES = Object.freeze({
+        base: {
+            terms: ['底妝', '粉底', '膚色'],
+            source: [['season', '四季型']]
+        },
+        eyebrow: {
+            terms: ['眉型', '眉毛', '眉妝'],
+            source: [['browShape', '眉型']]
+        },
+        eyes: {
+            terms: ['眼妝', '眼型', '眼線', '睫毛'],
+            source: [['eyeShape', '眼型']]
+        },
+        contour: {
+            terms: ['修容', '臉型', '鼻型', '輪廓', '鼻影', '鼻翼'],
+            source: [['faceShape', '臉型'], ['noseShape', '鼻型']]
+        },
+        cheeks: {
+            terms: ['腮紅', '臉型', '顴骨', '蘋果肌'],
+            source: [['faceShape', '臉型']]
+        },
+        lips: {
+            terms: ['唇妝', '唇型', '嘴型', '口紅', '唇彩'],
+            source: [['lipShape', '嘴型']]
+        },
+        color: {
+            terms: ['色彩', '四季型', '季型', '配色'],
+            source: [['season', '四季型']]
+        }
+    });
+
+    function personalizationText(item) {
+        return [item?.part, item?.detected, item?.adjustment, item?.reason]
+            .filter(Boolean).join(' ');
+    }
+
+    function personalizationPartHtml(personalization, partKey) {
+        if (!personalization || typeof personalization !== 'object') return '';
+        const rule = PERSONALIZED_PART_RULES[partKey];
+        if (!rule) return '';
+        const sourceFeatures = personalization.sourceFeatures && typeof personalization.sourceFeatures === 'object'
+            ? personalization.sourceFeatures : {};
+        const sourceRows = rule.source
+            .map(([key, label]) => sourceFeatures[key]
+                ? `<div class="part-advice-personal-row"><span>${escapeHtml(label)}</span><b>${escapeHtml(sourceFeatures[key])}</b></div>`
+                : '')
+            .filter(Boolean).join('');
+        const adjustments = Array.isArray(personalization.featureAdjustments)
+            ? personalization.featureAdjustments.filter(item => {
+                const haystack = personalizationText(item);
+                return haystack && rule.terms.some(term => haystack.includes(term));
+            }) : [];
+        const adjustmentHtml = adjustments.map(item => `
+            <article class="part-advice-personal-item">
+                <strong>${escapeHtml(item.part || item.detected || '個人化調整')}</strong>
+                ${item.detected && item.part ? `<span>偵測到：${escapeHtml(item.detected)}</span>` : ''}
+                ${item.adjustment ? `<p>${escapeHtml(item.adjustment)}</p>` : ''}
+                ${item.reason ? `<small>${escapeHtml(item.reason)}</small>` : ''}
+            </article>`).join('');
+        if (!sourceRows && !adjustmentHtml) return '';
+        return `<section class="part-advice-personal" aria-label="個人化調整">
+            <div class="part-advice-personal-head"><span>PERSONALIZED</span><b>依你的特徵調整</b></div>
+            ${sourceRows ? `<div class="part-advice-personal-source"><b>本次分析依據</b>${sourceRows}</div>` : ''}
+            ${adjustmentHtml ? `<div class="part-advice-personal-adjustments"><b>這次的調整</b>${adjustmentHtml}</div>` : ''}
+        </section>`;
+    }
+
+    function personalizationTriggerHtml(personalization) {
+        if (!personalization || typeof personalization !== 'object') return '';
+        return `<div class="lookbook-personal-entry">
+            <button class="btn-outline" type="button" data-personalized-analysis>查看個人化分析 →</button>
+        </div>`;
+    }
+
+    function personalizationHtml(personalization) {
+        if (!personalization || typeof personalization !== 'object') return '';
+        const story = personalization.personalizedStory && typeof personalization.personalizedStory === 'object'
+            ? personalization.personalizedStory : {};
+        const headline = String(story.headline || '').trim();
+        const intro = String(story.intro || '').trim();
+        const closing = String(story.closing || '').trim();
+        const paragraphs = listValue(story.paragraphs);
+        // 後端若沒有回 paragraphs，仍用 intro + closing 讓使用者看到完整說明。
+        const storyParagraphs = paragraphs.length ? [intro, ...paragraphs, closing] : [intro, closing];
+        const storyBody = storyParagraphs.filter(Boolean)
+            .map(paragraph => `<p>${escapeHtml(paragraph)}</p>`).join('');
+        const hasStory = !!storyBody || !!headline || !!personalization.profileSummary;
+        const storyHtml = hasStory ? `<section class="v4-personalized-story" aria-labelledby="personalizedStoryTitle">
+            <div class="v4-section-heading"><span class="eyebrow">PERSONALIZED STORY</span><h3 id="personalizedStoryTitle">${escapeHtml(headline || personalization.title || '你的專屬調整')}</h3></div>
+            ${personalization.profileSummary ? `<p class="v4-profile-summary">${escapeHtml(personalization.profileSummary)}</p>` : ''}
+            <div class="v4-story-copy">${storyBody || '<p>未提供</p>'}</div>
+        </section>` : '';
+
+        const sourceFeatures = personalization.sourceFeatures && typeof personalization.sourceFeatures === 'object'
+            ? personalization.sourceFeatures : {};
+        const featureLabels = [
+            ['faceShape', '臉型'], ['browShape', '眉型'], ['eyeShape', '眼型'],
+            ['noseShape', '鼻型'], ['lipShape', '嘴型'], ['season', '四季型']
+        ];
+        const sourceRows = featureLabels.map(([key, label]) => `<div class="v4-evidence-row"><span>${label}</span><b>${escapeHtml(sourceFeatures[key] || '未提供')}</b></div>`).join('');
+        const adjustments = Array.isArray(personalization.featureAdjustments)
+            ? personalization.featureAdjustments.filter(item => item && typeof item === 'object') : [];
+        const adjustmentsHtml = adjustments.length ? `<div class="v4-adjustment-list"><b class="v4-evidence-label">細節調整</b>${adjustments.map(item => `<article class="v4-adjustment-item">
+            <div><strong>${escapeHtml(item.part || '部位調整')}</strong>${item.detected ? `<span>偵測到：${escapeHtml(item.detected)}</span>` : ''}</div>
+            ${item.adjustment ? `<p>${escapeHtml(item.adjustment)}</p>` : ''}
+            ${item.reason ? `<small>${escapeHtml(item.reason)}</small>` : ''}
+        </article>`).join('')}</div>` : '';
+        const noteHtml = [
+            ['搭配說明', personalization.combinationNote],
+            ['風格連結', personalization.styleConnection]
+        ].filter(([, value]) => String(value || '').trim())
+            .map(([label, value]) => `<div class="v4-evidence-note"><b>${label}</b><p>${escapeHtml(value)}</p></div>`).join('');
+        const evidenceHtml = sourceRows || adjustmentsHtml || noteHtml ? `<details class="v4-personalization-evidence">
+            <summary>查看分析證據</summary>
+            <div class="v4-evidence-body">
+                <div class="v4-evidence-source"><b class="v4-evidence-label">本次分析依據</b>${sourceRows}</div>
+                ${adjustmentsHtml}${noteHtml}
+            </div>
+        </details>` : '';
+        if (!storyHtml && !evidenceHtml) return '';
+        return `<section class="v4-personalization" aria-label="個人化妝容說明">${storyHtml}${evidenceHtml}</section>`;
+    }
+
+    function openPersonalizationModal(structured) {
+        const personalization = structured?.personalization;
+        if (!personalization) return;
+        const body = personalizationHtml(personalization)
+            || '<p class="part-advice-empty">目前沒有可顯示的個人化分析資料。</p>';
+        const modal = journeyShell('PERSONALIZED ANALYSIS', '你的個人化分析', body,
+            '<button class="btn-gold" type="button" data-close>看完了</button>');
+        modal.querySelector('[data-close]').onclick = removeJourneyModal;
     }
 
     function safeColors(structured) {
@@ -79,17 +261,36 @@
     // 成果頁時，Safari 會沿用上一頁的垂直位置，畫面因此直接落在人像或標籤中段。
     // 立即重設一次，再等新頁完成兩輪排版後重設一次，避免轉場與圖片版面把位置帶回去。
     function resetSuggestionViewport() {
+        // router.js 已提供會暫時關掉 smooth scroll 的共用重設；妝容建議是
+        // PageInit 內部再次執行這段，不能退回直接 window.scrollTo，否則全站
+        // 的 `scroll-behavior:smooth` 仍會把上一頁的動畫帶進成果頁。
+        if (typeof resetSpaViewport === 'function') {
+            resetSpaViewport();
+            return;
+        }
         try {
             if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
         } catch (_) {}
-        const reset = () => window.scrollTo(0, 0);
+        const reset = () => {
+            const root = document.documentElement;
+            const previousScrollBehavior = root?.style?.scrollBehavior || '';
+            if (root?.style) root.style.scrollBehavior = 'auto';
+            try { window.scrollTo({ top: 0, left: 0, behavior: 'auto' }); }
+            catch (_) { window.scrollTo(0, 0); }
+            if (root) { root.scrollTop = 0; root.scrollLeft = 0; }
+            if (document.body) { document.body.scrollTop = 0; document.body.scrollLeft = 0; }
+            if (root?.style) root.style.scrollBehavior = previousScrollBehavior;
+        };
         reset();
         if (typeof requestAnimationFrame === 'function') {
             requestAnimationFrame(() => requestAnimationFrame(reset));
         }
     }
 
-    function journeyShell(kicker, title, body, actions, dismissible = true) {
+    // 流程視窗不能用點遮罩的方式關閉：尤其是「妝容建議完成」與「渲染中」，
+    // 關掉的只是前端視窗，後端請求仍會繼續，使用者會誤以為流程沒有執行。
+    // 所有離開都必須透過視窗內的明確按鈕（右上角關閉、上一步、看完了）。
+    function journeyShell(kicker, title, body, actions) {
         removeJourneyModal();
         const modal = document.createElement('div');
         modal.id = 'journeyModal';
@@ -107,15 +308,7 @@
         document.body.appendChild(modal);
         // 手機上內容可能超過視窗高度;右上角 ✕ 一律可關,不必捲到底部按鈕。
         modal.querySelector('.journey-dialog-close')?.addEventListener('click', removeJourneyModal);
-        // 只有「已經有結果」的視窗才允許點背景關閉。
-        //
-        // 進行中的兩個視窗（產生建議、妝容渲染）不給這個出口：backdrop 是一整片
-        // 沒有任何提示的可點區域，使用者要按按鈕或風格卡時很容易掃到，一掃就把
-        // 跑到一半的流程丟掉。右上角的 ✕ 一律保留，要離開仍然離得開，
-        // 只是必須是一個明確的動作。
-        if (dismissible) {
-            modal.addEventListener('click', event => { if (event.target === modal) removeJourneyModal(); });
-        }
+        // 不綁定 backdrop click。遮罩只是視覺背景，誤觸不應該讓視窗消失。
         return modal;
     }
 
@@ -141,7 +334,7 @@
                 userNote: style.tags.join('、')
             });
             const structured = Contract.normalize(response, contractContext(style));
-            const rawSuggestion = String(response?.suggestion || structured.rawSuggestion || structured.overall.summary || '').trim();
+            const rawSuggestion = suggestionText(response, structured);
             if (!rawSuggestion && structured.source !== 'structured') {
                 throw new Error('Ollama 沒有回傳可顯示的妝容建議。');
             }
@@ -149,13 +342,17 @@
             // Journey 流程載入本檔後會覆蓋 router.js 的同名核心函式，導致下一步
             // 渲染只能退回固定風格，甚至再次呼叫 Ollama。保留原始 prompt 與簽章，
             // 渲染端才能驗證後使用同一份指令。
-            const ollamaRenderPromptEn = String(response?.renderPromptEn || '').trim();
+            const ollamaRenderPromptEn = String(response?.renderPromptEn || response?.fluxPromptEn || '').trim();
+            const fluxPromptEn = String(response?.fluxPromptEn || '').trim();
+            const suggestionData = response?.suggestion && typeof response.suggestion === 'object'
+                ? response.suggestion : null;
 
             Router.analysisPackage = AnalysisPackage.update(pkg, {
                 generativeText: {
                     provider: response?.provider || 'ollama',
                     model: response?.model || null,
                     suggestion: rawSuggestion || structured.overall.summary,
+                    suggestionData,
                     structured,
                     contractSource: structured.source,
                     contractIssues: structured.issues || [],
@@ -167,7 +364,10 @@
                     renderPromptEn: ollamaRenderPromptEn
                         ? buildRenderPrompt(pkg.faceAnalysis, Router.selectedStyleId, rawSuggestion, ollamaRenderPromptEn)
                         : null,
-                    ollamaRenderPromptEn: ollamaRenderPromptEn || null
+                    ollamaRenderPromptEn: ollamaRenderPromptEn || null,
+                    // 後端 v4 仍保留兩個同內容欄位；保留 fluxPromptEn，避免
+                    // 現有 render service 或舊草稿讀不到它。
+                    fluxPromptEn: fluxPromptEn || null
                 },
                 recommendations: {
                     ...(pkg.recommendations || {}),
@@ -183,13 +383,21 @@
             // 否則 SPA 換頁、重新整理或從分析結果再次進推薦頁時，
             // Router.shadeRecommendation 一清空，畫面就只剩舊的單一色差區塊。
             // 這裡要保存完整 shadeRecommendation，不能只保存 products。
-            if (recommended?.products?.length || recommended?.shadeRecommendation?.anchor) {
+            if (recommended?.products?.length
+                || recommended?.shadeRecommendation?.anchor
+                || recommended?.foundationCrossBrandAlternatives?.length
+                || recommended?.foundationMatchStatus) {
                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
                     recommendations: {
                         ...(Router.analysisPackage.recommendations || {}),
                         style: style.name,
                         ...(recommended?.products?.length ? { products: recommended.products } : {}),
-                        shadeRecommendation: recommended?.shadeRecommendation || null
+                        // 跨品牌粉底選擇和淺／主／深三色階一樣，不能只存在記憶體；
+                        // 從妝容建議點進商品詳情、重新整理或回到分析頁後都要保留。
+                        foundationCrossBrandAlternatives: recommended?.foundationCrossBrandAlternatives || [],
+                        shadeRecommendation: recommended?.shadeRecommendation || null,
+                        foundationMatchStatus: recommended?.foundationMatchStatus || null,
+                        foundationAvailableTargetBrands: recommended?.foundationAvailableTargetBrands || []
                     }
                 });
             }
@@ -243,7 +451,7 @@
         const steps = [
             { title: '了解你的臉部特徵', note: '整理輪廓、五官與膚色重點' },
             { title: `搭配${style.name}風格`, note: '選出適合的色彩與妝感' },
-            { title: '完成專屬妝容建議', note: '整理整體方向與五個部位做法' }
+            { title: '完成專屬妝容建議', note: '整理整體方向與六個部位做法' }
         ];
         let active = 0;
         const body = `<div id="journeyProgress">${progressTimeline(steps, active)}</div><p class="journey-wait-note">建議正在整理中，完成後就能進行妝容渲染。</p>`;
@@ -260,7 +468,7 @@
         // 等於把同一件事再問一次；而失敗時真正有用的動作是回上一步換個風格
         // 或重新分析，那顆按鈕本來就在旁邊。
         const modal = journeyShell('MAKEUP SUGGESTION', '正在產生妝容建議', body,
-            '<button class="btn-outline" type="button" data-back>上一步</button>', false);
+            '<button class="btn-outline" type="button" data-back>上一步</button>');
         modal.querySelector('[data-back]').onclick = () => {
             removeJourneyModal();
             openMakeupStyleModal(Router.selectedStyleId);
@@ -354,7 +562,7 @@
             // 只是把「完成」這件事重複講兩遍。停 600ms 讓「渲染完成」與 100%
             // 看得到，然後走。
             //
-            // 回妝容建議：那裡有妝前妝後、五個部位的做法與收藏，是這次結果的完整樣貌。
+            // 回妝容建議：那裡有妝前妝後、六個部位的做法與收藏，是這次結果的完整樣貌。
             setTimeout(() => {
                 removeJourneyModal();
                 Router.go('suggestion');
@@ -409,21 +617,29 @@
     function openPartAdviceModal(partKey) {
         const style = getStyle();
         const structured = resolveStructured(Router.analysisPackage, style);
-        const advice = structured?.parts?.[partKey];
-        if (!advice) return;
-        const steps = Array.isArray(advice.steps) ? advice.steps.filter(Boolean) : [];
-        const partAvoid = Array.isArray(advice.avoid) ? advice.avoid.filter(Boolean) : [];
-        const globalAvoid = Array.isArray(structured.globalAvoid) ? structured.globalAvoid.filter(Boolean) : [];
-        const avoidList = partAvoid.length ? partAvoid : globalAvoid;
-        const avoidTitle = partAvoid.length ? '避免' : (globalAvoid.length ? '整體避免事項' : '避免');
-        const stepsHtml = steps.length
-            ? `<ol>${steps.map(step => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`
-            : `<p>${escapeHtml(partFallbackText(advice.label, 'steps'))}</p>`;
-        const avoidText = avoidList.length ? avoidList.join(' ') : partFallbackText(advice.label, 'avoid');
-        const modal = journeyShell('LOOK SUGGESTION', `${advice.label}建議`, `
-            <div class="part-advice-analysis"><span>分析</span><p>${escapeHtml(advice.analysis || partFallbackText(advice.label, 'analysis'))}</p></div>
+        const advice = structured?.parts?.[partKey] || null;
+        const label = advice?.label || (partKey === 'color' ? '色彩季型' : partKey);
+        const personalHtml = personalizationPartHtml(structured?.personalization, partKey);
+        if (!advice && !personalHtml) return;
+
+        const sections = [];
+        if (advice) {
+            const steps = Array.isArray(advice.steps) ? advice.steps.filter(Boolean) : [];
+            const partAvoid = Array.isArray(advice.avoid) ? advice.avoid.filter(Boolean) : [];
+            const globalAvoid = Array.isArray(structured.globalAvoid) ? structured.globalAvoid.filter(Boolean) : [];
+            const avoidList = partAvoid.length ? partAvoid : globalAvoid;
+            const avoidTitle = partAvoid.length ? '避免' : (globalAvoid.length ? '整體避免事項' : '避免');
+            const stepsHtml = steps.length
+                ? `<ol>${steps.map(step => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`
+                : `<p>${escapeHtml(partFallbackText(label, 'steps'))}</p>`;
+            const avoidText = avoidList.length ? avoidList.join(' ') : partFallbackText(label, 'avoid');
+            sections.push(`
+            <div class="part-advice-analysis"><span>分析</span><p>${escapeHtml(advice.analysis || partFallbackText(label, 'analysis'))}</p></div>
             <div class="part-advice-section"><h3>建議做法</h3>${stepsHtml}</div>
-            <div class="part-advice-avoid"><b>${escapeHtml(avoidTitle)}</b><p>${escapeHtml(avoidText)}</p></div>`,
+            <div class="part-advice-avoid"><b>${escapeHtml(avoidTitle)}</b><p>${escapeHtml(avoidText)}</p></div>`);
+        }
+        if (personalHtml) sections.push(personalHtml);
+        const modal = journeyShell('QUICK MAKEUP ADVICE', `${label}建議`, sections.join(''),
             '<button class="btn-gold" type="button" data-close>看完了</button>');
         modal.querySelector('[data-close]').onclick = removeJourneyModal;
         // backdrop 與右上 ✕ 的關閉已由 journeyShell 統一處理。
@@ -437,9 +653,10 @@
             return;
         }
         if (!hasRender) {
-            area.innerHTML = `<section class="lookbook-result journey-resume-card"><span class="eyebrow">MAKEUP SUGGESTION</span><h2>${escapeHtml(resultStyle(style).name)}妝容建議已完成</h2><p>${escapeHtml(structured.overall.summary)}</p>${paletteHtml(structured)}<div class="lookbook-actions"><button class="btn-outline" type="button" data-resume-style>重新選擇風格</button><button class="btn-gold" type="button" data-resume-render>開始妝容渲染 →</button></div></section>`;
+            area.innerHTML = `<section class="lookbook-result journey-resume-card"><span class="eyebrow">MAKEUP SUGGESTION</span><h2>${escapeHtml(resultStyle(style).name)}妝容建議已完成</h2><p>${escapeHtml(structured.overall.summary)}</p>${paletteHtml(structured)}${personalizationTriggerHtml(structured.personalization)}<div class="lookbook-actions"><button class="btn-outline" type="button" data-resume-style>重新選擇風格</button><button class="btn-gold" type="button" data-resume-render>開始妝容渲染 →</button></div></section>`;
             area.querySelector('[data-resume-style]').onclick = () => openMakeupStyleModal(Router.selectedStyleId);
             area.querySelector('[data-resume-render]').onclick = openRenderJourneyModal;
+            area.querySelector('[data-personalized-analysis]')?.addEventListener('click', () => openPersonalizationModal(structured));
         }
     }
 
@@ -469,10 +686,11 @@
         }
 
         const pinLayout = [
-            { key: 'brow', side: 'left', slot: 'top' },
+            { key: 'eyebrow', side: 'left', slot: 'top' },
             { key: 'base', side: 'left', slot: 'middle' },
             { key: 'contour', side: 'left', slot: 'bottom' },
             { key: 'eyes', side: 'right', slot: 'top' },
+            { key: 'cheeks', side: 'right', slot: 'middle' },
             { key: 'lips', side: 'right', slot: 'bottom' }
         ];
         const pin = item => {
@@ -501,7 +719,8 @@
                     <button type="button" data-photo="before" ${before ? '' : 'disabled'}>妝前</button>
                     <button type="button" class="active" data-photo="after">妝後</button>
                 </div>
-                <p class="look-pin-hint">點選人像兩側的部位標籤，查看本次 Ollama 回傳所對應的妝容做法。</p>
+                <p class="look-pin-hint">點選人像兩側的部位標籤，查看快速妝容做法與對應的個人化調整。</p>
+                ${personalizationTriggerHtml(structured.personalization)}
                 <div class="lookbook-actions">
                     <button class="btn-outline" type="button" data-prev-style>上一步：重新選擇風格</button>
                     <button class="btn-outline" type="button" data-save-look>收藏這次妝容</button>
@@ -553,6 +772,7 @@
         area.querySelectorAll('[data-look-part]').forEach(button => {
             button.onclick = () => openPartAdviceModal(button.dataset.lookPart);
         });
+        area.querySelector('[data-personalized-analysis]')?.addEventListener('click', () => openPersonalizationModal(structured));
         area.querySelector('[data-prev-style]').onclick = () => openMakeupStyleModal(Router.selectedStyleId);
         area.querySelector('[data-save-look]').onclick = openSaveLookModal;
         area.querySelector('[data-products]').onclick = openProductRecommendationModal;

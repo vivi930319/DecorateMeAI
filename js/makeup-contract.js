@@ -1,19 +1,23 @@
 (function (root) {
     'use strict';
 
-    const EXPECTED_PART_KEYS = ['base', 'brow', 'eyes', 'contour', 'lips'];
+    // v4 把眉毛與腮紅／修容拆成獨立部位。保留 brow 等舊別名，讓已存在的
+    // 分析草稿仍然可以被讀回，但新的結構化回應會完整輸出六張部位卡。
+    const EXPECTED_PART_KEYS = ['base', 'eyebrow', 'eyes', 'contour', 'cheeks', 'lips'];
     const PART_LABELS = {
         base: '底妝',
-        brow: '眉型',
+        eyebrow: '眉型',
         eyes: '眼妝',
-        contour: '腮紅修容',
+        contour: '修容',
+        cheeks: '腮紅',
         lips: '唇妝'
     };
     const PART_ALIASES = {
         base: ['base', 'foundation', 'skin'],
-        brow: ['brow', 'brows', 'eyebrow', 'eyebrows'],
+        eyebrow: ['eyebrow', 'eyebrows', 'brow', 'brows'],
         eyes: ['eyes', 'eye', 'eyeMakeup'],
-        contour: ['contour', 'cheeks', 'blush', 'blushContour'],
+        contour: ['contour', 'sculpt', 'sculpting'],
+        cheeks: ['cheeks', 'cheek', 'blush', 'blushContour'],
         lips: ['lips', 'lip', 'lipMakeup']
     };
 
@@ -50,6 +54,46 @@
         return null;
     }
 
+    function normalizeSourceFeatures(value) {
+        const source = isObject(value) ? value : {};
+        const keys = ['faceShape', 'browShape', 'eyeShape', 'noseShape', 'lipShape', 'season'];
+        return Object.fromEntries(keys.map(key => [key, text(source[key]) || null]));
+    }
+
+    function normalizeFeatureAdjustments(value) {
+        if (!Array.isArray(value)) return [];
+        return value.map(item => {
+            if (!isObject(item)) return null;
+            return {
+                part: text(item.part),
+                detected: text(item.detected),
+                adjustment: text(item.adjustment),
+                reason: text(item.reason)
+            };
+        }).filter(item => item && (item.part || item.detected || item.adjustment || item.reason));
+    }
+
+    function normalizePersonalization(value) {
+        if (!isObject(value)) return null;
+        const story = isObject(value.personalizedStory) ? value.personalizedStory : {};
+        return {
+            title: text(value.title),
+            profileSummary: text(value.profileSummary),
+            sourceFeatures: normalizeSourceFeatures(value.sourceFeatures),
+            featureAdjustments: normalizeFeatureAdjustments(value.featureAdjustments),
+            combinationNote: text(value.combinationNote),
+            styleConnection: text(value.styleConnection),
+            personalizedStory: {
+                headline: text(story.headline),
+                intro: text(story.intro),
+                // 契約要求 paragraphs 必須是陣列；字串不能被當成正常段落，
+                // 讓畫面層依規格退回 intro + closing。
+                paragraphs: Array.isArray(story.paragraphs) ? textList(story.paragraphs) : [],
+                closing: text(story.closing)
+            }
+        };
+    }
+
     // 結構化內容可能出現在三個位置，全部都要認：
     //   1. response.structured        —— 規格書寫的位置
     //   2. response.suggestion        —— **Ollama 端實際回的位置**（2026-08-14 實測）
@@ -77,18 +121,42 @@
         const summary = text(overallRaw.summary);
         const partsRaw = isObject(candidate.parts) ? candidate.parts : {};
         const parts = {};
+        const rawParts = Object.fromEntries(EXPECTED_PART_KEYS.map(key => [key, findPart(partsRaw, key)]));
+        // v3 有「腮紅修容」合併欄位，v4 才要求 contour 與 cheeks 分開；
+        // 沒有同時出現兩者時保留舊回應的可讀性，不把既有資料判成壞資料。
+        const requiredKeys = ['base', 'eyebrow', 'eyes', 'lips'];
         const missingParts = [];
 
         for (const key of EXPECTED_PART_KEYS) {
-            const raw = findPart(partsRaw, key);
-            if (!raw) missingParts.push(key);
+            const raw = rawParts[key];
             parts[key] = {
-                label: text(raw?.label) || PART_LABELS[key],
+                label: text(raw?.label)
+                    || (key === 'contour' && rawParts.contour && !rawParts.cheeks ? '腮紅修容' : PART_LABELS[key]),
                 analysis: text(raw?.analysis),
                 steps: textList(raw?.steps),
                 avoid: textList(raw?.avoid)
             };
         }
+        for (const key of requiredKeys) {
+            if (!rawParts[key]) missingParts.push(key);
+        }
+        if (!rawParts.contour && !rawParts.cheeks) missingParts.push('contour/cheeks');
+
+        // v3 的 cheeks 其實是「腮紅修容」合併卡，舊的互動標籤仍叫 contour。
+        // 只有在沒有獨立 contour 時才做這個相容別名；v4 同時回傳兩欄時不複製資料。
+        if (!rawParts.contour && rawParts.cheeks) {
+            parts.contour = {
+                ...parts.cheeks,
+                label: text(rawParts.cheeks.label) || '腮紅修容'
+            };
+        }
+
+        // 既有程式的互動標籤仍讀 brow；新增的 v4 UI 讀 eyebrow。兩者共用同一份資料。
+        parts.brow = parts.eyebrow;
+
+        const personalization = normalizePersonalization(
+            candidate.personalization || response?.personalization
+        );
 
         return {
             source: 'structured',
@@ -105,6 +173,7 @@
             },
             parts,
             globalAvoid: textList(candidate.avoid),
+            personalization,
             rawSuggestion: text(response?.suggestion)
         };
     }
@@ -183,15 +252,23 @@
         const partSteps = {
             base: splitSentences(sections.base).slice(0, 4),
             brow: matching(browEyeSentences, /眉|眉峰|眉尾|眉頭|毛流/, 4),
+            eyebrow: matching(browEyeSentences, /眉|眉峰|眉尾|眉頭|毛流/, 4),
             eyes: matching(browEyeSentences, /眼|睫|臥蠶/, 4),
             contour: contourSentences,
+            cheeks: matching(
+                splitSentences([sections.contour, sections.base, sections.overall, sections.summary].filter(Boolean).join('\n')),
+                /腮紅|顴骨|蘋果肌/,
+                4
+            ),
             lips: splitSentences(sections.lips).slice(0, 4)
         };
         const avoidPatterns = {
             base: /底妝|粉底|遮瑕|定妝|膚|高光|打亮/,
             brow: /眉/,
+            eyebrow: /眉/,
             eyes: /眼|睫|臥蠶/,
             contour: /腮紅|修容|顴骨|輪廓|鼻影|鼻翼|高光|打亮/,
+            cheeks: /腮紅|顴骨|蘋果肌/,
             lips: /唇|口紅|唇膏|唇釉/
         };
         const parts = {};
@@ -203,6 +280,7 @@
                 avoid: matching(avoidSentences, avoidPatterns[key], 4)
             };
         }
+        parts.brow = parts.eyebrow;
 
         return {
             source: 'legacy',

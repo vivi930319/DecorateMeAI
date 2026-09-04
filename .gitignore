@@ -45,3 +45,7 @@ style-japanese.png
 style-korean.jpg
 style-rich.png
 style-yandere.png
+
+# 跨品牌部署的暫存副本（css/js 各一份），由手動部署流程產生，不是原始碼。
+# 沒寫進來的話，任何一次 git add -A 都會把整份前端的副本撿進版控。
+.deploy_cross_brand/

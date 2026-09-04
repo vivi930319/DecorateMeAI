@@ -1122,7 +1122,8 @@ const Api = {
     _normalizeShadeRecommendation(raw) {
         if (!raw || typeof raw !== 'object') return null;
         const method = String(raw.method || '').trim();
-        if (!method) return null;
+        // method 與 label 都由推薦後端提供。缺少 method 時不能猜成官方色階，
+        // 缺少 label 時也不在前端補一個看似正確的說法。
         const official = method === 'official_depth_index';
         // 契約 §5 送的是 matchScore（0–1），先前這裡只讀 matchPercent（0–100）。
         // 兩個都不接的話，後端做好之後畫面上仍然什麼都不會出現——這個專案
@@ -1140,12 +1141,14 @@ const Api = {
             // 0–1 才乘 100。有些回傳已經是百分比，乘了會變 9500。
             return score == null ? null : (score <= 1 ? score * 100 : score);
         };
-        const pick = (node, fallbackLabel) => {
+        const pick = (node) => {
             if (!node || typeof node !== 'object') return null;
+            const product = node.product ? this._normalizeProduct(node.product) : null;
             return {
-                // 後端給了 label 就用它；沒給才用依 method 決定的預設。
-                label: String(node.label || fallbackLabel),
-                shadeCode: node.shadeCode ?? node.shade_code ?? '',
+                // 顯示文案必須來自後端；前端不依 method 自行產生「淺一階」等字樣。
+                label: node.label == null ? '' : String(node.label),
+                shadeCode: node.shadeCode ?? node.shade_code
+                    ?? product?.shadeCode ?? product?.shadeName ?? '',
                 description: String(node.description || ''),
                 matchPercent: pickMatchPercent(node),
                 // 替代色與**主推薦色號**的色差（契約 2026-08-27 §3）。
@@ -1155,16 +1158,16 @@ const Api = {
                 anchorDeltaE: (node.anchorDeltaE == null || node.anchorDeltaE === '')
                     ? null
                     : (Number.isFinite(Number(node.anchorDeltaE)) ? Number(node.anchorDeltaE) : null),
-                product: node.product ? this._normalizeProduct(node.product) : null,
+                product,
             };
         };
         return {
             method,
             official,
             seriesId: raw.seriesId ?? raw.series_id ?? null,
-            anchor: pick(raw.anchor, '主推薦色號'),
-            lighter: pick(raw.lighter, official ? '淺一階' : '較明亮的替代色'),
-            darker: pick(raw.darker, official ? '深一階' : '較深的替代色'),
+            anchor: pick(raw.anchor),
+            lighter: pick(raw.lighter),
+            darker: pick(raw.darker),
             disclaimer: String(raw.disclaimer || ''),
         };
     },
@@ -1233,28 +1236,65 @@ const Api = {
         const price = product.price == null
             ? ''
             : (String(product.price).startsWith('NT$') ? String(product.price) : `NT$${product.price}`);
+        const imageUrl = product.imageUrl || product.image_url || product.image_src
+            || product.img || product.image || '';
+        const matchPercentRaw = product.matchPercent ?? product.match_percent;
+        const matchPercent = (matchPercentRaw == null || matchPercentRaw === ''
+            || !Number.isFinite(Number(matchPercentRaw))) ? null : Number(matchPercentRaw);
+        const recommendationLabel = String(
+            product.recommendationLabel ?? product.recommendation_label ?? ''
+        ).trim();
+        // 色階推薦裡的 product 可能已經先被正規化過一次。若再次套用
+        // api-{type}-{id} 會變成 api-foundations-api-foundations-123，
+        // 詳情頁就無法用色階卡片的 id 找回這件商品，最後會退回商品清單。
+        // 身分鍵必須在任何正規化路徑都保持穩定。
+        const idPrefix = `api-${apiType || rawCat || cat}-`;
+        const suppliedRawId = product.rawId ?? null;
+        const suppliedId = product.id ?? null;
+        const alreadyNormalized = suppliedRawId != null
+            ? String(suppliedId) === `${idPrefix}${suppliedRawId}`
+            : (typeof suppliedId === 'string' && suppliedId.startsWith(idPrefix));
+        const rawId = suppliedRawId != null
+            ? suppliedRawId
+            : (alreadyNormalized ? suppliedId.slice(idPrefix.length) : suppliedId);
+        const normalizedId = rawId != null
+            ? `${idPrefix}${rawId}`
+            : null;
         return {
             // 本機商品 id 固定使用 api-{item_type}-{item_id}，才能和遠端收藏互相對應。
-            id: product.id != null ? `api-${apiType || rawCat || cat}-${product.id}` : `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            rawId: product.id ?? null,
+            id: normalizedId || `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            rawId,
             // 這件粉底跟使用者膚色的色差與判定（契約 2026-08-27 §3）。
             // 主推薦一定是 accepted:true；替代色可能是 false，那是正常的——
             // 它走的是「與主推薦色號 ΔE ≤ 5」那條規則。
             foundationSkinMatch: (product.foundationSkinMatch
                 && typeof product.foundationSkinMatch === 'object')
                 ? product.foundationSkinMatch : null,
+            // 粉底門檻／校正狀態由推薦後端決定。前端只保存這個狀態，
+            // 不從 foundationSkinMatch 或商品色號自行重建 status。
+            foundationMatchStatus: (product.foundationMatchStatus
+                && typeof product.foundationMatchStatus === 'object')
+                ? product.foundationMatchStatus : null,
             apiType, // 原始 type slug（例如 lipsticks），呼叫 /api/product/{type}/{id} 這類單品 API 要用
             cat,
             name: product.name || '推薦商品',
             brand: product.brand || '',
             price,
+            // 保留契約欄位 imageUrl；舊版畫面使用 img/imgFull，兩者都留著避免
+            // 正規化後三色階或推薦卡只剩圖片縮圖別名可用。
+            imageUrl,
             // img 是清單／卡片用的縮圖，imgFull 是原圖（詳情頁放大才需要）。
             // 兩個都留著：只留縮圖會讓詳情頁變糊，只留原圖就是現在這個 5.2 MB。
-            img: this._thumbUrl(product.imageUrl || product.image_url || product.image_src || product.img || product.image || ''),
-            imgFull: product.imageUrl || product.image_url || product.image_src || product.img || product.image || '',
+            img: this._thumbUrl(imageUrl),
+            imgFull: product.imageUrl || product.image_url || product.image_src
+                || product.img || product.image || '',
             desc: this._safeMatchReason(product) || product.description || product.desc || '',
             matchReason: this._safeMatchReason(product),
             score: product.score ?? null,
+            // 新推薦回應直接把這兩個欄位放在商品上；不能只保留舊的 score，
+            // 否則腮紅／口紅的色號與推薦契合度會在正規化時消失。
+            matchPercent,
+            recommendationLabel,
             popularity: product.popularity ?? product.sales ?? product.views ?? product.reviews ?? product.favorite_count ?? product.score ?? 0,
             // 推薦端點的 productUrl 實際上是 sale_page_id slug（不是 http 網址），留下來讓前端能跟商品清單比對補圖
             salePageId: product.sale_page_id || product.salePageId
@@ -1327,6 +1367,12 @@ const Api = {
             coverage: product.coverage || null,
             undertone: product.undertone || null,
             texture: product.texture || null,
+            // 新版推薦契約把色階與跨品牌結果綁在每一件商品上。這裡只正規化後端
+            // 已回傳的物件，不從一般商品目錄或其他商品補資料。
+            shadeRecommendation: product.shadeRecommendation
+                ? this._normalizeShadeRecommendation(product.shadeRecommendation) : null,
+            foundationCrossBrand: product.foundationCrossBrand
+                ? this._normalizeFoundationCrossBrand(product.foundationCrossBrand) : null,
 
             // ── 推薦依據 ────────────────────────────────────────────────
             // 2026-08-23 補。這些欄位後端一直都有回，但先前在這裡就被丟掉了，
@@ -1348,6 +1394,17 @@ const Api = {
                 && product.recommendationPresentation.showMatchPercent === false) ? false : true,
             matchScore: Number.isFinite(Number(product.matchScore ?? product.score))
                 ? Number(product.matchScore ?? product.score) : null,
+            matchReasons: Array.isArray(product.matchReasons)
+                ? product.matchReasons.filter(reason => reason && typeof reason === 'object')
+                    .map(reason => ({
+                        code: String(reason.code || '').trim(),
+                        priority: Number.isFinite(Number(reason.priority)) ? Number(reason.priority) : null,
+                        text: String(reason.text || '').trim(),
+                        source: String(reason.source || '').trim(),
+                        evidence: reason.evidence && typeof reason.evidence === 'object' ? reason.evidence : null,
+                    }))
+                    .filter(reason => reason.text)
+                : [],
             scoreBreakdown: (product.scoreBreakdown && typeof product.scoreBreakdown === 'object')
                 ? product.scoreBreakdown : null,
             matchedKeywords: Array.isArray(product.matchedKeywords) ? product.matchedKeywords
@@ -1360,44 +1417,32 @@ const Api = {
         };
     },
 
-    // 以色找色：直接使用商品清單的 Lab 值在瀏覽器排序。
-    // 目前只開放唇彩，避免其他類別的包裝色造成錯誤推薦。
-    SHADE_MATCH_CATEGORIES: Object.freeze(['lipsticks']),
-
-    // 使用 CIE94 計算高彩度唇彩的色差；labRef 是目前正在比較的商品。
-    _deltaE94(labRef, labOther) {
-        const [L1, a1, b1] = labRef;
-        const [L2, a2, b2] = labOther;
-        const dL = L1 - L2;
-        const C1 = Math.hypot(a1, b1);
-        const C2 = Math.hypot(a2, b2);
-        const dC = C1 - C2;
-        const da = a1 - a2;
-        const db = b1 - b2;
-        // dH² 在數學上非負，但浮點誤差可能讓它變成極小的負數，開根號會得到 NaN
-        const dH2 = Math.max(0, da * da + db * db - dC * dC);
-        const sC = 1 + 0.045 * C1;
-        const sH = 1 + 0.015 * C1;
-        return Math.sqrt(dL * dL + (dC / sC) ** 2 + dH2 / (sH * sH));
-    },
-
-    // 從已載入的商品清單裡找出色差最小的同類商品。純函式、同步，不打任何 API。
-    findSimilarShades(product, catalog, limit = 3) {
-        if (!product || !Array.isArray(product.lab)) return [];
-        if (!this.SHADE_MATCH_CATEGORIES.includes(String(product.apiType || ''))) return [];
-        const list = Array.isArray(catalog) ? catalog : [];
-        const seen = new Set([String(product.id)]);
-        const scored = [];
-        for (const item of list) {
-            if (!item || !Array.isArray(item.lab)) continue;
-            if (String(item.apiType || '') !== String(product.apiType)) continue;
-            const key = String(item.id);
-            if (seen.has(key)) continue;   // 清單可能混入推薦來源的重複商品
-            seen.add(key);
-            scored.push({ ...item, deltaE: this._deltaE94(product.lab, item.lab) });
-        }
-        scored.sort((a, b) => a.deltaE - b.deltaE);
-        return scored.slice(0, Math.max(0, limit));
+    _normalizeFoundationCrossBrand(raw) {
+        if (!raw || typeof raw !== 'object') return null;
+        const rawItems = Array.isArray(raw.items) ? raw.items
+            : (Array.isArray(raw.alternatives) ? raw.alternatives : []);
+        return {
+            status: String(raw.status || '').trim(),
+            anchorCandidateKey: String(raw.anchorCandidateKey || raw.anchor_candidate_key || '').trim(),
+            availableTargetBrands: Array.isArray(raw.availableTargetBrands)
+                ? [...new Set(raw.availableTargetBrands.map(brand => String(brand ?? '').trim()).filter(Boolean))]
+                : [],
+            items: rawItems.map(item => {
+                if (!item || typeof item !== 'object' || !item.product || typeof item.product !== 'object') return null;
+                const product = this._normalizeProduct(item.product);
+                if (!product) return null;
+                const deltaRaw = item.anchorDeltaE ?? item.anchor_delta_e;
+                return {
+                    brand: String(item.brand || '').trim(),
+                    shadeCode: String(item.shadeCode ?? item.shade_code ?? '').trim(),
+                    anchorDeltaE: (deltaRaw == null || deltaRaw === ''
+                        || !Number.isFinite(Number(deltaRaw))) ? null : Number(deltaRaw),
+                    reason: String(item.reason || '').trim(),
+                    product,
+                };
+            }).filter(item => item && item.brand && item.shadeCode),
+            noResultReason: String(raw.noResultReason || raw.no_result_reason || '').trim(),
+        };
     },
 
     // 個人化推薦：依賴組員資料庫的登入 session，登入狀態不確定時優雅地回傳空陣列，不影響其他功能。
@@ -1495,6 +1540,52 @@ const Api = {
     // 在那之前保守當成不支援——本機篩在兩版上都會給出正確結果，只是多算一點；
     // 反過來假設支援，在舊版上會顯示一個「有篩選器但沒篩到」的清單。
     productServerFiltering: false,
+
+    // 主推薦粉底切換品牌時，向同一個 Product Gateway 取該品牌前五個近似色號。
+    // productId 優先使用 rawId；前端自己的 api-foundations-* id 不能直接送給後端。
+    async listFoundationShadeMatches(productId, targetBrand, limit = 5) {
+        const base = this.config.url('product', 'listPath');
+        const rawId = String(productId ?? '').trim();
+        const brand = String(targetBrand ?? '').trim();
+        if (!base || !rawId || !brand) return { ok: false, items: [] };
+        const safeLimit = Math.min(5, Math.max(1, Math.trunc(Number(limit) || 5)));
+        const query = new URLSearchParams({ targetBrand: brand, limit: String(safeLimit) });
+        try {
+            const res = await fetch(
+                `${base}/${encodeURIComponent(rawId)}/shade-matches?${query}`,
+                { cache: 'no-store' }
+            );
+            if (!res.ok) return { ok: false, status: res.status, items: [] };
+            const data = await res.json();
+            const items = Array.isArray(data.items) ? data.items : [];
+            return {
+                ok: true,
+                ...data,
+                items: items.map(item => {
+                    if (!item || typeof item !== 'object') return null;
+                    // 新端點把商品資料放在 item.product，舊端點則直接放在 item；
+                    // 合併後交給同一個商品正規化器，兩種回應都能畫。
+                    const rawProduct = item.product && typeof item.product === 'object'
+                        ? { ...item, ...item.product } : item;
+                    const product = this._normalizeProduct(rawProduct);
+                    if (!product) return null;
+                    const deltaRaw = item.shadeMatch?.deltaE
+                        ?? item.shade_match?.deltaE
+                        ?? item.anchorDeltaE ?? item.anchor_delta_e;
+                    return {
+                        brand: String(item.brand || product.brand || '').trim(),
+                        shadeCode: String(item.shadeCode ?? item.shade_code
+                            ?? product.shadeCode ?? product.shadeName ?? '').trim(),
+                        anchorDeltaE: (deltaRaw == null || deltaRaw === ''
+                            || !Number.isFinite(Number(deltaRaw))) ? null : Number(deltaRaw),
+                        product,
+                    };
+                }).filter(item => item && item.brand),
+            };
+        } catch (_) {
+            return { ok: false, items: [] };
+        }
+    },
 
     async listProducts(params = {}) {
         const url = this.config.url('product', 'listPath');
@@ -2630,15 +2721,8 @@ const Api = {
 
     // 這組 LAB 能不能拿去做 CIEDE2000 比色。
     //
-    // 為什麼前端要自己驗一次：推薦端只在前端**主動宣告** labReliable:false 時才降級。
-    // 當 lab 本身是壞資料（型別錯、缺一軸、超出色彩空間），它照樣回
-    // skinToneLabReliable:true 與空的 fallbackReasons —— 於是畫面會顯示
-    // 「已依膚色精準比對」，但那個色差在數學上根本算不出來。
-    // （2026-08-23 實測，見 補充文件md檔案/商品推薦API_正反向測試報告_2026-08-23.md 的 P1）
-    //
-    // 推薦端對 labReliable:false 的降級路徑是**正確的**（實測會回
-    // SKIN_TONE_LAB_UNRELIABLE 並改用季型排序），所以這裡把壞資料一律當成不可信，
-    // 就能用它自己已經做對的機制，補上它驗證層的缺口。
+    // 這裡只做送出前的輸入邊界檢查，避免把壞座標送進色差計算；推薦結果的
+    // skinToneLabReliable 與 fallbackReasons 仍完全以後端回傳為準，前端不補結果。
     _isUsableLab(arr) {
         if (!Array.isArray(arr) || arr.length !== 3) return false;
         const [L, a, b] = arr;
@@ -2803,27 +2887,20 @@ const Api = {
                 };
             }
             const data = await res.json();
-            const rec = data.analysisPackage?.recommendations || data.recommendations || {};
-            const list = data.analysisPackage?.recommendations?.products
-                || data.recommendations?.products
-                || data.recommendations
-                || data.products
-                || [];  // 新格式在 analysisPackage.recommendations.products；相容舊格式
+            // 正式 Gateway 可能把 recommendations 放在 analysisPackage 裡，也可能直接
+            // 回在根節點。兩種回應都必須用同一個 recommendation 物件往下讀，否則根節點
+            // 的 shadeRecommendation／跨品牌欄位會在這裡被漏掉。
+            const recommendation = data.analysisPackage?.recommendations || data.recommendations || data;
+            const rec = (recommendation && typeof recommendation === 'object') ? recommendation : {};
+            const list = rec.products
+                ?? (Array.isArray(data.recommendations) ? data.recommendations : null)
+                ?? data.products
+                ?? [];  // 新格式在 analysisPackage.recommendations.products；相容根節點格式
 
-            // 回應說「膚色可信」不代表真的可信：我們自己送出去的就是不可用的 LAB 時，
-            // 推薦端仍會回 skinToneLabReliable:true。畫面若照著它顯示「已依膚色精準比對」
-            // 就是對使用者說了一句假話（契約 §4 明令不得如此）。
-            // 兩邊取交集，並補一筆降級原因讓 UI 走同一條顯示邏輯。
+            // 推薦服務是膚色可信度與降級狀態的唯一來源。前端不再把自己的輸入檢查
+            // 改寫成推薦結果，也不替後端追加 fallbackReasons；後端沒回就代表契約未完成。
             const fallbackReasons = Array.isArray(rec.fallbackReasons) ? [...rec.fallbackReasons] : [];
-            const skinToneLabReliable = skinLabOk && rec.skinToneLabReliable !== false;
-            if (!skinLabOk && !fallbackReasons.some(r => r?.code === 'SKIN_TONE_LAB_UNRELIABLE')) {
-                fallbackReasons.push({
-                    code: 'SKIN_TONE_LAB_UNRELIABLE',
-                    affected: ['foundations'],
-                    message: '膚色取樣可信度不足，未使用 ΔE 比色，改以季型與膚色分級排序',
-                    source: 'frontend'   // 標明是前端補的，方便對帳時分辨
-                });
-            }
+            const skinToneLabReliable = rec.skinToneLabReliable === true;
 
             // 同一商品只留一筆。回應同時有 analysisPackage.recommendations.products
             // 與最外層 products（後者是相容舊前端的重複欄位），萬一日後兩邊被合併，
@@ -2865,6 +2942,9 @@ const Api = {
                             product,
                         };
                     }).filter(Boolean),
+                foundationAvailableTargetBrands: Array.isArray(rec.availableTargetBrands)
+                    ? [...new Set(rec.availableTargetBrands.map(brand => String(brand ?? '').trim()).filter(Boolean))]
+                    : [],
                 // 兩組門檻（膚色 0～2、替代色 0～5）與粉底的判定結果。
                 // 前端不自己算門檻也不自己放寬——顯示的數字與界線一律以後端為準，
                 // 兩邊各判一次遲早會不一致，而不一致的樣子是「卡片說通過、說明說沒通過」。
@@ -3226,6 +3306,10 @@ const AnalysisPackage = {
                 provider: 'pending',
                 prompt: null,
                 suggestion: null,
+                // 文字建議 v4 仍保留兩個給 render service 使用的欄位；
+                // 初始資料包也先建立，避免尚未產生建議時欄位消失。
+                renderPromptEn: null,
+                fluxPromptEn: null,
                 model: null,
                 status: 'pending',
                 error: null

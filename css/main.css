@@ -1276,6 +1276,22 @@ body[data-member-theme="rose"] .topbar { background:rgba(15,17,19,0.9); }
 body[data-member-theme="rose"] .member-id { background:#1B1E21; }
 body[data-member-theme="rose"] ::selection { background:var(--gold); color:var(--ivory); }
 
+/* 銀霧主題背景氛圍：低對比的斜向冷光，讓內容保持清楚但帶有參考圖的深邃層次。 */
+body[data-member-theme="rose"] {
+    background-color:#070a0d;
+    background-image:
+        linear-gradient(122deg, transparent 0 34%, rgba(132,150,164,.055) 34.5%, rgba(132,150,164,.018) 38%, transparent 41%),
+        radial-gradient(74% 70% at 5% 92%, rgba(31,43,54,.32), transparent 68%),
+        radial-gradient(64% 52% at 18% 0%, rgba(38,47,57,.28), transparent 62%),
+        linear-gradient(180deg, #11151a 0%, #0a0d11 52%, #05070a 100%);
+    background-attachment:scroll;
+}
+
+body[data-member-theme="rose"] .app-shell,
+body[data-member-theme="rose"] .main-content {
+    background:transparent;
+}
+
 /* 青玉光澤 —— 綠色調 */
 body[data-member-theme="jade"] {
     --ivory:#D8EADF; --ivory-2:#BFDBCB; --paper:#EBF6F0; --white:#F4FAF6;
@@ -2085,10 +2101,35 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
 .sc2-match { color:var(--gold-deep); font-size:11px; font-variant-numeric:tabular-nums; }
 .sc2-desc { margin:4px 0 0; color:var(--mid); font-size:11.5px; line-height:1.65; }
 
+/* 不同品牌的相近粉底：獨立成一個可讀的區塊，不讓未套樣式的 button
+   把商品詳情頁撐開或把圖片縮成原始尺寸。 */
+.cross-brand-foundation { margin-top:18px; padding:16px;
+    border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.34); }
+.xcb-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.xcb-head strong { color:var(--ink-soft); font-size:13px; }
+.xcb-head select { min-width:130px; max-width:100%; padding:8px 30px 8px 10px; border:1px solid var(--line);
+    border-radius:999px; background:var(--paper); color:var(--ink-soft); }
+.xcb-results { display:grid; gap:8px; }
+.xcb-card { width:100%; display:flex; align-items:center; gap:14px; padding:10px; text-align:left;
+    border:1px solid var(--line); border-radius:12px; background:var(--paper); color:inherit;
+    font:inherit; cursor:pointer; }
+.xcb-card:hover { border-color:var(--gold-soft); transform:translateY(-1px); }
+.xcb-card:focus-visible { outline:2px solid var(--gold-deep); outline-offset:2px; }
+.xcb-card img { flex:0 0 82px; width:82px; height:82px; object-fit:cover; border-radius:9px; }
+.xcb-copy { min-width:0; display:flex; flex-direction:column; gap:4px; color:var(--mid); font-size:11.5px; }
+.xcb-copy em { color:var(--gold-deep); font-style:normal; letter-spacing:.08em; }
+.xcb-copy strong { color:var(--ink-soft); font-size:20px; overflow-wrap:anywhere; }
+.xcb-copy > span { overflow-wrap:anywhere; }
+.cross-brand-foundation > p { margin:10px 0 0; color:var(--mid); font-size:11px; line-height:1.6; }
+.xcb-loading { margin:8px 0; color:var(--mid); font-size:12px; }
+
 /* 手機：三欄擠成一排會看不清色號，改成單欄堆疊，主推薦排最前面 */
 /* 手機也維持三欄。堆疊起來就不是「並排比較」了，而那正是這一區存在的理由。
    改成縮字級與間距，讓三欄擠得下。 */
 @media (max-width:520px) {
+    .xcb-head { align-items:flex-start; flex-direction:column; }
+    .xcb-head select { width:100%; }
+    .xcb-card img { flex-basis:70px; width:70px; height:70px; }
     .sc2-row { gap:6px; }
     .sc2-col { padding:9px 5px; }
     .sc2-code { font-size:17px; }
@@ -3562,7 +3603,6 @@ body.admin-mode .main-content,
 /* ═══════════════ 舊版功能上的輕量動態與選妝容視窗 ═══════════════ */
 html.intro-off #brand-intro{display:none}
 #brand-intro.done{pointer-events:none}
-.intro-skip{position:absolute;bottom:38px;left:50%;transform:translateX(-50%);font-family:var(--sans);font-size:10px;letter-spacing:.28em;text-transform:uppercase;color:var(--gold-soft);opacity:0;animation:fadeUp 1s var(--ease) 2.6s forwards}
 .intro-name .ch{animation-fill-mode:both}
 
 .makeup-style-modal{position:fixed;inset:0;z-index:360;display:grid;place-items:center;padding:24px;background:rgba(27,18,19,.62);backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);opacity:0;visibility:hidden;pointer-events:none;transition:opacity .3s var(--ease),visibility .3s var(--ease)}
@@ -3581,7 +3621,7 @@ html.intro-off #brand-intro{display:none}
 #mainContent.page-enter .page-header,#mainContent.page-enter .reveal-in{animation:dmLegacyEnter .55s var(--ease) both}.suggestion-status.active,#analyzeBtn[disabled],#confirmStyleBtn[disabled],#renderBtn[disabled]{animation:dmLegacyPulse 1.3s ease-in-out infinite}.progress-fill{position:relative;overflow:hidden}.progress-fill:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,var(--glass),transparent);transform:translateX(-120%);animation:dmLegacyShimmer 1.4s ease-in-out infinite}
 @keyframes dmLegacyEnter{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}@keyframes dmLegacyPulse{50%{opacity:.58;transform:translateY(-1px)}}@keyframes dmLegacyShimmer{to{transform:translateX(120%)}}
 @media(max-width:760px){.makeup-style-modal{padding:12px;backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px)}.makeup-style-dialog{padding:18px;max-height:94vh}.makeup-style-grid{grid-template-columns:1fr 1fr}.makeup-style-option:hover{transform:none}.makeup-style-option img{aspect-ratio:1}.intro-haze,.cursor-glow{display:none}}
-@media(prefers-reduced-motion:reduce){.intro-haze,.intro-rule,.intro-sub,.intro-name .ch,.intro-skip{animation:none!important}.intro-mask,.intro-glint{display:none!important}.intro-haze{opacity:1}.intro-rule{width:240px}.intro-sub,.intro-skip{opacity:1}.intro-name .ch{filter:none}#brand-intro.done{animation:none;opacity:0;visibility:hidden}.makeup-style-modal,.makeup-style-dialog,.makeup-style-option,#mainContent.page-enter .page-header,#mainContent.page-enter .reveal-in,.suggestion-status.active,#analyzeBtn[disabled],#confirmStyleBtn[disabled],#renderBtn[disabled],.progress-fill:after{animation:none!important;transition:none!important;transform:none!important}}
+@media(prefers-reduced-motion:reduce){.intro-haze,.intro-rule,.intro-sub,.intro-name .ch{animation:none!important}.intro-mask,.intro-glint{display:none!important}.intro-haze{opacity:1}.intro-rule{width:240px}.intro-sub{opacity:1}.intro-name .ch{filter:none}#brand-intro.done{animation:none;opacity:0;visibility:hidden}.makeup-style-modal,.makeup-style-dialog,.makeup-style-option,#mainContent.page-enter .page-header,#mainContent.page-enter .reveal-in,.suggestion-status.active,#analyzeBtn[disabled],#confirmStyleBtn[disabled],#renderBtn[disabled],.progress-fill:after{animation:none!important;transition:none!important;transform:none!important}}
 
 /* Selective new layout. Legacy IDs and handlers are intentionally unchanged. */
 .auth-overlay{padding:0;background:var(--paper)}.auth-editorial{width:100%;min-height:100vh;display:grid;grid-template-columns:1.08fr .92fr;background:var(--paper);color:var(--ink-soft)}
@@ -4213,8 +4253,8 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
        兩個一起搬到左邊——設計稿本來就是這樣畫的。
        開合仍然只靠 transform 一個屬性，不動基礎規則那套已驗證過的流程。 */
     .topbar-nav {
-        left:0; right:auto; top:0; bottom:0;
-        width:min(330px,82vw); height:100%; max-height:none;
+        left:0; right:auto; top:0; bottom:auto;
+        width:min(330px,82vw); height:100vh; height:100dvh; max-height:none;
         padding:96px 16px 20px;
         border:0; border-right:1px solid var(--line-gold);
         border-radius:0 26px 26px 0;
@@ -4456,6 +4496,12 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
        抽屜會變成深底配深字，整個選單消失。 */
     /* 品牌章原本靠深底襯出白圓，淺底上那圈白會不見，改用金線描邊。 */
     .brand-round-mark { border-color:var(--line-gold); box-shadow:0 4px 12px rgba(120,70,66,.12); }
+}
+
+/* iOS Safari 會把 position:fixed 的手機抽屜也裁在 overflow:hidden 的父層內。
+   .topbar-nav 必須能離開 .topbar-inner 展開到整個視窗，否則選單只會露出頂欄高度。 */
+@media (max-width:760px) {
+    .topbar-inner { overflow:visible; }
 }
 
 /* ═══ 三段式分析進度（設計稿圖 7） ═══════════════════════════════════════

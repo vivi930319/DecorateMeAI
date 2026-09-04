@@ -498,23 +498,6 @@ function getProductCatalog(){
     });
 }
 
-// 用完整商品清單補齊推薦資料。
-// 推薦與商品清單使用不同的 rawId，因此改用 salePageId 或完整名稱比對。
-function fillRecommendedImages(list) {
-    const catalog = Array.isArray(Router?.generalProductCatalog) ? Router.generalProductCatalog : [];
-    return (Array.isArray(list) ? list : []).map((raw, index) => {
-        const p = (raw && typeof raw === 'object') ? raw : {};
-        const hit = catalog.find(g => (
-            (p.salePageId && g.salePageId && p.salePageId === g.salePageId) ||
-            (p.name && g.name && p.name === g.name)
-        ));
-        const stableId = p.id || hit?.id || (p.rawId != null ? `recommended-${p.rawId}` : `recommended-${index}-${String(p.name || 'product').slice(0, 24)}`);
-        return hit
-            ? { ...hit, ...p, id: stableId, img: p.img || hit.img, sourceUrl: p.sourceUrl || hit.sourceUrl }
-            : { ...p, id: stableId };
-    });
-}
-
 // 商品頁與推薦彈窗共用相同的顯示上限。
 const RECOMMENDED_DISPLAY_LIMIT = 8;
 // 商品頁一次只掛這麼多張卡。整份目錄有一千多筆，全部塞進 innerHTML 會產生約 1.1MB
@@ -573,6 +556,11 @@ const RecommendationNotice = {
         if (!rec || rec.ok === false) {
             this.reasons = [];
             this.isEmpty = false;
+            Router.shadeRecommendation = null;
+            Router.foundationCrossBrandAlternatives = [];
+            Router.foundationAvailableTargetBrands = [];
+            Router.foundationMatchStatus = null;
+            this.foundationStatus = null;
             this.error = {
                 code: rec?.code || 'NETWORK_ERROR',
                 requestId: rec?.requestId || '',
@@ -587,11 +575,14 @@ const RecommendationNotice = {
         Router.shadeRecommendation = rec.shadeRecommendation || null;
         Router.foundationCrossBrandAlternatives = Array.isArray(rec.foundationCrossBrandAlternatives)
             ? rec.foundationCrossBrandAlternatives : [];
+        Router.foundationAvailableTargetBrands = Array.isArray(rec.foundationAvailableTargetBrands)
+            ? rec.foundationAvailableTargetBrands : [];
         // 粉底門檻的判定結果（契約 2026-08-27 §4）。no_match 時不能拿最接近但
         // 超標的色號硬補——那正是這個門檻要防的事：2.54 的色差上臉看得出來，
         // 而「系統推薦的」這五個字會讓人以為它已經檢查過了。
         this.foundationStatus = (rec.foundationMatchStatus
             && typeof rec.foundationMatchStatus === 'object') ? rec.foundationMatchStatus : null;
+        Router.foundationMatchStatus = this.foundationStatus;
         // 契約 §3：personalization 要讓使用者知道有沒有套用個人化、依據多少互動。
         // 後端一直有回這包，先前前端完全沒用——於是「這是依你的使用紀錄推的」還是
         // 「這只是依這次的臉部分析推的」，畫面上分不出來。
@@ -608,6 +599,8 @@ const RecommendationNotice = {
         this.foundationStatus = null;
         Router.shadeRecommendation = null;
         Router.foundationCrossBrandAlternatives = [];
+        Router.foundationAvailableTargetBrands = [];
+        Router.foundationMatchStatus = null;
     },
 
     // 這批推薦是依什麼推的。措辭要能區分「只用了這次的臉部分析」與
@@ -983,11 +976,17 @@ function recommendationCardHtml(p) {
     const rawPercent = p?.matchPercent ?? pr.matchPercent ?? pr.match_percent;
     const matchPercent = (rawPercent == null || rawPercent === ''
         || !Number.isFinite(Number(rawPercent))) ? null : Number(rawPercent);
-    const label = String(
+    const foundationStatus = currentFoundationMatchStatus(p);
+    const closestAvailable = foundationStatus?.status === 'closest_available';
+    const backendLabel = String(
         p?.recommendationLabel || pr.recommendationLabel || pr.recommendation_label
         || pr.matchLabel || ''
-    ).trim() || (matchPercent == null ? '' : `推薦契合度 ${Math.round(matchPercent)}%`);
-    const closest = p?.foundationSkinMatch?.displayStatus === 'closest_available';
+    ).trim();
+    // closest_available 不得被舊版的 MATCH／匹配／最適合文案重新包裝成 matched。
+    // 這只是狀態型顯示保護，不會改變後端排序或色號選擇。
+    const label = (closestAvailable && /\bMATCH\b|匹配|最適合你/i.test(backendLabel))
+        ? ''
+        : (backendLabel || (matchPercent == null ? '' : `推薦契合度 ${Math.round(matchPercent)}%`));
 
     const parts = [];
     parts.push(`<div class="rec-sys">${escapeHtml(recLabel(pr.systemLabel))}</div>`);
@@ -997,14 +996,17 @@ function recommendationCardHtml(p) {
         const hasQualifier = /推薦契合度/.test(label);
         parts.push(`<div class="rec-match"><b>${escapeHtml(label)}</b>${hasQualifier ? '' : '<small>推薦契合度</small>'}</div>`);
     }
+    // 後端的 recommendationLabel 可能是純文字（例如「暖色調協調」），
+    // 仍要把後端回傳的 matchPercent 明確顯示出來；這個百分比是推薦契合度，
+    // 不是機率，也不是上妝成功率。
+    if (matchPercent != null && !/%/.test(label)) {
+        parts.push(`<div class="rec-match-percent">推薦契合度 ${Math.round(matchPercent)}%</div>`);
+    }
     if (pr.headline) parts.push(`<div class="rec-headline">${escapeHtml(pr.headline)}</div>`);
     const traits = Array.isArray(pr.suitedTraits) ? pr.suitedTraits.filter(Boolean).slice(0, 4) : [];
     if (traits.length) {
         parts.push(`<div class="rec-traits">${traits
             .map(t => `<span>${escapeHtml(String(t))}</span>`).join('')}</div>`);
-    }
-    if (closest) {
-        parts.push(`<div class="rec-closest-note">此色號為目前最接近的可比較色號，實際妝效可能仍有差異，建議實際試色。</div>`);
     }
     return parts.join('');
 }
@@ -1016,18 +1018,11 @@ function recommendationCardHtml(p) {
 // 只會讓人以為那是兩個不同的判斷。
 function foundationSkinLines(skin) {
     if (!skin || typeof skin !== 'object') return { matchWord: '', gate: '' };
-    // ⚠️ 不能直接 Number()：null 會變成 0，「沒有資料」就成了「色差 0.0」——
-    // 那是顏色完全相同，是最有把握的一句話，卻在沒有資料時說出口。
-    const d = (skin.deltaE != null && skin.deltaE !== '' && Number.isFinite(Number(skin.deltaE)))
-        ? Number(skin.deltaE) : null;
+    // 推薦理由與門檻說明必須是後端已產生的文字。前端不依 deltaE 自行拼出
+    // 「與您的膚色接近」或「通過門檻」，避免不同頁面各自解讀同一個數值。
     return {
-        matchWord: d == null ? ''
-            : d <= 1 ? `與您的膚色非常接近（色差 ${d.toFixed(1)}）`
-            : `與您的膚色接近（色差 ${d.toFixed(1)}）`,
-        // 門檻寫出來，使用者才知道這個「接近」是照什麼標準說的。
-        gate: (skin.accepted === true && Number.isFinite(Number(skin.maxInclusive)))
-            ? `這款粉底通過系統設定的膚色色差 ${Number(skin.minInclusive ?? 0)}～${Number(skin.maxInclusive)} 推薦門檻。`
-            : ''
+        matchWord: String(skin.matchReason || skin.reason || skin.text || '').trim(),
+        gate: String(skin.thresholdReason || skin.gate || '').trim()
     };
 }
 
@@ -1130,17 +1125,34 @@ function recommendationPanelHtml(p) {
     const rawPercent = p?.matchPercent ?? pr.matchPercent ?? pr.match_percent;
     const pct = (rawPercent == null || rawPercent === '') ? NaN : Number(rawPercent);
     const hasPct = Number.isFinite(pct);
-    const label = String(
+    const foundationStatus = currentFoundationMatchStatus(p);
+    const closestAvailable = foundationStatus?.status === 'closest_available';
+    const backendLabel = String(
         p?.recommendationLabel || pr.recommendationLabel || pr.recommendation_label
         || pr.matchLabel || ''
-    ).trim() || (hasPct ? `推薦契合度 ${Math.round(pct)}%` : '');
-    if (!label && !pr.headline && !pr.summary && !pr.reasonTexts?.length) return '';
+    ).trim();
+    // closest_available 不能被舊版 MATCH／匹配／最適合文案誤標為 matched；
+    // 百分比仍照契約顯示為「推薦契合度」，不代表機率或通過膚色門檻。
+    const label = (closestAvailable && /\bMATCH\b|匹配|最適合你/i.test(backendLabel))
+        ? ''
+        : (backendLabel || (hasPct ? `推薦契合度 ${Math.round(pct)}%` : ''));
+    const labelHasPercent = /%/.test(label);
+    const foundationStatusHtmlText = foundationStatusHtml(p);
+    const backendReasons = [
+        ...(Array.isArray(pr.reasonTexts) ? pr.reasonTexts : []),
+        ...(Array.isArray(p?.matchReasons) ? p.matchReasons.map(reason => reason?.text).filter(Boolean) : [])
+    ];
+    if (!label && !pr.headline && !pr.summary && !backendReasons.length && !foundationStatusHtmlText) return '';
     const traits = Array.isArray(pr.suitedTraits) ? pr.suitedTraits.filter(Boolean).slice(0, 4) : [];
-    const { matchWord, gate } = foundationSkinLines(p?.foundationSkinMatch);
+    // closest_available 不能沿用 matched／校正成功的膚色文案；它只顯示
+    // foundationMatchStatus 的「資料庫目前最接近」說明。
+    const { matchWord, gate } = closestAvailable
+        ? { matchWord: '', gate: '' }
+        : foundationSkinLines(p?.foundationSkinMatch);
     // 後端的 reasonTexts 常有一句就是「此色號與您的膚色相近（色差 1.3）」，
     // 而 matchWord 正要說同一件事。兩句並排讀起來像系統把同一個理由算了兩次，
     // 所以 matchWord 在場時濾掉講色差的那幾句，由 matchWord 統一說。
-    const reasons = (Array.isArray(pr.reasonTexts) ? pr.reasonTexts.filter(Boolean) : [])
+    const reasons = backendReasons
         .filter(r => !(matchWord && String(r).includes('色差')))
         .slice(0, 3);
 
@@ -1148,6 +1160,8 @@ function recommendationPanelHtml(p) {
         <div class="rec-panel-head">
             <span class="rec-eyebrow">✦ ${escapeHtml(recLabel(pr.systemLabel))}</span>
             ${label ? `<div class="rec-bigmatch">${escapeHtml(label)}</div>` : ''}
+            ${hasPct && !labelHasPercent
+                ? `<div class="rec-match-percent">推薦契合度 ${Math.round(pct)}%</div>` : ''}
             <div class="rec-bigmatch-sub">推薦契合度</div>
             ${pr.headline ? `<div class="rec-panel-headline">${escapeHtml(pr.headline)}</div>` : ''}
             ${traits.length ? `<div class="rec-traits">${traits
@@ -1159,6 +1173,7 @@ function recommendationPanelHtml(p) {
                 .map(r => `<li>${escapeHtml(String(r))}</li>`).join('')}</ul>` : ''}
             ${matchWord ? `<div class="rec-skinline">${escapeHtml(matchWord)}</div>` : ''}
             ${gate ? `<div class="rec-gate">${escapeHtml(gate)}</div>` : ''}
+            ${foundationStatusHtmlText}
             ${colorDiffEntryHtml(p)}
             ${pr.disclaimer ? `<p class="rec-disclaimer">${escapeHtml(pr.disclaimer)}</p>` : ''}
         </div>
@@ -1197,15 +1212,15 @@ function hasMatch(node) {
     return v != null && v !== '' && Number.isFinite(Number(v));
 }
 
-// 這一次推薦的粉底相鄰色階。記憶體裡沒有就回草稿——重新整理之後
-// 由 restoreAnalysisDraft() 還原的 Router.analysisPackage 仍可能尚未帶到
-// 最新推薦欄位，因此要保留 AnalysisDraft.load() 的最後一道 fallback。
-function currentShadeRecommendation() {
+// 這一次推薦的粉底相鄰色階。重新整理後可從 AnalysisDraft 還原「先前已由後端
+// 回傳並保存」的結果；這不是重新計算，也不能拿來補本次缺少的推薦資料。
+function currentShadeRecommendation(product = null) {
     // ⚠️ 三個來源存的都**已經是正規化過的**（Api.recommendProducts 就正規化了）。
     // 這裡再跑一次 _normalizeShadeRecommendation 的話，product 會被 _normalizeProduct
     // 二次加工，id 從 api-foundations-942 變成 api-底妝-api-foundations-942，
     // 於是那個「只在主推薦那件商品頁顯示」的比對永遠不成立——
     // 修好一個消失問題卻換來另一個。所以原樣回傳，不要再處理一次。
+    if (product?.shadeRecommendation) return product.shadeRecommendation;
     if (Router.shadeRecommendation) return Router.shadeRecommendation;
     const fromPackage = Router?.analysisPackage?.recommendations?.shadeRecommendation;
     if (fromPackage) return fromPackage;
@@ -1213,13 +1228,107 @@ function currentShadeRecommendation() {
     return draft?.recommendations?.shadeRecommendation || null;
 }
 
-function currentFoundationCrossBrandAlternatives() {
+// 粉底門檻／校正狀態只接受推薦後端回傳的 foundationMatchStatus。
+// 不從 foundationSkinMatch、商品名稱、N／NC／NW 或 depthIndex 推導狀態。
+function currentFoundationMatchStatus(product = null) {
+    // 一批推薦裡可能同時有粉底、唇彩與眼影；全域的粉底狀態不能污染其他品類
+    // 的商品詳情。沒有品類欄位的測試／舊草稿才允許繼續走全域 fallback。
+    const kind = String(product?.apiType || product?.type || product?.category || product?.cat || '')
+        .trim().toLowerCase();
+    if (product && kind
+        && !['foundations', 'foundation', 'base', '底妝'].includes(kind)) return null;
+    if (product?.foundationMatchStatus && typeof product.foundationMatchStatus === 'object') {
+        return product.foundationMatchStatus;
+    }
+    if (Router?.foundationMatchStatus && typeof Router.foundationMatchStatus === 'object') {
+        return Router.foundationMatchStatus;
+    }
+    if (typeof RecommendationNotice !== 'undefined'
+        && RecommendationNotice.foundationStatus
+        && typeof RecommendationNotice.foundationStatus === 'object') {
+        return RecommendationNotice.foundationStatus;
+    }
+    const fromPackage = Router?.analysisPackage?.recommendations?.foundationMatchStatus;
+    if (fromPackage && typeof fromPackage === 'object') return fromPackage;
+    const draft = typeof AnalysisDraft !== 'undefined' ? AnalysisDraft.load() : null;
+    const saved = draft?.recommendations?.foundationMatchStatus;
+    return saved && typeof saved === 'object' ? saved : null;
+}
+
+function foundationStatusMessage(status) {
+    if (!status || typeof status !== 'object') return '';
+    return String(status.message ?? status.reason ?? status.description
+        ?? status.text ?? status.explanation ?? '').trim();
+}
+
+function foundationStatusRawDeltaE(status) {
+    if (!status || typeof status !== 'object') return null;
+    const raw = status.rawSkinDeltaE ?? status.rawSkinDeltaE00 ?? status.rawDeltaE00;
+    return raw == null || raw === '' || !Number.isFinite(Number(raw)) ? null : Number(raw);
+}
+
+// 狀態文案是安全邊界，不是推薦計算：
+//   FOUNDATION_CALIBRATED_SAME_LANE：只顯示後端文案與試色提醒，不顯示 rawSkinDeltaE
+//   closest_available：顯示後端回傳的原始 ΔE00 與「目前最接近」說明，不宣稱最適合
+// 不在這裡產生淺一階、深一階、品牌或匹配結論。
+function foundationStatusHtml(product = null) {
+    const status = currentFoundationMatchStatus(product);
+    if (!status) return '';
+    const code = String(status.code || '').trim();
+    const state = String(status.status || '').trim();
+    const calibrated = code === 'FOUNDATION_CALIBRATED_SAME_LANE';
+    const closest = state === 'closest_available';
+    const noMatch = state === 'no_match';
+    if (!calibrated && !closest && !noMatch) return '';
+
+    const message = foundationStatusMessage(status);
+    const statusClass = escapeHtml(state || (calibrated ? 'calibrated-same-lane' : 'foundation'));
+    const reminder = '請以實際至實體專櫃試色與購買體驗為準。';
+    if (calibrated) {
+        return `<div class="rec-foundation-note rfn-${statusClass}">
+            <span class="rfn-mark">✦</span>
+            <div>${message ? `<p>${escapeHtml(message)}</p>` : ''}
+            <p class="rfn-sub">${reminder}</p></div>
+        </div>`;
+    }
+    if (closest) {
+        const raw = foundationStatusRawDeltaE(status);
+        const rawText = raw == null ? '' : `（原始膚色 ΔE00 ${raw.toFixed(2)}）`;
+        return `<div class="rec-foundation-note rfn-closest_available">
+            <span class="rfn-mark">✦</span>
+            <div><p>資料庫目前最接近${rawText}</p>
+            ${message ? `<p>${escapeHtml(message)}</p>` : ''}
+            <p class="rfn-sub">${reminder}</p></div>
+        </div>`;
+    }
+    return `<div class="rec-foundation-note rfn-${statusClass}">
+        <span class="rfn-mark">✦</span>
+        <div>${message ? `<p>${escapeHtml(message)}</p>` : ''}
+        <p class="rfn-sub">建議重新確認拍攝光線，或到實體通路試色。</p></div>
+    </div>`;
+}
+
+function currentFoundationCrossBrandAlternatives(product = null) {
+    if (Array.isArray(product?.foundationCrossBrand?.items)) return product.foundationCrossBrand.items;
     if (Array.isArray(Router.foundationCrossBrandAlternatives)
         && Router.foundationCrossBrandAlternatives.length) return Router.foundationCrossBrandAlternatives;
     const fromPackage = Router?.analysisPackage?.recommendations?.foundationCrossBrandAlternatives;
     if (Array.isArray(fromPackage)) return fromPackage;
     const draft = typeof AnalysisDraft !== 'undefined' ? AnalysisDraft.load() : null;
     const saved = draft?.recommendations?.foundationCrossBrandAlternatives;
+    return Array.isArray(saved) ? saved : [];
+}
+
+function currentFoundationAvailableTargetBrands(product = null) {
+    if (Array.isArray(product?.foundationCrossBrand?.availableTargetBrands)) {
+        return product.foundationCrossBrand.availableTargetBrands;
+    }
+    if (Array.isArray(Router.foundationAvailableTargetBrands)
+        && Router.foundationAvailableTargetBrands.length) return Router.foundationAvailableTargetBrands;
+    const fromPackage = Router?.analysisPackage?.recommendations?.foundationAvailableTargetBrands;
+    if (Array.isArray(fromPackage)) return fromPackage;
+    const draft = typeof AnalysisDraft !== 'undefined' ? AnalysisDraft.load() : null;
+    const saved = draft?.recommendations?.foundationAvailableTargetBrands;
     return Array.isArray(saved) ? saved : [];
 }
 
@@ -1237,19 +1346,24 @@ function crossBrandFoundationCard(item) {
 
 function crossBrandFoundationCardsHtml(items) {
     const cards = (Array.isArray(items) ? items : [])
-        .filter(item => item?.product && item?.brand)
+        .filter(item => item?.product && item?.brand && item?.shadeCode)
         .map(crossBrandFoundationCard)
         .join('');
     return cards ? `<div class="xcb-results">${cards}</div>` : '';
 }
 
 function crossBrandFoundationHtml(p) {
-    const sr = currentShadeRecommendation();
+    const sr = currentShadeRecommendation(p);
+    const perProduct = p?.foundationCrossBrand && typeof p.foundationCrossBrand === 'object'
+        ? p.foundationCrossBrand : null;
     const anchorId = String(sr?.anchor?.product?.id ?? '');
-    if (!anchorId || String(p?.id ?? '') !== anchorId) return '';
-    const alternatives = currentFoundationCrossBrandAlternatives().filter(item => item?.product && item?.brand);
+    if (!perProduct && (!anchorId || String(p?.id ?? '') !== anchorId)) return '';
+    const alternatives = currentFoundationCrossBrandAlternatives(p)
+        .filter(item => item?.product && item?.brand && item?.shadeCode);
     if (!alternatives.length) return '';
-    const brands = [...new Set(alternatives.map(item => String(item.brand).trim()).filter(Boolean))];
+    // 品牌選單只採用後端明確提供的 availableTargetBrands；不從目前幾筆 items 猜全庫品牌。
+    const brands = currentFoundationAvailableTargetBrands(p);
+    if (!brands.length) return '';
     const options = brands.map(brand =>
         `<option value="${escapeHtml(brand)}">${escapeHtml(brand)}</option>`).join('');
     const firstBrand = brands[0];
@@ -1285,36 +1399,11 @@ function userSkinRow() {
 }
 
 function shadeRecommendationHtml(p) {
-    const sr = currentShadeRecommendation();
-    if (!sr || !sr.anchor) {
-        // 沒有相鄰色號可畫。原因有兩種，而它們的下一步完全不同，
-        // 所以**不能講成同一句話**。
-        //
-        //   A. 這台裝置沒有分析資料。色階跟著「套用妝容風格 → 抓推薦」那一次流程來，
-        //      而 session 每台裝置各自獨立——在電腦做過分析、換手機看同一件商品，
-        //      手機這邊什麼都沒有。使用者自己做一次分析就會有。
-        //
-        //   B. 這台裝置有分析資料，但推薦端沒有回 shadeRecommendation。
-        //      2026-08-29 實測：/api/products 的 seriesId 與 depthIndex 都有值，
-        //      但 shades 是空陣列、shadeCount／depthIndexOfficial／shadeOrderSource
-        //      都是 null，推薦端也沒有帶 shadeRecommendation。
-        //      **這種使用者再做幾次分析都不會有**，講成 A 等於叫他做白工。
-        //
-        // ⚠️ 前端不自己從 seriesId + depthIndex 推算相鄰色號（2026-08-29 專案決定）：
-        // 那份資料由資料庫端提供，前端算一份等於同一件事有兩個真相來源，
-        // 而兩邊排序規則一旦不同，症狀是「同一支粉底在不同畫面色號順序不一樣」。
-        if (p?.foundationSkinMatch?.accepted === true) {
-            const hasAnalysisHere = !!(Router.analysisPackage?.faceAnalysis
-                || (typeof AnalysisDraft !== 'undefined' && AnalysisDraft.load()?.faceAnalysis));
-            return `<section class="shade-rec shade-rec-empty">
-                <p>${hasAnalysisHere
-                    ? '這支粉底目前沒有可比較的相鄰色號資料，同系列的色階還沒有提供。'
-                    : '這台裝置上還沒有這次的臉部分析資料，所以無法比較相鄰色號。'
-                       + '完成一次臉部分析並選擇妝容風格之後，這裡會顯示同系列的較亮／較深色號。'}</p>
-            </section>`;
-        }
-        return '';
-    }
+    const sr = currentShadeRecommendation(p);
+    // 沒有後端回傳的結構化色階就不畫，也不由 foundationSkinMatch、seriesId
+    // 或本機商品清單猜測。後端若要說明「沒有色階」，應在 shadeRecommendation
+    // 回傳 status/reasonText，前端只顯示該文字。
+    if (!sr || !sr.anchor) return '';
     // 只在看的就是主推薦那件商品時顯示，否則會出現在不相干的商品頁上。
     const anchorId = String(sr.anchor.product?.id ?? '');
     if (anchorId && String(p?.id ?? '') !== anchorId) return '';
@@ -1322,11 +1411,14 @@ function shadeRecommendationHtml(p) {
     const a = sr.anchor;
     const pct = (a.matchPercent == null || a.matchPercent === '') ? NaN : Number(a.matchPercent);
     const hasPct = Number.isFinite(pct);
+    const foundationStatus = currentFoundationMatchStatus(p);
+    const closestAvailable = foundationStatus?.status === 'closest_available';
 
-    // 主推薦的形容詞用**膚色色差**，不是 matchPercent：matchPercent 是綜合排序分數
-    //（含風格、關鍵字、行為），拿它說「與你的膚色多接近」是用一個數字回答另一個問題。
-    // 契約 2026-08-27 §7 要求主推薦寫的是膚色色差。
-    const { matchWord, gate } = foundationSkinLines(a.product?.foundationSkinMatch);
+    // 粉底門檻與校正狀態由 foundationMatchStatus 控制。closest_available
+    // 不得沿用 matched／校正成功的膚色文案。
+    const { matchWord, gate } = closestAvailable
+        ? { matchWord: '', gate: '' }
+        : foundationSkinLines(a.product?.foundationSkinMatch);
 
     // 同一頁底下的推薦面板也會印「✦ 根據系統演算法推薦 / N% MATCH / 色差 / 門檻」。
     // 兩塊都印，整組就出現兩遍。這一區的工作是**比較色號**，背書歸推薦面板，
@@ -1344,8 +1436,10 @@ function shadeRecommendationHtml(p) {
     // 但只有中間那個是。
     const hasVariants = Boolean(sr.lighter || sr.darker);
 
-    const col = (node, kind, label) => {
+    const col = (node, kind) => {
         if (!node) return '';
+        // 色階標籤由後端提供；缺少時整欄不顯示，避免前端冒充官方色階。
+        if (!String(node.label || '').trim()) return '';
         const prod = node.product || {};
         const np = (node.matchPercent == null || node.matchPercent === '')
             ? NaN : Number(node.matchPercent);
@@ -1364,12 +1458,9 @@ function shadeRecommendationHtml(p) {
             ? null : Number(v);
         let metric = '';
         if (kind === 'anchor') {
-            const skinDeltaE = num(node.product?.foundationSkinMatch?.deltaE);
-            if (skinDeltaE != null) {
-                metric = `與您的膚色的色差 ${skinDeltaE.toFixed(1)}`;
-            } else if (Number.isFinite(np)) {
-                metric = `${Math.round(np)}% MATCH`;
-            }
+            // 不把 foundationSkinMatch.rawSkinDeltaE／deltaE 畫成主推薦色差；
+            // 校正與 closest_available 的原始色差只能由狀態提示依契約分流顯示。
+            if (Number.isFinite(np)) metric = `推薦契合度 ${Math.round(np)}%`;
         } else {
             const anchorDeltaE = num(node.anchorDeltaE);
             if (anchorDeltaE != null) {
@@ -1394,7 +1485,7 @@ function shadeRecommendationHtml(p) {
                  style="background:${escapeHtml(String(Api.labToRgb(Number(lab[0]), Number(lab[1]), Number(lab[2]))))}"></span>`
             : '';
         const inner = `
-            <div class="sc2-label">${escapeHtml(node.label || label)}</div>
+            <div class="sc2-label">${escapeHtml(String(node.label))}</div>
             ${thumb}
             <div class="sc2-code">${swatch}${escapeHtml(String(node.shadeCode || '—'))}</div>
             ${metric ? `<div class="sc2-match">${escapeHtml(metric)}</div>` : ''}
@@ -1409,11 +1500,12 @@ function shadeRecommendationHtml(p) {
     // 兩段都可能被讓出去（背書歸推薦面板、色號歸中間那一欄），所以先組再判斷要不要
     // 這個容器——直接印一個空的 sr-hero 會在畫面上留下一塊有內距卻沒東西的空白。
     const heroInner = [
-        panelCarriesHeader ? '' : `
+            panelCarriesHeader ? '' : `
             <div class="sr-eyebrow">✦ ${escapeHtml(REC_LABEL)}</div>
-            ${hasPct ? `<div class="sr-bigmatch">${Math.round(pct)}% MATCH</div>` : ''}
+            ${hasPct ? `<div class="sr-bigmatch">推薦契合度 ${Math.round(pct)}%</div>` : ''}
             ${matchWord ? `<div class="sr-bigmatch-sub">${escapeHtml(matchWord)}</div>` : ''}
-            ${gate ? `<div class="sr-gate">${escapeHtml(gate)}</div>` : ''}`,
+            ${gate ? `<div class="sr-gate">${escapeHtml(gate)}</div>` : ''}
+            ${foundationStatusHtml(p)}`,
         // 有並排的三欄時，主推薦的色號由中間那一欄負責——上下各印一次同樣的 PO-02
         // 只是佔位置，還會讓人以為是兩件事。沒有替代色可比時才在這裡印。
         // 主推薦的色號一律由底下那一欄負責——那一欄現在一定會出現（欄數跟著實際
@@ -1428,9 +1520,9 @@ function shadeRecommendationHtml(p) {
     // lighter 或 darker 就是 null（契約 §5）。寫死三欄時，缺的那一欄會變成一格
     // 有邊框沒內容的空白，而主推薦被擠到偏一邊——看起來像載入失敗。
     const columns = [
-        col(sr.lighter, 'lighter', '較明亮的替代色'),
-        col(a, 'anchor', '主推薦色號'),
-        col(sr.darker, 'darker', '較深的替代色'),
+        col(sr.lighter, 'lighter'),
+        col(a, 'anchor'),
+        col(sr.darker, 'darker'),
     ].filter(Boolean);
 
     // 膚色色塊**不再綁在「有沒有替代色」上**。
@@ -1489,20 +1581,6 @@ function recommendationEvidenceHtml(p) {
     </details>`;
 }
 
-// 每個分類先放入最高分商品，再依分數補上其餘推薦。
-function orderRecommendedProducts(list) {
-    const items = Array.isArray(list) ? list : [];
-    const best = new Map();
-    for (const p of items) {
-        if (!p?.cat) continue;
-        if (!best.has(p.cat) || (p.score ?? 0) > (best.get(p.cat).score ?? 0)) best.set(p.cat, p);
-    }
-    const firsts = [...best.values()];
-    const picked = new Set(firsts.map(p => String(p.id)));
-    const rest = items.filter(p => !picked.has(String(p.id))).sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-    return [...firsts, ...rest];
-}
-
 // 將 NT$380、380 元或 1,650 等價格輸入轉成正數；無效輸入回傳 null。
 function parsePriceInput(raw) {
     if (raw == null) return null;
@@ -1516,10 +1594,12 @@ function parsePriceInput(raw) {
 
 function getRecommendedProductCatalog() {
     const fromPackage = Router?.analysisPackage?.recommendations?.products;
-    if (Array.isArray(fromPackage) && fromPackage.length) return fillRecommendedImages(fromPackage);
+    // 個人化推薦的商品欄位必須由商品後端一次完整回傳；不能拿一般目錄補圖片、價格、
+    // shades 或識別欄位，否則同一商品在兩條 API 會有兩個真相來源。
+    if (Array.isArray(fromPackage) && fromPackage.length) return fromPackage;
     const draft = typeof AnalysisDraft !== 'undefined' ? AnalysisDraft.load() : null;
     const fromDraft = draft?.recommendations?.products;
-    return Array.isArray(fromDraft) ? fillRecommendedImages(fromDraft) : [];
+    return Array.isArray(fromDraft) ? fromDraft : [];
 }
 
 // 把本機收藏清單解析成「真的畫得出來的商品」。收藏可能來自 demo 資料、真實商品 API、
@@ -2911,10 +2991,10 @@ function openProductRecommendationModal(){
     document.body.appendChild(modal);
     const grid=modal.querySelector('.recommendation-modal-grid');
 
-    // 推薦彈窗與商品頁共用同一份排序、補圖與價格資料。
+    // 推薦彈窗與商品頁共用同一份後端回傳結果；前端不重排、不補圖、不補價格。
     const draw=()=>{
         if(!document.getElementById('productRecommendationModal'))return;
-        const products=orderRecommendedProducts(getRecommendedProductCatalog());
+        const products=getRecommendedProductCatalog();
         if(!products.length){
             grid.classList.remove('prod-grid');
             // 載入中／後端回報空結果／單純還沒整理好，是三種不同的狀況，
@@ -2922,7 +3002,7 @@ function openProductRecommendationModal(){
             grid.innerHTML = Router.generalProductLoading
                 ? '<div class="empty-state">推薦商品載入中...</div>'
                 : (RecommendationNotice.error || RecommendationNotice.isEmpty
-                    ? RecommendationNotice.html() + RecommendationNotice.emptyHtml()
+                    ? RecommendationNotice.html() + RecommendationNotice.foundationNoticeHtml() + RecommendationNotice.emptyHtml()
                     : '<div class="empty-state">推薦商品正在整理中，也可以先查看所有商品。</div>');
             RecommendationNotice.bind(grid);
             return;
@@ -2935,7 +3015,7 @@ function openProductRecommendationModal(){
         // 把提示塞進去它會變成其中一個格子，跟商品卡排在一起。
         const holder = grid.parentNode;
         holder.querySelectorAll('[data-rec-holder]').forEach(n => n.remove());
-        const noticeHtml = RecommendationNotice.html();
+        const noticeHtml = RecommendationNotice.html() + RecommendationNotice.foundationNoticeHtml();
         if (noticeHtml && holder) {
             const box = document.createElement('div');
             box.setAttribute('data-rec-holder', '1');
@@ -2976,7 +3056,7 @@ function openProductRecommendationModal(){
         });
     };
     draw();
-    // 商品清單尚未載入時，先載入後再補齊推薦圖片與價格。
+    // 一般商品目錄尚未載入時，在背景載入供一般瀏覽使用；不會替個人化推薦補圖片、價格或色號。
     if(!productCatalogLoaded())loadGeneralProductCatalog(draw);
 
     modal.querySelector('.makeup-style-close').onclick=closeProductRecommendationModal;
@@ -3054,17 +3134,19 @@ async function runMakeupSuggestion(onProgress) {
         Api.recommendProducts(Router.analysisPackage, Router.selectedStyleId).then(rec => {
             // 成功與失敗都要記：成功時要把上一輪殘留的錯誤提示清掉。
             RecommendationNotice.record(rec);
-            if (!rec?.products?.length) return;
+            if (!rec?.products?.length && !rec?.foundationMatchStatus) return;
             Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
                 recommendations: {
                     ...Router.analysisPackage.recommendations,
-                    products: rec.products,
+                    ...(rec?.products?.length ? { products: rec.products } : {}),
                     // 粉底相鄰色階也要跟著存。先前它只活在 Router.shadeRecommendation
                     // 這個記憶體變數裡，而重新整理之後沒有任何地方還原它——
                     // 於是使用者重載一次，整個色號區塊就從商品頁上消失，
-                    // 看起來像功能壞掉。商品清單早就有草稿 fallback，這裡照同一個模式。
+                    // 保存本次後端回傳的推薦結果，供重新整理後還原；不從一般目錄補推薦欄位。
                     shadeRecommendation: rec.shadeRecommendation || null,
                     foundationCrossBrandAlternatives: rec.foundationCrossBrandAlternatives || [],
+                    foundationAvailableTargetBrands: rec.foundationAvailableTargetBrands || [],
+                    foundationMatchStatus: rec.foundationMatchStatus || null,
                 }
             });
             AnalysisDraft.save(Router.analysisPackage);
@@ -3289,6 +3371,7 @@ const Router = {
     latestRenderedAfter: false,
     currentCategory: null,
     productRecommendationLoading: false,
+    foundationMatchStatus: null,
     generalProductCatalog: null,
     generalProductLoading: false,
     productFacets: null,
@@ -4659,10 +4742,9 @@ const PageInit = {
             const chips = [`<button class="chip ${filter==='all'?'active':''}" data-filter="all">全部<span class="chip-en">All</span></button>`]
                 .concat(cats.map(id => `<button class="chip ${filter===id?'active':''}" data-filter="${id}">${id}</button>`)).join('');
             const recommended = getRecommendedProductCatalog();
-            // 排列與張數都跟推薦彈窗共用（見 orderRecommendedProducts）：同一份推薦
-            // 在兩個地方必須列出同樣的商品。
-            const recommendedAll = orderRecommendedProducts(recommended);
-            // 篩選只作用在這批推薦上，不會回頭跟後端要更多商品（後端目前也不支援）。
+            // 後端已決定個人化推薦順序；這裡只做畫面上的分類／品牌／價格篩選，
+            // 不重排推薦分數，也不回頭用一般目錄補個人化商品。
+            const recommendedAll = recommended;
             const recommendedByCat = RecFilter.apply(recommendedAll);
             const selectedBrand = String(Router.shopBrand || '').trim();
             const hasBrandCatalog = !selectedBrand
@@ -4852,14 +4934,17 @@ const PageInit = {
                     Api.recommendProducts(Router.analysisPackage, Router.selectedStyleId)
                         .then(rec => {
                             RecommendationNotice.record(rec, runRecommend);
-                            if (rec?.products?.length || rec?.shadeRecommendation?.anchor) {
+                            if (rec?.products?.length || rec?.shadeRecommendation?.anchor
+                                || rec?.foundationMatchStatus) {
                                 Router.productRecommendationError = false;
                                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
                                     recommendations: {
                                         ...(Router.analysisPackage.recommendations || {}),
                                         ...(rec?.products?.length ? { products: rec.products } : {}),
                                         shadeRecommendation: rec?.shadeRecommendation || null,
-                                        foundationCrossBrandAlternatives: rec?.foundationCrossBrandAlternatives || []
+                                        foundationCrossBrandAlternatives: rec?.foundationCrossBrandAlternatives || [],
+                                        foundationAvailableTargetBrands: rec?.foundationAvailableTargetBrands || [],
+                                        foundationMatchStatus: rec?.foundationMatchStatus || null
                                     }
                                 });
                                 AnalysisDraft.save(Router.analysisPackage);
@@ -4980,48 +5065,24 @@ const PageInit = {
             }, 360);
         }
 
-        // 色階資料掉了就自己補回來，不要要求使用者重跑一次流程。
-        //
-        // shadeRecommendation 只在「套用妝容風格 → 抓推薦」那一次流程裡拿到。
-        // 重新整理之後記憶體沒了；而在「把它存進資料包」這個修正上線之前建立的
-        // session，草稿裡也沒有那個欄位——那些分頁會一直看不到色階比較，
-        // 直到使用者自己重新走一次流程，而他不會知道要那樣做。
-        //
-        // 有分析資料就能重新問一次。只補一次（_shadeRefetched 這個旗標），
-        // 失敗也安靜收掉：這是補救，不是主要路徑，不該讓商品頁因此出錯。
-        let _shadeRefetching = false;
-        const refetchShadeIfMissing = (onDone) => {
-            if (_shadeRefetching || Router._shadeRefetched) return false;
-            if (currentShadeRecommendation()) return false;
-            const pkg = Router.analysisPackage;
-            if (!pkg?.faceAnalysis || !Router.selectedStyleId) return false;
-            _shadeRefetching = true;
-            Router._shadeRefetched = true;
-            Api.recommendProducts(pkg, Router.selectedStyleId).then(rec => {
-                if (rec?.shadeRecommendation) {
-                    RecommendationNotice.record(rec);
-                    // 補抓回來的資料也要落到分析草稿；只寫 Router 暫存值的話，
-                    // 使用者一重新整理，三色階仍會消失。
-                    if (Router.analysisPackage) {
-                        Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
-                            recommendations: {
-                                ...(Router.analysisPackage.recommendations || {}),
-                                shadeRecommendation: rec.shadeRecommendation,
-                                foundationCrossBrandAlternatives: rec.foundationCrossBrandAlternatives || []
-                            }
-                        });
-                        AnalysisDraft.save(Router.analysisPackage);
-                    }
-                    onDone();
-                }
-            }).catch(() => {}).finally(() => { _shadeRefetching = false; });
-            return true;
-        };
-
         function renderProductDetail(id) {
             const recommended = getRecommendedProductCatalog();
             const apiCatalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
-            const catalog = [...recommended, ...apiCatalog];
+            // 淺一階／深一階是推薦回應裡的完整商品，但不保證同時出現在
+            // 個人化 products[]。點色階卡片時也必須能用這份後端回傳的商品
+            // 直接開詳情，否則找不到 id 就會走「重新載入商品清單」而回到推薦頁。
+            const shadeProducts = [
+                currentShadeRecommendation()?.anchor?.product,
+                currentShadeRecommendation()?.lighter?.product,
+                currentShadeRecommendation()?.darker?.product,
+            ].filter(product => product && typeof product === 'object');
+            // 跨品牌相近色號同樣是後端推薦回應裡的完整商品，但通常不在
+            // 個人化 products[] 或一般商品目錄的第一批資料中。若只把 id 放進
+            // 卡片，點擊後找不到商品就會被舊流程送回商品清單。
+            const crossBrandProducts = currentFoundationCrossBrandAlternatives()
+                .map(item => item?.product)
+                .filter(product => product && typeof product === 'object');
+            const catalog = [...recommended, ...apiCatalog, ...shadeProducts, ...crossBrandProducts];
             const p = catalog.find(x => String(x.id) === String(id));
             if (!p) {
                 showAlert('這筆推薦商品的識別資料不完整，已重新載入商品清單，請稍後再試。', { type: 'error' });
@@ -5170,18 +5231,29 @@ const PageInit = {
                 // 使用者是在「比較三個色號」這件事情中間，回到清單等於把他丟出這個脈絡。
                 btn.onclick = () => {
                     Router.shadeReturnTo = id;
-                    Router.go('products', { productId: btn.dataset.shadeGo });
+                    // 已經在商品頁內，直接以後端提供的色階商品重畫詳情；
+                    // 不重新走 products 路由，避免先重建成商品推薦清單。
+                    resetSpaViewport();
+                    renderProductDetail(btn.dataset.shadeGo);
                 };
             });
             const crossBrandSelect = area.querySelector('[data-cross-brand-select]');
             const crossBrandResult = area.querySelector('[data-cross-brand-result]');
+            const goToCrossBrandProduct = (btn) => {
+                const productId = btn?.dataset?.crossBrandGo;
+                if (!productId) return;
+                // 跨品牌詳情的返回點仍是主推薦粉底，保留目前的比較脈絡。
+                Router.shadeReturnTo = id;
+                resetSpaViewport();
+                renderProductDetail(productId);
+            };
             if (crossBrandSelect && crossBrandResult) {
                 const alternatives = currentFoundationCrossBrandAlternatives();
                 const anchor = currentShadeRecommendation()?.anchor?.product || {};
                 const anchorApiId = anchor.rawId ?? anchor.id;
                 const bindCrossBrandLinks = () => {
                     crossBrandResult.querySelectorAll('[data-cross-brand-go]').forEach(btn => {
-                        btn.onclick = () => Router.go('products', { productId: btn.dataset.crossBrandGo });
+                        btn.onclick = () => goToCrossBrandProduct(btn);
                     });
                 };
                 bindCrossBrandLinks();
@@ -5201,21 +5273,27 @@ const PageInit = {
                     const result = await Api.listFoundationShadeMatches(anchorApiId, requestedBrand, 5);
                     if (crossBrandSelect.value !== requestedBrand || !area.contains(crossBrandResult)) return;
                     if (result?.ok && result.items?.length) {
+                        // 這些是品牌選單即時查回、原始推薦回應沒有帶到的商品。
+                        // 先收進同一份後端商品候選，點卡片時詳情頁才能找到它。
+                        const merged = [
+                            ...currentFoundationCrossBrandAlternatives(),
+                            ...result.items
+                        ];
+                        const seen = new Set();
+                        Router.foundationCrossBrandAlternatives = merged.filter(item => {
+                            const key = String(item?.product?.id ?? '');
+                            if (!key || seen.has(key)) return false;
+                            seen.add(key);
+                            return true;
+                        });
                         crossBrandResult.innerHTML = crossBrandFoundationCardsHtml(result.items);
                         bindCrossBrandLinks();
                     }
                 };
             }
             area.querySelectorAll('[data-cross-brand-go]').forEach(btn => {
-                btn.onclick = () => Router.go('products', { productId: btn.dataset.crossBrandGo });
+                btn.onclick = () => goToCrossBrandProduct(btn);
             });
-            // 這件是粉底、通過了膚色門檻，卻沒有色階區塊——那多半是資料掉了，
-            // 不是後端沒給。補一次再重畫。
-            if (p.foundationSkinMatch?.accepted === true) {
-                refetchShadeIfMissing(() => {
-                    if (Router.currentPage === 'products') renderProductDetail(id);
-                });
-            }
             // 色差說明。找的是「正在看的這件商品」，不是任何一件——
             // 同一頁上相關商品也可能帶著色差，開錯那件會解釋到別人的數字。
             area.querySelectorAll('[data-color-diff]').forEach(btn => {
@@ -5240,23 +5318,11 @@ const PageInit = {
             };
             bindRelatedClicks();
 
-            // 以色找色：在本機用 lab 算色差，不打 API（上游那支端點不存在，見 Api.findSimilarShades）。
-            // 標題不再叫「AI 相似色彩推薦」——這是 CIE94 色差公式，不是模型，叫它 AI 是騙人的。
-            if (typeof Api !== 'undefined' && Api.findSimilarShades) {
-                const similar = Api.findSimilarShades(p, apiCatalog, 3);
-                if (similar.length) {
-                    const box = document.getElementById('pdRelatedBox');
-                    if (box) {
-                        box.innerHTML = renderRelatedGrid(similar, '相似色號');
-                        bindRelatedClicks();
-                    }
-                }
-            }
         }
 
         // 分派放在最後：這個方法裡的 renderShop / renderProductDetail 是函式宣告
-        // （會提升），但它們用到的 applyShopControls、shopPriceOf、
-        // refetchShadeIfMissing 是 const。在原本的位置先呼叫，會在 const 初始化前
+        // （會提升），但它們用到的 applyShopControls、shopPriceOf 是 const。
+        // 在原本的位置先呼叫，會在 const 初始化前
         // 讀到它們，拋 ReferenceError: Cannot access ... before initialization——
         // 而錯誤發生在 area.innerHTML 賦值之前，所以整個商品頁是全白的，
         // 連「目前沒有商品資料」都不會出現。語法檢查抓不到，這是執行期的 TDZ。
@@ -6347,7 +6413,7 @@ const PageInit = {
         };
         const sectionButtons = Array.from(document.querySelectorAll('[data-admin-section]'));
         const sectionViews = Array.from(document.querySelectorAll('[data-admin-view]'));
-        const setAdminSection = (section) => {
+        const setAdminSection = (section, { scroll = true } = {}) => {
             const next = sectionMeta[section] ? section : 'overview';
             sectionButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.adminSection === next));
             sectionViews.forEach(view => {
@@ -6364,13 +6430,55 @@ const PageInit = {
             // 切進來才載入，避免每次開後台都去打一次不一定會看的資料。
             if (next === 'feedback') Router._loadFeedbackOnce?.();
             if (next === 'products') Router._loadProductAuditOnce?.();
-            document.querySelector('.admin-stage')?.scrollTo({ top: 0, behavior: 'smooth' });
+            // 換了區塊就要看到新區塊的開頭，否則視窗會停在上一區的捲動位置。
+            //
+            // ⚠️ 原本這行是 `document.querySelector('.admin-stage')?.scrollTo(...)`，
+            // 那是一個**永遠不會有任何效果**的呼叫：.admin-stage 是 overflow:visible、
+            // 只有 min-height:100vh，它從來就不是捲動容器，真正在捲的是整份文件。
+            // 對不會捲的元素呼叫 scrollTo 不報錯也不動作，所以在長長的營運總覽捲到
+            // 一半、用置頂工具列按「跳到模型複核區」時，內容其實已經換了，但畫面
+            // 停在原處——最容易被讀成「這顆按鈕壞了」。工具列是 sticky，捲到哪裡都
+            // 按得到，也就是說這個情境是這顆按鈕的**常態**用法，不是邊角案例。
+            //
+            // 改成跟本檔其他捲動（回到待覆核／跳到訓練批次）同一套 scrollIntoView：
+            // 它會自己找到真正的捲動容器，scrollMarginTop 讓標題不被 sticky 工具列蓋住。
+            if (scroll) {
+                const top = sectionViews.find(view => view.dataset.adminView === next);
+                if (top) {
+                    top.style.scrollMarginTop = '100px';
+                    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+                    top.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+                }
+            }
         };
         let initialSection = 'overview';
         try { initialSection = sessionStorage.getItem('beautyAdminSection') || 'overview'; } catch (_) {}
         sectionButtons.forEach(btn => { btn.onclick = () => setAdminSection(btn.dataset.adminSection); });
-        document.querySelectorAll('[data-admin-jump]').forEach(btn => { btn.onclick = () => setAdminSection(btn.dataset.adminJump); });
-        setAdminSection(initialSection);
+        // 「跳到模型複核區」要落在**照片審核清單**上，不是區塊開頭。
+        //
+        // 這一區由上到下是：標題 → 模型訓練批次紀錄 → 待覆核照片清單。批次紀錄
+        // 是已經發生、不能再改的事實，按這顆按鈕的人要做的是審核照片；落在區塊
+        // 開頭代表批次一多還得再滑一次，而「不想手動滑」正是這顆按鈕存在的理由。
+        //
+        // 落點要用 admin.html 裡靜態存在的 #adminFeedbackReview，不能等資料載完
+        // 才找得到——清單是切進來才載入的，這時候裡面還是空的，但外框已經在了。
+        document.querySelectorAll('[data-admin-jump]').forEach(btn => {
+            btn.onclick = () => {
+                const target = btn.dataset.adminJump;
+                // 先切區塊：feedback 在切換前是 hidden，對隱藏元素 scrollIntoView 不會有作用。
+                const review = target === 'feedback' ? document.getElementById('adminFeedbackReview') : null;
+                setAdminSection(target, { scroll: !review });
+                if (!review) return;
+                review.setAttribute('tabindex', '-1');
+                review.style.scrollMarginTop = '100px';
+                const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+                review.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+                review.focus({ preventScroll: true });
+            };
+        });
+        // 進頁時不捲：這是還原上次停留的區塊，不是使用者剛按下的動作。
+        // 頁面本來就在最上面，這時再捲一次只會多一段沒有理由的動畫。
+        setAdminSection(initialSection, { scroll: false });
 
         let memberConnectionState = 'pending';
         let productConnectionState = 'pending';
@@ -7584,6 +7692,9 @@ const PageInit = {
             let fbItems = [];
             const fbSelected = new Set();
             const fbSelectable = () => fbItems.filter(it => it.hasSample && !it.trainingRunId && fbBucket(it) === 'pending');
+            // 訓練批次區塊自己的出口。批次多的時候，下方那顆要先捲過整份清單才按得到，
+            // 而使用者想回去的時候人正在上面。
+            const fbJumpReviewTop = document.getElementById('adminTrainingJumpReview');
             const fbJumpReview = document.getElementById('adminFeedbackJumpReview');
             const fbJumpTraining = document.getElementById('adminFeedbackJumpTraining');
             if (fbJumpTraining) fbJumpTraining.onclick = () => {
@@ -7595,15 +7706,20 @@ const PageInit = {
                 target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
                 target.focus({ preventScroll: true });
             };
-            if (fbJumpReview) fbJumpReview.onclick = () => {
+            // 兩顆「回到待覆核」共用同一段：一顆在列表下方，一顆在訓練批次區塊的標題旁。
+            // 批次累積到幾十筆之後，下方那顆要先捲過整份清單才按得到，而人正在上面。
+            const jumpToReview = () => {
                 const target = feedbackBody.closest('.acp-deck');
-                if (target) {
-                    target.setAttribute('tabindex', '-1');
-                    target.style.scrollMarginTop = '100px';
-                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                    target.focus({ preventScroll: true });
-                }
+                if (!target) return;
+                target.setAttribute('tabindex', '-1');
+                target.style.scrollMarginTop = '100px';
+                // 跟其他捲動一致：使用者關掉動態效果時就不要硬捲。
+                const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+                target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+                target.focus({ preventScroll: true });
             };
+            if (fbJumpReview) fbJumpReview.onclick = jumpToReview;
+            if (fbJumpReviewTop) fbJumpReviewTop.onclick = jumpToReview;
 
             // 卡片右上角那個標籤。跟分頁是同一組語彙，不然同一筆在分頁叫「送訓中」、
             // 卡片上叫「已採用」，看的人得自己在腦中對應。
@@ -7690,12 +7806,20 @@ const PageInit = {
                 // 而這時候我們什麼都還不知道。
                 if (!fbLoaded) { fbTrain.textContent = '送去訓練'; fbTrain.disabled = true; return; }
                 const n = fbTrainTargets().length;
+                // 勾了東西卻一筆都送不出，是最容易被讀成「按鈕壞了」的狀態：
+                // 勾選看的是「待覆核」，送訓看的是「已採用」，兩者本來就可能沒有交集。
+                // 按鈕上直接寫出原因，比讓人對著一顆灰掉的按鈕猜要好。
                 fbTrain.textContent = fbSelected.size
-                    ? `送去訓練（已選 ${fbSelected.size}，可送 ${n}）`
+                    ? (n ? `送去訓練（已選 ${fbSelected.size}，可送 ${n}）`
+                         : `送去訓練（已選 ${fbSelected.size}，需先覆核採用）`)
                     : `送去訓練（已採用未送訓 ${n}）`;
                 fbTrain.disabled = n === 0;
+                // 先前這裡寫「待覆核資料會先登記為採用」——那是送訓界線壞掉時的行為。
+                // 現在待覆核的不會被順手採用，說明也要跟著改，否則它承諾了一件不會發生的事。
                 fbTrain.title = fbSelected.size
-                    ? '送出勾選資料；待覆核資料會先登記為採用，再排入新的訓練批次'
+                    ? (n ? '送出勾選之中已經採用的那幾筆，排成一個新的訓練批次'
+                         : '勾選的這些都還沒覆核。送訓只收已採用或部分採用的修正——'
+                           + '先逐筆決定要不要採用，這顆按鈕才會亮。')
                     : '把所有已採用、有影像、還沒送過訓練的修正送出成一個批次';
             };
 

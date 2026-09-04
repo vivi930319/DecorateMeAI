@@ -46,6 +46,10 @@ vm.runInContext(
   // 色差與門檻兩句由 foundationSkinLines 統一產生，推薦面板與色號比較區共用；
   // 抽了用它的函式沒抽它，測試會在執行時炸 ReferenceError。
   + cut('function foundationSkinLines(skin) {') + '\n'
+  + cut('function currentFoundationMatchStatus(product = null) {') + '\n'
+  + cut('function foundationStatusMessage(status) {') + '\n'
+  + cut('function foundationStatusRawDeltaE(status) {') + '\n'
+  + cut('function foundationStatusHtml(product = null) {') + '\n'
   + cut('function recommendationPanelHtml(p) {') + '\n'
   // recommendationPanelHtml 會呼叫色差入口，抽了前者沒抽相依，
   // 測試會在執行時炸 ReferenceError——那是測試的問題，不是程式的。
@@ -57,7 +61,7 @@ vm.runInContext(
   + cut('function hasMatch(node) {') + '\n'
   // shadeRecommendationHtml 現在透過 currentShadeRecommendation 讀，
   // 才有草稿 fallback。抽了前者沒抽相依會炸 ReferenceError。
-  + cut('function currentShadeRecommendation() {') + ';\n'
+  + cut('function currentShadeRecommendation(product = null) {') + ';\n'
   // shadeRecommendationHtml 會呼叫 userSkinRow（使用者膚色色塊）。
   + cut('function userSkinRow() {') + ';\n'
   + cut('function shadeRecommendationHtml(p) {') + '\n'
@@ -158,7 +162,7 @@ check('顯示 disclaimer', out.includes('色階依同品牌同系列'));
 // 版面：主推薦是主角，上下階是配角。三張等大並排會讓人以為三個都在推薦，
 // 但只有中間那個是——另外兩個是「想比較的話可以看看」。
 check('有推薦依據的標示', out.includes('根據臉部分析結果推薦'));
-check('主推薦有大字匹配度', /sr-bigmatch">95% MATCH/.test(out));
+check('主推薦有大字推薦契合度', /sr-bigmatch">推薦契合度 95%/.test(out));
 check('有「想比較不同妝效？」', out.includes('想比較不同妝效？'));
 // 三欄並排，直接看得到。先前替代色藏在 Modal 後面——而替代色的用途是**比較**，
 // 比較要看得到才成立。要求使用者先相信「裡面有東西值得看」才會點，
@@ -172,24 +176,48 @@ check('主推薦那一欄有獨立類別', out.includes('sc2-anchor'));
 check('替代色欄不帶 anchor 類別',
   (out.match(/sc2-anchor/g) || []).length === 1);
 
-// 主推薦的形容詞改用**膚色色差**，不是綜合排序分數（契約 2026-08-27 §7）。
-// matchPercent 混了風格、關鍵字與行為分；拿它說「與你的膚色多接近」
-// 是用一個數字回答另一個問題。
-const withSkin = (deltaE, accepted) => ({
+// 2026-09-03：主推薦的色差狀態與文案由 foundationMatchStatus 控制。
+// rawSkinDeltaE 只允許在 closest_available 顯示；校正成功時不可把它畫成
+// 「你的膚色與主推薦色差」，calibratedTargetDeltaE: 0 也不能被翻成「完全相同」。
+const withSkin = (rawSkinDeltaE, status) => ({
   ...official,
   anchor: { ...official.anchor,
             product: { id: 'api-foundations-1',
-                       foundationSkinMatch: { deltaE, accepted,
-                                              minInclusive: 0, maxInclusive: 2 } } },
+                       foundationSkinMatch: { rawSkinDeltaE, calibratedTargetDeltaE: 0,
+                                              accepted: status === 'matched' } } },
 });
-sandbox.Router.shadeRecommendation = withSkin(0.6, true);
-out = shade({ id: 'api-foundations-1' });
-check('色差 0.6 → 非常接近', out.includes('與您的膚色非常接近（色差 0.6）'));
-check('通過門檻要寫出來', out.includes('膚色色差 0～2 推薦門檻'));
-sandbox.Router.shadeRecommendation = withSkin(1.8, true);
-out = shade({ id: 'api-foundations-1' });
-check('色差 1.8 → 只說接近，不說非常接近',
-  out.includes('與您的膚色接近（色差 1.8）') && !out.includes('非常接近'));
+sandbox.Router.foundationMatchStatus = {
+  code: 'FOUNDATION_CALIBRATED_SAME_LANE', status: 'matched',
+  rawSkinDeltaE: 0.6,
+  message: '主推薦先通過原始膚色比色，再套用同一底調的校正色階。'
+};
+out = detail({ id: 'api-foundations-1', matchPercent: 95,
+  recommendationLabel: '主推薦色號',
+  foundationSkinMatch: { rawSkinDeltaE: 0.6, calibratedTargetDeltaE: 0 } });
+check('校正成功顯示後端狀態文案', out.includes('主推薦先通過原始膚色比色'));
+check('校正成功顯示推薦契合度', out.includes('推薦契合度 95%'));
+check('校正成功顯示實體試色提醒', out.includes('請以實際至實體專櫃試色與購買體驗為準'));
+check('校正成功不顯示 rawSkinDeltaE', !out.includes('0.6') && !out.includes('rawSkinDeltaE'));
+check('校正成功不宣稱膚色完全相同', !out.includes('完全相同'));
+
+// raw anchor 超過 ΔE00 2 時只能顯示 closest_available，不能沿用校正成功文案。
+sandbox.Router.foundationMatchStatus = {
+  code: 'FOUNDATION_CLOSEST_AVAILABLE', status: 'closest_available',
+  rawSkinDeltaE: 9.2,
+  message: '資料庫沒有 ΔE00 ≤ 2 的原始膚色近似粉底。'
+};
+out = detail({ id: 'api-foundations-1', matchPercent: 58,
+  recommendationLabel: '資料庫目前最接近',
+  foundationSkinMatch: { rawSkinDeltaE: 9.2, calibratedTargetDeltaE: 0 } });
+check('closest_available 顯示資料庫目前最接近', out.includes('資料庫目前最接近'));
+check('closest_available 顯示後端原始 ΔE00', out.includes('原始膚色 ΔE00 9.20'));
+check('closest_available 顯示後端說明', out.includes('資料庫沒有 ΔE00 ≤ 2'));
+check('closest_available 顯示實體試色提醒', out.includes('請以實際至實體專櫃試色與購買體驗為準'));
+check('closest_available 不顯示校正成功文案', !out.includes('主推薦先通過原始膚色比色'));
+check('closest_available 不標示最適合你', !out.includes('最適合你') && !out.includes('高度匹配'));
+
+// 沒有 status 時也不能用 foundationSkinMatch 或 matchPercent 自行拼膚色結論。
+sandbox.Router.foundationMatchStatus = null;
 // 沒有膚色色差就不要用排序分數硬湊一句形容
 sandbox.Router.shadeRecommendation = {
   ...official, anchor: { ...official.anchor, matchPercent: 95, product: { id: 'api-foundations-1' } } };
@@ -204,6 +232,18 @@ check('沒有 matchPercent → 不顯示匹配度', !out.includes('MATCH') && !o
 
 sandbox.Router.shadeRecommendation = official;
 out = shade({ id: 'api-foundations-1' });
+
+// 後端若把主推薦改成 N18，前端只能照後端的主色、淺一階、深一階顯示，不能重排。
+const backendN18 = {
+  ...official,
+  anchor: { ...official.anchor, shadeCode: 'N18' },
+  lighter: { ...official.lighter, shadeCode: 'N16', label: '淺一階' },
+  darker: { ...official.darker, shadeCode: 'N20', label: '深一階' },
+};
+sandbox.Router.shadeRecommendation = backendN18;
+out = shade({ id: 'api-foundations-1' });
+check('後端回 N18 時顯示後端主色與相鄰色階',
+  out.includes('N18') && out.includes('N16') && out.includes('N20'));
 
 const approx = {
   method: 'lab_lightness_approximation', official: false,
@@ -261,30 +301,26 @@ check('讀取時有草稿 fallback',
   /function currentShadeRecommendation/.test(src)
   && /AnalysisDraft\.load\(\)[\s\S]{0,160}shadeRecommendation/.test(src));
 check('畫面讀的是 fallback 而不是直接讀記憶體變數',
-  /const sr = currentShadeRecommendation\(\)/.test(src));
+  /const sr = currentShadeRecommendation\(p\)/.test(src));
 // 三個來源存的都已經正規化過。再跑一次 _normalizeShadeRecommendation 的話，
 // product 會被二次加工，id 從 api-foundations-942 變成 api-底妝-api-foundations-942，
 // 那個「只在主推薦那件商品頁顯示」的比對就永遠不成立。
 // 掃的是函式**本體**，不是連註解一起——那段註解正好在解釋
 // 「為什麼不能再跑一次 _normalizeShadeRecommendation」，連註解掃的話
 // 這條解釋自己會把測試弄紅（css_tokens_check 踩過同一個坑）。
-const shadeFallbackBody = (cut('function currentShadeRecommendation() {') || '')
+const shadeFallbackBody = (cut('function currentShadeRecommendation(product = null) {') || '')
   .split(String.fromCharCode(10))
   .filter(line => !line.trim().startsWith('//'))
   .join(' ');
-// 資料掉了要自己補回來，不能要求使用者重跑流程——他不會知道要那樣做。
-// 在「把色階存進資料包」上線之前建立的 session，草稿裡沒有那個欄位，
-// 那些分頁會一直看不到色階比較。
-check('缺資料時會重新抓一次', src.includes('refetchShadeIfMissing'));
-check('只補一次不會無限重抓', src.includes('Router._shadeRefetched'));
-// 補救失敗不該讓商品頁跟著壞
-check('補救失敗安靜收掉', src.includes('.catch(() => {}).finally('));
-// 只有通過門檻的粉底才補：closest_available 本來就不該有色階
-check('只對通過門檻的粉底補',
-  /foundationSkinMatch\?\.accepted === true[\s\S]{0,120}refetchShadeIfMissing/.test(src));
-
-check('fallback 不會二次正規化',
-  !shadeFallbackBody.includes('_normalizeShadeRecommendation('));
+// 2026-09-03：推薦結果必須由後端完整回傳；詳情頁不再自行補抓或拼接色階。
+check('不在詳情頁二次請求推薦補資料',
+  !src.includes('refetchShadeIfMissing') && !src.includes('Router._shadeRefetched'));
+check('推薦狀態會保存到分析資料包',
+  src.includes('foundationMatchStatus: rec.foundationMatchStatus || null'));
+check('草稿 fallback 只還原後端資料',
+  /function currentShadeRecommendation/.test(src)
+  && /AnalysisDraft\.load\(\)[\s\S]{0,160}shadeRecommendation/.test(src)
+  && !shadeFallbackBody.includes('_normalizeShadeRecommendation('));
 // 沒有可比的時候，主推薦的色號由那唯一一欄印出來（sc2-code），
 // 不再另外印一份 sr-anchor-code——同一個 N20 上下各出現一次只是佔位置。
 // 這一項要守的是「色號看得到」，不是「由哪個元素印」。
