@@ -1,6 +1,6 @@
 {
-  "version": "20260904_brow_nose",
-  "gcsPrefix": "gs://decorate-me-models/20260904_brow_nose",
+  "version": "20260904_eye_lip",
+  "gcsPrefix": "gs://decorate-me-models/20260904_eye_lip",
   "files": [
     {
       "path": "models/basic_features_roi/face_shape.onnx",
@@ -17,8 +17,8 @@
     {
       "path": "models/basic_features_roi/eye_shape.onnx",
       "object": "basic_features_roi/eye_shape.onnx",
-      "size": 111377336,
-      "sha256": "9eb605e24fbe8e3cf5d60298f3b462e192aa78efe4203bdc4bd495c09686374c"
+      "size": 111377337,
+      "sha256": "646966f35a2c64fda6fe64ad1f5208e2480877f0fc67877e2faf713ca0928500"
     },
     {
       "path": "models/basic_features_roi/nose_shape.onnx",
@@ -30,7 +30,7 @@
       "path": "models/basic_features_roi/lip_shape.onnx",
       "object": "basic_features_roi/lip_shape.onnx",
       "size": 111377337,
-      "sha256": "1ca88990adbf85380b668ed603ef2548523a86c0eca6144bab746919cfbfdd9b"
+      "sha256": "8064b4a7ec42ead07f69e51844bdbf4bf98d7c64f7ea78d0aa7dba48355f679a"
     },
     {
       "path": "models/pro_nose_side/nose_shape_side.onnx",
