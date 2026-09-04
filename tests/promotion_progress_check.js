@@ -40,15 +40,30 @@ check('不再進行中就停止輪詢',
 check('登記成功後立刻更新進度',
   /requestModelPromotion\([\s\S]{0,900}?Router\._watchPromotion\(\)/.test(code));
 
-console.log('\n=== 版面在最上方，而且不常駐 ===');
+console.log('\n=== 版面只在模型複核區，而且不常駐 ===');
 check('進度條在 admin.html', html.includes('id="adminPromotionBar"'));
-// 「最上方」是這個需求的重點：登記完人未必留在複核區。
-check('放在工具列之後、內容區之前',
-  /<\/header>[\s\S]{0,900}?id="adminPromotionBar"[\s\S]{0,1200}?<main class="admin-content">/.test(html));
+// 換上線是從這一區按的，狀態就回到這一區看；不要在每個分區都掛一條。
+check('放在模型複核區的最上面',
+  /data-admin-view="feedback"[\s\S]{0,1500}?id="adminPromotionBar"[\s\S]{0,2500}?admin-console-panel/.test(html));
+check('沒有掛在工具列下面（那會每一區都出現）',
+  !/<\/header>[\s\S]{0,400}?id="adminPromotionBar"/.test(html));
 check('預設隱藏（沒有請求時不佔位）', /id="adminPromotionBar"[^>]*\shidden/.test(html));
 check('狀態改變要念出來', /id="adminPromotionBar"[^>]*aria-live="polite"/.test(html));
-['adminPromotionHeadline', 'adminPromotionClock', 'adminPromotionRail', 'adminPromotionNote']
-  .forEach(id => check(`有 ${id}`, html.includes(`id="${id}"`)));
+['adminPromotionHeadline', 'adminPromotionClock', 'adminPromotionRail', 'adminPromotionNote',
+ 'adminPromotionDetail'].forEach(id => check(`有 ${id}`, html.includes(`id="${id}"`)));
+
+console.log('\n=== 後端印的報告要看得下去 ===');
+// promote_model 印出來的是逐行的檢查報告。先前把它塞進 <p> 並用「·」串起來，
+// 換行全被吃掉，「臉型 +0.0 / 鼻型 -2.6 / 唇型 +0.0」黏成一段——
+// 那份報告最重要的用途（一眼看出是哪個部位擋下來的）就沒了。
+check('細節用 <pre> 保留原本的分行', /<pre class="apr-detail"/.test(html));
+check('說明不再用「·」串成一段', !/lines\.join\('　·　'\)/.test(code));
+check('說明一行一件事', /lines\.join\('\\n'\)/.test(code));
+check('.apr-note 保留換行', /\.apr-note \{[^}]*white-space:pre-line/.test(css));
+check('.apr-detail 保留換行且會自己捲', /\.apr-detail \{[^}]*white-space:pre-wrap/.test(css)
+  && /\.apr-detail \{[^}]*overflow:auto/.test(css));
+check('不重複印批次編號', /i === 0 && row\.runId/.test(code));
+check('失敗細節不截斷（報告要完整）', !/row\.error[\s\S]{0,40}\.slice\(0, ?\d+\)/.test(code));
 
 console.log('\n=== 融入後台既有的視覺語彙 ===');
 // 金色主題那一層改的是 --admin-* token；這裡若寫死色碼，換主題就會有一條
@@ -56,7 +71,9 @@ console.log('\n=== 融入後台既有的視覺語彙 ===');
 check('用 --admin-* token 上色', /\.admin-promotion \{[^}]*var\(--admin-soft\)/.test(css));
 check('沿用凹槽的上緣內陰影', /\.admin-promotion \{[^}]*inset 0 3px 7px -3px/.test(css));
 check('進行中沿用工具列的脈動', /\.apr-step\.now \.apr-dot \{[^}]*adminPulse/.test(css));
-check('窄螢幕內距跟著工具列收窄', /\.admin-promotion \{ padding:12px 20px/.test(css));
+// 只要求窄螢幕有自己的內距，不鎖死數值——鎖死的話調一次留白就會紅，
+// 而它報的會是「沒有跟著收窄」，不是實話。
+check('窄螢幕有自己的內距', /@media[\s\S]{0,40000}?\.admin-promotion \{ padding:/.test(css));
 
 console.log('\n=== 只說後端真的寫下來的事 ===');
 // 這裡的每一項都是「不要重演已經發生過的誤會」。

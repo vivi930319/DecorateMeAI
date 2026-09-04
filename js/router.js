@@ -3561,13 +3561,25 @@ const Router = {
         // 而是根本還沒開始——而且畫面自己不會前進，要等那台機器被打開。
         if (status === 'queued') {
             lines.push('換模型是訓練機在做的。那台機器沒開，就會一直停在這一步——這裡不會自己往前走。');
-        } else if (status === 'failed' && row.error) {
-            lines.push(String(row.error).slice(0, 300));
-        } else if (row.note) {
+        } else if (status !== 'failed' && row.note) {
             lines.push(String(row.note));
         }
         const note = document.getElementById('adminPromotionNote');
-        if (note) note.textContent = lines.join('　·　');
+        // 一行一件事。先前用「·」串起來，三四件事黏成一段，讀的人得自己找分隔點。
+        if (note) note.textContent = lines.join('\n');
+
+        // 失敗細節另外放。promote_model 印出來的是一份逐行的檢查報告——類別表、
+        // 每個部位的線上與批次分數、擋下來的理由——把它壓成一行等於把報告丟掉。
+        const detail = document.getElementById('adminPromotionDetail');
+        if (detail) {
+            const raw = status === 'failed' ? String(row.error || '') : '';
+            // 它自己的第一行就是「批次 TR-…」，跟上面那行重複。
+            const body = raw.split('\n')
+                .filter((line, i) => !(i === 0 && row.runId && line.trim() === `批次 ${row.runId}`))
+                .join('\n').trim();
+            detail.textContent = body;
+            detail.hidden = !body;
+        }
     },
 
     // 同一個頁面正在載入時共用同一個 Promise。除了防止快速連點，也防止某個舊頁面

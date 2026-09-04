@@ -43,23 +43,6 @@
             </div>
         </header>
 
-        <!-- 換模型進度。放在工具列正下方而不是複核區裡面，因為登記完之後人不一定
-             留在那一區，而「我按的那件事現在走到哪」在哪一區都該看得到。
-
-             沒有進行中、也沒有剛結束的請求時整條隱藏——常駐一條「目前沒有」的橫幅
-             只會變成背景雜訊，久了就沒有人再看它一眼。 -->
-        <section class="admin-promotion" id="adminPromotionBar" hidden aria-live="polite">
-            <div class="apr-head">
-                <div class="apr-title">
-                    <span>MODEL PROMOTION</span>
-                    <strong id="adminPromotionHeadline">—</strong>
-                </div>
-                <span class="apr-clock" id="adminPromotionClock"></span>
-            </div>
-            <ol class="apr-rail" id="adminPromotionRail"></ol>
-            <p class="apr-note" id="adminPromotionNote"></p>
-        </section>
-
         <main class="admin-content">
             <section class="admin-view active" data-admin-view="overview">
                 <div class="admin-view-heading">
@@ -293,6 +276,24 @@
                     <div><span>Model Feedback</span><h2>模型修正複核</h2></div>
                     <span class="admin-crawler-state idle" id="adminFeedbackState">尚未載入</span>
                 </div>
+
+                <!-- 換模型進度。只放在這一區——換上線是從這裡按的，狀態就回到這裡看。
+                     沒有進行中、也沒有六小時內結束的請求時整塊隱藏：常駐一條「目前沒有」
+                     的橫幅會變成背景，久了連真的在跑的時候也沒有人看。 -->
+                <section class="admin-promotion" id="adminPromotionBar" hidden aria-live="polite">
+                    <div class="apr-head">
+                        <div class="apr-title">
+                            <span>MODEL PROMOTION</span>
+                            <strong id="adminPromotionHeadline">—</strong>
+                        </div>
+                        <span class="apr-clock" id="adminPromotionClock"></span>
+                    </div>
+                    <ol class="apr-rail" id="adminPromotionRail"></ol>
+                    <p class="apr-note" id="adminPromotionNote"></p>
+                    <!-- 失敗時放 promote_model 的輸出。它本來就是分行的，用 <pre> 保留原樣：
+                         先前塞進 <p> 並用「·」串起來，換行全被吃掉，一整段擠成一行。 -->
+                    <pre class="apr-detail" id="adminPromotionDetail" hidden></pre>
+                </section>
 
                 <!-- 兩個模塊合成同一塊面板，因為它們是同一件事的兩半：上面那層是
                      「這些決定真的被拿去訓練了」，下面那層是「我正在做哪些決定」。
