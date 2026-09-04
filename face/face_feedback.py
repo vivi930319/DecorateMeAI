@@ -304,18 +304,27 @@ def save(mode: str, job_id: str, payload: dict, owner_id: str | None = None) -> 
     tools/online_trust_score.py。
 
     文件 id 用 job_id：同一個 job 重送就覆蓋，不會累積成好幾筆互相矛盾的標註。
+
+    驗證要排在**所有**寫入之前。 這裡原本先寫評分事件、先存貢獻影像，最後才驗
+    corrections——於是一個不認識的類別會先被 face_contributions.store() 接去組成
+    GCS 物件路徑（``<prefix>/<版本>/<部位>/<類別>/<job_id>.png``，那支自己完全不驗
+    類別），然後才回 400。擋下來的請求照樣在訓練集裡留下一個用髒標籤命名的資料夾，
+    而 validate() 的存在理由正是不讓那件事發生。回應碼對了、資料卻已經髒了。
     """
     corrections = payload.get("corrections") or {}
     predicted = payload.get("predicted") or {}
     confidence = payload.get("predictionConfidence") or {}
+
+    # confirmed 也要驗：那條路徑一樣會拿 corrections 去寫評分事件與貢獻影像，
+    # 只是不寫 FEEDBACK_COL。少驗它等於留著同一個洞的另一半。
+    validate(corrections)
+
     _record_eval_event(mode, job_id, predicted, corrections)
     contributed = _store_contribution(mode, job_id, payload, corrections, owner_id)
 
     if payload.get("confirmed") or not corrections:
         job_store.delete(FEEDBACK_COL, job_id)
         return None
-
-    validate(corrections)
 
     fields = allowed_classes()
     doc = {

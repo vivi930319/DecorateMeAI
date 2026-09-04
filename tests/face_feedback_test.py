@@ -606,5 +606,76 @@ class ImageOnlyDependsOnModulesInTheFaceImageTest(unittest.TestCase):
                          "replicate_render 不在 face 映像裡，改用 face_contributions 那支")
 
 
+class ValidationRunsBeforeAnythingIsWrittenTest(unittest.TestCase):
+    """髒標籤不能在被擋下來之前先留下痕跡。
+
+    validate() 原本排在寫評分事件與存貢獻影像**之後**，於是一個不認識的類別會先被
+    face_contributions.store() 接去組成 GCS 物件路徑
+    （``<prefix>/<版本>/<部位>/<類別>/<job_id>.png``，那支自己完全不驗類別），
+    然後才回 400。請求擋下來了，訓練集裡卻已經多了一個用髒標籤命名的資料夾——
+    而 validate() 的存在理由正是不讓那件事發生。
+
+    所以這裡驗的不是「有沒有回 400」，是「回 400 之前有沒有動到任何東西」。
+    """
+
+    def setUp(self):
+        self.store = _FakeStore()
+        self._real_store = ff.job_store
+        ff.job_store = self.store
+        self._real_store_fn = ff.face_contributions.store
+        self.calls = []
+        ff.face_contributions.store = lambda *a, **k: (self.calls.append(k) or 1)
+
+    def tearDown(self):
+        ff.job_store = self._real_store
+        ff.face_contributions.store = self._real_store_fn
+
+    def _save(self, corrections, **payload):
+        return ff.save("basic", "JOB-V", {
+            "predicted": PREDICTED,
+            "corrections": corrections,
+            "allowTrainingUse": True,
+            "imageDataUrl": _TINY_PNG_DATA_URL,
+            **payload,
+        })
+
+    def test_an_unknown_class_never_reaches_gcs(self):
+        with self.assertRaises(ff.FeedbackRejected):
+            self._save({"眉型": "這個類別不存在"})
+        self.assertEqual(self.calls, [],
+                         "被擋下來的標籤不該已經被拿去組 GCS 路徑")
+
+    def test_an_unknown_class_never_reaches_the_scoring_collection(self):
+        with self.assertRaises(ff.FeedbackRejected):
+            self._save({"眉型": "這個類別不存在"})
+        self.assertIsNone(self.store.docs.get((ff.EVAL_COL, "JOB-V")),
+                          "線上信任分數的分母不該被一筆無效的送出撐大")
+
+    def test_an_unknown_field_never_reaches_gcs(self):
+        with self.assertRaises(ff.FeedbackRejected):
+            self._save({"髮型": "長髮"})
+        self.assertEqual(self.calls, [])
+
+    def test_confirmed_submissions_are_validated_too(self):
+        """confirmed 那條路一樣會拿 corrections 去寫評分事件與存影像。
+
+        它只是不寫 FEEDBACK_COL，不代表它不碰資料——少驗它等於留著同一個洞的另一半。
+        """
+        with self.assertRaises(ff.FeedbackRejected):
+            self._save({"眉型": "這個類別不存在"}, confirmed=True)
+        self.assertEqual(self.calls, [])
+
+    def test_a_valid_correction_still_goes_through(self):
+        """把驗證提前不能把正常的路徑一起擋掉。"""
+        doc_id = self._save({"眉型": "彎月眉"})
+        self.assertIsNotNone(doc_id)
+        self.assertEqual(len(self.calls), 1)
+        self.assertIsNotNone(self.store.docs.get((ff.EVAL_COL, "JOB-V")))
+
+    def test_an_empty_correction_set_is_not_rejected(self):
+        """「判斷正確」送出時 corrections 是空的，那不是錯誤。"""
+        self.assertIsNone(self._save({}, confirmed=True))
+
+
 if __name__ == "__main__":
     unittest.main()
