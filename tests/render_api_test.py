@@ -711,6 +711,51 @@ class BeforeImageAccessTest(unittest.TestCase):
         render_api._require_job_owner(self._job(), "actor_someone_else", "1")
 
 
+class QuotaIsPerAccountTest(unittest.TestCase):
+    """配額的桶要分得開每個帳號。
+
+    2026-09-04：這裡原本吃 X-User-Email，而 Gateway 從來沒送過那個標頭——它送的是
+    X-User-ID。email 恆為空，key 每次退回 IP；而 TRUST_FORWARDED_FOR 預設關閉，
+    所以那個 IP 是 Cloud Run 的內部位址（實測 24 小時 19 筆請求全部
+    169.254.169.126）。「每人每天 30 次」實際上是「全站每天 30 次」，而被擋的人
+    看到的是「你今日的次數已用完」。
+    """
+
+    class _Req:
+        """只帶 client.host 的假請求，_rate_limit_key 用不到別的。"""
+
+        class _Client:
+            host = "169.254.169.126"
+
+        client = _Client()
+        headers = {}
+
+    def test_two_accounts_do_not_share_a_bucket(self):
+        a = render_api._rate_limit_key(self._Req(), "actor_aaaaaaaaaaaa")
+        b = render_api._rate_limit_key(self._Req(), "actor_bbbbbbbbbbbb")
+        self.assertNotEqual(a, b, "不同帳號共用一個桶，一個人用完全站都被擋")
+
+    def test_the_same_account_keeps_one_bucket(self):
+        req = self._Req()
+        self.assertEqual(
+            render_api._rate_limit_key(req, "actor_aaaaaaaaaaaa"),
+            render_api._rate_limit_key(req, "  actor_aaaaaaaaaaaa  "),
+            "前後空白不該切出第二個桶——那等於把額度變兩倍")
+
+    def test_the_internal_proxy_address_is_not_what_separates_people(self):
+        """兩個帳號的 key 不能只差在 IP：這條路徑上的 IP 對所有人都一樣。"""
+        keys = {render_api._rate_limit_key(self._Req(), f"actor_{n}") for n in range(5)}
+        self.assertEqual(len(keys), 5)
+        for key in keys:
+            self.assertNotIn("169.254.169.126", key)
+
+    def test_a_request_without_an_identity_still_gets_a_bucket(self):
+        """拿不到身分時仍要有配額，只是退回 IP——不能變成無限制。"""
+        key = render_api._rate_limit_key(self._Req(), None)
+        self.assertTrue(key)
+        self.assertNotEqual(key, render_api._rate_limit_key(self._Req(), "actor_aaaaaaaaaaaa"))
+
+
 class RenderFailureIsClassifiedTest(unittest.TestCase):
     """「換一張照片」與「等一下再試」不能共用同一則訊息。
 

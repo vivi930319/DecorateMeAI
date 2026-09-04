@@ -243,10 +243,27 @@ def _client_ip(request: Request) -> str:
     return "unknown"
 
 
-def _rate_limit_key(request: Request, x_user_email: str | None) -> str:
-    ip = _client_ip(request)
-    email = (x_user_email or "").strip().lower()
-    return f"{ip}|{email}" if email else ip
+def _rate_limit_key(request: Request, x_user_id: str | None) -> str:
+    """配額的桶。有登入身分就用它，否則退回 IP。
+
+    這裡原本吃的是 X-User-Email，而 Gateway 從來沒有送過那個標頭——它送的是
+    X-User-ID（見 ai_gateway 的 _render_internal_request）。所以 email 恆為空，
+    key 每次都退回 IP。
+
+    而那個 IP 也不是使用者的。 請求鏈是 瀏覽器 → Hosting → Gateway → 這裡，
+    TRUST_FORWARDED_FOR 預設關閉，所以 request.client.host 拿到的是 Cloud Run
+    的內部位址：實測 24 小時內 19 筆請求全部是 169.254.169.126，一個都不例外。
+
+    兩件事疊起來，「每人每天 30 次」實際上是「全站每天 30 次」——不同縣市、
+    不同網路、不同帳號的人共用同一個桶，而被擋下來的人看到的訊息是
+    「你今日的次數已用完」。2026-09-04 就是這樣：某個帳號幾乎沒渲染幾次，
+    卻因為當天全站累積 34 次而被擋在 30 的門檻外。
+
+    X-User-ID 是 opaque actor id，每個帳號一個而且不含個資，比 email 更適合當
+    key——這條路徑不需要知道使用者是誰，只需要知道「是不是同一個人」。
+    """
+    actor = (x_user_id or "").strip()
+    return f"user:{actor}" if actor else f"ip:{_client_ip(request)}"
 
 
 def _raise_limit_error(code: str, message: str, retry_after: int, *, window: int, maximum: int) -> None:
@@ -261,10 +278,10 @@ def _raise_limit_error(code: str, message: str, retry_after: int, *, window: int
     )
 
 
-def enforce_render_rate_limit(request: Request, x_user_email: str | None = Header(default=None)):
+def enforce_render_rate_limit(request: Request, x_user_id: str | None = Header(default=None)):
     now = time.time()
     window_start = now - RENDER_RATE_LIMIT_WINDOW_SECONDS
-    key = _rate_limit_key(request, x_user_email)
+    key = _rate_limit_key(request, x_user_id)
 
     with _rate_limit_lock:
         _prune_limit_buckets(_rate_limit_hits, now, RENDER_RATE_LIMIT_WINDOW_SECONDS)
@@ -283,10 +300,10 @@ def enforce_render_rate_limit(request: Request, x_user_email: str | None = Heade
         bucket.append(now)
 
 
-def enforce_render_quota(request: Request, x_user_email: str | None = None) -> None:
+def enforce_render_quota(request: Request, x_user_id: str | None = None) -> None:
     """Reserve one provider call for the configured user/IP quota."""
     now = time.time()
-    key = _rate_limit_key(request, x_user_email)
+    key = _rate_limit_key(request, x_user_id)
     durable_result = job_store.consume_window_quota(
         "render_quota_counters",
         key,
@@ -698,7 +715,7 @@ def health():
             "enabled": True,
             "window_seconds": RENDER_QUOTA_WINDOW_SECONDS,
             "max_requests": RENDER_QUOTA_MAX_REQUESTS,
-            "key": "email+ip when supplied; otherwise ip",
+            "key": "user id when signed in; otherwise ip",
         },
         "dedup": {
             "enabled": RENDER_DEDUP_TTL_SECONDS > 0,
@@ -738,7 +755,7 @@ def health():
 async def render(
     req: RenderRequest,
     request: Request,
-    x_user_email: str | None = Header(default=None),
+    x_user_id: str | None = Header(default=None),
     _=Depends(require_api_key),
     __=Depends(enforce_render_rate_limit),
 ):
@@ -747,7 +764,9 @@ async def render(
     # 避免阻塞 FastAPI event loop 與其他人的健康檢查／工作輪詢。
     prompt, prompt_source = await asyncio.to_thread(_server_render_prompt, req)
     # 同圖同後端產生的 prompt 短時間內重複 → 直接回上次結果，不重打 Replicate
-    key = _dedup_key(req.image, prompt, req.strength, str(x_user_email or "").strip())
+    # 去重也用同一個身分。 這裡原本吃 x_user_email，而那個標頭 Gateway 從來沒送過，
+    # 所以去重的 key 少了「是誰」這一維：兩個人送同一張圖同一個風格會共用結果。
+    key = _dedup_key(req.image, prompt, req.strength, str(x_user_id or "").strip())
     cached = _dedup_get(key)
     if cached is not None:
         return {**cached, "deduped": True}
@@ -766,7 +785,7 @@ async def render(
             ),
         )
     try:
-        enforce_render_quota(request, x_user_email)
+        enforce_render_quota(request, x_user_id)
         result = call_replicate_render(req.image, prompt)
         response = {
             "status": "completed",
@@ -942,7 +961,6 @@ def classify_render_failure(exc: Exception) -> tuple[str, str, bool]:
 async def create_render_job(
     req: RenderRequest,
     request: Request,
-    x_user_email: str | None = Header(default=None),
     x_user_id: str | None = Header(default=None),
     _=Depends(require_api_key),
     __=Depends(enforce_render_rate_limit),
@@ -1013,7 +1031,7 @@ async def create_render_job(
             ),
         )
     try:
-        enforce_render_quota(request, x_user_email)
+        enforce_render_quota(request, x_user_id)
     except Exception:
         _dedup_release(key)
         raise
