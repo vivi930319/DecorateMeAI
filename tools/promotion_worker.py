@@ -112,6 +112,9 @@ def list_queued(project: str, limit: int = 10) -> list[dict]:
 
 
 STALE_MINUTES = 30
+# 多久掃一次卡住的工作。不跟輪詢同步（預設 20 秒）——那會讓每一輪都多兩次
+# Firestore 查詢，而卡住的工作本來就要等 STALE_MINUTES 才算數，掃那麼密沒有意義。
+STALE_SWEEP_SECONDS = int(os.getenv("PROMOTION_STALE_SWEEP_SECONDS", "300"))
 
 
 def _requeue_stale_in(project: str, collection: str, id_field: str) -> int:
@@ -284,6 +287,11 @@ def claim(project: str, promotion_id: str, worker_id: str) -> dict | None:
     return _claim_in(project, PROMOTIONS_COLLECTION, promotion_id, worker_id)
 
 
+# ledger 一筆有效紀錄至少要有的欄位。少任何一個都代表 promote_model 沒有走完
+# 「換檔案 → 更新 manifest → 追加 ledger」那一段，這次的結果就不能當數。
+LEDGER_REQUIRED_FIELDS = ("runId", "version", "backup", "parts")
+
+
 def _last_ledger_entry(run_id: str) -> dict | None:
     """promote_model.py 每換一次就往 ledger 追加一筆。取最後一筆當這次的結果。
 
@@ -299,6 +307,26 @@ def _last_ledger_entry(run_id: str) -> dict | None:
         return None
     entry = history[-1]
     return entry if entry.get("runId") == run_id else None
+
+
+def _ledger_problem(entry: dict | None, run_id: str) -> str:
+    """這筆 ledger 能不能證明工作真的做完了。可以就回空字串。
+
+    子程序結束碼 0 不等於模型換好了。 promote_model 在好幾條路徑上會印完訊息就
+    return 0（--dry-run、沒有可換的部位），而更糟的是 ledger 寫入失敗時前面的
+    複製其實已經發生。原本的寫法是 `entry = _last_ledger_entry(run_id) or {}`，
+    然後把 version、backup、results 全填 None 照樣寫 status=deployed——後台會顯示
+    一筆「已上線、版本空白」的紀錄，而沒有人能從那筆看出到底換了什麼、要怎麼還原。
+    """
+    if entry is None:
+        return (f"找不到對應這次批次（{run_id}）的 ledger 紀錄。"
+                "換模型腳本結束碼是 0，但沒有留下可以查證的工作紀錄，"
+                "所以無法確認模型是否真的換好。請檢查 models/promotion_ledger.json。")
+    missing = [f for f in LEDGER_REQUIRED_FIELDS if not entry.get(f)]
+    if missing:
+        return (f"ledger 紀錄不完整，缺少：{'、'.join(missing)}。"
+                "這代表換模型只做到一半就中斷，不能當成已完成。")
+    return ""
 
 
 def _fail(project: str, promotion_id: str, message: str) -> None:
@@ -378,7 +406,13 @@ def process(promotion: dict, project: str, dry_run: bool, prepare_only: bool = F
         _fail(project, promotion_id, output.strip()[-1500:] or f"結束碼 {proc.returncode}")
         return False
 
-    entry = _last_ledger_entry(run_id) or {}
+    # 結束碼 0 只代表子程序沒有崩潰。要宣告成功，還得拿得出這次的工作紀錄。
+    entry = _last_ledger_entry(run_id)
+    problem = _ledger_problem(entry, run_id)
+    if problem:
+        _fail(project, promotion_id, problem)
+        print(f"  ✗ 無法驗證換模型結果：{problem}")
+        return False
     patch_document(project, PROMOTIONS_COLLECTION, promotion_id, {
         # prepared 與 deployed 要分得開。混成同一個「完成」，就會重演
         # 「已登記 macro 但其實沒上線」那個誤會——那正是這整套要解決的問題。
@@ -428,14 +462,27 @@ def main() -> int:
     startup_sources = _source_fingerprint()
 
     print(f"換模型 worker 啟動：專案 {args.project}，識別 {args.worker_id}")
-    if not args.dry_run:
-        try:
-            n = requeue_stale(args.project)
-            if n:
-                print(f"回收了 {n} 筆上次沒做完的請求")
-        except Exception as exc:
-            print(f"回收檢查失敗（{type(exc).__name__}），繼續正常輪詢")
+    # 每一輪都掃，不能只在啟動時掃一次。
+    #
+    # 原本只在進迴圈前掃一次，而那個時機幾乎保證掃不到東西：worker 死掉之後
+    # 看門狗大約五分鐘就把它拉回來，那時卡住那筆的 claimedAt 還很新，遠不到
+    # STALE_MINUTES（30），於是被跳過；接著 worker 一直活著，再也不會掃第二次。
+    # 那筆就永遠停在 running，後台的部署按鈕永遠回 DEPLOY_ALREADY_QUEUED——
+    # 正是這個函式當初要消滅的症狀。只有「worker 剛好在 30 分鐘後又重啟一次」
+    # 才救得回來，而那是碰運氣，不是機制。
+    #
+    # 掃描本身很便宜（兩個集合各一次 status 查詢，各限 20 筆），而且 cutoff 是
+    # 絕對時間，重複掃不會誤判仍在執行中的工作。
+    last_sweep = 0.0
     while True:
+        if not args.dry_run and time.time() - last_sweep >= STALE_SWEEP_SECONDS:
+            last_sweep = time.time()
+            try:
+                n = requeue_stale(args.project)
+                if n:
+                    print(f"回收了 {n} 筆沒做完的請求")
+            except Exception as exc:
+                print(f"回收檢查失敗（{type(exc).__name__}），繼續正常輪詢")
         try:
             queued = list_queued(args.project)
         except Exception as exc:

@@ -746,7 +746,15 @@ class FaceAnalyzer:
     #   4. 分塊共識取樣（見 _patch_consensus_mask）。上面三層處理的都是「這個像素
     #      不是皮膚」；這一層處理的是「這片皮膚上有妝」。取樣區原本只有雙頰，而那
     #      正是腮紅與修容的位置——選頰部是為了避開頭髮與陰影，那份考量裡沒有化妝。
-    #      門檻在 tools/compare_skin_sampling.py 上校準，數字見該檔輸出。
+    #      門檻在 tools/calibrate_patch_sampling.py 上量出來的分布訂的（不是
+    #      compare_skin_sampling.py，那支比的是分割 vs 紋理，跟分塊無關）。
+    #
+    #      ⚠️ 未驗證：只證明了「換取樣方式會讓結果改變、以及改變多少」，沒有證明
+    #      新的比較準。 60 張 CelebA + 60 張生成臉的實測是四季型各改變 15% 與 23%、
+    #      膚色分級各改變 32% 與 42%；而 MAC 色號框在新舊取樣下都只被命中 0%（生成臉）
+    #      與 5%（CelebA），當不了裁判。要判定準不準需要人工標註的保留集。
+    #      TODO(UAT)：標註 30 張以上（膚色分級，或至少「有沒有上妝」），
+    #      再回來決定這些門檻與 _classify_season 的 warm 門檻該設多少。
     SKIN_PATCH_GRID       = float(os.getenv("FACE_SKIN_PATCH_GRID", "14"))    # 臉寬切幾塊
     SKIN_PATCH_MIN_PX     = int(os.getenv("FACE_SKIN_PATCH_MIN_PX", "6"))
     SKIN_PATCH_MAX_PX     = int(os.getenv("FACE_SKIN_PATCH_MAX_PX", "40"))

@@ -125,6 +125,64 @@ class RequeueStaleTest(unittest.TestCase):
         self.assertEqual(store.docs[(pw.DEPLOYMENTS_COLLECTION, "DP-1")]["status"], "queued")
 
 
+class LedgerMustProveTheWorkHappenedTest(unittest.TestCase):
+    """子程序結束碼 0 不等於模型換好了。
+
+    原本是 `entry = _last_ledger_entry(run_id) or {}`——對不上就當成空 dict，
+    然後 version、backup、results 全填 None，status 照樣寫 deployed。後台會顯示
+    一筆「已上線、版本空白」的紀錄，而沒有人能從那筆看出換了什麼、要怎麼還原。
+    """
+
+    def test_a_missing_ledger_is_a_problem(self):
+        problem = pw._ledger_problem(None, "TR-abc")
+        self.assertTrue(problem)
+        self.assertIn("TR-abc", problem)
+
+    def test_an_incomplete_ledger_names_what_is_missing(self):
+        problem = pw._ledger_problem(
+            {"runId": "TR-abc", "version": "20260904_eye_lip"}, "TR-abc")
+        self.assertTrue(problem)
+        self.assertIn("backup", problem)
+        self.assertIn("parts", problem)
+
+    def test_an_empty_version_is_not_acceptable(self):
+        """version 是空字串時最危險：dict 有那個 key，粗看像完整的。"""
+        self.assertTrue(pw._ledger_problem(
+            {"runId": "TR-abc", "version": "", "backup": "b", "parts": [{"part": "眼型"}]},
+            "TR-abc"))
+
+    def test_a_complete_ledger_passes(self):
+        self.assertEqual(pw._ledger_problem(
+            {"runId": "TR-abc", "version": "20260904_eye_lip", "backup": "models/x",
+             "parts": [{"part": "眼型", "liveMacro": 0.68, "newMacro": 0.74}]},
+            "TR-abc"), "")
+
+
+class StaleSweepRunsRepeatedlyTest(unittest.TestCase):
+    """回收要每一輪都掃，不能只在啟動時掃一次。
+
+    只在啟動掃的話幾乎保證掃不到：worker 死掉之後看門狗大約五分鐘就把它拉回來，
+    那時卡住那筆的 claimedAt 還很新、不到 STALE_MINUTES，於是被跳過；之後 worker
+    一直活著，再也不掃第二次。那筆就永遠停在 running，後台的部署按鈕永遠回
+    DEPLOY_ALREADY_QUEUED——正是這個函式當初要消滅的症狀。
+    """
+
+    def test_the_sweep_is_inside_the_polling_loop(self):
+        """驗的是呼叫點的位置，因為錯的就是位置本身。"""
+        source = (ROOT / "tools" / "promotion_worker.py").read_text(encoding="utf-8")
+        body = source.split("def main()")[1]
+        loop_at = body.index("while True:")
+        sweeps = [i for i in range(len(body)) if body.startswith("requeue_stale(", i)]
+        self.assertTrue(sweeps, "找不到 requeue_stale 的呼叫")
+        self.assertTrue(any(i > loop_at for i in sweeps),
+                        "requeue_stale 只在進迴圈前呼叫，之後永遠不會再掃")
+
+    def test_the_sweep_interval_is_far_longer_than_the_poll_interval(self):
+        """每輪都掃會讓每 20 秒多兩次 Firestore 查詢，而卡住的工作要等 30 分鐘才算數。"""
+        self.assertGreaterEqual(pw.STALE_SWEEP_SECONDS, 60)
+        self.assertLess(pw.STALE_SWEEP_SECONDS, pw.STALE_MINUTES * 60)
+
+
 class ClaimDeploymentTest(unittest.TestCase):
     def setUp(self):
         self._saved = (pw._run_query, pw.patch_document, pw.get_document, pw.subprocess)

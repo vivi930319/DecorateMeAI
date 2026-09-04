@@ -2095,6 +2095,20 @@ async def proxy_public_member_request(request: Request, upstream_path: str):
     response_headers = {"X-Content-Type-Options": "nosniff"}
     if response.headers.get("content-type"):
         response_headers["content-type"] = response.headers["content-type"]
+    # 這條路徑最需要這道處理，卻是最後才補上的。
+    #
+    # 登入、註冊、忘記密碼、驗證碼是**未登入的人**也打得到的四條路由，而且會員資料庫
+    # 的 tunnel 斷線時它們正好是最常被打的：2026-09-02 到 09-03 的日誌裡有 13 筆
+    # 502/530 落在 /auth/register 與 /auth/forgot-password 上。原樣轉出去的話，
+    # 那頁 Cloudflare 錯誤頁會把 *.trycloudflare.com 的主機名稱印給任何一個
+    # 打得開 F12 的訪客看——而這支函式的 docstring 正好寫著「瀏覽器永遠不會知道
+    # 會員資料庫的網址」。
+    sanitised = upstream_failure_payload(response)
+    if sanitised is not None:
+        status_code, payload = sanitised
+        response_headers["content-type"] = "application/json"
+        return Response(content=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                        status_code=status_code, headers=response_headers)
     return Response(content=response.content, status_code=response.status_code, headers=response_headers)
 
 

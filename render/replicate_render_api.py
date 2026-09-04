@@ -473,7 +473,9 @@ def _server_render_prompt(req: RenderRequest) -> tuple[str, str]:
                     retryable=False,
                 ),
             )
-        # 只把驗證過的 prompt 當作妝容描述；identity lock 仍由後端固定疊加。
+        # 只把驗證過的 prompt 當作妝容描述。
+        # identity lock 2026-09-04 起預設關閉（RENDER_IDENTITY_LOCK），
+        # 所以這條路徑現在不會再疊任何約束句上去。
         return build_render_prompt(
             {"renderPrompt": None, "style": signed_prompt},
             face_analysis or {},

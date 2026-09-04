@@ -17,6 +17,7 @@
 """
 import asyncio
 import os
+import unittest.mock
 import sys
 import unittest
 from pathlib import Path
@@ -98,6 +99,50 @@ class SanitisesUpstreamFailuresTest(unittest.TestCase):
         status, _payload = gateway.upstream_failure_payload(
             _response(500, content=b"<html>oops</html>", content_type="text/html"))
         self.assertEqual(status, 502)
+
+
+class EveryForwarderIsCoveredTest(unittest.TestCase):
+    """四個轉發點都要套用，漏掉一個等於沒做。
+
+    2026-09-04 第一版改了三個，漏掉 proxy_public_member_request——而那是四條裡
+    唯一**未登入的人**也打得到的（登入、註冊、忘記密碼、驗證碼），也正是會員
+    資料庫的通道斷線時最常被打的。09-02 到 09-03 的日誌有 13 筆 502/530 落在
+    /auth/register 與 /auth/forgot-password 上，每一筆都把 tunnel 主機名稱
+    送給了瀏覽器。
+    """
+
+    def _cloudflare_down(self):
+        return _response(530, content=CLOUDFLARE_1033, content_type="text/html; charset=UTF-8")
+
+    def test_the_auth_routes_do_not_leak_the_tunnel_hostname(self):
+        from unittest.mock import AsyncMock, Mock
+
+        request = Mock()
+        request.method = "POST"
+        request.headers = {}
+        request.cookies = {}
+        request.client.host = "203.0.113.5"
+        request.body = AsyncMock(return_value=b'{"email":"a@example.com"}')
+        request.app.state.http_client.post = AsyncMock(return_value=self._cloudflare_down())
+
+        patches = (
+            unittest.mock.patch.object(gateway, "MEMBER_DATABASE_URL", "https://upstream.example"),
+            unittest.mock.patch.object(gateway, "enforce_signup_rate_limit", lambda *a, **k: None),
+        )
+        for patch in patches:
+            patch.start()
+        try:
+            result = asyncio.run(
+                gateway.proxy_public_member_request(request, "/api/forgot-password"))
+        finally:
+            for patch in patches:
+                patch.stop()
+
+        body = bytes(result.body).decode("utf-8")
+        self.assertNotIn(TUNNEL_HOST, body)
+        self.assertNotIn("trycloudflare", body.lower())
+        self.assertEqual(result.status_code, 502)
+        self.assertIn("UPSTREAM_UNAVAILABLE", body)
 
 
 class _RecordingClient:
