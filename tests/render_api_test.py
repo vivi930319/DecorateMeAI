@@ -332,6 +332,39 @@ class RenderApiTest(unittest.TestCase):
         # 唯一一句，identity lock 關掉之後它是僅存的框架。
         self.assertIn("makeup-only edit", prompt)
 
+    def test_each_style_pushes_a_different_part(self):
+        """七種風格不能一起變濃——那樣還是會撞妝。
+
+        它們難以分辨不是因為都太淡，是因為都往同一個「粉棕自然妝」收斂。
+        所以每個風格要指定「哪一塊是主角」，而且相鄰的兩個要互相排除。
+        """
+        from replicate_render import STYLE_INTENSITY, build_server_render_prompt
+
+        prompts = {sid: build_server_render_prompt(sid) for sid in STYLE_INTENSITY}
+        self.assertEqual(len(set(prompts.values())), len(prompts), "有兩個風格產生了一樣的指令")
+
+        # 容易互相撞的兩組要在指令裡明講差異，不能只靠形容詞不同。
+        self.assertIn("must not look like a soft baddie", prompts["richGirl"])
+        self.assertIn("not Korean glass skin", prompts["japaneseClear"])
+        # 韓系不修容、港風不再加眼妝——這兩個是「不要加」而不是「加更多」。
+        self.assertIn("Do not add contour", prompts["koreanClean"])
+        self.assertIn("Do not push the eyeshadow", prompts["hongKong"])
+
+    def test_natural_is_not_boosted(self):
+        """natural 是基準線。加強它等於把所有風格的底一起推高，差異又被抹平。"""
+        from replicate_render import STYLE_INTENSITY
+
+        self.assertNotIn("natural", STYLE_INTENSITY)
+
+    def test_a_frontend_prompt_is_never_boosted(self):
+        """前端送自訂 prompt 時原封不動送出，這條路徑一向如此。"""
+        from replicate_render import build_render_prompt
+
+        custom = "just do whatever"
+        self.assertEqual(
+            build_render_prompt({"renderPrompt": custom}, {}, "", style_id="richGirl"),
+            custom)
+
     def test_the_identity_lock_is_off_by_default(self):
         """2026-09-04 的產品決定：不再疊「除了妝以外什麼都不要動」，讓模型自由發揮。
 

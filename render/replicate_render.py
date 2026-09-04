@@ -626,6 +626,57 @@ def format_makeup_sections(sections: dict[str, str]) -> str:
     return "; ".join(f"{label}: {value}" for label, value in ordered if value)
 
 
+# 每個風格要「更濃」的地方不一樣。
+#
+# 為什麼是文字不是倍率： 這裡沒有任何數值強度可以乘。線上跑 openai/gpt-image-2，
+# 它只吃文字 prompt——送出去的八個參數裡沒有 strength、denoise、CFG、steps 或
+# negative prompt（`RENDER_GUIDANCE` 只在 flux 分支送出，那條路線上沒走，所以那個
+# 環境變數從來沒有生效過）。寫一個 `"richGirl": 1.5` 進來會是第二個同樣的假旋鈕。
+#
+# 為什麼要分部位： 整體一起加濃只會讓七種風格一起變濃，撞妝的問題原封不動——
+# 它們現在難以分辨，不是因為都太淡，是因為都往同一個「粉棕自然妝」收斂。
+# 所以這裡寫的是「這個風格該讓哪一塊變成主角」，而且刻意寫出彼此的差異
+# （千金要明講「不要像 soft baddie」、日雜要明講「不是韓系水光」），
+# 否則模型會把相鄰的風格拉到同一個平均值上。
+#
+# natural 沒有條目：它本來就該是最淡的那一個，加強它等於把基準線一起推高。
+# 前端送自訂 renderPrompt 時也不套用——那條路徑一向原封不動送出。
+STYLE_INTENSITY = {
+    "softBaddie": (
+        "Push the eye makeup well past a natural look: deep smudged shadow, a long lifted "
+        "outer liner, clearly visible lower-lash shadow, heavy outer lashes, and strong "
+        "sculpted contour. Keep a few freckles showing through. The lip should be deep and glossy."
+    ),
+    "koreanClean": (
+        "Do not add contour. Make it bright, fresh and wet-looking: strong dewy glass skin, "
+        "plump highlighted aegyo-sal under the eyes, spiky clumped lashes, generous peach blush, "
+        "and a clear gradient jelly lip."
+    ),
+    "japaneseClear": (
+        "Keep the base light and sheer — this is not Korean glass skin. Make the milk-tea and "
+        "coral eyeshadow and the blush clearly present rather than hinted at, add fine pearl "
+        "shimmer on the lids, and give the lip a definite colour."
+    ),
+    "richGirl": (
+        "This must read as expensive and polished, and must not look like a soft baddie: "
+        "layered earth-tone eyeshadow with real depth, prominent champagne-gold fine glitter on "
+        "the lids, precise thin liner with neat defined lashes, and a milk-tea rose-brown lip."
+    ),
+    "hongKong": (
+        "Let the red lip and the sharply defined brows and eye outline carry the look. "
+        "Do not push the eyeshadow any further than described."
+    ),
+    "yandere": (
+        "Keep this restrained overall. Only the red-pink wash under the eyes should be "
+        "a little more visible."
+    ),
+    "mensPlain": (
+        "Keep this minimal: no visible colour anywhere, only evened skin tone and the faintest "
+        "natural definition."
+    ),
+}
+
+
 # identity lock：叫模型「除了妝以外什麼都不要動」的那幾句。
 #
 # 這段的歷史值得留著。 最早有八句「不要改」對上一句「上妝」——妝容描述只占整段
@@ -654,6 +705,7 @@ def build_render_prompt(
     suggestion: str,
     *,
     makeup_sections: dict[str, str] | None = None,
+    style_id: str | None = None,
 ) -> str:
     explicit_prompt = first_string(frontend_package, ("renderPrompt", "render_prompt", "imagePrompt", "image_prompt"))
     if explicit_prompt:
@@ -674,6 +726,9 @@ def build_render_prompt(
         face_desc,
         f"Apply this makeup: {makeup_detail or 'everyday makeup'}.",
         ollama_line,
+        # 這個風格要往哪個方向加強。接在妝容描述之後、約束之前——
+        # 它講的是「上什麼妝」的一部分，不是「不要改什麼」。
+        STYLE_INTENSITY.get(str(style_id or ""), ""),
     ]
     parts += IDENTITY_LOCK_SENTENCES
     return " ".join(p for p in parts if p)
@@ -686,7 +741,8 @@ def build_server_render_prompt(style_id: str) -> str:
     if sections is None:
         raise ValueError(f"Unsupported render style: {normalized_style_id}")
     # 走四段結構：模型會收到 Base/Brows and eyes/Cheeks and contour/Lips 的分段指令。
-    return build_render_prompt({}, {}, "", makeup_sections=sections)
+    return build_render_prompt({}, {}, "", makeup_sections=sections,
+                               style_id=normalized_style_id)
 
 
 # ─── Ollama 個人化渲染指令 ──────────────────────────────────────────────────
@@ -803,7 +859,8 @@ def build_personalized_render_prompt(style_id: str, face_analysis: dict[str, Any
     #
     # 將 face_analysis 傳入 prompt 組裝流程，確保渲染使用完整的個人化特徵。
     return build_render_prompt(
-        {"renderPrompt": None, "style": ollama_prompt}, face_analysis or {}, ""
+        {"renderPrompt": None, "style": ollama_prompt}, face_analysis or {}, "",
+        style_id=style_id,
     ), "ollama"
 
 
