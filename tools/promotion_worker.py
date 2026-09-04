@@ -56,6 +56,31 @@ from training_run_store import (  # noqa: E402
 
 LIVE_DIR = ROOT / "models" / "basic_features_roi"
 
+# 程式改了就自己結束，讓外殼用新版把自己帶回來。
+#
+# 這支是常駐程式：改完 promotion_worker.py 之後，正在跑的那個行程仍然是舊碼，
+# 而它「還活著」，所以工作排程的看門狗不會動它——看門狗只救死掉的行程。
+# 結果是改動看起來沒生效，而唯一的線索要去比對啟動時間才看得出來。
+#
+# 只監看真的被載進這個行程的檔案。promote_model.py 是每次用子行程叫的，
+# 它自己就會拿到新版，列進來只會造成沒有必要的重啟。
+WATCHED_SOURCES = (Path(__file__), ROOT / "training" / "training_run_store.py")
+# 外殼看到這個結束碼就立刻重啟，不套用指數退避——這不是失敗，是刻意的換版。
+RELOAD_EXIT_CODE = 86
+
+
+def _source_fingerprint() -> tuple:
+    marks = []
+    for path in WATCHED_SOURCES:
+        try:
+            stat = path.stat()
+            marks.append((str(path), stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            # 讀不到就記成固定值。這裡不能拋例外——原始碼一時讀不到
+            # （同步中、防毒掃描）不該讓一支守候程式整個倒下。
+            marks.append((str(path), 0, 0))
+    return tuple(marks)
+
 PROMOTIONS_COLLECTION = "face_model_promotions"
 DEPLOYMENTS_COLLECTION = "face_service_deployments"
 
@@ -369,6 +394,9 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="只顯示會做什麼")
     args = parser.parse_args()
 
+    # 啟動當下的原始碼樣貌。之後每一輪閒下來時比對，變了就結束換新版。
+    startup_sources = _source_fingerprint()
+
     print(f"換模型 worker 啟動：專案 {args.project}，識別 {args.worker_id}")
     if not args.dry_run:
         try:
@@ -419,6 +447,14 @@ def main() -> int:
 
         if args.once:
             return 0
+
+        # 檢查點放在這裡是有意義的：這一輪的換模型與部署都已經做完，手上沒有
+        # 任何進行中的工作。換模型中途結束會留下一筆卡在 running 的請求，
+        # 那正是 2026-09-03 那個「後台顯示進行中、實際上沒有任何行程」的形狀。
+        if _source_fingerprint() != startup_sources:
+            print("偵測到程式碼已更新，結束讓外殼用新版重啟。")
+            return RELOAD_EXIT_CODE
+
         time.sleep(max(5, args.interval))
 
 

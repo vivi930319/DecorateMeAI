@@ -51,6 +51,16 @@ while ($true) {
     & $python -u tools\promotion_worker.py *>&1 | Out-File $log -Append -Encoding utf8
     $code = $LASTEXITCODE
 
+    # 86 = worker 發現自己的程式碼被改了，主動結束換新版。那不是失敗，
+    # 所以立刻重啟，也不要把退避時間往上加——否則改一次程式要等到五分鐘後才生效，
+    # 而那正是這個機制想省掉的事。
+    if ($code -eq 86) {
+        "=== 程式碼已更新，立即用新版重啟 $(Get-Date -Format 'HH:mm:ss') ===" |
+            Out-File $log -Append -Encoding utf8
+        $delay = 15
+        continue
+    }
+
     # 130 = 使用者按了 Ctrl+C。那是明確的「停下來」，不要跟他作對。
     if ($code -eq 130) {
         "=== 手動停止 $(Get-Date -Format 'HH:mm:ss') ===" | Out-File $log -Append -Encoding utf8
