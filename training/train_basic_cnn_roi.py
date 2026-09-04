@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import random
+import shutil
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -95,6 +96,38 @@ def load_cache():
     return {part: rois[part] for part in PARTS}, index["records"]
 
 
+def resolve_holdout_split_path(holdout_split: str | None) -> Path | None:
+    """回傳保留集檔案；回饋合併快取缺檔時自動補回基準切分。
+
+    Worker 會把 ``ROI_CACHE_DIR`` 指到 ``*_plus_feedback``。這個目錄是每次匯入
+    回饋新建的，原本只存在 ``data/roi_cache`` 的 holdout JSON 不一定會跟著被複製。
+    保留集是跨批次比較的固定基準，不能因為一個快取目錄少檔就讓整批訓練在第一個
+    epoch 前失敗；也不能改用新的隨機切分。這裡再做一次防線，讓直接執行訓練腳本、
+    舊版 worker 或手動重新送訓都能得到同一份基準檔。
+    """
+    if not holdout_split:
+        return None
+    filename = f"holdout_split_{holdout_split}.json"
+    target = CACHE_DIR / filename
+    if target.is_file():
+        return target
+
+    candidates = [
+        Path("data/roi_cache") / filename,
+        Path(__file__).resolve().parents[1] / "data" / "roi_cache" / filename,
+    ]
+    source = next((path for path in candidates if path.is_file()), None)
+    if source is None:
+        raise FileNotFoundError(
+            f"找不到保留集切分 {filename}；已檢查 "
+            + "、".join(str(path) for path in candidates)
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+    print(f"訓練前置：已補齊保留集 {target}（來源 {source}）")
+    return target
+
+
 def load_excluded_rows(records, holdout_split: str | None, exclude_file: str | None) -> set[int]:
     """算出「訓練時完全不能碰」的 record 索引。
 
@@ -108,7 +141,7 @@ def load_excluded_rows(records, holdout_split: str | None, exclude_file: str | N
     wanted: set[str] = set()
     label = []
     if holdout_split:
-        path = CACHE_DIR / f"holdout_split_{holdout_split}.json"
+        path = resolve_holdout_split_path(holdout_split)
         data = json.loads(path.read_text(encoding="utf-8"))
         keys = {s["sha256"] for s in data["samples"] if s["split"] == "holdout"}
         wanted |= keys

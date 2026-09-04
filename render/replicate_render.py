@@ -1,6 +1,8 @@
 import argparse
 import base64
 import binascii
+import hashlib
+import hmac
 import json
 import logging
 import mimetypes
@@ -682,12 +684,14 @@ def build_server_render_prompt(style_id: str) -> str:
 # renderApiKey 是明文寫在前端網頁裡的，一旦開放前端送任意 prompt，任何人都能拿它
 # 生成任意圖片、燒我們的 Replicate 額度。styleId 白名單是目前唯一的濫用防線，不能拆。
 #
-# 建議服務不可用時（它跑在組員的 Mac 上、走 Cloudflare tunnel，網址一重啟就換），
-# 一律靜默退回固定的 styleId prompt —— 渲染絕不能因為建議服務掛掉而失敗。
+# 本機若沒有接建議服務，可以使用白名單風格 prompt；正式環境由 API 層要求
+# 個人化 prompt，建議服務不可用時在呼叫第三方生圖前就回錯，不會靜默降級。
 
 SUGGESTION_SERVICE_URL = os.getenv("SUGGESTION_SERVICE_URL", "").rstrip("/")
 SUGGESTION_SERVICE_API_KEY = os.getenv("SUGGESTION_SERVICE_API_KEY", "")
 SUGGESTION_SERVICE_TIMEOUT = int(os.getenv("SUGGESTION_SERVICE_TIMEOUT", "90"))
+PROMPT_SIGNING_SECRET = os.getenv("PROMPT_SIGNING_SECRET", "").strip()
+PROMPT_SIGNATURE_VERSION = "hmac-sha256-v1"
 
 # styleId -> 建議服務認得的風格名稱。必須跟前端 data.js 的 STYLES 對得起來，
 # 否則建議服務會退回它的預設風格，產出的 prompt 就跟使用者選的風格不符。
@@ -747,6 +751,25 @@ def fetch_ollama_render_prompt(style_id: str, face_analysis: dict[str, Any] | No
         logging.warning("建議服務有回應，但沒有 renderPromptEn")
         raise SuggestionServiceUnavailable("建議服務沒有回傳渲染指令")
     return prompt
+
+
+def verify_render_prompt_signature(prompt: str, signature: str | None, version: str | None) -> bool:
+    """驗證建議服務簽出的 prompt，避免前端自行改字串後燒生圖額度。
+
+    簽章只簽原始 renderPromptEn；渲染端之後才會再疊 identity lock。這樣前端可以
+    把同一次 Ollama 回應直接交給渲染端，不必為了重取同一份建議再叫一次 Ollama，
+    也不會把明文 prompt 變成可任意使用的 render API。
+    """
+    if not PROMPT_SIGNING_SECRET or not prompt or not signature:
+        return False
+    if str(version or "").strip() != PROMPT_SIGNATURE_VERSION:
+        return False
+    expected = hmac.new(
+        PROMPT_SIGNING_SECRET.encode("utf-8"),
+        prompt.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, str(signature).strip())
 
 
 def build_personalized_render_prompt(style_id: str, face_analysis: dict[str, Any] | None) -> tuple[str, str]:

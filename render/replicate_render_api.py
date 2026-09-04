@@ -30,10 +30,13 @@ from replicate_render import (
     GCS_BUCKET_NAME,
     GCS_RENDER_RETENTION_DAYS,
     IMAGE_PROVIDER,
+    PROMPT_SIGNING_SECRET,
+    PROMPT_SIGNATURE_VERSION,
     RENDER_STYLE_PROMPTS,
     REPLICATE_MODEL,
     SUGGESTION_SERVICE_URL,
     build_personalized_render_prompt,
+    build_render_prompt,
     build_server_render_prompt,
     call_replicate_render,
     create_signed_storage_url,
@@ -43,6 +46,7 @@ from replicate_render import (
     retain_permanent_storage_url,
     storage_object_name_from_url,
     upload_bytes_to_permanent_storage,
+    verify_render_prompt_signature,
 )
 
 app = FastAPI()
@@ -60,6 +64,14 @@ install_api_error_handling(app, "replicate-render")
 # /health 仍會標明是否啟用驗證。
 RENDER_API_KEY = os.getenv("RENDER_API_KEY", "")
 enforce_service_api_key(app, "RENDER_API_KEY")
+APP_ENV = os.getenv("APP_ENV", "local").strip().lower() or "local"
+# 正式環境拿不到個人化指令時不能默默產生一張固定妝容圖；那會讓使用者以為
+# Ollama 有生效，實際上卻只收到 styleId 的罐頭 prompt。開發環境仍保留明確可用的
+# style fallback，方便不接外部服務時測試畫面。
+REQUIRE_PERSONALIZED_RENDER_PROMPT = os.getenv(
+    "REQUIRE_PERSONALIZED_RENDER_PROMPT",
+    "1" if APP_ENV == "production" else "0",
+).strip().lower() in {"1", "true", "yes"}
 RENDER_RATE_LIMIT_WINDOW_SECONDS = max(1, int(os.getenv("RENDER_RATE_LIMIT_WINDOW_SECONDS", "3600")))
 RENDER_RATE_LIMIT_MAX_REQUESTS = max(1, int(os.getenv("RENDER_RATE_LIMIT_MAX_REQUESTS", "10")))
 RENDER_QUOTA_WINDOW_SECONDS = max(60, int(os.getenv("RENDER_QUOTA_WINDOW_SECONDS", "86400")))
@@ -113,16 +125,20 @@ def _require_job_owner(
     *,
     variant: str = "",
 ) -> None:
-    """確認呼叫者是這個 job 的擁有者。管理員可豁免，但**妝前圖除外**。
+    """確認呼叫者是這個 job 的擁有者。管理員可豁免，妝前妝後皆然。
 
-    妝後圖是產品功能的一部分（後台要看得到使用者收藏了什麼妝容）。妝前圖不是——
-    那是使用者自己上傳的原始臉部照片，屬於生物特徵資料，管理員需要它的正當理由不存在。
-    2026-07-29 起 `variant="before"` 一律走擁有者檢查，管理員也擋。
+    2026-07-29 曾把妝前圖排除在豁免之外（理由是原始臉部照片屬於生物特徵資料）。
+    2026-08-29 專案負責人推翻：渲染品質只看妝後圖判斷不了——沒有妝前圖就分不出
+    「模型畫得很好」與「模型把人換掉了」。
 
-    Gateway 那邊已經不對妝前圖送 `X-Admin-Request`，這裡是第二道：
-    只靠呼叫端自律不算防線，執行點必須自己守住。
+    放寬的是誰看得到，不是有沒有痕跡：Gateway 每一次管理員讀圖都寫進
+    admin_audit_events 並記下 variant。這裡不重複記（同一次讀取記兩筆只會讓稽核
+    表難讀），而**沒有 admin 旗標的人，擁有者檢查一字未改**。
+
+    ⚠️ 這個豁免與 Gateway 的 `admin_bypass` 必須同進退。只放寬一邊的話，gateway
+    送了旗標而這裡照擋，畫面會顯示「此妝容圖已過期」——那句話跟權限一個字都沒關係。
     """
-    if str(admin_request or "").strip() == "1" and variant != "before":
+    if str(admin_request or "").strip() == "1":
         return
     expected = str(job.get("ownerId") or "").strip()
     supplied = str(user_id or "").strip()
@@ -316,16 +332,14 @@ class RenderRequest(BaseModel):
 
     # 全站串接統一走 analysisPackage，渲染也不例外。
     #
-    # 但這裡只從資料包讀「結構化資料」（faceAnalysis、styleId），
-    # 資料包裡的 generativeText.renderPromptEn 一律忽略 ——
-    # 那是前端送來的，可以被竄改，而 renderApiKey 是明文寫在網頁裡的：
-    # 一旦照著它渲染，任何人都能拿這把 key 送任意 prompt、用我們的 Replicate 額度生成任意圖片。
-    # 要下給模型的 prompt，後端自己去跟建議服務要（build_personalized_render_prompt）。
-    #
-    # 若之後要讓前端送的 prompt 也能被信任，做法是請建議服務對 renderPromptEn 加 HMAC 簽章，
-    # render 這邊驗簽 —— 前端就能送 prompt，但編不出有效簽章。那需要建議服務端配合改程式。
+    # 一般前端送來的自由文字仍然不信任；只有建議服務用共享密鑰簽出的
+    # renderPromptEn 才會採用。這避免同一次 Ollama 回應被渲染端重取一次，
+    # 也避免任何人拿公開的 render API key 自訂 prompt 燒額度。
     analysisPackage: dict | None = None
     faceAnalysis: dict | None = None  # 舊前端相容：沒送資料包時，單獨給臉部分析也行
+    renderPromptEn: str | None = Field(default=None, max_length=16000)
+    promptSignature: str | None = Field(default=None, max_length=128)
+    promptSignatureVersion: str | None = Field(default=None, max_length=64)
 
     # 這一次渲染對應到哪一個臉部分析 job。
     #
@@ -387,29 +401,36 @@ def _validate_render_request(req: RenderRequest) -> None:
                 )
 
 
-def _render_inputs(req: RenderRequest) -> tuple[str, dict | None]:
+def _render_inputs(req: RenderRequest) -> tuple[str, dict | None, str | None, str | None, str | None]:
     """從請求裡取出組 prompt 需要的兩樣東西：styleId 與 faceAnalysis。
 
     優先讀 analysisPackage（全站串接統一走資料包），沒有的話才看單獨的欄位。
-    刻意不讀資料包裡的 generativeText.renderPromptEn —— 見 RenderRequest 的說明。
+    若資料包帶有建議服務簽出的 renderPromptEn，也一併取出；簽章會在
+    _server_render_prompt 驗證，沒有有效簽章就不會採用。
     """
     package = req.analysisPackage or {}
     face = req.faceAnalysis or package.get("faceAnalysis")
+    generative = package.get("generativeText") if isinstance(package.get("generativeText"), dict) else {}
 
     style_id = req.styleId
     if (not style_id or style_id == "natural") and isinstance(package.get("render"), dict):
         style_id = package["render"].get("styleId") or style_id
 
-    return style_id, face
+    signature = req.promptSignature or generative.get("promptSignature")
+    signature_version = req.promptSignatureVersion or generative.get("promptSignatureVersion")
+    # generativeText.renderPromptEn 是前端組好的顯示／紀錄 prompt，可能已經疊過
+    # identity lock；驗簽只能對建議服務原始輸出的欄位，避免簽錯字串。
+    prompt = req.renderPromptEn or generative.get("ollamaRenderPromptEn")
+    return style_id, face, prompt, signature, signature_version
 
 
 def _server_render_prompt(req: RenderRequest) -> tuple[str, str]:
     """回傳 (prompt, promptSource)。
 
-    優先跟建議服務要個人化的 renderPromptEn；拿不到就退回 styleId 白名單的固定 prompt。
-    無論走哪一條，prompt 都是後端組的 —— 前端送進來的只有結構化資料，不是指令。
+    優先使用同一次 Ollama 回應的已簽 prompt；舊客戶端沒有簽章時才向建議服務取。
+    正式環境拿不到個人化指令會在第三方生圖呼叫前回 503，不會偷偷使用固定 prompt。
     """
-    style_id, face_analysis = _render_inputs(req)
+    style_id, face_analysis, signed_prompt, signature, signature_version = _render_inputs(req)
     if not isinstance(style_id, str) or style_id not in RENDER_STYLE_PROMPTS:
         raise HTTPException(
             status_code=422,
@@ -425,13 +446,41 @@ def _server_render_prompt(req: RenderRequest) -> tuple[str, str]:
             status_code=400,
             detail=error_payload("INVALID_FACE_ANALYSIS", "faceAnalysis must be an object.", retryable=False),
         )
+    if signed_prompt:
+        if not verify_render_prompt_signature(signed_prompt, signature, signature_version):
+            raise HTTPException(
+                status_code=422,
+                detail=error_payload(
+                    "INVALID_RENDER_PROMPT_SIGNATURE",
+                    "個人化渲染指令驗證失敗，未送出圖片生成。",
+                    retryable=False,
+                ),
+            )
+        # 只把驗證過的 prompt 當作妝容描述；identity lock 仍由後端固定疊加。
+        return build_render_prompt(
+            {"renderPrompt": None, "style": signed_prompt},
+            face_analysis or {},
+            "",
+        ), "ollama_signed"
+
     try:
-        return build_personalized_render_prompt(style_id, face_analysis)
+        prompt, source = build_personalized_render_prompt(style_id, face_analysis)
+        if source == "style_allowlist" and REQUIRE_PERSONALIZED_RENDER_PROMPT:
+            raise SuggestionServiceUnavailable("未設定個人化渲染指令服務")
+        return prompt, source
     except SuggestionServiceUnavailable as exc:
-        # Demo 的渲染不能被一台校外 Mac 或臨時 tunnel 拖垮。保留明確的 promptSource
-        # 與 warning log，維運端仍看得出降級；使用者則可用白名單中的安全固定 prompt
-        # 完成流程，不會因建議服務暫時離線而整個卡在 503。
-        logging.warning("建議服務不可用，改用固定風格 prompt：%s", exc)
+        # 正式環境不能把「建議服務掛掉」偽裝成成功渲染；否則會生成接近原圖的
+        # 固定風格結果，而且照樣消耗第三方圖片額度。
+        logging.warning("建議服務不可用：%s", exc)
+        if REQUIRE_PERSONALIZED_RENDER_PROMPT:
+            raise HTTPException(
+                status_code=503,
+                detail=error_payload(
+                    "PERSONALIZED_PROMPT_UNAVAILABLE",
+                    "個人化妝容指令服務目前無法使用，尚未送出圖片生成。",
+                    retryable=True,
+                ),
+            ) from exc
         return build_server_render_prompt(style_id), "style_allowlist_fallback"
     except ValueError:
         raise HTTPException(
@@ -665,9 +714,12 @@ def health():
             # 開放的話任何人都能用它生成任意圖片、燒我們的 Replicate 額度。
             "client_prompt_accepted": False,
             "allowed_style_ids": sorted(RENDER_STYLE_PROMPTS),
-            # prompt 由後端組：優先跟建議服務要個人化的 renderPromptEn，拿不到就退回 styleId 白名單。
-            "personalized_prompt_enabled": bool(SUGGESTION_SERVICE_URL),
-            "fallback": "style_allowlist",
+            # prompt 由後端組：優先使用已驗證的 Ollama prompt，沒有才向建議服務取。
+            "personalized_prompt_enabled": bool(SUGGESTION_SERVICE_URL or PROMPT_SIGNING_SECRET),
+            "require_personalized": REQUIRE_PERSONALIZED_RENDER_PROMPT,
+            "signed_prompt_enabled": bool(PROMPT_SIGNING_SECRET),
+            "signature_version": PROMPT_SIGNATURE_VERSION if PROMPT_SIGNING_SECRET else None,
+            "fallback": "style_allowlist" if not REQUIRE_PERSONALIZED_RENDER_PROMPT else None,
         },
         "async_jobs": {
             "enabled": True,
@@ -1088,6 +1140,26 @@ async def retain_render_job(
         )
     _require_job_owner(job, x_user_id, x_admin_request)
     owner_id = str(job.get("ownerId") or "")
+    before_source = job.get("beforeImageUrl")
+    if not before_source:
+        # 新收藏必須是完整的妝前／妝後對比。若渲染時原圖上傳失敗，
+        # 不能先把妝後圖標成 retained，否則資料庫會留下半筆收藏，
+        # 使用者之後回後台只會看到妝後圖。舊的 after-only job 仍可讀取，
+        # 但不能再被新的收藏流程當成完整對比保存。
+        job_store.patch(
+            RENDER_JOBS_COLLECTION,
+            job_id,
+            {"retainStatus": "failed", "retainLastAttemptAt": time.time(), "updatedAt": time.time()},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=error_payload("RETAIN_INCOMPLETE", "Before and after images could not both be retained.", retryable=True),
+        )
+    after_source = job.get("afterImageUrl")
+    after_object_name = storage_object_name_from_url(after_source)
+    after_was_already_retained = bool(
+        after_object_name and after_object_name.startswith("retained/")
+    )
     try:
         retained_url = retain_permanent_storage_url(job.get("afterImageUrl"), owner_id, job_id)
     except Exception as exc:
@@ -1110,24 +1182,27 @@ async def retain_render_job(
             status_code=503,
             detail=error_payload("RETAIN_INCOMPLETE", "Render image retention is incomplete.", retryable=True),
         )
-    if job.get("beforeImageUrl"):
-        try:
-            retained_before = retain_permanent_storage_url(
-                job.get("beforeImageUrl"), owner_id, job_id, variant="-before"
-            )
-            if not retained_before:
-                raise RuntimeError("before image retention returned no URL")
-        except Exception as exc:  # noqa: BLE001
-            logging.getLogger(__name__).exception("妝前圖 retain 失敗，保留 job 供後續重試")
-            job_store.patch(
-                RENDER_JOBS_COLLECTION,
-                job_id,
-                {"retainStatus": "failed", "retainLastAttemptAt": time.time(), "updatedAt": time.time()},
-            )
-            raise HTTPException(
-                status_code=503,
-                detail=error_payload("RETAIN_INCOMPLETE", "Before and after images could not both be retained.", retryable=True),
-            ) from exc
+    try:
+        retained_before = retain_permanent_storage_url(
+            before_source, owner_id, job_id, variant="-before"
+        )
+        if not retained_before:
+            raise RuntimeError("before image retention returned no URL")
+    except Exception as exc:  # noqa: BLE001
+        # after 可能已經複製成功，但 job 尚未標成 retained。若這次 after 原本
+        # 不在 retained/，把這個半成品清掉，避免下次重試與生命週期留下孤兒物件。
+        if retained_url and not after_was_already_retained:
+            delete_permanent_storage_url(retained_url)
+        logging.getLogger(__name__).exception("妝前圖 retain 失敗，保留 job 供後續重試")
+        job_store.patch(
+            RENDER_JOBS_COLLECTION,
+            job_id,
+            {"retainStatus": "failed", "retainLastAttemptAt": time.time(), "updatedAt": time.time()},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=error_payload("RETAIN_INCOMPLETE", "Before and after images could not both be retained.", retryable=True),
+        ) from exc
 
     patch = {
         "retained": True,

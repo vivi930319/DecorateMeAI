@@ -271,6 +271,76 @@ class AiGatewayTest(unittest.TestCase):
         ):
             self.assertIsNone(_render_job_id_from_url(unretainable), unretainable)
 
+    def test_saved_look_refreshes_legacy_before_and_after_media(self):
+        """舊收藏的妝前圖也要像妝後圖一樣換成新的短效網址。
+
+        之前 Gateway 只刷新 afterImageUrl。資料庫紀錄仍在，但 beforeImageUrl
+        會留著不能再直接使用的私人 GCS URL，後台打開收藏時便只剩妝後圖。
+        """
+        before = "https://storage.googleapis.com/decorate-me-renders/rendered/before.jpg"
+        after = "https://storage.googleapis.com/decorate-me-renders/rendered/after.png"
+        signed = {
+            before: "https://storage.googleapis.com/decorate-me-renders/rendered/before.jpg?X-Goog-Signature=before",
+            after: "https://storage.googleapis.com/decorate-me-renders/rendered/after.png?X-Goog-Signature=after",
+        }
+
+        async def fake_sign(_request, value, _owner_id):
+            return signed[value]
+
+        payload = {
+            "looks": [{
+                "id": 7,
+                "beforeImageUrl": before,
+                "afterImageUrl": after,
+            }],
+        }
+        with patch.object(gateway, "_sign_legacy_media", side_effect=fake_sign) as signer:
+            result = asyncio.run(gateway._refresh_saved_look_media(Mock(), payload, "actor_owner"))
+
+        self.assertEqual(result["looks"][0]["beforeImageUrl"], signed[before])
+        self.assertEqual(result["looks"][0]["afterImageUrl"], signed[after])
+        self.assertEqual(signer.await_count, 2)
+
+    def test_saved_look_retain_failure_rolls_back_the_created_row(self):
+        request = Mock()
+        request.app.state.http_client.delete = AsyncMock(
+            return_value=httpx.Response(204, request=httpx.Request("DELETE", "https://member.test/rollback"))
+        )
+        response = httpx.Response(
+            201,
+            json={"id": 17},
+            request=httpx.Request("POST", "https://member.test/api/members/member/saved-looks"),
+        )
+        upstream = dataclasses.replace(UPSTREAMS["member-database"], base_url="https://member.test")
+        asyncio.run(gateway._rollback_saved_look_after_retain_failure(
+            request,
+            upstream,
+            "api/members/member%40example.com/saved-looks",
+            response,
+            {"Cookie": "session=private"},
+        ))
+        request.app.state.http_client.delete.assert_awaited_once()
+        rollback_url = request.app.state.http_client.delete.await_args.args[0]
+        self.assertTrue(rollback_url.endswith("/saved-looks/17"))
+
+    def test_saved_look_retain_failure_without_row_id_does_not_delete_an_unknown_row(self):
+        request = Mock()
+        request.app.state.http_client.delete = AsyncMock()
+        response = httpx.Response(
+            201,
+            json={"status": "created"},
+            request=httpx.Request("POST", "https://member.test/api/members/member/saved-looks"),
+        )
+        upstream = dataclasses.replace(UPSTREAMS["member-database"], base_url="https://member.test")
+        asyncio.run(gateway._rollback_saved_look_after_retain_failure(
+            request,
+            upstream,
+            "api/members/member%40example.com/saved-looks",
+            response,
+            {"Cookie": "session=private"},
+        ))
+        request.app.state.http_client.delete.assert_not_awaited()
+
     def test_session_status_names_the_account_the_session_belongs_to(self):
         # Administrator and member sign-ins share one `__session` cookie, so
         # signing in as an administrator silently replaces a member session
@@ -1454,11 +1524,17 @@ class GuestTrialTest(unittest.TestCase):
         request.app.state.http_client.request.assert_not_awaited()
 
     def test_guest_write_is_limited_to_the_listed_paths(self):
-        """開放清單以外的寫入要回到會員驗證，例如五官修正回饋。"""
+        """訪客可送 BASIC 回饋，但不可覆核、送訓或進會員資料庫。"""
         self.assertTrue(gateway._guest_path_allowed("face-basic", "v1/face/jobs/basic", "POST"))
         self.assertTrue(gateway._guest_path_allowed("face-basic", "v1/face/pose", "POST"))
         self.assertTrue(gateway._guest_path_allowed("render-service", "render", "POST"))
-        self.assertFalse(gateway._guest_path_allowed("face-basic", "v1/face/jobs/JOB-012345abcdef/feedback", "POST"))
+        self.assertTrue(gateway._guest_path_allowed("face-basic", "v1/face/jobs/JOB-012345abcdef/feedback", "POST"))
+        for method in ("GET", "PATCH", "DELETE", "PUT"):
+            self.assertFalse(gateway._guest_path_allowed("face-basic", "v1/face/jobs/JOB-012345abcdef/feedback", method))
+        self.assertFalse(gateway._guest_path_allowed("face-pro", "v1/face/jobs/JOB-1/feedback", "POST"))
+        self.assertFalse(gateway._guest_path_allowed("face-basic", "v1/face/feedback/FB-JOB-1/review", "PATCH"))
+        self.assertFalse(gateway._guest_path_allowed("admin-api", "face-training/runs", "POST"))
+        self.assertFalse(gateway._guest_spends_quota("face-basic", "v1/face/jobs/JOB-1/feedback", "POST"))
         self.assertFalse(gateway._guest_path_allowed("member-database", "api/members", "GET"))
         # 讀取放行：輪詢工作狀態、取結果都是 GET。
         self.assertTrue(gateway._guest_path_allowed("face-basic", "v1/face/jobs/JOB-012345abcdef/result", "GET"))
@@ -1576,29 +1652,63 @@ class FaceTrainingRunTest(unittest.TestCase):
         }
         self.created = []
         self.patched = []
+        self.run_docs = {}
         self.collections = {
             "face_training_runs": [],
             "face_training_workers": [{"workerId": "PC-1", "state": "idle",
                                        "lastSeenAt": "2026-08-26T01:00:00+00:00"}],
         }
 
-        self._orig = (job_store.get, job_store.create, job_store.patch, job_store.all_jobs)
-        job_store.get = lambda col, doc_id: (
-            self.feedback.get(f"FB-{doc_id}") if col == "face_feedback" else None)
-        job_store.create = lambda col, doc_id, data: self.created.append((col, doc_id, data))
-        job_store.patch = lambda col, doc_id, updates: self.patched.append((col, doc_id, updates))
+        self._orig = (job_store.get, job_store.create, job_store.patch,
+                      job_store.all_jobs, job_store.find_by_field)
+
+        def fake_get(col, doc_id):
+            if col == "face_feedback":
+                return self.feedback.get(f"FB-{doc_id}")
+            if col == "face_training_runs":
+                run = self.run_docs.get(doc_id)
+                return dict(run) if run else None
+            return None
+
+        def fake_create(col, doc_id, data):
+            self.created.append((col, doc_id, data))
+            if col == "face_training_runs":
+                self.run_docs[doc_id] = dict(data)
+
+        def fake_patch(col, doc_id, updates):
+            self.patched.append((col, doc_id, updates))
+            if col == "face_training_runs" and doc_id in self.run_docs:
+                self.run_docs[doc_id].update(updates)
+            if col == "face_feedback" and f"FB-{doc_id}" in self.feedback:
+                self.feedback[f"FB-{doc_id}"].update(updates)
+
+        def fake_find_by_field(col, field, value, limit=10):
+            if col != "face_training_runs":
+                return []
+            return [dict(run) for run in self.run_docs.values()
+                    if run.get(field) == value][:limit]
+
+        job_store.get = fake_get
+        job_store.create = fake_create
+        job_store.patch = fake_patch
         job_store.all_jobs = lambda col, **kw: list(self.collections.get(col, []))
+        job_store.find_by_field = fake_find_by_field
         self.client = TestClient(ai_gateway.app)
 
     def tearDown(self):
         (self._job_store.get, self._job_store.create,
-         self._job_store.patch, self._job_store.all_jobs) = self._orig
+         self._job_store.patch, self._job_store.all_jobs,
+         self._job_store.find_by_field) = self._orig
         self._job_store.firestore, self._job_store._client = self._fs
 
     def _create(self, ids):
         return self.client.post("/admin-api/face-training/runs",
                                 json={"feedbackIds": ids},
                                 cookies=self.cookies, headers=self.headers)
+
+    def _retry(self, run_id):
+        return self.client.post(f"/admin-api/face-training/runs/{run_id}/retry",
+                                json={}, cookies=self.cookies, headers=self.headers)
 
     def test_run_stamps_the_batch_id_back_onto_each_feedback(self):
         r = self._create(["FB-JOB-1"])
@@ -1619,6 +1729,20 @@ class FaceTrainingRunTest(unittest.TestCase):
         self.assertIn("FB-JOB-2", reasons)
         # 排除的理由要說得出口——這個欄位就是給人看「為什麼沒用這一筆」的。
         self.assertIn("影像", reasons["FB-JOB-2"])
+
+    def test_admin_corrected_label_is_sent_to_the_training_batch(self):
+        """管理員改判後，批次必須使用管理員的標籤，不可退回使用者原答案。"""
+        self.feedback["FB-JOB-3"] = {
+            "feedbackId": "FB-JOB-3", "jobId": "JOB-3", "contributed": True,
+            "corrections": {"眉型": "一字眉"},
+            "reviewDecisions": {"眉型": "corrected"},
+            "reviewLabels": {"眉型": "落尾眉"},
+        }
+
+        r = self._create(["FB-JOB-3"])
+
+        self.assertEqual(r.status_code, 202, r.text)
+        self.assertEqual(r.json()["selections"]["FB-JOB-3"]["眉型"], "落尾眉")
 
     def test_stamp_failure_does_not_lose_the_batch(self):
         # 蓋標記失敗時，批次本身仍然要建立起來：批次是證據，標記只是方便查詢。
@@ -1649,6 +1773,82 @@ class FaceTrainingRunTest(unittest.TestCase):
                             cookies=self.cookies, headers=self.headers)
         self.assertEqual(r.status_code, 200, r.text)
         self.assertIsNone(r.json()["worker"])
+
+    def test_failed_run_can_be_requeued_without_overwriting_original(self):
+        source_id = "TR-failed-1"
+        self.run_docs[source_id] = {
+            "runId": source_id, "status": "failed", "model": "ConvNeXt-Tiny",
+            "createdAt": "2026-08-29T01:00:00+00:00",
+            "selections": {"FB-JOB-1": {"眉型": "一字眉"}},
+            "feedbackIds": ["FB-JOB-1"], "sampleCount": 1,
+            "error": {"code": "TRAINING_FAILED", "message": "測試失敗"},
+        }
+        self.feedback["FB-JOB-1"]["trainingRunId"] = source_id
+
+        r = self._retry(source_id)
+
+        self.assertEqual(r.status_code, 202, r.text)
+        body = r.json()
+        self.assertNotEqual(body["runId"], source_id)
+        self.assertEqual(body["status"], "queued")
+        self.assertEqual(body["retryOf"], source_id)
+        self.assertEqual(self.run_docs[source_id]["status"], "failed",
+                         "重試不能覆蓋原批次，否則失敗原因與歷史證據會消失")
+        self.assertEqual(self.run_docs[source_id]["retryRunId"], body["runId"])
+        self.assertEqual(self.feedback["FB-JOB-1"]["trainingRunId"], body["runId"])
+
+    def test_retrying_the_same_failed_run_is_idempotent(self):
+        source_id = "TR-failed-2"
+        self.run_docs[source_id] = {
+            "runId": source_id, "status": "failed",
+            "selections": {"FB-JOB-1": {"眉型": "一字眉"}},
+        }
+        self.feedback["FB-JOB-1"]["trainingRunId"] = source_id
+
+        first = self._retry(source_id)
+        second = self._retry(source_id)
+
+        self.assertEqual(first.status_code, 202, first.text)
+        self.assertEqual(second.status_code, 202, second.text)
+        self.assertEqual(second.json()["runId"], first.json()["runId"])
+        self.assertTrue(second.json()["deduped"])
+        self.assertEqual(len([item for item in self.created
+                              if item[0] == "face_training_runs"]), 1,
+                         "連按重試不能建立兩個新批次")
+
+    def test_a_failed_retry_can_be_retried_again_from_the_same_run(self):
+        """第一次重試也失敗時，原批次仍要能從進度視窗再送一次。"""
+        source_id = "TR-failed-chain-1"
+        self.run_docs[source_id] = {
+            "runId": source_id, "status": "failed",
+            "selections": {"FB-JOB-1": {"眉型": "一字眉"}},
+        }
+        self.feedback["FB-JOB-1"]["trainingRunId"] = source_id
+
+        first = self._retry(source_id)
+        self.assertEqual(first.status_code, 202, first.text)
+        first_id = first.json()["runId"]
+        self.run_docs[first_id]["status"] = "failed"
+
+        second = self._retry(source_id)
+
+        self.assertEqual(second.status_code, 202, second.text)
+        second_body = second.json()
+        self.assertNotEqual(second_body["runId"], first_id)
+        self.assertEqual(second_body["retryOf"], first_id,
+                         "再次重試要接在失敗的子批次後，不能覆蓋原歷史")
+        self.assertEqual(self.run_docs[first_id]["retryRunId"], second_body["runId"])
+        self.assertEqual(self.feedback["FB-JOB-1"]["trainingRunId"], second_body["runId"])
+
+    def test_only_a_failed_run_can_be_retried(self):
+        source_id = "TR-done-1"
+        self.run_docs[source_id] = {
+            "runId": source_id, "status": "done",
+            "selections": {"FB-JOB-1": {"眉型": "一字眉"}},
+        }
+        r = self._retry(source_id)
+        self.assertEqual(r.status_code, 409, r.text)
+        self.assertEqual(r.json()["error"]["code"], "TRAINING_RETRY_NOT_ALLOWED")
 
 
 class TrainingRunsAreAppendOnlyTest(unittest.TestCase):

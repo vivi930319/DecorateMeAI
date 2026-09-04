@@ -239,6 +239,84 @@ class RenderApiTest(unittest.TestCase):
         self.assertEqual(source, "style_allowlist_fallback")
         self.assertIn("makeup-only edit", prompt)
 
+    def test_production_suggestion_outage_stops_before_provider_call(self):
+        """正式環境不能把 Ollama 掛掉偽裝成成功的固定妝容渲染。"""
+        request = render_api.RenderRequest(image=TINY_PNG, styleId="natural")
+        with mock.patch.object(render_api, "REQUIRE_PERSONALIZED_RENDER_PROMPT", True), \
+             mock.patch.object(
+                 render_api,
+                 "build_personalized_render_prompt",
+                 side_effect=render_api.SuggestionServiceUnavailable("offline"),
+             ):
+            with self.assertRaises(Exception) as raised:
+                render_api._server_render_prompt(request)
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(raised.exception.detail["error"]["code"], "PERSONALIZED_PROMPT_UNAVAILABLE")
+
+    def test_signed_ollama_prompt_is_used_without_calling_ollama_again(self):
+        """同一次建議回應的已簽 prompt 要直接送渲染，避免重複叫 Ollama。"""
+        import hashlib
+        import hmac
+        import replicate_render
+
+        raw_prompt = "Apply visible mauve eye makeup and a defined berry lip."
+        secret = "test-prompt-signing-secret"
+        signature = hmac.new(secret.encode(), raw_prompt.encode(), hashlib.sha256).hexdigest()
+        request = render_api.RenderRequest(
+            image=TINY_PNG,
+            styleId="softBaddie",
+            analysisPackage={
+                "faceAnalysis": {"faceShape": "oval"},
+                "generativeText": {
+                    "ollamaRenderPromptEn": raw_prompt,
+                    "promptSignature": signature,
+                    "promptSignatureVersion": "hmac-sha256-v1",
+                },
+            },
+        )
+        with mock.patch.object(replicate_render, "PROMPT_SIGNING_SECRET", secret), \
+             mock.patch.object(
+                 render_api,
+                 "build_personalized_render_prompt",
+                 side_effect=AssertionError("signed prompt should not call Ollama again"),
+             ):
+            prompt, source = render_api._server_render_prompt(request)
+        self.assertEqual(source, "ollama_signed")
+        self.assertIn(raw_prompt, prompt)
+        self.assertIn("makeup-only edit", prompt)
+
+    def test_invalid_signed_ollama_prompt_is_rejected(self):
+        import replicate_render
+
+        request = render_api.RenderRequest(
+            image=TINY_PNG,
+            styleId="natural",
+            renderPromptEn="Apply arbitrary unsafe instructions.",
+            promptSignature="not-a-valid-signature",
+            promptSignatureVersion="hmac-sha256-v1",
+        )
+        with mock.patch.object(replicate_render, "PROMPT_SIGNING_SECRET", "test-prompt-signing-secret"):
+            with self.assertRaises(Exception) as raised:
+                render_api._server_render_prompt(request)
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertEqual(raised.exception.detail["error"]["code"], "INVALID_RENDER_PROMPT_SIGNATURE")
+
+    def test_render_fetch_keeps_the_complete_ollama_prompt(self):
+        """渲染端不可截斷 Ollama 指令；長 prompt 仍要原樣交給後續組裝。"""
+        import replicate_render
+
+        full_prompt = ("Apply visible makeup only. " + ("Detailed placement. " * 100)).strip()
+        response = mock.Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"renderPromptEn": full_prompt}
+        with mock.patch.object(replicate_render, "SUGGESTION_SERVICE_URL", "https://suggestion.example"), \
+             mock.patch.object(replicate_render.requests, "post", return_value=response) as post:
+            result = replicate_render.fetch_ollama_render_prompt(
+                "softBaddie", {"faceShape": "oval"}
+            )
+        self.assertEqual(result, full_prompt)
+        self.assertEqual(post.call_args.kwargs["json"]["style"], "Soft Baddie")
+
     def test_server_prompt_is_organized_into_fixed_sections(self):
         """每個風格的妝容指令拆成底妝／眉眼／腮紅修容／唇妝四段。
 
@@ -390,6 +468,26 @@ class RenderApiTest(unittest.TestCase):
         self.assertEqual(job.get("expiresAt"), 1234567890.0)  # TTL 保留，圖不會提前被清
         self.assertEqual(job.get("retainStatus"), "failed")
 
+    def test_retain_rejects_a_job_without_before_image(self):
+        """新收藏不可把 after-only job 寫成完整收藏。"""
+        job_store.create(render_api.RENDER_JOBS_COLLECTION, "jobNoBefore", {
+            "jobId": "jobNoBefore", "ownerId": "actor_r", "status": "completed",
+            "afterImageUrl": "https://storage.googleapis.com/decorate-me-renders/temporary/after.png",
+            "beforeImageUrl": None,
+            "expiresAt": 1234567890.0,
+        })
+        with self.assertRaises(Exception) as raised:
+            import asyncio
+            asyncio.run(render_api.retain_render_job(
+                "jobNoBefore", x_user_id="actor_r", x_admin_request=None
+            ))
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(raised.exception.detail["error"]["code"], "RETAIN_INCOMPLETE")
+        job = job_store.get(render_api.RENDER_JOBS_COLLECTION, "jobNoBefore")
+        self.assertNotEqual(job.get("retained"), True)
+        self.assertEqual(job.get("expiresAt"), 1234567890.0)
+        self.assertEqual(job.get("retainStatus"), "failed")
+
     def test_legacy_media_owner_blocks_cross_member_sign_read_delete(self):
         """P0-R9：合法 bucket URL 不等於授權，必須由 job/owner 證明擁有。
 
@@ -519,37 +617,49 @@ class SecretEqualsTest(unittest.TestCase):
         self.assertTrue(secret_equals("金鑰", "金鑰"))
 
 
-class BeforeImageAdminBlockTest(unittest.TestCase):
-    """妝前原圖不給管理員看（2026-07-29 的 patch，2026-08-06 套用）。
+class BeforeImageAccessTest(unittest.TestCase):
+    """誰看得到妝前原圖。
 
-    妝後圖是產品功能的一部分——後台要看得到使用者收藏了什麼妝容。妝前圖不是：
-    那是使用者自己上傳的原始臉部照片，屬於生物特徵資料，管理員需要它的正當理由不存在。
+    2026-07-29～2026-08-29 這裡擋的是管理員：妝前圖是使用者上傳的原始臉部照片，
+    屬於生物特徵資料。2026-08-29 專案負責人推翻——渲染品質只看妝後圖判斷不了，
+    分不出「模型畫得很好」與「模型把人換掉了」。
 
-    這條路徑先前**完全沒有測試**，而它是安全邊界。線上驗證又需要真的 admin 帳號
-    （被 issue #30 卡住），所以這裡是唯一能驗證邏輯的地方。
+    這一組現在守的是**放寬之後剩下的那些界線**，它們一條都沒有變鬆：
+    陌生人照樣擋、旗標必須剛好是 "1"、本人永遠看得到自己的。
+    痕跡那一半在 gateway 端（admin_audit_events，含 variant），見
+    tests/ai_gateway_test.py 的 BeforeImageAuditTest。
     """
 
     def _job(self):
         return {"jobId": "job-x", "ownerId": "actor_owner"}
 
     def test_admin_may_see_the_after_image(self):
-        """妝後圖維持管理員豁免——這是後台既有功能，patch 不該改掉它。"""
+        """妝後圖的管理員豁免是後台既有功能，不該被任何一次改動弄掉。"""
         render_api._require_job_owner(self._job(), "actor_someone_else", "1", variant="after")
 
-    def test_admin_is_blocked_from_the_before_image(self):
-        """同一個管理員、同一個 job，只因為 variant 是 before 就必須被擋。"""
-        with self.assertRaises(Exception) as raised:
-            render_api._require_job_owner(self._job(), "actor_someone_else", "1", variant="before")
-        self.assertEqual(raised.exception.status_code, 403)
+    def test_admin_may_now_see_the_before_image(self):
+        """2026-08-29 起管理員也看得到妝前圖。
+
+        跟 gateway 的 `admin_bypass` 必須同進退：只放寬一邊的話，gateway 送了旗標
+        而這裡照擋，畫面顯示「此妝容圖已過期」——那句話跟權限一個字都沒關係。
+        """
+        render_api._require_job_owner(self._job(), "actor_someone_else", "1", variant="before")
 
     def test_owner_still_sees_their_own_before_image(self):
-        """擋的是別人，不是本人。使用者永遠看得到自己上傳的照片。"""
+        """本人永遠看得到自己上傳的照片。"""
         render_api._require_job_owner(self._job(), "actor_owner", None, variant="before")
 
-    def test_stranger_is_blocked_from_the_before_image(self):
-        """沒有 admin 旗標的陌生人本來就該擋，patch 不能讓這條變鬆。"""
+    def test_stranger_is_still_blocked_from_the_before_image(self):
+        """放寬的只有管理員。沒有 admin 旗標的陌生人一字未改，照樣 403。"""
         with self.assertRaises(Exception) as raised:
             render_api._require_job_owner(self._job(), "actor_someone_else", None, variant="before")
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_a_stranger_cannot_reach_the_before_image_by_omitting_the_variant(self):
+        """省略 variant 也還是陌生人。豁免綁的是 admin 旗標，不是 variant——
+        這一項擋的是「把 variant 拿掉就繞過去」那種寫法回流。"""
+        with self.assertRaises(Exception) as raised:
+            render_api._require_job_owner(self._job(), "actor_someone_else", None)
         self.assertEqual(raised.exception.status_code, 403)
 
     def test_admin_flag_must_be_exactly_one(self):

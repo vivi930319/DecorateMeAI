@@ -9,6 +9,7 @@ Windows 的閒置計時器看的是使用者輸入，不是 CPU 忙不忙——�
 """
 import importlib.util
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -65,6 +66,58 @@ class KeepAwakeTest(unittest.TestCase):
             with tw._keep_awake():
                 ran.append(True)
         self.assertEqual(ran, [True])
+
+
+class WorkerQueuePolicyTest(unittest.TestCase):
+    def test_once_does_not_auto_collect_without_explicit_flag(self):
+        created = mock.Mock()
+        with mock.patch.object(tw.sys, "argv", ["training_worker.py", "--once"]), \
+             mock.patch.object(tw, "list_runs", return_value=[]), \
+             mock.patch.object(tw, "heartbeat"), \
+             mock.patch.object(tw, "create_run_from_accepted", created):
+            result = tw.main()
+
+        self.assertEqual(result, 0)
+        created.assert_not_called()
+
+
+class HoldoutSplitPreflightTest(unittest.TestCase):
+    def test_copies_canonical_split_into_feedback_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "data/roi_cache/holdout_split_v2.json"
+            source.parent.mkdir(parents=True)
+            source.write_text('{"samples":[{"split":"holdout"}]}', encoding="utf-8")
+            with mock.patch.object(tw, "ROOT", root), \
+                 mock.patch.object(tw, "_log"), \
+                 mock.patch.object(tw.shutil, "copy2", wraps=tw.shutil.copy2) as copy2:
+                target = tw._ensure_holdout_split(
+                    "data/roi_cache_manual", "data/roi_cache_manual_plus_feedback", "v2")
+
+            expected = root / "data/roi_cache_manual_plus_feedback/holdout_split_v2.json"
+            self.assertEqual(target, expected)
+            self.assertTrue(expected.is_file())
+            copy2.assert_called_once_with(source, expected)
+
+    def test_missing_split_fails_before_training(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(tw, "ROOT", Path(tmp)):
+            with self.assertRaises(FileNotFoundError):
+                tw._ensure_holdout_split(
+                    "data/roi_cache_manual", "data/roi_cache_manual_plus_feedback", "v2")
+
+    def test_existing_split_is_validated_without_copying(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "data/roi_cache_manual_plus_feedback/holdout_split_v2.json"
+            target.parent.mkdir(parents=True)
+            target.write_text('{"samples":[{"split":"holdout"}]}', encoding="utf-8")
+            with mock.patch.object(tw, "ROOT", root), \
+                 mock.patch.object(tw.shutil, "copy2") as copy2:
+                result = tw._ensure_holdout_split(
+                    "data/roi_cache_manual", "data/roi_cache_manual_plus_feedback", "v2")
+            self.assertEqual(result, target)
+            copy2.assert_not_called()
 
 
 if __name__ == "__main__":

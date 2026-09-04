@@ -28,13 +28,20 @@ ConvNeXt 訓練是好幾分鐘的 CPU 工作。所以那顆按鈕**註定**只�
     python tools/training_worker.py                 # 一直守著，每 20 秒看一次
     python tools/training_worker.py --once          # 只處理目前排隊中的，做完就結束
     python tools/training_worker.py --dry-run       # 只顯示會做什麼，不真的訓練
+    python tools/training_worker.py --auto-collect  # 相容舊流程：自動收集未送訓回饋
+
+預設不會自動收集回饋。管理員必須在後台按「送去訓練」或失敗批次的
+「重新送訓這一批」，Worker 只執行已明確進入 queued 的批次；``--auto-collect``
+只保留給需要舊行為的手動維運，不應放進正式啟動排程。
 """
 from __future__ import annotations
 
 import argparse
 import contextlib
 import ctypes
+import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -138,6 +145,50 @@ def _run_step(cmd: list[str], env: dict, tail: deque) -> int:
     return process.wait()
 
 
+def _ensure_holdout_split(cache_dir: str, plus_dir: str, split_version: str | None) -> Path | None:
+    """讓合併回饋後的快取也帶著同一份保留集切分。
+
+    training_worker 把新回饋匯入 ``*_plus_feedback`` 後，訓練腳本會以
+    ``ROI_CACHE_DIR`` 指向那個新目錄；但保留集 JSON 原本只放在基礎快取
+    ``data/roi_cache``。少了這個檔案，訓練還沒進第一個 epoch 就會因為
+    FileNotFoundError 失敗，重新送訓只是在重複同一個錯誤。
+
+    只在目標快取缺檔時複製，不重建、不改寫已存在的切分，確保所有批次仍使用
+    同一份 v2 基準。回傳 None 代表呼叫端沒有要求保留集。
+    """
+    if not split_version:
+        return None
+    filename = f"holdout_split_{split_version}.json"
+    target = ROOT / plus_dir / filename
+    if target.is_file():
+        source = target
+    else:
+        candidates = [
+            ROOT / cache_dir / filename,
+            ROOT / "data" / "roi_cache" / filename,
+        ]
+        source = next((path for path in candidates if path.is_file()), None)
+        if source is None:
+            raise FileNotFoundError(
+                f"找不到保留集切分 {filename}；已檢查 "
+                + "、".join(str(path) for path in candidates)
+            )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        _log(f"已補齊訓練保留集：{target}（來源 {source}）")
+
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"保留集切分 {target} 不是可讀的 JSON：{exc}") from exc
+    samples = payload.get("samples") if isinstance(payload, dict) else None
+    if not isinstance(samples, list) or not samples:
+        raise ValueError(f"保留集切分 {target} 缺少有效 samples 清單")
+    if not any(isinstance(row, dict) and row.get("split") == "holdout" for row in samples):
+        raise ValueError(f"保留集切分 {target} 沒有 holdout 樣本")
+    return target
+
+
 def process_run(run: dict, args, project: str) -> bool:
     run_id = str(run.get("runId") or "")
     parts = _parts_of(run)
@@ -193,6 +244,14 @@ def process_run(run: dict, args, project: str) -> bool:
                      "可能是保留期限到了，或先前被清理掉。")
             _log(f"{run_id} 沒有可用影像，標記為失敗")
             return False
+        if index == 0 and args.holdout_split:
+            try:
+                _ensure_holdout_split(cache_dir, plus_dir, args.holdout_split)
+            except (OSError, ValueError) as exc:
+                reason = f"訓練前置檢查失敗：{exc}"
+                fail_run(project, run_id, reason)
+                _log(f"{run_id} {reason}")
+                return False
 
     # 訓練腳本自己會把 status 寫成 done 並附上前後指標；這裡只補上產出位置，
     # 讓「這批的模型在哪」不必靠猜。
@@ -213,6 +272,10 @@ def main() -> int:
                         help="心跳用的識別字；後台顯示的就是這個")
     parser.add_argument("--once", action="store_true", help="把目前排隊中的做完就結束")
     parser.add_argument("--dry-run", action="store_true", help="只顯示會做什麼")
+    parser.add_argument(
+        "--auto-collect", action="store_true",
+        help="相容舊流程：沒有 queued 批次時自動收集已採用回饋；正式排程不要開啟",
+    )
     # 保留集要在**每一次**訓練都排除，否則它就不是保留集了。
     #
     # v1 就是這樣花掉的：2026-08-06 為了多拿 27% 的資料，讓線上模型把 v1 的 613 張
@@ -228,7 +291,7 @@ def main() -> int:
     args = parser.parse_args()
 
     _log(f"訓練機 {args.worker_id} 啟動｜專案 {args.project}｜快取 {args.cache_dir}")
-    _log("後台按下「送去訓練」的批次會在這裡自動執行。關掉這個視窗不會遺失批次，它們會等到下次啟動。")
+    _log("後台按下「送去訓練」或「重新送訓這一批」的批次會在這裡自動執行；沒有按鈕就不會建立新批次。")
 
     # 開機時把自己上次沒做完的批次撿回來。
     #
@@ -269,10 +332,9 @@ def main() -> int:
                 time.sleep(args.interval)
                 continue
 
-            if not queued:
-                # 沒有現成的批次，就自己把「已送訓、還沒訓練過」的修正收成一批。
-                # 後台的「送訓」按在單一部位上，成批留到這裡做——那時候累積了哪些
-                # 才是確定的，也才不會為了一個新樣本跑完整整一輪訓練。
+            if not queued and args.auto_collect:
+                # 舊版流程會在這裡自動收集回饋。保留成明確的維運開關，避免既有
+                # 手動腳本突然失效；正式啟動不開這個旗標，批次只能由管理員按鈕建立。
                 try:
                     made = None if args.dry_run else create_run_from_accepted(args.project, args.worker_id)
                 except Exception as exc:
@@ -283,13 +345,14 @@ def main() -> int:
                     _log(f"收集到新批次 {made['runId']}：{made['sampleCount']} 個部位標註、"
                          f"{len(made['feedbackIds'])} 筆回饋")
                     queued = [made]
-                else:
-                    heartbeat(args.project, args.worker_id, "idle")
-                    if args.once:
-                        _log("沒有排隊中的批次，也沒有新的已送訓資料，結束。")
-                        return 0
-                    time.sleep(args.interval)
-                    continue
+
+            if not queued:
+                heartbeat(args.project, args.worker_id, "idle")
+                if args.once:
+                    _log("沒有排隊中的批次；請由管理員按鈕送訓後再執行。")
+                    return 0
+                time.sleep(args.interval)
+                continue
 
             for run in queued:
                 run_id = str(run.get("runId") or "")

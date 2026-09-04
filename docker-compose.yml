@@ -59,6 +59,7 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OLLAMA_MODEL=${OLLAMA_MODEL:-gemma3}
       - SUGGESTION_API_KEY=${SUGGESTION_API_KEY:-}
+      - PROMPT_SIGNING_SECRET=${PROMPT_SIGNING_SECRET:-}
       - ALLOW_INSECURE_LOCAL_DEV=${ALLOW_INSECURE_LOCAL_DEV:-1}
     command: ["uvicorn", "Ollama_suggestion:app", "--host", "0.0.0.0", "--port", "8010"]
     restart: always
@@ -74,6 +75,12 @@ services:
     environment:
       - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
       - RENDER_API_KEY=${RENDER_API_KEY:-}
+      # 渲染端要和文字建議端使用同一個服務；不填時會在本機明確退回 style fallback，
+      # 正式環境則由 REQUIRE_PERSONALIZED_RENDER_PROMPT 擋住，不會假裝個人化成功。
+      - SUGGESTION_SERVICE_URL=${SUGGESTION_SERVICE_URL:-http://ollama_suggestion:8010}
+      - SUGGESTION_SERVICE_API_KEY=${SUGGESTION_SERVICE_API_KEY:-}
+      - PROMPT_SIGNING_SECRET=${PROMPT_SIGNING_SECRET:-}
+      - REQUIRE_PERSONALIZED_RENDER_PROMPT=${REQUIRE_PERSONALIZED_RENDER_PROMPT:-0}
       - ALLOW_INSECURE_LOCAL_DEV=${ALLOW_INSECURE_LOCAL_DEV:-1}
     command: ["uvicorn", "replicate_render_api:app", "--host", "0.0.0.0", "--port", "8020"]
     restart: always

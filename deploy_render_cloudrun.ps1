@@ -6,6 +6,8 @@
     [string]$ImageName = "replicate-render",
     [string]$Tag = "latest",
     [string]$GcsBucketName = "",
+    # 必須指向和 Gateway 使用同一個 Ollama 建議服務；不要把會變動的 tunnel 網址寫死在腳本。
+    [string]$SuggestionServiceUrl = $env:SUGGESTION_SERVICE_URL,
     # 測試壞掉還是要硬上（只在緊急回復時用，而且要自己知道在做什麼）
     [switch]$SkipTests
 )
@@ -14,6 +16,30 @@
 # stderr 包成 NativeCommandError 並中斷——即使 gcloud 其實成功（exit code 0）。
 # 這支腳本本來就每一步都檢查 $LASTEXITCODE，所以改用 Continue，讓 exit code 說了算。
 $ErrorActionPreference = "Continue"
+
+if ([string]::IsNullOrWhiteSpace($SuggestionServiceUrl) -or $SuggestionServiceUrl -notmatch '^https://[^/]+') {
+    throw "部署中止：請先提供目前可用的 SUGGESTION_SERVICE_URL（https://...），而且必須和 ai-gateway 的 TEXT_SUGGESTION_URL 相同。"
+}
+
+# Tunnel 會變動，不能只檢查參數「有填」；直接讀目前 Gateway 的非秘密環境值，
+# 把兩個上游不一致的情況在建置前攔下來。API key 只存在 Secret，不在這裡讀取。
+$gatewayConfig = gcloud run services describe ai-gateway `
+  --project=$ProjectId `
+  --region=$Region `
+  --format=json 2>$null
+if ($LASTEXITCODE -ne 0 -or -not $gatewayConfig) {
+    throw "部署中止：無法讀取 ai-gateway 的 TEXT_SUGGESTION_URL，不能確認 Ollama 上游是否一致。"
+}
+$gatewayObject = $gatewayConfig | ConvertFrom-Json
+$gatewaySuggestionUrl = [string](
+    @($gatewayObject.spec.template.spec.containers[0].env | Where-Object name -eq "TEXT_SUGGESTION_URL" | Select-Object -First 1).value
+)
+if ([string]::IsNullOrWhiteSpace($gatewaySuggestionUrl) -or
+    $gatewaySuggestionUrl.TrimEnd('/') -ne $SuggestionServiceUrl.TrimEnd('/')) {
+    $gatewayHost = if ($gatewaySuggestionUrl) { try { ([uri]$gatewaySuggestionUrl).Host } catch { 'invalid-url' } } else { 'empty' }
+    $renderHost = try { ([uri]$SuggestionServiceUrl).Host } catch { 'invalid-url' }
+    throw "部署中止：Render 與 Gateway 的 Ollama 上游不同（Gateway=$gatewayHost；Render=$renderHost）。"
+}
 
 # ── 部署門檻：測試沒過就不准上 production ──────────────────────────────
 # 「等一下再修」在部署腳本裡永遠不會發生。紅燈就停在這裡，比上線後才發現便宜太多。
@@ -54,7 +80,8 @@ gcloud run deploy $ServiceName `
   --concurrency=4 `
   --min-instances=1 `
   --no-cpu-throttling `
-  --no-allow-unauthenticated
+  --no-allow-unauthenticated `
+  --update-env-vars "SUGGESTION_SERVICE_URL=$SuggestionServiceUrl,REQUIRE_PERSONALIZED_RENDER_PROMPT=1"
 if ($LASTEXITCODE -ne 0) { throw "部署中止：Cloud Run 部署失敗。" }
 
 Write-Host "Deployment finished. Checking health..."

@@ -278,7 +278,13 @@ def build_prompt(payload: SuggestRequest) -> str:
 5. 中文第一部分總字數限制在 350 ~ 1050 字。
 6. 中文六段結束後，另起一行輸出「第二部分：英文渲染指令」，接著只寫一段英文影像
    編輯指令。英文指令要描述可見的底妝、眉眼、腮紅修容與唇妝，必須使用這份分析與
-   風格資料，不得改變人物、五官、姿勢、背景或光線；不要輸出解釋、Markdown 或引號。"""
+   風格資料，不得改變人物、五官、姿勢、背景或光線；不要輸出解釋、Markdown 或引號。
+7. 用詞要讓沒有化妝經驗的人也讀得懂，寫給朋友看，不是寫給同業看：
+   - 眉毛最高的位置寫「眉峰」，不要寫「眉山」。
+   - 眼睛下方那條寫「臥蠶」，不要寫「臥蠶形」。
+   - 不要用「流美」「眼摺骨」這類自創或生僻的詞。
+   - 形容立體度用「較明顯」「較突出」，不要用「高聳」。
+   - 需要用專業術語時，同一句話裡要順帶說明它指的是哪個部位。"""
 
 
 def call_ollama(prompt: str, model: str) -> str:
@@ -312,6 +318,36 @@ _RENDER_PROMPT_MARKER = re.compile(
 )
 
 
+# Prompt 說了不代表模型會照做，所以再過一次替換。
+#
+# 這幾個詞是實際出現在使用者面前的：「眉山」「臥蠶形」「流美」「眼摺骨」「高聳」——
+# 前四個一般人看不懂，最後一個帶著評價意味。它們不在任何一份程式碼裡，是模型自己
+# 生成的，所以只能在輸出這一關攔。
+#
+# 只替換中文建議，不動英文渲染指令：那一段是給圖片模型看的，改動它的用字會改變構圖。
+WORDING_FIXES = (
+    ("眉山", "眉峰"),
+    ("臥蠶形狀", "臥蠶"),
+    ("臥蠶形", "臥蠶"),
+    ("眼摺骨", "眼窩"),
+    ("流美", "流暢優美"),
+    # 用「突出」而不是「較明顯」：模型常寫「較高聳」，替換成含「較」的詞會得到
+    # 「較較明顯」。單字詞接得住任何程度副詞，替換才不會在句子裡留下痕跡。
+    ("高聳", "突出"),
+)
+
+
+def normalize_wording(text: str) -> str:
+    """把模型偶爾冒出來的生僻或評價性用詞換成日常說法。
+
+    順序有意義：「臥蠶形狀」要排在「臥蠶形」前面，否則前者會先被後者截成「臥蠶狀」。
+    """
+    out = str(text or "")
+    for wrong, right in WORDING_FIXES:
+        out = out.replace(wrong, right)
+    return out
+
+
 def split_ollama_response(raw: str) -> tuple[str, str]:
     """把 Ollama 偶爾黏在一起的中文建議與英文渲染指令拆開。
 
@@ -321,8 +357,9 @@ def split_ollama_response(raw: str) -> tuple[str, str]:
     text = str(raw or "").strip()
     marker = _RENDER_PROMPT_MARKER.search(text)
     if not marker:
-        return text, ""
-    return text[: marker.start()].strip(), text[marker.end() :].strip()
+        return normalize_wording(text), ""
+    # 用詞替換只套在中文那半：英文渲染指令要原樣送去圖片模型。
+    return normalize_wording(text[: marker.start()].strip()), text[marker.end():].strip()
 
 
 RENDER_PROMPT_FALLBACKS = {

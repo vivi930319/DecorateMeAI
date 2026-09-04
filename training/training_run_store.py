@@ -226,7 +226,11 @@ def _list_collection(project: str, collection: str) -> list[tuple[str, dict]]:
 
 
 def create_run_from_accepted(project: str, worker_id: str) -> dict | None:
-    """把所有「已送訓、有影像、還沒訓練過」的修正收成一個批次。回傳批次，沒有就回 None。
+    """把尚未進批次的已採用修正收成一批（舊流程相容用）。
+
+    正式 Worker 預設不再呼叫這條路徑；只有明確傳入 ``--auto-collect`` 才會使用。
+    正常流程由管理員按「送去訓練」或「重新送訓這一批」建立 queued 批次，避免
+    開機自動把同一批回饋反覆收成新的訓練序號。
 
     為什麼由訓練機建立批次，而不是後台按鈕
     --------------------------------------
