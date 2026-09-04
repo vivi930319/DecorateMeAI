@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import shutil
 import subprocess
 import time
@@ -456,6 +457,42 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def macro_std_error(best: dict) -> float | None:
+    """macro accuracy 的標準誤。取不到就回 None，不要用 0 冒充——0 代表「毫無誤差」。
+
+    macro accuracy 是各類別 recall 的平均，所以
+
+        Var(macro) = (1/K²) · Σ_c  recall_c · (1 - recall_c) / n_c
+
+    其中 n_c 是該類別在保留集裡的張數（混淆矩陣的列和）。類別越小、recall 越接近
+    0.5，它對誤差的貢獻越大——2 類的鼻型只要有一類樣本少，整體誤差就會明顯放大。
+
+    為什麼需要它：保留集是 613 張、197 個身分，而部位各自只用得到其中一部分。
+    在這個規模下，兩個批次差兩個百分點完全可能只是抽樣造成的。先前的換上線檢查
+    拿一個沒有誤差範圍的數字當確定的事實，任何負數都整批擋下——那對訓練結果不公平，
+    因為它把雜訊講成退步。`online_trust_score --by-version` 早就會印 Wilson 區間，
+    理由一模一樣，只是那時沒有一併套到這裡。
+
+    注意這是**保守**估計：兩次評分用的是同一批保留集影像，成對比較的變異其實更小。
+    保守的方向是「比較容易說看不出差別」，所以判定退步時要更有把握才會擋。
+    """
+    recalls = best.get("per_class_recall")
+    matrix = best.get("confusion_matrix")
+    if not isinstance(recalls, (list, tuple)) or not isinstance(matrix, (list, tuple)):
+        return None
+    if not recalls or len(recalls) != len(matrix):
+        return None
+    total = 0.0
+    for recall, row in zip(recalls, matrix):
+        if not isinstance(recall, (int, float)) or not isinstance(row, (list, tuple)):
+            return None
+        n_c = sum(value for value in row if isinstance(value, (int, float)))
+        if n_c <= 0:
+            return None
+        total += float(recall) * (1.0 - float(recall)) / float(n_c)
+    return math.sqrt(total) / len(recalls)
+
+
 def read_model_metrics(model_dir: Path) -> dict:
     """讀目前 ConvNeXt 模型的正式指標，供 training_runs 的 before/after 使用。"""
     result = {"architecture": "ConvNeXt-Tiny", "parts": {}}
@@ -471,9 +508,34 @@ def read_model_metrics(model_dir: Path) -> dict:
                 "architecture": classes.get("architecture", "convnext_tiny"),
                 "macroAccuracy": best.get("macro_accuracy"),
                 "accuracy": best.get("accuracy"),
+                # 有了樣本數與標準誤，後台才有辦法說「這個差距在誤差內」而不是
+                # 把 -2.6 講得像確定退步。少了它們，畫面只能假裝數字是精確的。
+                "valCount": best.get("val_count") or identity.get("val_count"),
+                "macroStdErr": macro_std_error(best),
                 "classes": classes.get("classes", []),
                 "metricsFile": str(metrics_path),
             }
         except (OSError, ValueError, TypeError):
             continue
     return result
+
+
+def publish_live_model_metrics(project: str, model_dir: Path) -> dict:
+    """把「線上目錄現在實際是什麼分數」寫成 face_model_metrics/current。
+
+    Gateway 已經優先讀這一份，讀不到才退回「往回找最後一個回報該部位的歷史批次」。
+    而那個退路在換過一次模型之後就會過時：線上臉型已經是 53.4%，後台仍拿 46.6%
+    去比，於是一個 48.9% 的批次被畫成 +2.3，其實是 -4.5。使用者按下換上線，
+    才被 promote_model 用真實數字擋回來——按鈕在被按之前就講錯了。
+
+    所以換上線一成功就把這份寫回去。這只能在訓練機上做：線上模型檔在它的檔案系統，
+    Cloud Run 讀不到。
+    """
+    metrics = read_model_metrics(model_dir)
+    patch_document(project, METRICS_COLLECTION, "current", {
+        **metrics,
+        "model": metrics.get("architecture", "ConvNeXt-Tiny"),
+        "updatedAt": now_iso(),
+        "source": "promotion",
+    })
+    return metrics

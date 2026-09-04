@@ -51,7 +51,10 @@ from training_run_store import (  # noqa: E402
     get_document,
     now_iso,
     patch_document,
+    publish_live_model_metrics,
 )
+
+LIVE_DIR = ROOT / "models" / "basic_features_roi"
 
 PROMOTIONS_COLLECTION = "face_model_promotions"
 DEPLOYMENTS_COLLECTION = "face_service_deployments"
@@ -334,6 +337,22 @@ def process(promotion: dict, project: str, dry_run: bool, prepare_only: bool = F
         "stage": None,
         "error": None,
     })
+    # 換完就把「線上現在實際是什麼分數」寫回 face_model_metrics/current。
+    #
+    # Gateway 優先讀那一份，讀不到才退回「往回找最後一個回報該部位的歷史批次」。
+    # 那個退路換過一次模型就會過時，後台於是拿舊基準去比，把一個其實變差的批次
+    # 畫成有進步——使用者按下換上線，才被這支腳本用真實數字擋回來。按鈕在被按之前
+    # 就已經講錯了，而那正是「明明顯示有進步卻換不上去」的來源。
+    #
+    # 寫失敗不影響這次換上線：模型已經在線上了，只是後台的比較基準會停在舊的一份。
+    # 所以只記一行，不讓它把一次成功的換上線變成失敗。
+    if not prepare_only:
+        try:
+            publish_live_model_metrics(project, LIVE_DIR)
+            print("  已更新後台的線上比較基準。")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ! 線上比較基準沒更新（{exc}）。模型已上線，但後台仍會拿舊基準比較。")
+
     print(f"  {'已備妥' if prepare_only else '已上線'}，版本 {entry.get('version')}。")
     return True
 

@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -60,6 +61,11 @@ LIVE_DIR = ROOT / "models" / "basic_features_roi"
 BACKUP_ROOT = ROOT / "models" / "promote_backups"
 MANIFEST = Path(__file__).with_name("face_models_manifest.json")
 LEDGER = ROOT / "models" / "promotion_ledger.json"
+
+# macro 的標準誤跟 training_run_store 共用同一個實作。複製一份公式的話，
+# 訓練端與換上線端遲早會對同一個模型算出不同的誤差，而那種不一致沒有人看得出來。
+sys.path.insert(0, str(ROOT / "training"))
+from training_run_store import macro_std_error  # noqa: E402
 
 # 中文部位名 → 檔名前綴。接受中文是因為後台、回饋表與訓練報告用的都是中文，
 # 換模型的人手上拿到的就是「鼻型 +11.7」這種句子。
@@ -95,6 +101,39 @@ def _macro(metrics_path: Path):
     best = (data.get("identity") or {}).get("best") or {}
     value = best.get("macro_accuracy")
     return float(value) if isinstance(value, (int, float)) else None
+
+
+def _best(metrics_path: Path) -> dict:
+    if not metrics_path.exists():
+        return {}
+    try:
+        data = _read_json(metrics_path)
+    except ValueError:
+        return {}
+    return ((data.get("identity") or {}).get("best") or {}) if isinstance(data, dict) else {}
+
+
+def _diff_margin(live_path: Path, new_path: Path):
+    """兩個 macro 的差距要多大才不是抽樣造成的，以及兩邊各用了幾張保留集影像。
+
+    回傳 (誤差百分點, n_線上, n_批次)；算不出來就回 (None, n, n)。
+
+    保留集雖然是固定的 613 張，但每個部位只用得到其中有該標註的那些——實測是
+    76～169 張。在這個規模下，單次量測的 95% 誤差就有 ±7～9 個百分點，
+    所以「批次比線上低 2.6」這種差距根本分不出是真的退步還是換一批資料的抖動。
+    先前任何負數都整批擋下，等於把雜訊當成證據。
+
+    兩邊獨立相加是**保守**的（同一批影像的成對比較變異更小），保守的方向是
+    比較容易判成「看不出差別」，所以真的擋下來時會更有把握。
+    """
+    live_best, new_best = _best(live_path), _best(new_path)
+    live_se = macro_std_error(live_best)
+    new_se = macro_std_error(new_best)
+    n_live = live_best.get("val_count")
+    n_new = new_best.get("val_count")
+    if live_se is None or new_se is None:
+        return None, n_live, n_new
+    return 1.96 * math.sqrt(live_se ** 2 + new_se ** 2) * 100, n_live, n_new
 
 
 def _pct(value) -> str:
@@ -325,11 +364,30 @@ def promote(run_id: str, parts: list[str], allow_change: bool, dry_run: bool,
     for part, stem in checked:
         live = _macro(LIVE_DIR / f"{stem}_metrics.json")
         new = _macro(run_dir / f"{stem}_metrics.json")
-        delta = f"{(new - live) * 100:+.1f}" if (new is not None and live is not None) else "—"
-        print(f"  {part}：線上 {_pct(live)} → 批次 {_pct(new)}   {delta}")
+        margin, n_live, n_new = _diff_margin(LIVE_DIR / f"{stem}_metrics.json",
+                                             run_dir / f"{stem}_metrics.json")
+        if new is None or live is None:
+            print(f"  {part}：線上 {_pct(live)} → 批次 {_pct(new)}   —")
+            moves.append((part, stem, live, new))
+            continue
+        gap = (new - live) * 100
+        scale = f"（保留集 n={n_live}／{n_new}）" if n_live and n_new else ""
+        if margin is None:
+            verdict = ""
+        elif abs(gap) <= margin:
+            # 這是這次改動的重點：差距在誤差內就說「看不出差別」，不要講成退步。
+            verdict = f"　看不出差別（誤差約 ±{margin:.1f}）"
+        else:
+            verdict = f"　超出誤差 ±{margin:.1f}"
+        print(f"  {part}：線上 {_pct(live)} → 批次 {_pct(new)}   {gap:+.1f}{verdict}{scale}")
         moves.append((part, stem, live, new))
-        if live is not None and new is not None and new < live:
-            worse.append((part, live, new))
+        # 只有**確實**比較差才算退步：差距要大到誤差解釋不掉。
+        if margin is not None and gap < -margin:
+            worse.append((part, live, new, margin))
+        elif margin is None and new < live:
+            # 連誤差都算不出來（metrics 缺 confusion_matrix）就退回舊規則：
+            # 不知道誤差有多大時，保守一點擋下來，總比默默換上一個更差的模型好。
+            worse.append((part, live, new, None))
 
     # 換上去比現在差就擋下來。
     #
@@ -340,11 +398,12 @@ def promote(run_id: str, parts: list[str], allow_change: bool, dry_run: bool,
     # 這裡用**執行當下**的 metrics 重新判斷，不相信請求裡帶的數字——這是最後一道，
     # 也是唯一一道能看到真實線上狀態的關卡。
     if worse and not allow_regression:
-        print("\n  ✗ 擋下來：這些部位換上去會比現在差")
-        for part, live, new in worse:
-            print(f"      {part}：線上 {_pct(live)} → 批次 {_pct(new)}   {(new - live) * 100:+.1f}")
-        print("      後台的比較基準是歷史批次，換過模型之後就會過時；上面用的是"
-              "目前線上模型的實際分數。")
+        print("\n  ✗ 擋下來：這些部位換上去會比現在差，而且差距大到不是抽樣造成的")
+        for part, live, new, margin in worse:
+            tail = f"（誤差約 ±{margin:.1f}）" if margin is not None else "（算不出誤差，保守擋下）"
+            print(f"      {part}：線上 {_pct(live)} → 批次 {_pct(new)}   "
+                  f"{(new - live) * 100:+.1f}{tail}")
+        print("      上面用的是目前線上模型的實際分數，不是後台那份會過期的歷史基準。")
         print("      確定要換（例如刻意回退到舊模型）請加 --allow-regression。")
         return 1
     if worse and allow_regression:
