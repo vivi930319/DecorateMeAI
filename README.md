@@ -10,6 +10,10 @@
 > 內容包含瀏覽器的單一 API 入口、臉部特徵分析（BASIC / PRO）、妝容渲染與私人媒體管線、
 > 文字建議服務，以及 Cloud Run 部署設定與 Firestore 工作紀錄。
 >
+> 還有一條**閉環**：使用者說「這個判斷不對」→ 管理員逐筆覆核 → 重新訓練 →
+> 帶著誤差範圍與線上模型比較 → 換上線 → 回頭量使用者的同意率有沒有提高。
+> 那是這個專題想證明的事——模型不是交出去就結束，它要能被使用者的意見推著往前。
+>
 > 正式前端：<https://decorate-me.web.app>（前端原始碼在 `dev_makeup` 分支）
 
 ---
@@ -36,7 +40,17 @@ flowchart TD
     F --> J
     G --> J
     C --> J
+
+    C --> K[後台<br/>覆核 · 送訓 · 換上線 · 部署]
+    K --> L[Firestore 佇列<br/>runs / promotions / deployments]
+    M[訓練機<br/>training_worker · promotion_worker] -->|輪詢| L
+    M -->|換檔 · 上傳 · 部署| E
+    M -->|線上真實分數| L
 ```
+
+後台只**登記決定**，不執行：模型檔在訓練機的檔案系統上，Cloud Run 讀不到，
+所以佇列是兩邊唯一的接觸面。訓練機沒開機時請求就排隊等著——
+這件事在畫面上會直說，不會假裝進度在前進。
 
 ---
 
@@ -69,8 +83,18 @@ flowchart TD
   自動擷取正面與左右 45 度，建立更完整的輪廓與側面資料。
 * **非同步工作**：兩者都以提交後輪詢的方式運作，工作狀態與逾時由 Job Store 管理，
   避免長時間佔用連線。
-* **模型檔納入版控**：`models/` 下的分類頭與形狀檔隨專案保存，換機器不需重訓。
-  DINOv2 主幹（88MB）刻意不收，需要時以 `tools/export_dinov2_heads.py` 重新匯出。
+* **皮膚取樣的三道防線**：臉頰多邊形先避開髮際線；MediaPipe `selfie_multiclass`
+  分割出頭髮像素（一張測試照佔畫面 28.3%）；分割不可用時退回材質啟發式。
+  分析結果會標出**取樣來源**（segmentation／texture／unfiltered），
+  先前這三條退路是靜默的，同一個人的兩張照片可以給出不同答案而畫面上毫無線索。
+* **誠實說出這個改善的大小**：跨三個來源七張照片，分割只讓 L\* 平均動 +0.17，
+  沒有任何季型或色階標籤改變。真正主宰誤差的是**拍攝條件**——兩張照片十種光線變化，
+  ΔE 中位數 5.76、最大 11.15（ΔE 2.3 就是肉眼可辨的門檻），十種裡六種改了色階標籤、
+  兩種改了季型。**輸入的精度撐不起建立在它上面的判斷**，調排序修不了這件事。
+* **模型檔不進 Git**：權重靠 `tools/face_models_manifest.json` 描述，從 GCS 取得。
+  manifest 記著每個檔案的 sha256，`face/Dockerfile` 會跑
+  `download_face_models.py --verify-only`——換了模型卻沒更新 manifest，
+  build 會以一個「看起來像下載壞掉」的訊息失敗。
 
 ### 3. 妝容渲染與私人媒體（`replicate_render_api.py` / `replicate_render.py`）
 
@@ -84,8 +108,14 @@ flowchart TD
 
 * 依臉部分析結果與選定風格組出提示詞，交由 Ollama 產生六段式繁體中文妝容建議。
 * 具備 `/suggest` 與 `/suggest/stream` 兩種輸出，服務金鑰缺少時拒絕啟動（fail closed）。
-* **目前狀態**：Gateway 的 `GATEWAY_ALLOW_EXTERNAL_TEXT_UPSTREAM` 未開啟，
-  `/text-suggestion/*` 一律回 503。等上游端完成金鑰輪替並提供固定網址後才會啟用。
+* **簽章的渲染提示詞**：回應中第二段英文是給渲染端用的。它帶著共用密鑰的簽章與契約版本，
+  渲染端**驗證**而不是自己重新生成——兩邊各自組一次提示詞，遲早會對同一張臉講出不同的妝。
+  `REQUIRE_PERSONALIZED_RENDER_PROMPT` 開啟時，拿不到可信提示詞就明確失敗；
+  關閉時退回固定風格句，但會說出來。先前那個退路是靜默的，
+  「個人化失敗」與「個人化成功」在畫面上長得一模一樣。
+* **部署位置**：這支跑在組員的機器上，經 Cloudflare Tunnel 對外。網址每次重啟都會換，
+  用 `web_frontend/update-ollama-url.ps1` 同時更新 Gateway 的 `TEXT_SUGGESTION_URL`
+  與 render 的 `SUGGESTION_SERVICE_URL`——**兩個都要改**，只改一個的話渲染會安靜地退回通用妝容。
 
 ### 5. 五官判斷回饋（`face_feedback.py`）
 
@@ -113,7 +143,108 @@ flowchart TD
 | `admin_audit.py` | 管理端操作稽核紀錄 |
 | `face_feedback.py` | 五官判斷回饋：對照 `*_classes.json` 驗證、寫入 `face_feedback` 集合，並提供 BASIC／PRO 共用的路由註冊 |
 | `analysis_package.py` | 分析結果封裝，供前端與文字建議共用 |
+| `training/training_run_store.py` | 訓練批次的 Firestore 讀寫、worker 心跳、`macro_std_error`（訓練端與換上線端共用同一個誤差算式） |
+| `tools/promote_model.py` | 換模型上線：類別檢查、以線上分數重算、備份、重寫 manifest |
+| `tools/online_trust_score.py` | 依模型版本分組的線上同意率，附 Wilson 區間 |
 | `dev_server_utils.py` | 本機開發伺服器啟動、連接埠占用偵測與 CORS 來源 |
+
+---
+
+## 模型持續改善迴路
+
+使用者說「這個判斷不對」之後會發生什麼事。整條線的設計原則只有一句：
+**後台下令，本機執行**——模型檔在訓練機的檔案系統上，Cloud Run 碰不到它，
+而 ConvNeXt 訓練是好幾分鐘的 CPU 工作，一個 HTTP request 裝不下。
+
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#ffffff', 'primaryTextColor': '#000000', 'primaryBorderColor': '#000000', 'lineColor': '#000000', 'secondaryColor': '#ffffff', 'tertiaryColor': '#ffffff'}}}%%
+flowchart LR
+    A[使用者修正五官判斷] --> B[face_feedback<br/>Firestore]
+    B --> C[後台逐筆覆核<br/>採用／退回]
+    C -->|送去訓練| D[face_training_runs<br/>queued]
+    D --> E[training_worker.py<br/>訓練機]
+    E -->|訓練前後指標| D
+    D -->|換上線| F[face_model_promotions<br/>queued]
+    F --> G[promotion_worker.py<br/>訓練機]
+    G --> H[promote_model.py<br/>換檔 → 上傳 GCS → 部署]
+    H --> I[face-basic / face-pro<br/>Cloud Run]
+    H --> J[face_model_metrics/current<br/>線上真實分數]
+    J --> C
+    I --> A
+```
+
+### 為什麼要人按兩次
+
+`training_worker` **刻意不把訓練出來的模型換上線**——「要不要換是決策，不是計算」。
+所以「送去訓練」與「換上線」是兩個獨立的決定，各自要有人按。
+先前只有前者，結果是 37 批產出躺在 `models/training_runs/`，
+線上目錄一個位元組都沒動過，其中包括一個比線上高 11.7 分的鼻型模型。
+
+### 同一張考卷
+
+跨批次比較只有在「考卷固定」時才成立。`holdout_split_v2.json` 定案後不再重跑：
+
+| | |
+|---|---|
+| 總量 | 2298 張 → 保留 613 張、197 個身分（ratio 0.2、seed 42） |
+| 每個部位實際可用 | **76～169 張**（只有帶該標註的影像算數） |
+| 鍵 | sha256，不是路徑——搬機器或搬資料夾都不影響 |
+
+`training_worker` 會把這份切分複製進 `*_plus_feedback` 快取目錄，
+訓練腳本自己也再補一次。少了它，訓練會在第一個 epoch 前就 `FileNotFoundError`，
+而「重新送訓」只是在重複同一個錯誤。兩處都**只複製、不重新亂數切**——
+換一份新的隨機切分等於安靜地終結跨批次比較。
+
+### 數字要帶誤差
+
+macro accuracy 是各類別 recall 的平均，所以
+
+```
+Var(macro) = (1/K²) · Σ_c  recall_c · (1 - recall_c) / n_c
+```
+
+在 76～169 張的規模下，單次量測的 95% 誤差是 **±7～9 個百分點**。
+所以這套量測**分辨不出 10 個百分點以內的差異**——讀任何一個 delta 都要記得這件事。
+
+`promote_model` 因此只在「差距大到誤差解釋不掉」時才擋下換上線。
+先前是任何負數都整批拒絕，等於把雜訊當成證據：2026-09-04 有一批被 −2.6 擋掉，
+而那個部位的誤差是 ±10.1。誤差算不出來時回 `None` 而不是 `0`
+（`0` 會被讀成「量得毫無誤差」），並退回保守的舊規則。
+
+### 換上線時擋在前面的四件事
+
+| 檢查 | 擋掉什麼 |
+|---|---|
+| `classes.json` 一致 | 2026-08-24 加了第四類眉型而代碼表沒跟上，一萬張線上照片有 964 張的答案被丟成 unknown，而且不報錯 |
+| 以**線上真實分數**重算 | 後台的歷史基準換過一次模型就過期，會把 −4.5 畫成 +2.3 |
+| 備份被替換的檔案 | 換到一半失敗時線上目錄是新舊混合，要能回去 |
+| 重寫 manifest 的 sha256 | 否則下一次 build 會以「像下載壞掉」的訊息失敗 |
+
+`--allow-regression` 留給刻意的回退。
+
+### 兩台守候程式
+
+| 程式 | 排程工作 | 職責 |
+|---|---|---|
+| `tools/training_worker.py` | `DecorateMe 訓練機` | 撿 queued 批次去訓練，回寫訓練前後指標 |
+| `tools/promotion_worker.py` | `DecorateMe 換模型機` | 撿換上線與部署請求，一路做到 Cloud Run |
+
+兩者都由 `tools/start_*_worker.ps1` 包起來（日誌輪替、UTF-8、指數退避重啟），
+再由 Windows 工作排程每 5 分鐘拉一次——**死掉的行程自己會回來**。
+
+看門狗救不了「行程還活著但程式是舊的」，所以 `promotion_worker` 會在每輪閒下來時
+比對自己的原始碼指紋，變了就以結束碼 `86` 退出，外殼立刻用新版重啟。
+檢查點刻意放在該輪工作全部做完之後——換模型中途結束會留下一筆卡在 `running`
+而背後沒有任何行程的請求。
+
+啟動排程：`powershell -ExecutionPolicy Bypass -File tools\setup_training_task.ps1`
+
+### 換完之後怎麼知道有沒有變好
+
+`tools/online_trust_score.py --by-version` 依模型版本分組計算使用者的同意率——
+「換模型之後大家是不是更同意了」正是整個回饋迴路存在的理由。
+每個比率旁邊印 Wilson 區間：以兩週內拿得到的樣本數，它們會重疊，
+**那才是誠實的答案**，不是一個看起來像進展的數字。
 
 ---
 
@@ -330,14 +461,18 @@ curl -s -o /dev/null -w "%{http_code}\n" "https://decorate-me.web.app/public-con
 
 ## 相關文件
 
-| 文件 | 內容 |
+**這個 repo 裡只有 `README.md` 與 `docs/agents/`。** 其餘 `.md` 依專案慣例不進版控
+（`.gitignore` 是白名單，第二行就是 `*`），所以工作文件留在本機：
+
+| 位置 | 內容 |
 |---|---|
-| `後端完整技術文件_2026-07-25.md` | 架構、端點、資安機制與環境變數的完整參考 |
-| `Demo前設定與走查清單_2026-07-25.md` | Demo 前一天的設定與走查步驟 |
-| `搬機地雷補充_2026-07-21.md` | 換機器時容易踩到的問題 |
-| `給資料庫端_待修清單_2026-07-25.md` | 對資料庫端的待修項目與實測證據 |
-| `給Ollama端_文字建議服務接入規格書_2026-07-25.md` | 文字建議服務的接入規格 |
-| `給資料庫端_緊急_會員端點全面401_2026-07-27.md` | 2026-07-27 會員端點全面 401 的事故紀錄 |
+| `docs/專案管理與交接/歷史流程更改追蹤.md` | **除錯時第一個要讀的**。逐次記錄問題、根因、修正與**驗證界線**，包括當時推論錯在哪 |
+| `docs/專案管理與交接/演算法文件書.md`、`資料庫文件書.md` | 演算法與資料庫的完整說明 |
+| `docs/專案管理與交接/Gateway_API測試與驗收操作手冊.md` | 線上 Gateway 的驗收步驟 |
+| `補充文件md檔案/` | 給資料庫端、演算法端、前端的規格書與實測報告 |
+
+歷史紀錄裡有一條反覆出現的教訓值得寫在這裡：**看狀態碼不夠，要看 `error.code`**。
+同樣是 401，「沒登入」與「上游拒絕我們」是兩件事，混在一起會把三天花在錯的方向上。
 
 ---
 
