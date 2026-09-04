@@ -91,5 +91,33 @@ check('不編造百分比進度', !/apr[\s\S]{0,400}?(percent|progress\s*=\s*Mat
 check('讀不到就維持現狀，不用故障蓋掉資訊',
   /if \(!res\.ok\) return this\._promotionActive/.test(code));
 
+console.log('\n=== 換上線：人選部位，數字帶誤差 ===');
+// 只看 promoteRun 這一段。別的地方仍然可以用 trainHistoricalBefore 畫「訓練前後對照」，
+// 那是另一件事；換上線要比的是「現在線上是什麼」。
+const promote = (code.match(/const promoteRun = async[\s\S]*?\n            \};/) || [''])[0];
+check('換上線的區段找得到', promote.length > 500, `${promote.length} 字元`);
+// 這是這次修的根。拿「這一批訓練前」當基準，換過一次模型就過期，
+// 於是按鈕會提供根本換不上去的部位——2026-09-04 那批三個部位就是這樣來的。
+check('基準用線上實際分數，不是歷史批次',
+  /trainLatestRegisteredMetrics\(\s*\n?\s*fbCurrentMetrics/.test(promote)
+  && !/trainHistoricalBefore\(run\)/.test(promote));
+check('線上分數有被記下來', /fbCurrentMetrics = data\?\.currentMetrics/.test(code));
+check('對話框放得進自訂節點', /opts\.bodyNode/.test(code));
+check('逐部位勾選', /promote-picker/.test(promote) && /type = 'checkbox'/.test(promote));
+check('只送出勾選的部位',
+  /const parts = Array\.from\(picked\)/.test(promote)
+  && /requestModelPromotion\(runId, parts\)/.test(promote));
+check('沒有勾就不能按', /ok\.disabled = picked\.size === 0/.test(code));
+// 預設勾「確實比較好」的；看不出差別的留給人決定，不要替他決定。
+check('預設只勾確實比較好的', /verdict === 'better'\)\.map\(/.test(promote));
+check('確實比較差的不給勾', /box\.disabled = row\.verdict === 'worse'/.test(promote));
+
+// 誤差要跟 promote_model 的 _diff_margin 同一個算式，
+// 否則同一個模型會被前端與訓練端講成不同的話，而且沒有人看得出來。
+check('誤差用 1.96 × 合併標準誤', /1\.96 \* Math\.sqrt\(a \* a \+ b \* b\)/.test(code));
+check('算不出誤差回 null，不是 0', /Number\.isFinite\(a\)[\s\S]{0,60}return null/.test(code));
+check('畫面寫出誤差範圍', /看不出差別（誤差約 ±/.test(js));
+check('畫面寫出保留集張數', /保留集 \$\{row\.n/.test(js));
+
 console.log(`\n${pass}/${pass + fail} passed`);
 process.exit(fail ? 1 : 0);

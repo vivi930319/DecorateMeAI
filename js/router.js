@@ -2271,6 +2271,9 @@ function showConfirm(msg, opts){
         + '</div></div>';
     if (opts.title) ov.querySelector(".ga-title").textContent = opts.title;
     ov.querySelector(".ga-msg").textContent = msg;
+    // 需要「讓人在對話框裡做選擇」時才用 bodyNode，而且只收已經建好的節點——
+    // 訊息本身仍然走 textContent，不開 HTML 字串的口子。
+    if (opts.bodyNode) ov.querySelector(".ga-msg").after(opts.bodyNode);
     ov.querySelector(".ga-ok").textContent = opts.okText || "確定";
     ov.querySelector(".ga-cancel").textContent = opts.cancelText || "取消";
     document.body.appendChild(ov);
@@ -8194,6 +8197,10 @@ const PageInit = {
             const fbRunStatus = new Map();
             // 批次卡片的重訓按鈕需要完整 run，而不是只有 status 字串。
             const fbRunRecords = new Map();
+            // 「線上現在實際是什麼分數」。換上線成功時由 promotion_worker 寫進
+            // face_model_metrics/current，Gateway 原封不動送過來。換模型要比的是它，
+            // 不是「這一批訓練前是什麼」——後者換過一次模型就過期了。
+            let fbCurrentMetrics = null;
             let fbRetryableRuns = [];
             let fbRetryingRunId = '';
             let fbRetryingBatch = false;
@@ -8398,45 +8405,121 @@ const PageInit = {
                 return min ? `${min} 分 ${sec} 秒` : `${sec} 秒`;
             };
 
-            // 只登記「比線上好」的部位。
+            // 換上線是決策，所以逐個部位攤開讓人自己勾。
             //
-            // 眉型與眼型在最近幾批一路往下掉，臉型在 ±2 之間跳——把一整批無差別換上去
-            // 等於拿運氣賭。training_worker 的註解已經寫過這件事：「要不要換是決策，
-            // 不是計算」，所以這裡把決策攤開給人看，但預設不勾會讓系統變差的部位。
+            // training_worker 的註解早就寫過「要不要換是決策，不是計算」，但這裡先前
+            // 是自己算完就送：`delta > 0` 的全部丟出去，人只能看不能選。
+            //
+            // 兩個毛病疊在一起。基準是「這一批訓練前」的歷史數字，換過一次模型就過期；
+            // 而那個 delta 沒有誤差範圍。保留集固定是 613 張，但每個部位只用得到有該
+            // 標註的那些——實測 76～169 張，單次量測的 95% 誤差就有 ±7～9 個百分點。
+            // 2026-09-04 有一批因此被 -2.6 擋掉全部，而那個 -2.6 完全落在雜訊裡。
+            const promoteMargin = (liveEntry, batchEntry) => {
+                // 兩邊獨立相加是保守估計（同一批影像的成對比較變異更小），
+                // 保守的方向是比較容易判成「看不出差別」。與 promote_model 的
+                // _diff_margin 用同一個算式，兩邊不能對同一個模型講出不同的話。
+                const a = Number(liveEntry?.macroStdErr);
+                const b = Number(batchEntry?.macroStdErr);
+                if (!Number.isFinite(a) || !Number.isFinite(b) || a < 0 || b < 0) return null;
+                return 1.96 * Math.sqrt(a * a + b * b) * 100;
+            };
             const promoteRun = async (runId) => {
                 const run = fbRunRecords.get(String(runId));
                 if (!run) { showAlert('找不到這個批次的資料，請重新整理後再試', { type: 'error' }); return; }
-                const before = trainParts(trainHistoricalBefore(run));
+                // 比的是「現在線上」，不是「這一批訓練前」。後者換過一次模型就過期：
+                // 線上臉型已經 53.4%，卻拿 46.6% 去比，一個 48.9% 的批次會被畫成 +2.3，
+                // 其實是 -4.5。按下去才被 promote_model 用真實數字擋回來——
+                // 按鈕在被按之前就講錯了。
+                const before = trainParts(trainLatestRegisteredMetrics(
+                    fbCurrentMetrics || {}, Array.from(fbRunRecords.values())));
                 const after = trainParts(run.modelAfter);
                 const rows = [];
                 Object.keys(TRAIN_PART_ZH).forEach((part) => {
                     const ma = trainMacro(after[part]);
                     if (ma == null) return;
                     const mb = trainMacro(before[part]);
-                    rows.push({ zh: TRAIN_PART_ZH[part], after: ma, delta: mb == null ? null : (ma - mb) * 100 });
+                    const delta = mb == null ? null : (ma - mb) * 100;
+                    const margin = promoteMargin(before[part], after[part]);
+                    let verdict = 'unknown';
+                    if (delta != null && margin != null) {
+                        verdict = delta > margin ? 'better' : (delta < -margin ? 'worse' : 'same');
+                    } else if (delta != null) {
+                        // 舊批次的 modelAfter 沒有 macroStdErr（那是這次才開始記的），
+                        // 算不出誤差就退回舊的判斷方式，但畫面會說「算不出誤差」。
+                        verdict = delta > 0 ? 'better' : (delta < 0 ? 'worse' : 'same');
+                    }
+                    rows.push({ zh: TRAIN_PART_ZH[part], live: mb, after: ma, delta, margin, verdict,
+                                n: Number(after[part]?.valCount) || null });
                 });
-                const improved = rows.filter((row) => row.delta != null && row.delta > 0);
-                if (!improved.length) {
-                    showAlert('這一批沒有任何部位比線上模型好，換上去只會讓分析變差。',
+                if (!rows.length) {
+                    showAlert('這個批次沒有可以比較的部位分數。', { type: 'error' });
+                    return;
+                }
+                const selectable = rows.filter((row) => row.verdict !== 'worse');
+                if (!selectable.length) {
+                    showAlert('這一批每個部位都比線上差，而且差距大到不是抽樣造成的。',
                               { type: 'error' });
                     return;
                 }
-                const listed = improved
-                    .map((row) => `${row.zh} ${(row.after * 100).toFixed(1)}%（+${row.delta.toFixed(1)}）`)
-                    .join('\n');
-                const skipped = rows.filter((row) => !improved.includes(row)).map((row) => row.zh);
-                const skippedText = skipped.length ? `\n\n不換（沒有比線上好）：${skipped.join('、')}` : '';
+                // 預設只勾「確實比較好」的。看不出差別的留給人自己決定——換上去不會
+                // 讓系統變差，但也沒有證據說會變好，那是一個判斷，不是計算。
+                const picked = new Set(rows.filter((row) => row.verdict === 'better').map((row) => row.zh));
+                const list = document.createElement('div');
+                list.className = 'promote-picker';
+                rows.forEach((row) => {
+                    const label = document.createElement('label');
+                    label.className = `pp-row pp-${row.verdict}`;
+                    const box = document.createElement('input');
+                    box.type = 'checkbox';
+                    box.checked = picked.has(row.zh);
+                    box.disabled = row.verdict === 'worse';
+                    const text = document.createElement('span');
+                    const head = document.createElement('b');
+                    head.textContent = row.zh;
+                    const score = document.createElement('span');
+                    score.className = 'pp-score';
+                    score.textContent = row.live == null
+                        ? `線上沒有這個部位 → ${trainPct(row.after)}`
+                        : `${trainPct(row.live)} → ${trainPct(row.after)}　${row.delta >= 0 ? '+' : ''}${row.delta.toFixed(1)}`;
+                    const why = document.createElement('span');
+                    why.className = 'pp-why';
+                    // 每一行都要說出「憑什麼這樣判斷」。保留集每個部位只有 76～169 張，
+                    // 不寫出誤差與 n，2.6 個百分點會被讀成確定的差距。
+                    why.textContent = row.margin == null
+                        ? (row.live == null ? '新增部位' : '這個批次沒有記誤差，無法判斷差距是否顯著')
+                        : ({
+                            better: `確實比較好（超出誤差 ±${row.margin.toFixed(1)}）`,
+                            same: `看不出差別（誤差約 ±${row.margin.toFixed(1)}，保留集 ${row.n || '?'} 張）`,
+                            worse: `確實比較差（超出誤差 ±${row.margin.toFixed(1)}），不能換`,
+                            unknown: '無法比較',
+                        })[row.verdict];
+                    text.append(head, score, why);
+                    label.append(box, text);
+                    box.onchange = () => {
+                        if (box.checked) picked.add(row.zh); else picked.delete(row.zh);
+                        const ok = document.querySelector('#dmConfirm .ga-ok');
+                        if (ok) {
+                            ok.disabled = picked.size === 0;
+                            ok.textContent = picked.size ? `登記換上線（${picked.size} 個部位）` : '請先勾選部位';
+                        }
+                    };
+                    list.appendChild(label);
+                });
                 showConfirm(
-                    `要把這些部位換上線嗎？\n\n${listed}${skippedText}\n\n`
+                    '勾選要換上線的部位。分數是同一份保留集上的 macro，'
+                    + '差距小於誤差就代表這次量測分不出好壞——那是判斷，不是計算。\n\n'
                     + '登記之後由訓練機接手：換檔案、上傳模型、重新部署 face 服務，'
-                    + '整個過程要幾分鐘，狀態會在這一頁更新。'
+                    + '整個過程要幾分鐘，狀態會在這一區更新。'
                     + '訓練機沒有開著的話，這筆會排隊等到下次啟動。',
                     {
                         title: '換模型上線',
-                        okText: '登記換上線',
+                        bodyNode: list,
+                        okText: picked.size ? `登記換上線（${picked.size} 個部位）` : '請先勾選部位',
                         cancelText: '取消',
                         onOk: async () => {
-                            const res = await Api.requestModelPromotion(runId, improved.map((row) => row.zh));
+                            const parts = Array.from(picked);
+                            if (!parts.length) return;
+                            const res = await Api.requestModelPromotion(runId, parts);
                             if (!res.ok) {
                                 showAlert(res.error || '登記失敗，請稍後再試',
                                           { type: 'error', code: res.code, status: res.status });
@@ -8452,11 +8535,16 @@ const PageInit = {
                         },
                     }
                 );
+                // 一個部位都沒勾就不該按得下去。showConfirm 是同步把節點掛上去的，
+                // 所以呼叫回來之後查得到那顆按鈕。
+                const ok = document.querySelector('#dmConfirm .ga-ok');
+                if (ok) ok.disabled = picked.size === 0;
             };
 
             const renderTrainingRuns = (data) => {
                 if (fbTrainingPanel) fbTrainingPanel.hidden = false;
                 const runs = Array.isArray(data?.runs) ? data.runs : [];
+                fbCurrentMetrics = data?.currentMetrics || null;
                 const currentParts = trainParts(trainLatestRegisteredMetrics(data?.currentMetrics || {}, runs));
                 if (fbCurrentScore) {
                     // currentMetrics 是已登記指標，不是部署憑證；歷史批次也可能未上線。

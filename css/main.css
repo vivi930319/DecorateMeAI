@@ -1614,6 +1614,21 @@ body.admin-mode .main-content * { letter-spacing:0; }
    太長時自己捲，不要把整張卡撐到看不到下面的清單。 */
 .apr-detail { margin:10px 0 0; padding:11px 13px; max-height:260px; overflow:auto; border-left:3px solid var(--admin-line); border-radius:0 6px 6px 0; background:var(--admin-surface); color:var(--admin-ink); font:400 11.5px/1.85 ui-monospace,"Noto Sans TC",monospace; white-space:pre-wrap; word-break:break-word; }
 .admin-promotion.is-failed .apr-detail { border-left-color:var(--admin-red); }
+/* 換上線的部位勾選。這是一份要讀的清單，不是一排選項：每一列都要同時說出
+   分數、差多少、以及憑什麼這樣判斷，所以三段各自一行、數字用等寬對齊。 */
+.promote-picker { display:grid; gap:7px; margin:14px 0 4px; text-align:left; }
+.pp-row { display:flex; align-items:flex-start; gap:10px; padding:10px 12px; border:1px solid var(--admin-line); border-radius:8px; background:var(--admin-surface); cursor:pointer; }
+.pp-row:hover { border-color:var(--admin-ink); }
+.pp-row input { margin:2px 0 0; flex:0 0 auto; }
+.pp-row span { display:block; }
+.pp-row b { display:block; color:var(--admin-ink); font:600 13px/1.4 "Noto Sans TC",sans-serif; }
+.pp-score { margin-top:2px; color:var(--admin-ink); font-size:12px; font-variant-numeric:tabular-nums; }
+.pp-why { margin-top:2px; color:var(--admin-muted); font-size:11px; line-height:1.55; }
+.pp-better { border-color:rgba(23,107,88,.4); }
+.pp-better .pp-why { color:var(--admin-green); }
+/* 看不出差別的不是錯誤，只是沒有證據——用中性的灰，不要用警告色嚇人。 */
+.pp-worse { background:var(--admin-soft); cursor:not-allowed; opacity:.72; }
+.pp-worse .pp-why { color:var(--admin-red); }
 .admin-promotion.is-done .apr-title strong { color:var(--admin-green); }
 .admin-promotion.is-failed .apr-title strong { color:var(--admin-red); }
 .admin-promotion.is-failed .apr-step.now .apr-dot { border-color:var(--admin-red); background:var(--admin-red); animation:none; }
