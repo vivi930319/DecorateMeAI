@@ -114,24 +114,15 @@ def list_queued(project: str, limit: int = 10) -> list[dict]:
 STALE_MINUTES = 30
 
 
-def requeue_stale(project: str) -> int:
-    """把上次沒做完的請求排回佇列。
-
-    換模型中途關機（或斷電、或 worker 被殺）時，那筆請求會停在 claimed 或
-    running——而 list_queued 只找 queued，所以沒有人會再碰它。後台顯示「進行中」
-    而實際上沒有任何程序在跑，跟訓練那邊踩過的十一小時是同一種壞法。
-
-    重做是安全的：複製檔案、上傳 GCS、build 與部署都是冪等的，而且 promote_model
-    會用執行當下的線上分數重新判斷——如果上一次其實已經換完，這次會看到
-    live 等於 new，不算退步，照樣通過。
-    """
+def _requeue_stale_in(project: str, collection: str, id_field: str) -> int:
+    """把某個集合裡上次沒做完的請求排回佇列。回傳回收了幾筆。"""
     from datetime import datetime, timedelta, timezone
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=STALE_MINUTES)
     recovered = 0
     for status in ("claimed", "running"):
         query = {
-            "from": [{"collectionId": PROMOTIONS_COLLECTION}],
+            "from": [{"collectionId": collection}],
             "where": {"fieldFilter": {
                 "field": {"fieldPath": "status"},
                 "op": "EQUAL",
@@ -153,18 +144,42 @@ def requeue_stale(project: str) -> int:
                 when = when.replace(tzinfo=timezone.utc)
             if when > cutoff:
                 continue  # 還在合理時間內，可能真的正在跑
-            pid = str(row.get("promotionId") or "")
-            if not pid:
+            doc_id = str(row.get(id_field) or "")
+            if not doc_id:
                 continue
-            patch_document(project, PROMOTIONS_COLLECTION, pid, {
+            patch_document(project, collection, doc_id, {
                 "status": "queued",
+                # stage 要一起清掉。它停在「正在部署 gateway」，重新排隊後那行還在，
+                # 後台就會顯示一筆 queued 卻同時說它正在部署某個服務。
+                "stage": None,
                 "note": f"上一次沒有做完（訓練機可能中途關機），已重新排隊。"
                         f"停在 {status} 超過 {STALE_MINUTES} 分鐘。",
                 "error": None,
             })
-            print(f"[{pid}] 回收：停在 {status} 太久，重新排隊")
+            print(f"[{doc_id}] 回收：停在 {status} 太久，重新排隊")
             recovered += 1
     return recovered
+
+
+def requeue_stale(project: str) -> int:
+    """把上次沒做完的請求排回佇列——換模型與部署兩種都要。
+
+    換模型中途關機（或斷電、或 worker 被殺）時，那筆請求會停在 claimed 或
+    running——而 list_queued 只找 queued，所以沒有人會再碰它。後台顯示「進行中」
+    而實際上沒有任何程序在跑，跟訓練那邊踩過的十一小時是同一種壞法。
+
+    部署也要一起回收，而且它的後果更硬。 這裡原本只掃換模型那個集合，但
+    Gateway 在收到新的部署請求時會擋掉「還有一筆 queued/claimed/running」的情況——
+    於是一筆卡死的部署不是「顯示怪怪的」而已，它會讓後台那顆部署按鈕**永遠**
+    按不下去，而且沒有任何一條路徑會把它清掉。
+
+    重做都是安全的：複製檔案、上傳 GCS、build 與部署都是冪等的，而且 promote_model
+    會用執行當下的線上分數重新判斷——如果上一次其實已經換完，這次會看到
+    live 等於 new，不算退步，照樣通過。部署更單純，它本來就只是「拿現在的程式碼
+    再建一次、再送一次」。
+    """
+    return (_requeue_stale_in(project, PROMOTIONS_COLLECTION, "promotionId")
+            + _requeue_stale_in(project, DEPLOYMENTS_COLLECTION, "deploymentId"))
 
 
 def list_queued_in(project: str, collection: str, limit: int = 10) -> list[dict]:
@@ -182,8 +197,15 @@ def list_queued_in(project: str, collection: str, limit: int = 10) -> list[dict]
     return sorted(rows, key=lambda row: str(row.get("createdAt") or ""))
 
 
-def process_deployment(row: dict, project: str, dry_run: bool) -> bool:
-    """重新建置並部署指定的服務。不換模型，只把現在的程式碼送上去。"""
+def process_deployment(row: dict, project: str, dry_run: bool, worker_id: str) -> bool:
+    """重新建置並部署指定的服務。不換模型，只把現在的程式碼送上去。
+
+    要先 claim 才做事。 這裡原本讀到 queued 就直接把狀態寫成 claimed，完全不看
+    它現在是不是還在 queued——換模型那條路徑至少有 claim() 檔著，部署這條連
+    那層都沒有。同時開兩個 worker（改完程式碼手動再起一個就會發生）時，兩邊
+    都會去跑 deploy_*.ps1，互相覆蓋 Cloud Run revision，而且沒有人分得出線上
+    最後是哪一次的產物。
+    """
     dep_id = str(row.get("deploymentId") or "")
     services = [str(s) for s in (row.get("services") or []) if s in DEPLOY_SCRIPTS]
     if not dep_id or not services:
@@ -198,8 +220,9 @@ def process_deployment(row: dict, project: str, dry_run: bool) -> bool:
         print("  --dry-run：不執行")
         return True
 
-    patch_document(project, DEPLOYMENTS_COLLECTION, dep_id, {
-        "status": "claimed", "claimedAt": now_iso(), "error": None})
+    if not _claim_in(project, DEPLOYMENTS_COLLECTION, dep_id, worker_id):
+        print("  已經被收走，略過")
+        return False
 
     done = []
     for name in services:
@@ -236,22 +259,29 @@ def process_deployment(row: dict, project: str, dry_run: bool) -> bool:
     return True
 
 
-def claim(project: str, promotion_id: str, worker_id: str) -> dict | None:
-    """收下一筆 queued 請求。已經被收走就回 None。
+def _claim_in(project: str, collection: str, doc_id: str, worker_id: str) -> dict | None:
+    """收下某個集合裡的一筆 queued 請求。已經被收走就回 None。
 
     先讀再寫，不是原子操作——與 training_run_store.claim_run 同樣的取捨：
-    實務上只有一台訓練機，這個競態跑不出來。
+    實務上只有一台訓練機，這個競態跑不出來。Firestore 的 REST 介面只支援
+    「文件存不存在」的前置條件，要做欄位值的 CAS 得走 transaction commit，
+    而這裡共用的那層沒有包那支。
     """
-    row = get_document(project, PROMOTIONS_COLLECTION, promotion_id)
+    row = get_document(project, collection, doc_id)
     if not row or row.get("status") != "queued":
         return None
-    patch_document(project, PROMOTIONS_COLLECTION, promotion_id, {
+    patch_document(project, collection, doc_id, {
         "status": "claimed",
         "claimedAt": now_iso(),
         "workerId": worker_id,
         "error": None,
     })
     return row
+
+
+def claim(project: str, promotion_id: str, worker_id: str) -> dict | None:
+    """收下一筆 queued 換模型請求。已經被收走就回 None。"""
+    return _claim_in(project, PROMOTIONS_COLLECTION, promotion_id, worker_id)
 
 
 def _last_ledger_entry(run_id: str) -> dict | None:
@@ -436,7 +466,7 @@ def main() -> int:
             deployments = []
         for row in deployments:
             try:
-                process_deployment(row, args.project, args.dry_run)
+                process_deployment(row, args.project, args.dry_run, args.worker_id)
             except Exception as exc:
                 dep_id = str(row.get("deploymentId") or "")
                 print(f"[{dep_id}] 部署失敗：{type(exc).__name__}: {exc}")
