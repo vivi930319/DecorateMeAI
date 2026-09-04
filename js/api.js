@@ -108,6 +108,9 @@ const USER_ERROR_ZH = Object.freeze({
     PACKAGE_BUILD_FAILED: '臉部分析已完成，但結果整理失敗，請稍後再試（不需重拍照片）。',
     RENDER_TIMEOUT: '妝容生成逾時，請稍後再試。',
     RENDER_PROVIDER_ERROR: '妝容生成服務處理失敗，請稍後再試。',
+    // 內容審查擋下來的照片重試不會過——判定是確定性的，同一張圖同一個結果。
+    // 跟上面那則分開，因為使用者要做的下一步完全相反：一個是等，一個是換照片。
+    RENDER_CONTENT_BLOCKED: '這張照片被 AI 服務的內容審查擋下來了，換一張照片再試一次。同一張照片重試不會成功。',
     OLLAMA_UNAVAILABLE: '文字建議服務目前無法連線，請稍後再試。',
     NETWORK_ERROR: '網路連線失敗，請確認網路後再試。',
     FETCH_TIMEOUT: '服務回應逾時，請稍後再試。'
