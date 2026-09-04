@@ -626,6 +626,28 @@ def format_makeup_sections(sections: dict[str, str]) -> str:
     return "; ".join(f"{label}: {value}" for label, value in ordered if value)
 
 
+# identity lock：叫模型「除了妝以外什麼都不要動」的那幾句。
+#
+# 這段的歷史值得留著。 最早有八句「不要改」對上一句「上妝」——妝容描述只占整段
+# prompt 的 14%（226 字裡的 32 字，2026-09-04 實測）。擴散模型把整段一起加權，
+# 所以那個比例本身就是答案：使用者反映「妝太淡」，而 prompt 從頭到尾都在叫模型
+# 不要動。先收成三句（妝容占比 14% → 32%），2026-09-04 再依產品決定整段關閉，
+# 讓生圖模型自由發揮。
+#
+# 用旗標而不是直接刪，是因為這是一個會想來回試的取捨：關掉之後模型比較敢上妝，
+# 但也比較敢改臉、改姿勢、改背景，輸出可能不像本人。設 RENDER_IDENTITY_LOCK=1
+# 就把三句加回去，不必重新 build。
+#
+# 注意這裡關掉的只是**我們自己疊上去的**那幾句。前端送自訂 renderPrompt 時本來
+# 就原封不動送出，從來不疊 lock（那條路徑在更早以前就因為同樣的原因拿掉了）。
+IDENTITY_LOCK_ENABLED = os.getenv("RENDER_IDENTITY_LOCK", "0") != "0"
+IDENTITY_LOCK_SENTENCES = [
+    "Keep the same face, skin texture and hair as the original photo — do not smooth, airbrush, whiten, reshape, slim or beautify.",
+    "Keep the same pose, expression, clothing, background, lighting and framing.",
+    "Keep it photorealistic and camera-like, like the original photo — not AI art, a beauty filter or a 3D render.",
+] if IDENTITY_LOCK_ENABLED else []
+
+
 def build_render_prompt(
     frontend_package: dict[str, Any],
     face_analysis: dict[str, Any],
@@ -647,31 +669,13 @@ def build_render_prompt(
     else:
         makeup_detail = ", ".join(filter(None, [style_hint, suggestion[:300]]))
     ollama_line = f"Makeup reference (translated from advisor): {suggestion[:300].strip()}." if suggestion else ""
-    # 這一段原本有八句「不要改」對上一句「上妝」——妝容描述只占整段 prompt 的 14%
-    # （226 字裡的 32 字，2026-09-04 實測）。擴散模型會把整段一起加權，所以那個比例
-    # 本身就是答案：使用者一直反映「妝太淡」，而 prompt 從頭到尾都在叫模型不要動。
-    #
-    # 收成三句，講的事情沒有少：
-    #   身分與膚質（原本第 8、9 句，兩句講的是同一件事的兩半）
-    #   人以外的一切（原本第 7、10、11 句，全是「保持原樣」的列舉）
-    #   照片感（原本第 2、3 句）
-    # 原本第 12 句是前面三件事的總結，刪掉不損失任何約束。
-    #
-    # "The ONLY change allowed is" 一併拿掉：它是這段裡壓抑力最強的一句，而
-    # 「只改妝」這件事在第一句與後面三句已經講滿了，留著只是再加一次權重。
-    #
-    # 這是刻意的取捨，不是純賺。 那八句當初就是為了擋「模型把人臉改掉、美肌、
-    # 換姿勢」才寫這麼滿；放鬆之後走鐘的機率會上升。妝濃度本身不在這裡調——
-    # 那由建議服務產出的 makeup_detail 決定。
     parts = [
         "This is a makeup-only edit on the exact person in the input photo.",
         face_desc,
         f"Apply this makeup: {makeup_detail or 'everyday makeup'}.",
         ollama_line,
-        "Keep the same face, skin texture and hair as the original photo — do not smooth, airbrush, whiten, reshape, slim or beautify.",
-        "Keep the same pose, expression, clothing, background, lighting and framing.",
-        "Keep it photorealistic and camera-like, like the original photo — not AI art, a beauty filter or a 3D render.",
     ]
+    parts += IDENTITY_LOCK_SENTENCES
     return " ".join(p for p in parts if p)
 
 

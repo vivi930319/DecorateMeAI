@@ -328,18 +328,48 @@ class RenderApiTest(unittest.TestCase):
         prompt = build_server_render_prompt("softBaddie")
         for label in ("Base:", "Brows and eyes:", "Cheeks and contour:", "Lips:"):
             self.assertIn(label, prompt)
-        # identity lock 仍然疊在最後——分段只改「上什麼妝」，不動「不可以改長相」。
-        #
-        # 2026-09-04 把 lock 從八句收成三句（妝容描述原本只占整段 prompt 的 14%，
-        # 而使用者一直反映妝太淡）。所以這裡改成驗**它保護的三件事還在**，
-        # 不再釘在某一句的字面值上——那種寫法上次改字就紅了，卻不代表約束真的消失。
+        # 「這是一次只改妝的編輯」這句一定要在——它是把整段定義成編輯而不是重新生圖的
+        # 唯一一句，identity lock 關掉之後它是僅存的框架。
         self.assertIn("makeup-only edit", prompt)
-        for guard, missing in (
-            ("airbrush", "美肌與改臉的約束不見了，模型會把人磨皮磨到不像本人"),
-            ("same pose", "姿勢的約束不見了，妝前妝後會變成兩張不同的照片"),
-            ("photorealistic", "照片感的約束不見了，輸出會滑向 AI 插畫"),
-        ):
-            self.assertIn(guard, prompt, missing)
+
+    def test_the_identity_lock_is_off_by_default(self):
+        """2026-09-04 的產品決定：不再疊「除了妝以外什麼都不要動」，讓模型自由發揮。
+
+        歷史：最早八句「不要改」對上一句「上妝」，妝容只占整段 prompt 的 14%，
+        而使用者反映妝太淡；收成三句之後占比 32%；最後整段關閉。
+        """
+        from replicate_render import build_server_render_prompt
+
+        prompt = build_server_render_prompt("softBaddie")
+        for absent in ("airbrush", "same pose", "photorealistic", "Do not", "Keep the same"):
+            self.assertNotIn(absent, prompt, f"identity lock 應該關閉，卻仍出現「{absent}」")
+
+    def test_the_lock_can_be_switched_back_on(self):
+        """關掉是取捨不是結論：模型會比較敢上妝，也比較敢改臉、改姿勢、改背景。
+
+        RENDER_IDENTITY_LOCK=1 要能把三句加回去，而且不必重新 build——
+        這是一個會想來回試的參數。
+        """
+        import replicate_render as rr
+
+        saved = rr.IDENTITY_LOCK_SENTENCES
+        rr.IDENTITY_LOCK_SENTENCES = [
+            "Keep the same face, skin texture and hair as the original photo — do not smooth, airbrush, whiten, reshape, slim or beautify.",
+            "Keep the same pose, expression, clothing, background, lighting and framing.",
+            "Keep it photorealistic and camera-like, like the original photo — not AI art, a beauty filter or a 3D render.",
+        ]
+        try:
+            prompt = rr.build_server_render_prompt("softBaddie")
+            for guard, missing in (
+                ("airbrush", "美肌與改臉的約束不見了"),
+                ("same pose", "姿勢的約束不見了"),
+                ("photorealistic", "照片感的約束不見了"),
+            ):
+                self.assertIn(guard, prompt, missing)
+            # 妝容仍要講在約束前面，不能又回到被淹掉的狀態。
+            self.assertLess(prompt.index("Apply this makeup"), prompt.index("airbrush"))
+        finally:
+            rr.IDENTITY_LOCK_SENTENCES = saved
 
     def test_the_makeup_instruction_is_not_buried_by_the_identity_lock(self):
         """妝容描述不能被「不要改」的句子淹掉。
@@ -349,8 +379,9 @@ class RenderApiTest(unittest.TestCase):
         就是「妝太淡」的成因——調 guidance 沒有用（線上跑 gpt-image-2，
         那條路徑根本不送 guidance），能動的只有這裡的配比。
 
-        門檻放寬鬆是刻意的：這支要擋的是「又有人往 lock 裡加五句」那種回歸，
-        不是把某個精確比例固定下來。
+        門檻放寬鬆是刻意的：這支要擋的是「又有人往 prompt 裡加五句約束」那種回歸，
+        不是把某個精確比例固定下來。2026-09-04 起 lock 預設關閉，占比因此更高，
+        但這一項仍然有用——它守的是「不要再讓妝容被約束淹掉」，跟 lock 開不開無關。
         """
         from replicate_render import (RENDER_STYLE_SECTIONS, build_server_render_prompt,
                                       format_makeup_sections)
