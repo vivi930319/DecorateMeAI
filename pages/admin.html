@@ -43,6 +43,23 @@
             </div>
         </header>
 
+        <!-- 換模型進度。放在工具列正下方而不是複核區裡面，因為登記完之後人不一定
+             留在那一區，而「我按的那件事現在走到哪」在哪一區都該看得到。
+
+             沒有進行中、也沒有剛結束的請求時整條隱藏——常駐一條「目前沒有」的橫幅
+             只會變成背景雜訊，久了就沒有人再看它一眼。 -->
+        <section class="admin-promotion" id="adminPromotionBar" hidden aria-live="polite">
+            <div class="apr-head">
+                <div class="apr-title">
+                    <span>MODEL PROMOTION</span>
+                    <strong id="adminPromotionHeadline">—</strong>
+                </div>
+                <span class="apr-clock" id="adminPromotionClock"></span>
+            </div>
+            <ol class="apr-rail" id="adminPromotionRail"></ol>
+            <p class="apr-note" id="adminPromotionNote"></p>
+        </section>
+
         <main class="admin-content">
             <section class="admin-view active" data-admin-view="overview">
                 <div class="admin-view-heading">

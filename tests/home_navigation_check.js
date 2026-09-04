@@ -55,7 +55,11 @@ if (!/const openFilePicker = \(input\) =>/.test(router)
     fail('face analysis upload must reset the file input before opening the picker');
 }
 if (!/go\(page, opts\) \{[\s\S]*?const tracked = promise\.finally\(\(\) => \{[\s\S]*?this\._navigationPromise === tracked/s.test(router)
-    || !/async _go\(page, opts\)/.test(router)) {
+    // 只要求「換頁的實作在一個 async 的 _go 裡」，不鎖死參數個數：
+    // navId 是後來為了讓舊換頁失效而加的第三個參數，寫死 (page, opts) 的話
+    // 這條會在一次正常的重構之後開始說謊——它報的會是「去重壞了」，
+    // 而實際上去重好好的，壞的是這條檢查。
+    || !/async _go\(page, opts[,)]/.test(router)) {
     fail('router must deduplicate concurrent navigation to the same page');
 }
 if (!/this\._fetchPageTemplate\(page\)/.test(router)

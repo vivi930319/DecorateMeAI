@@ -309,6 +309,11 @@ body {
     position:fixed; inset:0; z-index:400; background:var(--ink);
     display:flex; flex-direction:column; align-items:center; justify-content:center;
     overflow:hidden;
+    /* 這是一段動畫，不是一個要被按的東西。它蓋滿整個視窗，只要接得到點擊，
+       開場那 3.4 秒內全站的第一下就會落在它身上而不是使用者瞄準的按鈕上。
+       關掉動畫改由 document 捕獲階段負責（見 index.html），所以這裡不需要
+       接任何指標事件。.done 之後那條規則保留著也無害，兩者不衝突。 */
+    pointer-events:none;
 }
 #brand-intro.done { animation:introOut 1.1s var(--ease) forwards; }
 @keyframes introOut { to{ opacity:0; visibility:hidden; } }
@@ -1577,6 +1582,35 @@ body.admin-mode .main-content * { letter-spacing:0; }
 .admin-topbar > div:first-child span,.admin-view-heading span,.admin-block-heading span { display:block; color:#7a858e; font:600 10px/1.2 Jost,sans-serif; text-transform:uppercase; }
 .admin-topbar h1 { margin:6px 0 0; color:var(--admin-ink); font:600 22px/1.25 "Noto Sans TC",sans-serif; }
 .admin-topbar-actions { display:flex; align-items:center; gap:12px; }
+/* 換模型進度條。它是工具列的延伸，不是內容區裡的一張卡——所以用凹槽那一層的底色
+   與上緣內陰影（跟 .acp-sunk 同一個光源），左右內距對齊工具列的 34px。這樣它讀起來
+   是後台外框的一部分，而不是飄在內容上面的通知條。
+   顏色全部走 --admin-* token，金色主題那一層改的是 token，這裡不必再寫一份。 */
+.admin-promotion { padding:13px 34px 15px; background:var(--admin-soft); border-bottom:1px solid var(--admin-line); box-shadow:inset 0 3px 7px -3px rgba(var(--admin-shade),.16); }
+.apr-head { display:flex; align-items:flex-end; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+.apr-title span { display:block; color:var(--admin-muted); font:600 10px/1.2 Jost,sans-serif; letter-spacing:.14em; text-transform:uppercase; }
+.apr-title strong { display:block; margin-top:3px; color:var(--admin-ink); font:600 14px/1.35 "Noto Sans TC",sans-serif; }
+.apr-clock { color:var(--admin-muted); font-size:11.5px; font-variant-numeric:tabular-nums; }
+.apr-rail { display:flex; margin:12px 0 0; padding:0; list-style:none; overflow-x:auto; scrollbar-width:none; }
+.apr-rail::-webkit-scrollbar { display:none; }
+.apr-step { position:relative; flex:1 1 0; min-width:92px; padding-top:17px; color:var(--admin-muted); font-size:11px; text-align:center; }
+/* 連接線穿過整格，首尾各切一半，看起來才是「節點之間有線」而不是線的兩端多出來。 */
+.apr-step::before { content:''; position:absolute; top:5px; left:0; right:0; height:2px; background:var(--admin-line); }
+.apr-step:first-child::before { left:50%; }
+.apr-step:last-child::before { right:50%; }
+.apr-dot { position:absolute; top:0; left:50%; transform:translateX(-50%); width:12px; height:12px; border-radius:50%; border:2px solid var(--admin-line); background:var(--admin-surface); }
+.apr-step b { display:block; font-weight:inherit; }
+.apr-step time { display:block; margin-top:2px; font-size:10px; font-variant-numeric:tabular-nums; }
+.apr-step.done::before { background:var(--admin-green); }
+.apr-step.done .apr-dot { border-color:var(--admin-green); background:var(--admin-green); }
+.apr-step.now { color:var(--admin-ink); font-weight:600; }
+/* 進行中是琥珀色的脈動，跟工具列的「資料同步中」同一個語彙。
+   等訓練機的時候也用它——那是誠實的：畫面在等，不是在前進。 */
+.apr-step.now .apr-dot { border-color:var(--admin-amber); background:var(--admin-surface); animation:adminPulse 1.2s ease-in-out infinite; }
+.apr-note { margin:11px 0 0; color:var(--admin-muted); font-size:11.5px; line-height:1.65; }
+.admin-promotion.is-done .apr-title strong { color:var(--admin-green); }
+.admin-promotion.is-failed .apr-title strong { color:var(--admin-red); }
+.admin-promotion.is-failed .apr-step.now .apr-dot { border-color:var(--admin-red); background:var(--admin-red); animation:none; }
 .admin-sync-status { min-height:34px; display:inline-flex; align-items:center; gap:8px; padding:0 11px; border:1px solid #d4dadd; border-radius:4px; background:#fafbfb; color:#66717a; font-size:12px; }
 .admin-sync-status i { width:7px; height:7px; border-radius:50%; background:#8b969e; }
 .admin-sync-status.ok i { background:var(--admin-green); }
@@ -2350,6 +2384,8 @@ button.sc2-col:focus-visible { outline:2px solid var(--gold-deep); outline-offse
     .admin-stage,.admin-topbar,.admin-content,.admin-view { width:100%; min-width:0; max-width:100%; }
     .admin-topbar { position:sticky; min-height:78px; padding:15px 20px; }
     .admin-content { padding:24px 20px 44px; overflow-x:hidden; }
+    /* 內距跟著工具列一起收窄；步驟軌本身可橫向捲，窄螢幕不會把字擠成兩三個字一行。 */
+    .admin-promotion { padding:12px 20px 14px; }
     .admin-product-grid,.admin-crawler-layout,.admin-product-search-panel { grid-template-columns:1fr; }
     .admin-product-search-panel p { grid-column:1; }
     .admin-overview-grid { grid-template-columns:1fr; }

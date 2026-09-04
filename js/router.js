@@ -3436,6 +3436,140 @@ const Router = {
         this.proCameraStream = null;
     },
 
+    // ═══ 換模型進度 ═══
+    //
+    // 「已登記」是承諾，不是狀態。先前按下換上線只跳一個 alert 說「完成後這一頁會顯示
+    // 已上線」，而 Api.fetchModelPromotions() 定義了卻**從來沒有被任何地方呼叫過**——
+    // 沒有東西回頭讀狀態，那句話是頁面兌現不了的。登記完就什麼都不會再變，
+    // 隔天再登記一次還是同一句話，於是「到底換上去了沒」永遠沒有答案。
+    //
+    // 這裡只顯示後端真的寫下來的東西：status、stage、note，以及三個時間戳。
+    // 不估進度、不估剩餘時間——換模型 worker 沒有心跳，前端無從知道訓練機開著沒有，
+    // 唯一誠實的說法是「停在等接手這一步，就代表還沒有人來拿」。
+    _promotionTimer: null,
+    _promotionRow: null,
+
+    stopPromotionWatch() {
+        if (this._promotionTimer) clearInterval(this._promotionTimer);
+        this._promotionTimer = null;
+    },
+
+    async _watchPromotion() {
+        this.stopPromotionWatch();
+        if (!(await this._renderPromotion())) return;
+        // 進行中才輪詢。換模型是分鐘級的事，15 秒夠細了；停止條件放在回呼裡，
+        // 這樣「做完了就不再打 API」不必依賴任何外部事件。
+        this._promotionTimer = setInterval(async () => {
+            if (!(await this._renderPromotion())) this.stopPromotionWatch();
+        }, 15000);
+    },
+
+    async _renderPromotion() {
+        const bar = document.getElementById('adminPromotionBar');
+        if (!bar) return false;                       // 已經離開後台
+        const res = await Api.fetchModelPromotions(5);
+        // 讀不到就維持畫面現狀。用一次網路抖動把已經顯示的進度換成錯誤，
+        // 等於讓故障冒充答案——這一條在 Gateway 端也是同一個規矩。
+        if (!res.ok) return this._promotionActive(this._promotionRow);
+
+        const row = (res.promotions || [])[0] || null;
+        this._promotionRow = row;
+        const status = String(row?.status || '');
+        const active = this._promotionActive(row);
+        // 結束六小時後就收起來。做完的事一直掛在最上面，久了會被當成背景不再有人看，
+        // 那會讓下一次真的在進行時也被忽略。
+        const finished = Date.parse(row?.finishedAt || '') || 0;
+        const fresh = finished && (Date.now() - finished) < 6 * 3600 * 1000;
+        if (!row || (!active && !fresh)) { bar.hidden = true; return false; }
+
+        bar.hidden = false;
+        bar.classList.toggle('is-done', status === 'deployed');
+        bar.classList.toggle('is-failed', status === 'failed');
+        this._paintPromotion(row, status, active);
+        return active;
+    },
+
+    _promotionActive(row) {
+        return ['queued', 'claimed', 'running'].includes(String(row?.status || ''));
+    },
+
+    _paintPromotion(row, status, active) {
+        const STEPS = [
+            { key: 'queued', label: '登記' },
+            { key: 'swapping', label: '換檔案' },
+            { key: 'uploading', label: '上傳' },
+            { key: 'deploying', label: '部署' },
+            { key: 'done', label: '上線' },
+        ];
+        const stage = String(row.stage || '');
+        const stageIndex = STEPS.findIndex(step => step.key === stage);
+        let at = 0;
+        if (status === 'claimed') at = 1;
+        else if (status === 'running') at = stageIndex > 0 ? stageIndex : 1;
+        else if (status === 'deployed') at = 4;
+        else if (status === 'prepared') at = 3;      // 檔案好了但沒部署，停在部署前
+        else if (status === 'failed') at = stageIndex > 0 ? stageIndex : 0;
+
+        const at2 = (n) => String(n).padStart(2, '0');
+        const clock = (iso) => {
+            const t = Date.parse(iso || '');
+            return t ? `${at2(new Date(t).getHours())}:${at2(new Date(t).getMinutes())}` : '';
+        };
+        // 每一步只標「後端真的寫下時間」的那幾步，其餘留白。憑階段推算時間會寫出
+        // 看起來精確、其實是猜的數字，那比留白更難發現錯。
+        const stamps = { 0: row.createdAt, 1: row.claimedAt, 4: status === 'deployed' ? row.finishedAt : '' };
+
+        const rail = document.getElementById('adminPromotionRail');
+        if (rail) rail.innerHTML = STEPS.map((step, i) => {
+            const done = status === 'deployed' ? true : i < at;
+            const now = status !== 'deployed' && i === at;
+            const time = clock(stamps[i]);
+            return `<li class="apr-step${done ? ' done' : ''}${now ? ' now' : ''}">`
+                 + `<i class="apr-dot" aria-hidden="true"></i><b>${escapeHtml(step.label)}</b>`
+                 + (time ? `<time>${time}</time>` : '') + '</li>';
+        }).join('');
+
+        const parts = Array.isArray(row.parts) ? row.parts.join('、') : '';
+        const HEAD = {
+            queued: '已登記，正在等訓練機接手',
+            claimed: '訓練機已接手',
+            running: '正在換模型',
+            deployed: `已上線${row.version ? `（版本 ${row.version}）` : ''}`,
+            prepared: '檔案已備妥，尚未部署',
+            failed: '換上線失敗',
+        };
+        const head = document.getElementById('adminPromotionHeadline');
+        if (head) head.textContent = HEAD[status] || status || '—';
+
+        // 時間條的「時間」：從登記算到現在（或算到完成）。這是唯一一個
+        // 不用猜就講得出來的量，也是「他到底跑多久了」真正在問的東西。
+        const started = Date.parse(row.createdAt || '') || 0;
+        const ended = Date.parse(row.finishedAt || '') || 0;
+        const span = started ? ((ended || Date.now()) - started) : 0;
+        const mins = Math.max(0, Math.round(span / 60000));
+        const spent = mins < 60 ? `${mins} 分鐘` : `${Math.floor(mins / 60)} 小時 ${mins % 60} 分`;
+        const el = document.getElementById('adminPromotionClock');
+        if (el) el.textContent = started
+            ? (active ? `已經 ${spent}　登記於 ${clock(row.createdAt)}`
+                      : `共 ${spent}　${clock(row.createdAt)} → ${clock(row.finishedAt)}`)
+            : '';
+
+        const lines = [];
+        if (parts) lines.push(`部位：${parts}`);
+        if (row.runId) lines.push(`批次 ${row.runId}`);
+        // 這一句是這整條進度條存在的理由。停在「登記」不代表快好了，
+        // 而是根本還沒開始——而且畫面自己不會前進，要等那台機器被打開。
+        if (status === 'queued') {
+            lines.push('換模型是訓練機在做的。那台機器沒開，就會一直停在這一步——這裡不會自己往前走。');
+        } else if (status === 'failed' && row.error) {
+            lines.push(String(row.error).slice(0, 300));
+        } else if (row.note) {
+            lines.push(String(row.note));
+        }
+        const note = document.getElementById('adminPromotionNote');
+        if (note) note.textContent = lines.join('　·　');
+    },
+
     // 同一個頁面正在載入時共用同一個 Promise。除了防止快速連點，也防止某個舊頁面
     // 還留著第二個 click handler 時平行載入兩份 HTML；後完成的初始化會把分析頁的
     // selectedFile 清掉，使用者就會看到「要點兩次」或「照片明明選了卻不見」。
@@ -3500,6 +3634,9 @@ const Router = {
             return;
         }
         if (this.currentPage === 'analysis' && page !== 'analysis') this.stopAnalysisCameras();
+        // 離開後台就停掉換模型輪詢。留著的話會在其他頁面繼續打 admin API，
+        // 而那些頁面可能連管理員身分都沒有——換來一串 401 和沒有人要看的請求。
+        if (this.currentPage === 'admin' && page !== 'admin') this.stopPromotionWatch();
         resetSpaViewport(() => navId === this._navigationSeq);
         try {
             if (!opts.fromHash && location.hash !== `#${page}`) {
@@ -6479,6 +6616,9 @@ const PageInit = {
         // 進頁時不捲：這是還原上次停留的區塊，不是使用者剛按下的動作。
         // 頁面本來就在最上面，這時再捲一次只會多一段沒有理由的動畫。
         setAdminSection(initialSection, { scroll: false });
+        // 換模型進度不綁在複核區：登記完人未必留在那一區，而「我按的那件事走到哪」
+        // 在哪一區都該看得到。沒有進行中也沒有剛結束的請求時，這條會自己隱藏。
+        Router._watchPromotion();
 
         let memberConnectionState = 'pending';
         let productConnectionState = 'pending';
@@ -8290,8 +8430,13 @@ const PageInit = {
                                           { type: 'error', code: res.code, status: res.status });
                                 return;
                             }
-                            showAlert('已登記。訓練機會接著換模型並重新部署，完成後這一頁會顯示「已上線」。');
+                            // 這句話以前是空頭支票：沒有任何地方讀回狀態，所以「這一頁會顯示
+                            // 已上線」永遠不會發生。現在指向最上方那條進度，而且說出真正的
+                            // 前提——訓練機要開著，否則它會停在「等接手」不動。
+                            showAlert('已登記。最上方會顯示這次換模型走到哪一步；'
+                                    + '訓練機開著它才會往前走，沒開就會停在「等訓練機接手」。');
                             loadTrainingRuns();
+                            Router._watchPromotion();
                         },
                     }
                 );

@@ -10,8 +10,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Serif+TC:wght@300;400;500;700&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/main.css?v=20260904-131008">
-<link rel="stylesheet" href="css/makeup-flow.css?v=20260904-131008">
+<link rel="stylesheet" href="css/main.css?v=20260904-133014">
+<link rel="stylesheet" href="css/makeup-flow.css?v=20260904-133014">
 <script>
 (function(){
     try {
@@ -170,12 +170,24 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
         dismissed = true;
         clearTimeout(timer);
         document.removeEventListener('keydown', onKey);
+        document.removeEventListener('click', dismiss, true);
         intro.classList.add('done');
         setTimeout(function(){ intro.remove(); }, OUT);
     }
     function onKey(event){ if (event.key === 'Escape' || event.key === 'Enter' || event.key === ' ') dismiss(); }
     timer = setTimeout(dismiss, DUR);
-    intro.addEventListener('click', dismiss);
+    // 關掉動畫，但**不要吃掉那一下點擊**。
+    //
+    // 原本是把 click 監聽掛在 intro 元素自己身上：#brand-intro 是 inset:0、
+    // z-index:400 的全螢幕遮罩，pointer-events:none 又只在 .done 之後才生效，
+    // 所以動畫播放的 3.4 秒內，全站任何一次點擊都只會關掉動畫、不會落到底下的
+    // 按鈕上。introShown 存在 sessionStorage，代表**每開一個新分頁都會再來一次**。
+    // 使用者看到的是「第一下沒反應，要按兩次」，而畫面上沒有任何東西解釋為什麼。
+    //
+    // 改成 document 的捕獲階段：dismiss 先跑，但它不 preventDefault、也不停止傳遞，
+    // 事件照樣抵達原本的目標。遮罩本身改成永遠 pointer-events:none（見 main.css），
+    // 所以點擊一開始就落在底下真正的元素上。
+    document.addEventListener('click', dismiss, true);
     document.addEventListener('keydown', onKey);
 })();
 
@@ -207,7 +219,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     }, { passive: true });
 })();
 </script>
-<script defer src="js/config.js?v=20260904-131008"></script>
+<script defer src="js/config.js?v=20260904-133014"></script>
 <script>
 // config.local.js 只存在於開發機：firebase.json 明確把它排除在部署之外（它是本機覆寫用的，
 // 而且 deploy.ps1 會斷言這件事，因為那個檔案可能含有不該公開的設定）。
@@ -230,13 +242,13 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape'&&document.bo
     document.currentScript.parentNode.insertBefore(local, document.currentScript.nextSibling);
 })();
 </script>
-<script defer src="js/service-endpoints.js?v=20260904-131008"></script>
-<script defer src="js/data.js?v=20260904-131008"></script>
-<script defer src="js/api.js?v=20260904-131008"></script>
+<script defer src="js/service-endpoints.js?v=20260904-133014"></script>
+<script defer src="js/data.js?v=20260904-133014"></script>
+<script defer src="js/api.js?v=20260904-133014"></script>
 <!-- 五官圖鑑：要在 router.js 之前，router 初始化分析頁時會呼叫 FeatureAtlas.attach -->
-<script defer src="js/feature-atlas.js?v=20260904-131008"></script>
-<script defer src="js/makeup-contract.js?v=20260904-131008"></script>
-<script defer src="js/router.js?v=20260904-131008"></script>
-<script defer src="js/makeup-flow.js?v=20260904-131008"></script>
+<script defer src="js/feature-atlas.js?v=20260904-133014"></script>
+<script defer src="js/makeup-contract.js?v=20260904-133014"></script>
+<script defer src="js/router.js?v=20260904-133014"></script>
+<script defer src="js/makeup-flow.js?v=20260904-133014"></script>
 </body>
 </html>
