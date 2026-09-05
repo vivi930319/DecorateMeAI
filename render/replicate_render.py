@@ -691,6 +691,35 @@ STYLE_INTENSITY = {
 #
 # 注意這裡關掉的只是**我們自己疊上去的**那幾句。前端送自訂 renderPrompt 時本來
 # 就原封不動送出，從來不疊 lock（那條路徑在更早以前就因為同樣的原因拿掉了）。
+# 構圖鎖跟 identity lock 分開，因為它們要解決的是不同的問題。
+#
+# identity lock 講的是「不要改這個人」，關掉它妝才上得去（226 字的版本裡妝容只占
+# 14%，那就是「妝太淡」的成因）。構圖鎖講的是「不要重新取景」——它不壓抑妝容，
+# 所以沒有理由跟 identity lock 綁在同一個開關上。分開之後可以「鎖構圖、不鎖濃度」，
+# 那正是實際要的組合。
+#
+# 這裡鎖的是**畫面裡的人**，不是像素尺寸。 輸出尺寸由 gpt-image-2 依 aspect_ratio
+# 自己決定，輸入多大它都不參考，所以「Do NOT resize the image」這類句子對它無效
+# ——我們能做的是 pick_aspect_ratio() 把比例送對（已經在做），以及在這裡要求它
+# 不要把人縮小、不要重新取景。解析度沒變但人變小，是這一段要擋的。
+#
+# 這一段**只管構圖**。 刻意不含任何跟妝容或皮膚有關的字眼：沒有 beautify、
+# 沒有 retouch、沒有 subtle / natural、沒有「保留每一處瑕疵」。那些是 identity lock
+# 的職責，而 identity lock 現在是關的（關掉它妝才上得去）。混進來一句就會把
+# 「妝可以明顯改變」跟「人不能被縮小」重新綁在一起，而那正是拆開的理由。
+#
+# 「preserve exact image dimensions」刻意不寫：gpt-image-2 的輸出尺寸由
+# aspect_ratio 決定，不參考輸入的像素大小，那句話對它沒有作用，只會拉長 prompt
+# 稀釋妝容指令。像素比例由 pick_aspect_ratio() 負責，不在這裡講。
+FRAMING_LOCK_ENABLED = os.getenv("RENDER_FRAMING_LOCK", "1") != "0"
+FRAMING_LOCK_SENTENCES = [
+    "FRAMING LOCK:",
+    "Preserve the original crop, framing, camera distance and subject scale.",
+    "Do not zoom in or zoom out.",
+    "Keep the face, head and shoulders at approximately the same size and position in the frame.",
+    "Do not extend the background or recenter the subject.",
+] if FRAMING_LOCK_ENABLED else []
+
 IDENTITY_LOCK_ENABLED = os.getenv("RENDER_IDENTITY_LOCK", "0") != "0"
 IDENTITY_LOCK_SENTENCES = [
     "Keep the same face, skin texture and hair as the original photo — do not smooth, airbrush, whiten, reshape, slim or beautify.",
@@ -730,6 +759,7 @@ def build_render_prompt(
         # 它講的是「上什麼妝」的一部分，不是「不要改什麼」。
         STYLE_INTENSITY.get(str(style_id or ""), ""),
     ]
+    parts += FRAMING_LOCK_SENTENCES
     parts += IDENTITY_LOCK_SENTENCES
     return " ".join(p for p in parts if p)
 

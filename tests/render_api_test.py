@@ -374,8 +374,76 @@ class RenderApiTest(unittest.TestCase):
         from replicate_render import build_server_render_prompt
 
         prompt = build_server_render_prompt("softBaddie")
-        for absent in ("airbrush", "same pose", "photorealistic", "Do not", "Keep the same"):
+        # 只驗 identity lock 自己的句子。 不能再用「有沒有出現 Do not」來判斷——
+        # 2026-09-05 加入的構圖鎖也用 Do not，而它跟妝容強度無關。用寬鬆的字眼去驗
+        # 一個特定的東西，就會在別人加了無關的句子時誤報。
+        for absent in ("airbrush", "same pose", "photorealistic", "beautify", "skin texture"):
             self.assertNotIn(absent, prompt, f"identity lock 應該關閉，卻仍出現「{absent}」")
+
+
+class FramingLockTest(unittest.TestCase):
+    """構圖鎖只管構圖，不能碰妝容強度。
+
+    2026-09-05：使用者反映妝後圖裡的人被縮小、重新構圖。原本擋這件事的句子在
+    identity lock 裡（「Keep the same pose, expression, clothing, background,
+    lighting and framing」），而那整段前一天因為壓抑妝容被關掉了。
+
+    所以拆成獨立開關：構圖要鎖，妝容強度不要跟著回來。這兩件事被綁在同一個開關上
+    才是原本的問題。
+    """
+
+    BANNED = ("beautify", "retouch", "subtle", "natural", "imperfection",
+              "skin", "airbrush", "intensity", "dimension", "resize")
+
+    def test_it_says_exactly_the_four_things_it_should(self):
+        from replicate_render import FRAMING_LOCK_SENTENCES
+
+        # 標題那一行不算句子，後面四句才是。
+        self.assertEqual(FRAMING_LOCK_SENTENCES[0], "FRAMING LOCK:")
+        self.assertEqual(len(FRAMING_LOCK_SENTENCES) - 1, 4,
+                         "構圖鎖應該正好四句；每多一句都會稀釋妝容指令的占比")
+
+    def test_it_never_mentions_makeup_or_skin(self):
+        """混進一句「不要美化」就會把妝容強度重新綁回來，那正是拆開要避免的。"""
+        from replicate_render import FRAMING_LOCK_SENTENCES
+
+        text = " ".join(FRAMING_LOCK_SENTENCES).lower()
+        for word in self.BANNED:
+            self.assertNotIn(word, text, f"構圖鎖不該提到「{word}」")
+
+    def test_it_does_not_ask_to_preserve_pixel_dimensions(self):
+        """gpt-image-2 的輸出尺寸由 aspect_ratio 決定，不看輸入的像素大小。
+
+        寫「preserve exact image dimensions」對它沒有作用，只會拉長 prompt。
+        比例是 pick_aspect_ratio() 的職責，不在這裡講。
+        """
+        from replicate_render import FRAMING_LOCK_SENTENCES
+
+        text = " ".join(FRAMING_LOCK_SENTENCES).lower()
+        for phrase in ("image size", "pixel", "1024", "same dimensions"):
+            self.assertNotIn(phrase, text)
+
+    def test_every_style_gets_it(self):
+        """不依賴建議服務：七種風格、每一次 render 都要有。"""
+        from replicate_render import RENDER_STYLE_SECTIONS, build_server_render_prompt
+
+        for style_id in RENDER_STYLE_SECTIONS:
+            prompt = build_server_render_prompt(style_id)
+            self.assertIn("FRAMING LOCK:", prompt, style_id)
+            self.assertIn("Do not zoom in or zoom out", prompt, style_id)
+
+    def test_it_comes_after_the_makeup(self):
+        """妝容要講在約束之前，否則又回到「一整段都在叫模型不要動」的狀態。"""
+        from replicate_render import build_server_render_prompt
+
+        prompt = build_server_render_prompt("softBaddie")
+        self.assertLess(prompt.index("Apply this makeup"), prompt.index("FRAMING LOCK:"))
+
+    def test_a_frontend_prompt_is_still_sent_untouched(self):
+        from replicate_render import build_render_prompt
+
+        custom = "just do whatever"
+        self.assertEqual(build_render_prompt({"renderPrompt": custom}, {}, ""), custom)
 
     def test_the_lock_can_be_switched_back_on(self):
         """關掉是取捨不是結論：模型會比較敢上妝，也比較敢改臉、改姿勢、改背景。
