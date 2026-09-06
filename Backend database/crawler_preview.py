@@ -18,12 +18,62 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import requests
 from bs4 import BeautifulSoup
 
+from price_conversion import price_for_frontend
+
 
 CONNECT_TIMEOUT = float(os.getenv("CRAWLER_CONNECT_TIMEOUT", "5"))
 READ_TIMEOUT = float(os.getenv("CRAWLER_READ_TIMEOUT", "10"))
 MAX_HTML_BYTES = int(os.getenv("CRAWLER_MAX_HTML_BYTES", str(2 * 1024 * 1024)))
 MAX_REDIRECTS = int(os.getenv("CRAWLER_MAX_REDIRECTS", "3"))
 USER_AGENT = os.getenv("CRAWLER_USER_AGENT", "DecorateMeProductPreview/1.0")
+
+
+BRAND_SITE_PROFILES = (
+    {
+        "domains": ("maybelline.com.tw",),
+        "brand": "MAYBELLINE",
+        "defaultCurrency": "TWD",
+    },
+    {
+        "domains": ("maybelline.com",),
+        "brand": "MAYBELLINE",
+        "defaultCurrency": "USD",
+    },
+    {
+        "domains": ("bobbibrown.com.tw",),
+        "brand": "BOBBI BROWN",
+        "defaultCurrency": "TWD",
+    },
+    {
+        "domains": ("bobbibrowncosmetics.com",),
+        "brand": "BOBBI BROWN",
+        "defaultCurrency": "USD",
+    },
+)
+
+
+def _brand_site_profile(url: str) -> dict | None:
+    hostname = (urlsplit(url).hostname or "").rstrip(".").lower()
+    for profile in BRAND_SITE_PROFILES:
+        if any(hostname == domain or hostname.endswith(f".{domain}") for domain in profile["domains"]):
+            return profile
+    return None
+
+
+def _canonical_category(final_url: str, raw_category: Any = None) -> str | None:
+    value = f"{urlsplit(final_url).path} {raw_category or ''}".casefold().replace("_", "-")
+    category_markers = (
+        ("foundations", ("foundation", "粉底", "底妝")),
+        ("lipsticks", ("lipstick", "lip-color", "lip-colour", "唇膏", "唇彩", "唇釉")),
+        ("blushes", ("blush", "腮紅")),
+        ("eyeshadows", ("eye-shadow", "eyeshadow", "眼影")),
+        ("eyeliner_mascara", ("eyeliner", "mascara", "眼線", "睫毛")),
+        ("eyebrows", ("eyebrow", "brow", "眉")),
+        ("contouring", ("contour", "bronzer", "修容")),
+        ("highlighters", ("highlighter", "highlight", "打亮")),
+    )
+    return next((category for category, markers in category_markers
+                 if any(marker in value for marker in markers)), None)
 
 
 class CrawlerError(Exception):
@@ -121,6 +171,14 @@ def fetch_html(url: str) -> tuple[str, str, str]:
             raise CrawlerError("RATE_LIMITED", "目標網站限制請求頻率", 429)
         if response.status_code in {401, 403}:
             response.close()
+            profile = _brand_site_profile(current_url)
+            if profile:
+                raise CrawlerError(
+                    "SCRAPE_BLOCKED",
+                    f"{profile['brand']} 官網目前拒絕伺服器自動讀取",
+                    502,
+                    "品牌官網啟用了自動存取防護；請保留原始商品連結，改由管理員人工補登並審核。",
+                )
             raise CrawlerError("SCRAPE_BLOCKED", "目標網站拒絕爬蟲存取", 502)
         if response.status_code == 404:
             response.close()
@@ -196,6 +254,7 @@ def _number(value: Any) -> int | float | None:
 
 def parse_product_preview(html: str, final_url: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
+    site_profile = _brand_site_profile(final_url)
     product = None
     for script in soup.select('script[type="application/ld+json"]'):
         try:
@@ -216,15 +275,18 @@ def parse_product_preview(html: str, final_url: str) -> dict:
     product = product or {}
     offers = _first(product.get("offers")) or {}
     brand_value = product.get("brand")
-    brand = (brand_value.get("name") if isinstance(brand_value, dict) else brand_value) or meta("product:brand")
+    parsed_brand = (brand_value.get("name") if isinstance(brand_value, dict) else brand_value) or meta("product:brand")
+    brand = site_profile["brand"] if site_profile else parsed_brand
     name = product.get("name") or meta("og:title", "twitter:title")
     description = product.get("description") or meta("og:description", "description")
     price = _number(offers.get("price") or offers.get("lowPrice") or meta("product:price:amount"))
-    currency = offers.get("priceCurrency") or meta("product:price:currency") or "TWD"
+    currency = (offers.get("priceCurrency") or meta("product:price:currency")
+                or (site_profile["defaultCurrency"] if site_profile else None) or "TWD")
     images = _image_urls(product.get("image"), final_url)
     if not images:
         images = _image_urls(meta("og:image", "twitter:image"), final_url)
-    category = product.get("category") or meta("product:category")
+    raw_category = product.get("category") or meta("product:category")
+    category = _canonical_category(final_url, raw_category) or raw_category
     specs = {}
     properties = product.get("additionalProperty") or []
     if isinstance(properties, dict):
@@ -243,6 +305,7 @@ def parse_product_preview(html: str, final_url: str) -> dict:
     if not product_evidence:
         raise CrawlerError("NO_PRODUCT_FOUND", "此頁不是可辨識的單一商品頁", 404)
 
+    frontend_price = price_for_frontend(price, currency)
     missing = []
     for field, value in (("brand", brand), ("price", price), ("imageUrl", images[0] if images else None), ("category", category)):
         if value in {None, ""}:
@@ -256,10 +319,17 @@ def parse_product_preview(html: str, final_url: str) -> dict:
         "brand": str(brand).strip() if brand else None,
         "price": price,
         "currency": str(currency).upper(),
+        "displayPrice": frontend_price["display"],
+        "priceValue": frontend_price["amount"],
+        "displayCurrency": frontend_price["currency"],
+        "priceConverted": frontend_price["converted"],
+        "priceNote": frontend_price["note"],
+        "priceConversion": frontend_price["conversion"],
         "description": BeautifulSoup(str(description), "html.parser").get_text(" ", strip=True) if description else None,
         "imageUrl": images[0] if images else None,
         "imageUrls": images,
         "category": str(category).strip() if category else None,
+        "sourceProfile": site_profile["brand"] if site_profile else None,
         "specs": specs,
         "missingFields": missing,
         "lastCrawledAt": datetime.now().astimezone().isoformat(),

@@ -348,6 +348,8 @@ class Blushes(db.Model):
     color_vector = db.Column(JSONB)
     qdrant_vector_12d = db.Column(JSONB)
     hex_primary = db.Column(db.String(10))
+    palette_colors = db.Column(JSONB, nullable=False, default=list, server_default='[]')
+    palette_image_url = db.Column(db.Text)
     created_at = db.Column(db.DateTime)
 
 
@@ -364,6 +366,8 @@ class Contouring(db.Model):
     color_vector = db.Column(JSONB)
     qdrant_vector_12d = db.Column(JSONB)
     hex_primary = db.Column(db.String(10))
+    palette_colors = db.Column(JSONB, nullable=False, default=list, server_default='[]')
+    palette_image_url = db.Column(db.Text)
 
 
 class Eyebrows(db.Model):
@@ -379,6 +383,8 @@ class Eyebrows(db.Model):
     color_vector = db.Column(JSONB)
     qdrant_vector_12d = db.Column(JSONB)
     hex_primary = db.Column(db.String(10))
+    palette_colors = db.Column(JSONB, nullable=False, default=list, server_default='[]')
+    palette_image_url = db.Column(db.Text)
     created_at = db.Column(db.DateTime)
 
 
@@ -395,6 +401,8 @@ class EyelinerMascara(db.Model):
     color_vector = db.Column(JSONB)
     qdrant_vector_12d = db.Column(JSONB)
     hex_primary = db.Column(db.String(10))
+    palette_colors = db.Column(JSONB, nullable=False, default=list, server_default='[]')
+    palette_image_url = db.Column(db.Text)
     created_at = db.Column(db.DateTime)
 
 
@@ -411,6 +419,8 @@ class Eyeshadows(db.Model):
     color_vector = db.Column(JSONB)
     qdrant_vector_12d = db.Column(JSONB)
     hex_primary = db.Column(db.String(10))
+    palette_colors = db.Column(JSONB, nullable=False, default=list, server_default='[]')
+    palette_image_url = db.Column(db.Text)
     created_at = db.Column(db.DateTime)
 
 
@@ -427,6 +437,8 @@ class Foundations(db.Model):
     color_vector = db.Column(JSONB)
     qdrant_vector_12d = db.Column(JSONB)
     hex_primary = db.Column(db.String(10))
+    palette_colors = db.Column(JSONB, nullable=False, default=list, server_default='[]')
+    palette_image_url = db.Column(db.Text)
     source_type = db.Column(db.String(50))
     shade_code = db.Column(db.String(30))
     shade_name = db.Column(db.Text)
@@ -449,6 +461,8 @@ class Highlighters(db.Model):
     color_vector = db.Column(JSONB)
     qdrant_vector_12d = db.Column(JSONB)
     hex_primary = db.Column(db.String(10))
+    palette_colors = db.Column(JSONB, nullable=False, default=list, server_default='[]')
+    palette_image_url = db.Column(db.Text)
     created_at = db.Column(db.DateTime)
 
 
@@ -465,6 +479,8 @@ class Lipsticks(db.Model):
     color_vector = db.Column(JSONB)
     qdrant_vector_12d = db.Column(JSONB)
     hex_primary = db.Column(db.String(10))
+    palette_colors = db.Column(JSONB, nullable=False, default=list, server_default='[]')
+    palette_image_url = db.Column(db.Text)
     source_type = db.Column(db.String(50))
     created_at = db.Column(db.DateTime)
 

@@ -45,9 +45,9 @@ docker compose up -d db redis
 docker compose ps
 ```
 
-預設服務埠：Flask API `5000`、PostgreSQL `5432`、Redis `6379`。
+目前正式本機服務埠：Flask API `5000`、Docker PostgreSQL `5433`、Redis `6379`。Windows PostgreSQL 的 `5432` 僅保留為舊資料回復來源，不可再作為執行中 API 的資料庫。
 
-若主機上的 `5432` 或 `6379` 已被占用，可在 `.env` 調整 `DB_PORT_PUBLISHED` 或 `REDIS_PORT_PUBLISHED`；容器內服務埠不需改動。
+Docker PostgreSQL 固定由主機 `5433` 對應至容器 `5432`；Windows API 與 Docker API 均連至此同一資料庫。若 `5433` 或 `6379` 被占用，可在 `.env` 調整 `DB_PORT_PUBLISHED` 或 `REDIS_PORT_PUBLISHED`，並同步修改 `DATABASE_URL`；容器內服務埠不需改動。
 
 ### 4. 首次初始化資料庫
 
@@ -88,6 +88,7 @@ python run_local_5000.py
 | `REDIS_URL` 或 `REDIS_HOST`／`REDIS_PORT`／`REDIS_PASSWORD` | 必填 | OTP、TTL、寄送與驗證嘗試限制。 |
 | `SMTP_USER`、`SMTP_PASS`、`SMTP_HOST`、`SMTP_PORT` | Email 功能必填 | OTP 郵件寄送；預設 Gmail SMTP 587。 |
 | `OTP_EXPIRE_SECONDS`、`OTP_SEND_WINDOW_SECONDS`、`OTP_SEND_MAX_ATTEMPTS` | 選填 | OTP 到期與限流參數。 |
+| `USD_TO_TWD_RATE`、`USD_TO_TWD_RATE_AS_OF` | 有美元商品時必填 | 美元顯示價換算匯率與資料時間；正式環境應依臺灣銀行美金即期賣出匯率更新。 |
 | `PENDING_REGISTRATION_EXPIRE_SECONDS`、`OTP_VERIFIED_WINDOW_SECONDS` | 選填 | 待驗證註冊及驗證完成狀態期限。 |
 | `CORS_ALLOWED_ORIGINS` | 正式環境必填 | 逗號分隔的允許前端來源。 |
 | `UPSTREAM_MEMBER_API_KEY`、`GATEWAY_KEY_LOOSE_MODE` | 正式環境必填 | Gateway 驗證；正式環境應關閉 loose mode。 |
@@ -105,7 +106,9 @@ python run_local_5000.py
 - **驗證後才成為會員**：註冊資料會先保存在 `pending_registrations`；只有 OTP 驗證成功才寫入 `members`。
 - **Email 網域檢查**：驗證格式、MX 記錄與一次性信箱黑名單；`admin@decorateme.local` 是唯一允許的非標準網域帳號。
 - **OTP 防護與品牌 Email**：Redis 儲存有效期限、驗證嘗試與寄送時間窗；OTP HTML Email 使用 CID 內嵌 `static/brand/decorate-me-logo.jpg`，同時保留純文字備援內容。
-- **密碼與登入**：以 Flask-Bcrypt 雜湊密碼；登入建立 PostgreSQL `member_sessions`，回傳 HttpOnly/Secure/SameSite Cookie 與 Bearer Token。
+- **忘記密碼限制**：只有已註冊、已驗證且狀態可用的帳號才會建立並寄送重設 OTP；不存在的 Email 回傳 `EMAIL_NOT_REGISTERED`，SMTP 失敗時會刪除 Redis 中不可用的 OTP，不會假裝寄送成功。
+- **統一密碼規則**：網頁註冊、JSON 註冊、忘記密碼重設與登入後變更密碼皆為 6～128 碼；OTP 則固定為 6 位數字，兩者不再混用。
+- **密碼與登入**：以 Flask-Bcrypt 雜湊密碼；OTP 由 `secrets` 產生；登入建立 PostgreSQL `member_sessions`，回傳 HttpOnly/Secure/SameSite Cookie 與 Bearer Token。
 - **角色與授權**：使用者只能存取自己的資源；管理者可進行會員、商品與爬蟲資料管理。
 - **請求安全**：CORS 僅允許設定來源；Cookie 驗證的寫入請求檢查 `Origin` 與 `Sec-Fetch-Site`；API 錯誤回應含 `code`、`message` 與 `requestId`。
 
@@ -163,7 +166,9 @@ flowchart TD
 ### 4. 爬蟲商品暫存與管理稽核
 
 - 商品預覽 API 會驗證 URL、過濾不安全網路目標並解析商品資料，以降低 SSRF 風險。
-- 爬蟲資料先寫入 `crawler_staging_products`，管理者才可核准或拒絕。
+- 官方來源設定檔目前辨識 Maybelline 台灣／美國與 Bobbi Brown 台灣／美國網址，統一品牌名稱並由網址／頁面內容正規化商品分類；Maybelline 台灣官方商品頁已可解析。Bobbi Brown 官網若回傳 401/403，API 會以 `SCRAPE_BLOCKED` 明確告知品牌反自動存取，不會把阻擋頁當成商品。
+- 爬蟲或前端送交的資料應先寫入 `crawler_staging_products`，管理者核准後才匯入正式商品表。
+- 官網原價為 USD 時資料庫保留美元原價；前端回應另提供本站換算的新台幣顯示價、原價、匯率、來源、資料時間、四捨五入規則與完整公式。
 - 商品新增、修改、刪除與暫存審核均可留下產品／管理稽核紀錄。
 - 管理者可查詢會員、更新會員、刪除會員、檢視稽核與產品紀錄。
 
@@ -178,7 +183,7 @@ flowchart TD
 | 資料庫 | PostgreSQL 18 | 資料表、JSONB、Function、Trigger、View、Index |
 | 快取 | Redis 7、redis-py | OTP、TTL、嘗試計數與限流 |
 | 安全 | Flask-Bcrypt、Flask-Login、Flask-WTF、Flask-CORS、dnspython | 密碼、登入、表單、跨域與 MX 驗證 |
-| 爬蟲/預覽 | requests、BeautifulSoup4、httpx、Playwright、Selenium | 商品頁解析與動態網頁支援 |
+| 爬蟲/預覽 | requests、BeautifulSoup4 | 現行商品頁 JSON-LD／Meta 解析、官方品牌正規化與 SSRF 防護；`httpx`、Playwright、Selenium 雖列於相依套件，但目前預覽流程未呼叫。 |
 | 數值/影像 | NumPy、OpenCV-headless、Pillow | 色彩與影像處理 |
 | 部署 | Docker、Docker Compose | Flask、PostgreSQL、Redis 容器化 |
 
@@ -211,12 +216,12 @@ flowchart TD
 
 ## API 概覽
 
-Flask 實際載入後目前有 **81 條 URL 規則**（包含 Flask 內建 static route），合計 **87 個 HTTP 操作**；同一路徑可能依 HTTP method 對應不同處理函式。
+Flask 實際載入後目前有 **88 條 URL 規則**（包含 Flask 內建 static route），合計 **95 個 HTTP 操作**；同一路徑可能依 HTTP method 對應不同處理函式。
 
 | 類別 | 代表端點 |
 |---|---|
 | 健康 | `GET /health`、`GET /healthz` |
-| 認證 | `POST /api/register`、`POST /api/send-otp`、`POST /api/verify-otp`、`POST /api/login`、`POST /api/logout`、`GET /api/me` |
+| 認證 | `POST /api/register`、`POST /api/send-otp`、`POST /api/verify-otp`、`POST /api/forgot-password`、`POST /api/reset-password`、`POST /api/change-password`、`POST /api/login`、`POST /api/logout`、`GET /api/me` |
 | 會員管理 | `GET /api/members`、`GET/PATCH/DELETE /api/members/<email>`、`GET /api/members/<email>/audit-log`、`GET /api/members/<phone>/stats` |
 | 點數與會員活動 | `GET /points`、`POST /points/adjust`、每日簽到 GET/POST、任務 GET/claim、主題 GET/redeem、推薦碼 GET |
 | 收藏與購物車 | 收藏列表、toggle、單筆刪除；購物車 GET/PUT、品項 POST/PATCH/DELETE |
@@ -227,6 +232,16 @@ Flask 實際載入後目前有 **81 條 URL 規則**（包含 Flask 內建 stati
 | Jinja 頁面 | 首頁、註冊、登入、忘記／重設／變更密碼、收藏、歷史、個人資料、商品及管理頁 |
 
 > `GET/POST /api/members/<email>/referral` 是保留給舊前端的相容路徑，目前固定回傳 HTTP 501；正式推薦碼功能請使用 `GET /api/members/<email>/referral-code`。
+
+### 忘記密碼 API
+
+`POST /api/forgot-password` 接受 `{ "email": "member@example.com" }`。成功回傳 `otpSent`、`expiresIn: 300`、`resendAfter: 60` 及統一的 `passwordPolicy`；不存在的 Email 回傳 HTTP 404／`EMAIL_NOT_REGISTERED`，不建立也不寄送 OTP。`POST /api/reset-password` 接受 `email`、6 位數字 `otp`、`newPassword`，並可傳 `confirmPassword`；新密碼必須為 6～128 碼。
+
+為相容前端共用的 OTP 驗證畫面，`POST /api/verify-otp` 會先驗證 PostgreSQL 中的註冊 OTP；沒有有效註冊 OTP 時，才檢查 Redis 中的忘記密碼 OTP。密碼重設 OTP 驗證成功只代表可進入設定新密碼步驟，最後仍須呼叫 `POST /api/reset-password` 才會更新密碼。
+
+### 美元商品顯示價
+
+正式商品 API、推薦 API與官方商品預覽都保留原始美元，另回傳：`priceConverted`、`priceNote`、`priceConversion.originalAmount`、`originalCurrency`、`rateToTwd`、`rateSource`、`rateSourceUrl`、`rateAsOf`、`rounding` 與 `calculation`。計算採 Decimal 乘法並四捨五入至新台幣整數。例如匯率 31.685 時，`US$58.00 × 31.685 = NT$1,838`。畫面必須顯示「本站換算」，不可寫成品牌台灣官方售價。
 
 ### 商品列表與相似商品
 
@@ -306,7 +321,7 @@ Flask 實際載入後目前有 **81 條 URL 規則**（包含 Flask 內建 stati
 |---|---|
 | `matchReason` | 相容既有前端的中文推薦理由字串。 |
 | `matchReasons` | 結構化理由陣列，包含 `priority`、`reasonCode`、`personalized`、`text` 與 `evidence`。 |
-| `recommendationPresentation` | 前端呈現模型：系統演算法標籤、MATCH 顯示值、自然語句、適用特徵與非準確率聲明。 |
+| `recommendationPresentation` | 前端呈現模型：「根據臉部分析結果」標籤、MATCH 顯示值、自然語句、適用特徵與非準確率聲明。 |
 | `recommendationPresentation.colorDifferenceExplanation` | 僅粉底／唇彩回傳的 CIEDE2000 色差白話說明、區間與 QA；其他品類為 `null`。 |
 | `foundationSkinMatch` | 每件粉底相對膚色的 ΔE00 與正式 `0～2` 判定；`accepted: false` 但 `displayStatus: closest_available` 代表目前商品清單沒有相近色時顯示的 `2～5` 可比較色號。 |
 | `skinToneLabReliable` | 後端依 LAB 型別、三軸完整性及合法值域重新判定的可信狀態。 |
@@ -339,7 +354,7 @@ Flask 實際載入後目前有 **81 條 URL 規則**（包含 Flask 內建 stati
 
 ```text
 Backend database/
-├── app.py                     # Flask app、81 條 URL 規則、驗證與各模組整合
+├── app.py                     # Flask app、88 條 URL 規則、驗證與各模組整合
 ├── models.py                  # SQLAlchemy ORM 模型
 ├── extensions.py              # 共用 db、bcrypt、login_manager 實例
 ├── config.py                  # .env 載入與 PostgreSQL SQLAlchemy URI 組裝
@@ -347,6 +362,8 @@ Backend database/
 ├── recommendation.py          # CIEDE2000、動態權重、個人化、理由與粉底相鄰色
 ├── makeup_keywords.py         # 七種妝容風格定義、別名及關鍵字
 ├── crawler_preview.py         # 商品頁解析、URL/SSRF 防護與爬蟲限流
+├── price_conversion.py        # USD 原價、TWD 顯示價、公式、匯率來源與四捨五入
+├── password_policy.py         # 網頁表單與 JSON API 共用的 6～128 碼密碼規則
 ├── otp_utils.py               # OTP 產生、雜湊、Redis 與 SMTP/CID 郵件
 ├── OTP.py                     # 舊啟動相容入口；實際 OTP 路由仍由 app.py 提供
 ├── sql.py                     # 舊式 CSV／測試資料批次匯入工具
@@ -364,9 +381,12 @@ Backend database/
 ├── templates/                 # Jinja 頁面：會員、商品、推薦、後台等
 ├── static/brand/              # OTP Email 使用的 Decorate Me Logo
 ├── static/uploads/            # 使用者上傳或試妝產生的執行期檔案
-├── tests/recommendation/      # 22 項推薦契約測試與 Precision@K 評估工具
+├── tests/recommendation/      # 27 項推薦契約測試與 Precision@K 評估工具
 │   └── validate_feedback_aggregate.py # 五官回饋彙總的隱私與結構檢查
 ├── tests/test_catalog_availability.py # 收藏／購物車商品參照可用性測試
+├── tests/test_crawler_preview.py # Maybelline／Bobbi Brown 官方來源與美元換算測試
+├── tests/test_password_reset_contract.py # 忘記密碼寄送、未知 Email 與密碼規則測試
+├── 給前端_忘記密碼品牌爬蟲與美元換算交接_2026-08-30.md # API、畫面文案與驗收案例
 ├── 五官回饋彙總_演算法端驗收與使用決議_2026-08-26.md # 資料驗收、用途界線與下一批規格
 ├── 回覆前端_推薦契約眉型與下架商品標記_2026-08-26.md # 眉型契約、下架商品與前端驗收回覆
 ├── 回覆前端_shadeRecommendation與coverage修正_2026-08-26.md # 色號三階與品類覆蓋第一次修正紀錄
@@ -387,7 +407,7 @@ Backend database/
 ## 測試、限制與安全提醒
 
 ```powershell
-python -m py_compile app.py recommendation.py
+python -m py_compile app.py recommendation.py crawler_preview.py price_conversion.py password_policy.py
 $env:PYTHONPATH='.'
 python tests/recommendation/test_recommendation_contract.py
 python tests/recommendation/validate_feedback_aggregate.py <彙總JSON路徑>
@@ -395,7 +415,8 @@ python tests\recommendation\evaluate_precision_at_k.py gold.json predictions.jso
 docker compose ps
 ```
 
-- `test_recommendation_contract.py` 現有 22 項測試，涵蓋粉底正式匹配 `ΔE00 0～2`、沒有嚴格匹配時顯示 `2～5` 最接近可比較色號但隱藏 MATCH、替代色相對主推薦放寬至 `0～5`、只有粉底／唇彩使用輸入色彩、風格品類不受膚色影響、limit 覆蓋原因、官方色階與 LAB 降級不得混用，以及替代色不得跨品牌／跨產品系列；商品參照另有 1 項可用性測試。
+- `test_recommendation_contract.py` 現有 27 項測試，涵蓋粉底正式匹配 `ΔE00 0～2`、沒有嚴格匹配時顯示 `2～5` 最接近可比較色號但隱藏 MATCH、替代色相對主推薦放寬至 `0～5`、只有粉底／唇彩使用輸入色彩、風格品類不受膚色影響、limit 覆蓋原因、官方色階與 LAB 降級不得混用，以及替代色不得跨品牌／跨產品系列。
+- `test_crawler_preview.py` 驗證 Maybelline 台灣來源正規化及 Bobbi Brown 美元商品換算契約；`test_password_reset_contract.py` 驗證未註冊信箱不寄 OTP、SMTP 失敗清理、6～128 碼共用規則與密碼學安全 OTP 格式。
 - 路由層還應在可連線的 PostgreSQL／Redis 環境驗證商品過濾、相似商品、502 `PRODUCT_DB_UNAVAILABLE` 與 504 `PRODUCT_DB_TIMEOUT`。純演算法單元測試不會模擬資料庫離線。
 - 評估工具可計算 Precision@5/10、重複率、停用商品率與幻覺商品率；尚未建立人工金標集前，不宣稱準確率數字。
 - 不可提交 `.env`、SMTP 密碼、Gateway/Bearer Key、真實個資、正式資料庫 dump 或 Docker Volume。

@@ -64,6 +64,14 @@ class CatalogFilterTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/products?minPrice=10&maxPrice=5").status_code, 422)
         self.assertEqual(self.client.get("/api/products?sort=random").status_code, 422)
 
+    @patch.object(app_module, "_catalog_rows")
+    def test_large_legacy_products_alias_is_opt_in(self, rows):
+        rows.return_value = self.rows
+        compact = self.client.get("/api/products?limit=2").get_json()
+        legacy = self.client.get("/api/products?limit=2&legacyAliases=true").get_json()
+        self.assertNotIn("products", compact)
+        self.assertEqual(legacy["products"], legacy["items"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,5 @@
 import os
-import random
+import secrets
 import string
 import smtplib
 from email.mime.text import MIMEText
@@ -9,7 +9,7 @@ from email.header import Header
 
 
 def generate_otp(length: int = 6) -> str:
-    return ''.join(random.choices(string.digits, k=length))
+    return ''.join(secrets.choice(string.digits) for _ in range(length))
 
 
 def redis_key(email: str) -> str:

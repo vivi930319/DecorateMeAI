@@ -10,13 +10,21 @@
 """
 
 import math
+import re
 from typing import Dict, List, Tuple, Optional, Any
 from makeup_keywords import MAKEUP_KEYWORD_WHITELIST, normalize_style
 
 SCHEMA_VERSION = "2026-08-v2"
 FOUNDATION_SKIN_MAX_DELTA_E = 2.0
 SHADE_ALTERNATIVE_MAX_DELTA_E = 5.0
+# The user-facing "one shade lighter" preference is only safe within a MAC
+# undertone lane.  It needs a separate guard from generic shade alternatives:
+# neighbouring official MAC shades can be slightly farther apart than 5 ΔE00,
+# but a 9+ ΔE00 cross-undertone jump (for example N/NC -> NW) is never a step.
+MAC_LIGHTER_STEP_MAX_DELTA_E = 7.0
 FOUNDATION_IN_STORE_DISCLAIMER = "請以實際至實體專櫃試色與購買體驗為準。"
+# 這是服務端固定排序策略，不是前端偏好，也不可當成對客文案。
+_FOUNDATION_SHADE_POLICY = "one_step_lighter"
 _FORBIDDEN_INPUT_FIELDS = {
     "email", "member", "memberemail", "memberid", "userid", "customerid",
     "name", "fullname", "phone", "phonenumber", "telephone", "mobile",
@@ -191,6 +199,8 @@ def _minimized_recommendation_options(value: Any) -> dict:
         "avoidedBrands": _normalized_label_list(value.get("avoidedBrands")),
         "pricePreference": {"min": minimum, "max": maximum,
                             "mode": mode or None},
+        # MAC 主軸的選色規則只由後端控制；前端不能切換，也不需要知道。
+        "foundationShadePreference": _FOUNDATION_SHADE_POLICY,
     }
 
 
@@ -646,13 +656,19 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
                           or prod.get("shadeName") or prod.get("shade_name")),
             "seriesId": prod.get("seriesId") or prod.get("series_id"),
             "depthIndex": prod.get("depthIndex") if prod.get("depthIndex") is not None else prod.get("depth_index"),
+            "depthIndexOfficial": prod.get("depthIndexOfficial"),
+            "shadeOrderSource": prod.get("shadeOrderSource"),
             "imageUrl": prod.get("imageUrl") or prod.get("image_url", ""),
             "productUrl": prod.get("productUrl") or prod.get("product_url", "") or prod.get("sale_page_id", ""),
             "sourceUrl": prod.get("sourceUrl") or "",
             "salePageId": prod.get("salePageId") or prod.get("sale_page_id", ""),
             "coverageCategory": prod.get("coverageCategory") or prod.get("type") or cat,
             "price": prod.get("price", 0),
+            "priceValue": prod.get("priceValue"),
             "currency": prod.get("currency", "TWD"),
+            "priceConverted": bool(prod.get("priceConverted")),
+            "priceNote": prod.get("priceNote"),
+            "priceConversion": prod.get("priceConversion"),
             "tags": prod_tags,
             "lab": prod_lab,
             "score": round(final_score, 4),
@@ -702,9 +718,86 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         and item.get("_foundationDeltaE") is not None
     ]
     foundation_anchor_brand = "MAC" if mac_foundation_items else None
-    foundation_anchor_pool = mac_foundation_items or [
+    # The user's actual routine is liquid foundation first, then cushion.
+    # A concealer/"dot pen" must never outrank either merely because its Lab
+    # value happens to be nearer.  Keep other base formats as a safe fallback
+    # only when this request has no MAC liquid/cushion candidates.
+    mac_preferred_format_items = [
+        item for item in mac_foundation_items
+        if _foundation_format_rank(item) <= 1
+    ]
+    foundation_anchor_pool = mac_preferred_format_items or mac_foundation_items or [
         item for item in foundation_items if item.get("_foundationDeltaE") is not None
     ]
+    nearest_foundation_anchor = min(
+        foundation_anchor_pool,
+        key=lambda item: (
+            float(item.get("_foundationDeltaE")),
+            -float(item.get("score") or 0),
+            str(item.get("candidateKey") or ""),
+        ),
+        default=None,
+    )
+    preferred_foundation = nearest_foundation_anchor
+    foundation_preference_applied = False
+    # A one-step-lighter calibration is a refinement of an already close raw
+    # match, never a way to turn a poor match into the primary recommendation.
+    # If no raw shade is within the strict threshold, retain the actual nearest
+    # shade as `closest_available` and expose its real ΔE to the user.
+    if (nearest_foundation_anchor is not None
+            and bool((nearest_foundation_anchor.get("foundationSkinMatch") or {}).get("accepted"))
+            and foundation_anchor_brand == "MAC"
+            and recommendation_options["foundationShadePreference"] == "one_step_lighter"):
+        preferred_foundation = _mac_foundation_lighter_steps(
+            nearest_foundation_anchor, foundation_items, steps=1
+        ) or nearest_foundation_anchor
+        foundation_preference_applied = preferred_foundation is not nearest_foundation_anchor
+    if preferred_foundation is not None:
+        preferred_foundation["foundationRecommendationRole"] = "primary"
+        # 暫存於候選物件，供同一次請求內的色階計算使用；回傳前會移除。
+        preferred_foundation["foundationShadePreference"] = {
+            "mode": recommendation_options["foundationShadePreference"],
+            "applied": foundation_preference_applied,
+            "anchorCandidateKey": nearest_foundation_anchor.get("candidateKey") if nearest_foundation_anchor else None,
+            "anchorShadeCode": nearest_foundation_anchor.get("shadeCode") if nearest_foundation_anchor else None,
+            "selectedShadeCode": preferred_foundation.get("shadeCode"),
+            "reason": "internal_server_ranking_policy",
+        }
+        preferred_match = preferred_foundation.get("foundationSkinMatch") or {}
+        preferred_match.update({
+            "displayEligible": True,
+            "displayStatus": ("calibrated_recommendation" if foundation_preference_applied
+                              else (preferred_match.get("displayStatus") or "recommended")),
+        })
+        if foundation_preference_applied:
+            # Keep the raw skin distance for audit/debugging, but do not present
+            # a deliberately calibrated shade as if it were the raw closest
+            # shade.  The choice is anchored in the accepted raw match.
+            preferred_match.update({
+                "comparisonTarget": "mac_calibrated_target",
+                "rawSkinDeltaE": preferred_match.get("deltaE"),
+                "calibrationAnchorShadeCode": nearest_foundation_anchor.get("shadeCode"),
+                "calibrationAnchorDeltaE": (nearest_foundation_anchor.get("foundationSkinMatch") or {}).get("deltaE"),
+                "calibratedTargetDeltaE": 0.0,
+            })
+            preferred_foundation["matchReason"] = (
+                "已依臉部分析結果與 MAC 同底調色階選出底妝色號。"
+                + FOUNDATION_IN_STORE_DISCLAIMER
+            )
+            preferred_foundation["matchReasons"] = [{
+                "priority": 1,
+                "reasonCode": "foundation_calibrated_same_lane",
+                "personalized": True,
+                "text": preferred_foundation["matchReason"],
+                "evidence": {
+                    "comparisonTarget": "mac_calibrated_target",
+                    "rawAnchorShadeCode": nearest_foundation_anchor.get("shadeCode"),
+                    "rawAnchorDeltaE": (nearest_foundation_anchor.get("foundationSkinMatch") or {}).get("deltaE"),
+                    "selectedShadeCode": preferred_foundation.get("shadeCode"),
+                    "undertoneLane": _mac_undertone_lane(preferred_foundation),
+                },
+            }]
+        preferred_foundation["foundationSkinMatch"] = preferred_match
     foundation_delta_values = [
         float(item["_foundationDeltaE"]) for item in foundation_anchor_pool
     ]
@@ -712,10 +805,77 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         bool((item.get("foundationSkinMatch") or {}).get("accepted"))
         for item in foundation_anchor_pool
     )
-    eligible_foundation_keys = {
-        item.get("candidateKey") for item in foundation_anchor_pool
-        if bool((item.get("foundationSkinMatch") or {}).get("accepted"))
-    }
+    if preferred_foundation is not None and foundation_preference_applied:
+        # The public default is a MAC-first, one-step-brighter preference. Keep
+        # exactly that selected shade in the primary pool, while preserving its
+        # real skin ΔE and strict accepted flag for transparent presentation.
+        eligible_foundation_keys = {preferred_foundation.get("candidateKey")}
+    else:
+        eligible_foundation_keys = {
+            item.get("candidateKey") for item in foundation_anchor_pool
+            if bool((item.get("foundationSkinMatch") or {}).get("accepted"))
+        }
+
+    # 精準色號是主推薦門檻，不是把整個品牌其餘底妝都判成「不能用」的排除條件。
+    # 以主推薦為錨點，額外保留最多三個 MAC 替代品：同系列近色優先，其次是
+    # 同品牌其他粉底系列。替代品會清楚標示，不宣稱其通過膚色 ΔE 0～2。
+    foundation_reference = preferred_foundation or nearest_foundation_anchor
+    if (foundation_reference is not None
+            and str(foundation_reference.get("brand") or "").strip().casefold() == "mac"):
+        reference_brand = str(foundation_reference.get("brand") or "").strip().casefold()
+        reference_series = str(foundation_reference.get("seriesId") or "").strip().casefold()
+        reference_key = foundation_reference.get("candidateKey")
+        same_brand_alternatives = [
+            item for item in foundation_items
+            if item.get("candidateKey") != reference_key
+            and str(item.get("brand") or "").strip().casefold() == reference_brand
+            and item.get("_foundationDeltaE") is not None
+        ]
+        same_brand_alternatives.sort(key=lambda item: (
+            0 if (reference_series and str(item.get("seriesId") or "").strip().casefold() == reference_series) else 1,
+            _foundation_format_rank(item),
+            float(item.get("_foundationDeltaE")),
+            -float(item.get("score") or 0),
+            str(item.get("candidateKey") or ""),
+        ))
+        for alternative in same_brand_alternatives[:3]:
+            alternative["foundationRecommendationRole"] = "alternative"
+            eligible_foundation_keys.add(alternative.get("candidateKey"))
+            same_series = bool(
+                reference_series
+                and str(alternative.get("seriesId") or "").strip().casefold() == reference_series
+            )
+            alt_match = alternative.get("foundationSkinMatch") or {}
+            alt_match.update({
+                "displayEligible": True,
+                "displayStatus": "same_series_alternative" if same_series else "same_brand_alternative",
+            })
+            alternative["foundationSkinMatch"] = alt_match
+            alternative_text = (
+                ("同系列其他近似色號，可依實際上臉效果比較；" if same_series
+                 else "同品牌其他粉底系列的近似選擇，可依妝效與膚質需求比較；")
+                + FOUNDATION_IN_STORE_DISCLAIMER
+            )
+            alternative["matchReason"] = alternative_text
+            alternative["matchReasons"] = [{
+                "priority": 2,
+                "reasonCode": ("foundation_same_series_alternative" if same_series
+                               else "foundation_same_brand_alternative"),
+                "personalized": True,
+                "text": alternative_text,
+                "evidence": {
+                    "anchorShadeCode": foundation_reference.get("shadeCode"),
+                    "candidateShadeCode": alternative.get("shadeCode"),
+                    "sameSeries": same_series,
+                    "skinDeltaE": alt_match.get("deltaE"),
+                },
+            }]
+            alternative["recommendationPresentation"].update({
+                "systemLabel": "同系列替代色" if same_series else "同品牌粉底替代選擇",
+                "headline": "可一併試色比較" if same_series else "可依妝效需求比較",
+                "summary": alternative_text,
+                "reasonTexts": [alternative_text],
+            })
     scored = [
         item for item in scored
         if item.get("category") != "base"
@@ -739,6 +899,10 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
             ),
             default=None,
         )
+    if (preferred_foundation is not None
+            and not foundation_preference_applied
+            and not bool((preferred_foundation.get("foundationSkinMatch") or {}).get("accepted"))):
+        closest_display_foundation = preferred_foundation
     if closest_display_foundation is not None:
         closest_delta = float(closest_display_foundation["foundationSkinMatch"]["deltaE"])
         closest_display_foundation["foundationSkinMatch"].update({
@@ -747,9 +911,9 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
             "displayMaxInclusive": None,
         })
         closest_text = (
-            "資料庫目前沒有與你膚色極近似（色差 0～2）的色號；"
-            f"以下提供目前最相近的色號（色差 {closest_delta:.1f}）。"
-            f"{FOUNDATION_IN_STORE_DISCLAIMER}"
+            "資料庫目前沒有與你膚色極近似（色差 0～2）的色號；以下提供目前最相近的色號；"
+            + f"這支色號與膚色的色差為 {closest_delta:.1f}。"
+            + FOUNDATION_IN_STORE_DISCLAIMER
         )
         closest_display_foundation["matchReason"] = closest_text
         closest_display_foundation["matchReasons"] = [{
@@ -767,8 +931,9 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         presentation = closest_display_foundation["recommendationPresentation"]
         presentation.update({
             "systemLabel": "目前最接近的可比較色號",
-            "matchLabel": None,
-            "showMatchPercent": False,
+            "matchPercent": max(0, min(100, round(float(closest_display_foundation.get("matchScore") or 0) * 100))),
+            "matchLabel": f"推薦契合度 {max(0, min(100, round(float(closest_display_foundation.get('matchScore') or 0) * 100)))}%",
+            "showMatchPercent": True,
             "matchTier": "未達相近色號門檻",
             "headline": "目前商品清單中沒有相近色號",
             "summary": closest_text,
@@ -802,6 +967,13 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         foundation_match_status = "unavailable"
         foundation_status_code = "FOUNDATION_PRODUCT_LAB_UNAVAILABLE"
         foundation_status_message = "粉底缺少可用 LAB，無法驗證色差是否在 0～2，因此未回傳粉底推薦"
+    elif foundation_preference_applied and preferred_foundation is not None:
+        foundation_match_status = "matched"
+        foundation_status_code = "FOUNDATION_CALIBRATED_SAME_LANE"
+        foundation_status_message = (
+            "已根據臉部分析結果，在 MAC 同底調色階中選出主推薦色號。"
+            f"{FOUNDATION_IN_STORE_DISCLAIMER}"
+        )
     elif foundation_qualified_count == 0 and closest_display_foundation is not None:
         foundation_match_status = "closest_available"
         foundation_status_code = "FOUNDATION_CLOSEST_AVAILABLE"
@@ -861,8 +1033,14 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         fallback_reasons.append({"code": "STYLE_KEYWORD_NO_MATCH", "message": "沒有商品命中風格關鍵字，已改以合格資料庫商品排序", "affected": []})
     fallback_reason = fallback_reasons[0] if fallback_reasons else None
     shade_recommendation = _foundation_shade_recommendation(scored, shade_candidate_pool)
+    cross_brand_foundation_alternatives = _cross_brand_foundation_alternatives(
+        preferred_foundation, foundation_items
+    )
     for item in shade_candidate_pool:
         item.pop("_foundationDeltaE", None)
+        # The selected shade remains the same, but the server-side ranking
+        # policy must never become customer-facing API copy or a UI switch.
+        item.pop("foundationShadePreference", None)
     for item in final:
         _apply_recommendation_display_policy(item)
     for wrapped in [*primary, *alternates]:
@@ -885,7 +1063,8 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
             "foundationSkinMatch": {
                 "metric": "CIEDE2000", "symbol": "ΔE00",
                 "minInclusive": 0.0, "maxInclusive": FOUNDATION_SKIN_MAX_DELTA_E,
-                "mode": "hard_filter", "comparisonTarget": "使用者膚色與粉底色號",
+                "mode": "strict_primary_with_ranked_same_brand_alternatives",
+                "comparisonTarget": "使用者膚色與粉底色號",
             },
             "foundationAnchor": {
                 "brand": foundation_anchor_brand,
@@ -916,6 +1095,7 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
             "evaluatedCount": len(foundation_delta_values),
             "closestDeltaE": round(closest_foundation_delta, 2) if closest_foundation_delta is not None else None,
             "displayedCandidateKey": (
+                preferred_foundation.get("candidateKey") if preferred_foundation is not None else
                 closest_display_foundation.get("candidateKey") if closest_display_foundation is not None else None
             ),
             "anchorBrand": foundation_anchor_brand,
@@ -924,6 +1104,7 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         "alternates": alternates,
         "threshold": threshold,
         "shadeRecommendation": shade_recommendation,
+        "foundationCrossBrandAlternatives": cross_brand_foundation_alternatives,
         "personalization": {
             "applied": bool(behavior_profile.get("interactionCount") or recommendation_options["preferredBrands"]
                             or recommendation_options["avoidedBrands"]
@@ -1134,12 +1315,15 @@ def _build_user_presentation(product: dict, style: str, face_analysis: dict,
         raw = str(face_analysis["lipShape"])
         traits.append(lip_labels.get(raw.casefold(), raw))
     traits.append(f"{style}妝")
-    low_score_sensitive_category = category in {"contour", "highlight", "brow"} and percent < 70
-    show_match_percent = category != "lip" and not low_score_sensitive_category
+    # The product owner requires a consistent percentage on every recommended
+    # item.  It is a ranking-fit score, not a claim about colour accuracy;
+    # lips therefore retain their style-based explanation and never expose
+    # a lip-colour ΔE value.
+    show_match_percent = True
     return {
         "systemLabel": "根據臉部分析結果",
         "matchPercent": percent if show_match_percent else None,
-        "matchLabel": f"{percent}% MATCH" if show_match_percent else None,
+        "matchLabel": f"推薦契合度 {percent}%",
         "showMatchPercent": show_match_percent,
         "matchTier": tier,
         "headline": headline,
@@ -1155,10 +1339,11 @@ def _build_user_presentation(product: dict, style: str, face_analysis: dict,
 
 
 def _apply_recommendation_display_policy(item: dict) -> None:
-    """Expose only scores that are useful and appropriate for customer display."""
+    """Expose the consistent customer-facing recommendation-fit percentage."""
     presentation = item.get("recommendationPresentation") or {}
     display_score = bool(presentation.get("showMatchPercent"))
     item["displayScore"] = display_score
+    item["matchPercent"] = presentation.get("matchPercent")
     item["recommendationLabel"] = (
         presentation.get("matchLabel") if display_score else "根據臉部分析結果推薦"
     )
@@ -1208,12 +1393,137 @@ def _foundation_family_key(item: dict) -> Optional[Tuple[str, str, str]]:
     return brand, "name", _normalized_product_text(name)
 
 
+def _mac_undertone_lane(item: dict) -> Optional[str]:
+    """Return the explicit MAC N/NC/NW lane used for safe shade stepping.
+
+    `depthIndex` is a lightness ordering across a product series; it is not an
+    undertone order.  In particular, N, NC and NW rows must not become each
+    other's "one shade lighter" merely because their L* values are adjacent.
+    Unknown or non-MAC codes deliberately return None, disabling the offset
+    rather than guessing a lane from the product name.
+    """
+    if _normalized_product_text(item.get("brand")) != "mac":
+        return None
+    code = str(item.get("shadeCode") or item.get("shadeName") or "").strip().upper()
+    match = re.match(r"^(NC|NW|N)(?=\s*\d)", code)
+    return match.group(1) if match else None
+
+
+def _foundation_format_rank(item: dict) -> int:
+    """Rank base formats for the user's foundation-first routine.
+
+    This intentionally uses only explicit official product text.  A lower rank
+    is preferred: liquid foundation, then cushion, then all other base forms.
+    """
+    product_text = " ".join(str(item.get(field) or "") for field in (
+        "name", "description", "productType", "seriesName"
+    )).casefold()
+    if any(token in product_text for token in ("粉底液", "liquid foundation", "fluid foundation")):
+        return 0
+    if any(token in product_text for token in ("氣墊", "cushion")):
+        return 1
+    return 2
+
+
+def _mac_foundation_lighter_steps(anchor: dict, pool: List[dict], steps: int) -> Optional[dict]:
+    """Move a MAC shade lighter by up to ``steps`` safe same-series steps.
+
+    The stored depth index is a Lab-lightness order, not a claimed MAC ordinal.
+    Every hop must be in the same family and inside the adjacent-shade ΔE00
+    guard.  The caller controls the fixed internal offset without inventing
+    an unavailable shade.
+    """
+    if (steps < 1 or _normalized_product_text(anchor.get("brand")) != "mac"
+            or not anchor.get("lab")):
+        return None
+    family = _foundation_family_key(anchor)
+    lane = _mac_undertone_lane(anchor)
+    if family is None or lane is None:
+        return None
+    # The crawler stores each complete series in light-to-dark depth order.
+    # Prefer that explicit order whenever it exists: a step means an adjacent
+    # catalogue shade, not merely a numerically larger L* jump.
+    ordered = sorted(
+        (item for item in pool
+         if item.get("lab") and _foundation_family_key(item) == family
+         and _mac_undertone_lane(item) == lane
+         and item.get("depthIndex") is not None),
+        key=lambda item: (int(item["depthIndex"]), str(item.get("candidateKey") or "")),
+    )
+    if anchor in ordered:
+        anchor_position = ordered.index(anchor)
+        target_position = anchor_position - steps
+        if target_position >= 0:
+            target = ordered[target_position]
+            target_delta = delta_e(anchor.get("lab"), target.get("lab"))
+            if (float(target["lab"][0]) > float(anchor["lab"][0])
+                    and target_delta is not None
+                    and target_delta <= MAC_LIGHTER_STEP_MAX_DELTA_E * steps):
+                return target
+
+    # Legacy products may lack a usable series index.  Only then infer two
+    # neighbouring lighter hops from Lab values, preserving the same guard.
+    current = anchor
+    for _ in range(steps):
+        current_l = float(current["lab"][0])
+        candidates = []
+        for item in pool:
+            if (item is current or not item.get("lab")
+                    or _foundation_family_key(item) != family
+                    or _mac_undertone_lane(item) != lane):
+                continue
+            lightness_gain = float(item["lab"][0]) - current_l
+            shade_delta = delta_e(current.get("lab"), item.get("lab"))
+            if (lightness_gain > 0 and shade_delta is not None
+                    and shade_delta <= MAC_LIGHTER_STEP_MAX_DELTA_E):
+                candidates.append((lightness_gain, float(shade_delta), item))
+        next_step = min(candidates, key=lambda value: (
+            value[0], value[1], str(value[2].get("candidateKey") or "")
+        ), default=(None, None, None))[2]
+        if next_step is None:
+            break
+        current = next_step
+    return current if current is not anchor else None
+
+
+def _cross_brand_foundation_alternatives(anchor: Optional[dict], pool: List[dict]) -> List[dict]:
+    """Return the nearest foundation shade per non-anchor brand."""
+    if anchor is None or not anchor.get("lab"):
+        return []
+    anchor_brand = _normalized_product_text(anchor.get("brand"))
+    by_brand = {}
+    for item in pool:
+        brand = _normalized_product_text(item.get("brand"))
+        if not brand or brand == anchor_brand or not item.get("lab"):
+            continue
+        shade_delta = delta_e(anchor.get("lab"), item.get("lab"))
+        if shade_delta is None:
+            continue
+        current = by_brand.get(brand)
+        key = (float(shade_delta), str(item.get("candidateKey") or ""))
+        if current is None or key < current[0]:
+            by_brand[brand] = (key, item)
+    return [{
+        "brand": item.get("brand"),
+        "shadeCode": item.get("shadeCode") or item.get("shadeName"),
+        "anchorDeltaE": round(key[0], 2),
+        "product": item,
+        "comparisonAnchor": {
+            "brand": anchor.get("brand"),
+            "shadeCode": anchor.get("shadeCode") or anchor.get("shadeName"),
+            "candidateKey": anchor.get("candidateKey"),
+        },
+        "disclaimer": FOUNDATION_IN_STORE_DISCLAIMER,
+    } for key, item in sorted(by_brand.values(), key=lambda value: value[0])]
+
+
 def _foundation_shade_recommendation(scored: List[dict],
                                      shade_candidate_pool: Optional[List[dict]] = None) -> Optional[dict]:
     anchor_candidates = [
         item for item in scored
         if item.get("category") == "base" and item.get("lab")
-        and bool((item.get("foundationSkinMatch") or {}).get("accepted"))
+        and (bool((item.get("foundationSkinMatch") or {}).get("accepted"))
+             or bool((item.get("foundationShadePreference") or {}).get("applied")))
     ]
     if not anchor_candidates:
         return None
@@ -1222,6 +1532,7 @@ def _foundation_shade_recommendation(scored: List[dict],
         if item.get("category") == "base" and item.get("lab")
     ]
     anchor = min(anchor_candidates, key=lambda item: (
+        0 if item.get("foundationRecommendationRole") == "primary" else 1,
         float(item.get("_foundationDeltaE") if item.get("_foundationDeltaE") is not None
               else (item.get("foundationSkinMatch") or {}).get("deltaE", float("inf"))),
         -float(item.get("score") or 0),
@@ -1229,7 +1540,8 @@ def _foundation_shade_recommendation(scored: List[dict],
     ))
     series_id, depth_index = anchor.get("seriesId"), anchor.get("depthIndex")
     anchor_brand = _normalized_product_text(anchor.get("brand"))
-    official = series_id and depth_index is not None
+    official = bool(series_id and depth_index is not None
+                    and anchor.get("depthIndexOfficial") is not False)
     if official:
         same_series = [item for item in foundation_pool if item is not anchor
                        and anchor_brand
@@ -1288,10 +1600,16 @@ def _foundation_shade_recommendation(scored: List[dict],
         "seriesId": series_id if official else None,
         "selectionScope": "same_brand_same_series",
         "alternativeMaxDeltaE": SHADE_ALTERNATIVE_MAX_DELTA_E,
-        "anchor": choice(anchor, "anchor", "主推薦色號", "目前最接近你的膚色明暗與色調。"),
-        "lighter": choice(lighter, "lighter_variant", "淺一階" if official else "較明亮的替代色",
+        "anchor": choice(
+            anchor, "anchor", "主推薦色號",
+            "根據臉部分析結果選出的相近色號。",
+        ),
+        # Anchor is already the server-selected main recommendation.  These
+        # labels are relative to that visible anchor; the private skin-anchor
+        # offset is intentionally not exposed to the client.
+        "lighter": choice(lighter, "lighter_variant", "淺一階",
                            "適合希望提亮膚色或呈現較明亮妝效時比較。"),
-        "darker": choice(darker, "darker_variant", "深一階" if official else "較深的替代色",
+        "darker": choice(darker, "darker_variant", "深一階",
                           "適合近期有日曬或偏好自然健康妝效時比較。"),
         "disclaimer": ("色階依同品牌同系列的正式深淺順序提供，且只回傳與主推薦色號 "
                        f"ΔE00 不超過 {SHADE_ALTERNATIVE_MAX_DELTA_E:.1f} 的相鄰色；"
@@ -1313,6 +1631,7 @@ def _diversify_categories(scored: List[dict], limit: int) -> List[dict]:
     for items in by_cat.values():
         if items and items[0].get("category") == "base":
             items.sort(key=lambda item: (
+                0 if item.get("foundationRecommendationRole") == "primary" else 1,
                 float(item.get("_foundationDeltaE") if item.get("_foundationDeltaE") is not None
                       else (item.get("foundationSkinMatch") or {}).get("deltaE", float("inf"))),
                 -float(item.get("score") or 0),

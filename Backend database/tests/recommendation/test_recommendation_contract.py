@@ -37,9 +37,11 @@ class RecommendationContractTests(unittest.TestCase):
         presentation = item["recommendationPresentation"]
         self.assertEqual(presentation["systemLabel"], "根據臉部分析結果")
         self.assertNotIn("AI", presentation["systemLabel"])
-        self.assertFalse(item["displayScore"])
-        self.assertIsNone(item["matchScore"])
-        self.assertIsNone(presentation["matchPercent"])
+        self.assertTrue(item["displayScore"])
+        self.assertIsInstance(item["matchScore"], float)
+        self.assertIsInstance(item["matchPercent"], int)
+        self.assertEqual(item["matchPercent"], presentation["matchPercent"])
+        self.assertIn("推薦契合度", item["recommendationLabel"])
 
     def test_brow_without_brow_lab_is_normal_style_ranking(self):
         brow = {"id": 7, "type": "eyebrows", "category": "brow", "name": "淺棕眉彩", "inStock": True,
@@ -47,8 +49,9 @@ class RecommendationContractTests(unittest.TestCase):
         result = recommend_products({"style": "richGirl", "faceAnalysis": {"skinTone": {"lab": [71.17, 9.14, 13.73]}}}, [brow])
         product = result["products"][0]
         self.assertEqual(product["colorMethod"], "style_only")
-        self.assertFalse(product["displayScore"])
-        self.assertIsNone(product["scoreBreakdown"])
+        self.assertTrue(product["displayScore"])
+        self.assertIsInstance(product["matchPercent"], int)
+        self.assertIsNotNone(product["scoreBreakdown"])
         self.assertFalse(any(reason["code"] == "BROW_COLOR_UNAVAILABLE" for reason in result["fallbackReasons"]))
         self.assertNotIn("膚色", product["matchReason"])
         self.assertEqual(result["primary"][0]["type"], "eyebrows")
@@ -105,7 +108,7 @@ class RecommendationContractTests(unittest.TestCase):
         self.assertEqual(len(far_result["products"]), 1)
         self.assertEqual(far_result["foundationMatchStatus"]["status"], "closest_available")
         self.assertEqual(far_result["foundationMatchStatus"]["code"], "FOUNDATION_CLOSEST_AVAILABLE")
-        self.assertFalse(far_result["products"][0]["displayScore"])
+        self.assertTrue(far_result["products"][0]["displayScore"])
         self.assertIn("請以實際至實體專櫃試色", far_result["foundationMatchStatus"]["message"])
         self.assertEqual(far_result["colorDifferencePolicy"]["foundationSkinMatch"]["maxInclusive"], 2.0)
         self.assertTrue(close["foundationSkinMatch"]["accepted"])
@@ -127,12 +130,13 @@ class RecommendationContractTests(unittest.TestCase):
         self.assertEqual(lip["colorMethod"], "style_only")
         self.assertEqual(lip["recommendationPresentation"]["comparisonBasis"], "makeup_style")
         self.assertIsNone(lip["recommendationPresentation"]["colorDifferenceExplanation"])
-        self.assertFalse(lip["displayScore"])
-        self.assertIsNone(lip["score"])
-        self.assertIsNone(lip["scoreBreakdown"])
+        self.assertTrue(lip["displayScore"])
+        self.assertIsInstance(lip["matchPercent"], int)
+        self.assertIsNotNone(lip["score"])
+        self.assertIsNotNone(lip["scoreBreakdown"])
         self.assertNotIn("唇色色差", str(lip))
 
-    def test_low_contour_score_is_hidden_behind_face_analysis_label(self):
+    def test_low_contour_score_still_has_a_recommendation_fit_percent(self):
         contour = {
             "id": 63, "type": "contouring", "category": "contour",
             "name": "一般修容", "tags": [], "inStock": True,
@@ -140,10 +144,11 @@ class RecommendationContractTests(unittest.TestCase):
         item = recommend_products(
             {"style": "richGirl", "faceAnalysis": {"faceShape": "oval"}}, [contour]
         )["products"][0]
-        self.assertFalse(item["displayScore"])
-        self.assertEqual(item["recommendationLabel"], "根據臉部分析結果推薦")
-        self.assertIsNone(item["matchScore"])
-        self.assertIsNone(item["scoreBreakdown"])
+        self.assertTrue(item["displayScore"])
+        self.assertIn("推薦契合度", item["recommendationLabel"])
+        self.assertIsInstance(item["matchPercent"], int)
+        self.assertIsNotNone(item["matchScore"])
+        self.assertIsNotNone(item["scoreBreakdown"])
 
     def test_explicit_brand_and_budget_preferences_are_explainable(self):
         candidate = {**self.candidate, "type": "eyeshadows", "category": "eye",
@@ -184,7 +189,7 @@ class RecommendationContractTests(unittest.TestCase):
         self.assertEqual(result["products"], [])
         self.assertEqual(result["foundationMatchStatus"]["status"], "unavailable")
 
-    def test_closest_foundation_is_always_displayed_without_match_badge(self):
+    def test_closest_foundation_is_always_displayed_with_recommendation_fit_percent(self):
         foundation = {
             "id": 21, "type": "foundations", "category": "base",
             "brand": "Demo", "name": "Demo Foundation - Main", "shadeCode": "Main",
@@ -202,8 +207,9 @@ class RecommendationContractTests(unittest.TestCase):
         self.assertFalse(displayed["foundationSkinMatch"]["accepted"])
         self.assertTrue(displayed["foundationSkinMatch"]["displayEligible"])
         self.assertEqual(displayed["foundationSkinMatch"]["displayStatus"], "closest_available")
-        self.assertFalse(displayed["recommendationPresentation"]["showMatchPercent"])
-        self.assertIsNone(displayed["recommendationPresentation"]["matchLabel"])
+        self.assertTrue(displayed["recommendationPresentation"]["showMatchPercent"])
+        self.assertIn("推薦契合度", displayed["recommendationPresentation"]["matchLabel"])
+        self.assertIsInstance(displayed["matchPercent"], int)
         self.assertIsNone(result["colorDifferencePolicy"]["foundationClosestAvailable"]["maxInclusive"])
         self.assertIsNone(result["shadeRecommendation"])
 
@@ -245,6 +251,158 @@ class RecommendationContractTests(unittest.TestCase):
         self.assertEqual(result["colorDifferencePolicy"]["foundationAnchor"]["brand"], "MAC")
         self.assertEqual(result["colorDifferencePolicy"]["foundationAnchor"]["mode"],
                          "mac_primary_then_cross_brand_alternatives")
+
+    def test_mac_nearest_moves_one_safe_step_lighter_then_drives_cross_brand_matches(self):
+        candidates = [
+            {"id": 260, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "Studio Fix - N20", "shadeCode": "N20", "seriesId": "MAC::studio",
+             "depthIndex": 4, "depthIndexOfficial": False,
+             "lab": [70.0, 10.0, 18.0], "inStock": True},
+            {"id": 261, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "Studio Fix - N18", "shadeCode": "N18", "seriesId": "MAC::studio",
+             "depthIndex": 3, "depthIndexOfficial": False,
+             "lab": [71.5, 10.0, 18.0], "inStock": True},
+            {"id": 263, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "Studio Fix - N16", "shadeCode": "N16", "seriesId": "MAC::studio",
+             "depthIndex": 2, "depthIndexOfficial": False,
+             "lab": [73.0, 10.0, 18.0], "inStock": True},
+            {"id": 264, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "Studio Fix - N14", "shadeCode": "N14", "seriesId": "MAC::studio",
+             "depthIndex": 1, "depthIndexOfficial": False,
+             "lab": [74.5, 10.0, 18.0], "inStock": True},
+            {"id": 262, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "Studio Fix - N25", "shadeCode": "N25", "seriesId": "MAC::studio",
+             "depthIndex": 5, "depthIndexOfficial": False,
+             "lab": [67.0, 10.0, 18.0], "inStock": True},
+            {"id": 270, "type": "foundations", "category": "base", "brand": "YSL",
+             "name": "YSL Foundation - LN4", "shadeCode": "LN4", "seriesId": "YSL::allhours",
+             "depthIndex": 2, "lab": [71.4, 10.1, 18.1], "inStock": True},
+        ]
+
+        result = recommend_products({"style": "richGirl", "faceAnalysis": {
+            "skinTone": {"lab": [70.0, 10.0, 18.0], "labReliable": True}
+        }}, candidates)
+
+        foundation = next(item for item in result["products"] if item["category"] == "base")
+        self.assertEqual(foundation["brand"], "MAC")
+        self.assertEqual(foundation["shadeCode"], "N18")
+        self.assertEqual(foundation["foundationSkinMatch"]["comparisonTarget"], "mac_calibrated_target")
+        self.assertEqual(foundation["foundationSkinMatch"]["calibrationAnchorShadeCode"], "N20")
+        self.assertEqual(foundation["foundationSkinMatch"]["calibratedTargetDeltaE"], 0.0)
+        self.assertEqual(result["foundationMatchStatus"]["code"], "FOUNDATION_CALIBRATED_SAME_LANE")
+        self.assertNotIn("deltaE", foundation["matchReasons"][0]["evidence"])
+        self.assertNotIn("shadePreferenceApplied", result["foundationMatchStatus"])
+        self.assertNotIn("shadePreference", result["foundationMatchStatus"])
+        self.assertNotIn("foundationShadePreference", foundation)
+        self.assertEqual(result["shadeRecommendation"]["anchor"]["shadeCode"], "N18")
+        self.assertEqual(result["shadeRecommendation"]["method"], "lab_lightness_approximation")
+        self.assertEqual(result["shadeRecommendation"]["lighter"]["shadeCode"], "N16")
+        self.assertEqual(result["shadeRecommendation"]["lighter"]["label"], "淺一階")
+        self.assertNotIn("shadePreference", result["shadeRecommendation"])
+        self.assertNotIn("較明亮一階", result["foundationMatchStatus"]["message"])
+        ysl = next(item for item in result["foundationCrossBrandAlternatives"]
+                   if item["brand"] == "YSL")
+        self.assertEqual(ysl["shadeCode"], "LN4")
+        self.assertEqual(ysl["comparisonAnchor"]["shadeCode"], "N18")
+
+        exact = recommend_products({"style": "richGirl", "faceAnalysis": {
+            "skinTone": {"lab": [70.0, 10.0, 18.0], "labReliable": True}
+        }}, candidates, recommendation_options={"foundationShadePreference": "closest_skin_match"})
+        exact_foundation = next(item for item in exact["products"] if item["category"] == "base")
+        self.assertEqual(exact_foundation["shadeCode"], "N18")
+        self.assertNotIn("shadePreferenceApplied", exact["foundationMatchStatus"])
+
+    def test_mac_lighter_calibration_never_crosses_n_nc_nw_undertone_lanes(self):
+        # In the real Studio Fix family, N16 and NW7 are near each other in a
+        # Lab-lightness sort but differ by ΔE00 about 9.2.  They are not one
+        # another's adjacent shade.  The safer N16 -> N18 hop is allowed.
+        candidates = [
+            {"id": 300, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "Studio Fix - N16", "shadeCode": "N16", "seriesId": "MAC::studio",
+             "depthIndex": 12, "lab": [77.65, 4.0, 19.0], "inStock": True},
+            {"id": 301, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "Studio Fix - NW7", "shadeCode": "NW7", "seriesId": "MAC::studio",
+             "depthIndex": 11, "lab": [78.43, 14.0, 20.0], "inStock": True},
+            {"id": 302, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "Studio Fix - N18", "shadeCode": "N18", "seriesId": "MAC::studio",
+             "depthIndex": 8, "lab": [80.39, 7.0, 15.0], "inStock": True},
+        ]
+
+        result = recommend_products({"style": "richGirl", "faceAnalysis": {
+            "skinTone": {"lab": [77.65, 4.0, 19.0], "labReliable": True}
+        }}, candidates)
+
+        foundation = next(item for item in result["products"] if item["category"] == "base")
+        self.assertEqual(foundation["shadeCode"], "N18")
+        self.assertNotEqual(foundation["shadeCode"], "NW7")
+
+    def test_nw7_primary_keeps_same_series_and_same_brand_foundation_alternatives(self):
+        candidates = [
+            {"id": 330, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "Studio Fix 粉底液 - NW7", "shadeCode": "NW7", "seriesId": "MAC::studio",
+             "lab": [78.4, 14.0, 20.0], "inStock": True},
+            {"id": 331, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "Studio Fix 粉底液 - NW10", "shadeCode": "NW10", "seriesId": "MAC::studio",
+             "lab": [76.8, 13.0, 19.0], "inStock": True},
+            {"id": 332, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "超持妝濾鏡粉底液 - N12", "shadeCode": "N12", "seriesId": "MAC::filter",
+             "lab": [77.1, 10.0, 18.0], "inStock": True},
+            {"id": 333, "type": "foundations", "category": "base", "brand": "Other",
+             "name": "Other Foundation", "shadeCode": "LIGHT", "seriesId": "Other::one",
+             "lab": [78.3, 14.0, 20.0], "inStock": True},
+        ]
+
+        result = recommend_products({"style": "richGirl", "faceAnalysis": {
+            "skinTone": {"lab": [78.4, 14.0, 20.0], "labReliable": True}
+        }}, candidates, limit=4,
+            recommendation_options={"foundationShadePreference": "closest_skin_match"})
+
+        foundations = [item for item in result["products"] if item["category"] == "base"]
+        self.assertEqual(foundations[0]["shadeCode"], "NW7")
+        self.assertIn("NW10", [item["shadeCode"] for item in foundations])
+        self.assertIn("N12", [item["shadeCode"] for item in foundations])
+        self.assertNotIn("LIGHT", [item["shadeCode"] for item in foundations])
+        statuses = {item["shadeCode"]: item["foundationSkinMatch"]["displayStatus"]
+                    for item in foundations}
+        self.assertEqual(statuses["NW10"], "same_series_alternative")
+        self.assertEqual(statuses["N12"], "same_brand_alternative")
+
+    def test_far_raw_anchor_is_not_forced_to_a_lighter_shade(self):
+        candidates = [
+            {"id": 310, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "Studio Fix - N16", "shadeCode": "N16", "seriesId": "MAC::studio",
+             "depthIndex": 12, "lab": [77.65, 4.0, 19.0], "inStock": True},
+            {"id": 311, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "Studio Fix - N18", "shadeCode": "N18", "seriesId": "MAC::studio",
+             "depthIndex": 8, "lab": [80.39, 7.0, 15.0], "inStock": True},
+        ]
+
+        result = recommend_products({"style": "richGirl", "faceAnalysis": {
+            "skinTone": {"lab": [68.0, 4.0, 19.0], "labReliable": True}
+        }}, candidates)
+
+        foundation = next(item for item in result["products"] if item["category"] == "base")
+        self.assertEqual(foundation["shadeCode"], "N16")
+        self.assertEqual(result["foundationMatchStatus"]["status"], "closest_available")
+
+    def test_mac_liquid_foundation_outranks_a_closer_dot_pen(self):
+        candidates = [
+            {"id": 280, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "超持妝全能點點筆 - NC15", "shadeCode": "NC15",
+             "seriesId": "MAC::dot-pen", "depthIndex": 1,
+             "lab": [70.0, 10.0, 18.0], "inStock": True},
+            {"id": 281, "type": "foundations", "category": "base", "brand": "MAC",
+             "name": "超持妝濾鏡粉底液 - NC15", "shadeCode": "NC15",
+             "seriesId": "MAC::liquid", "depthIndex": 1,
+             "lab": [70.8, 10.0, 18.0], "inStock": True},
+        ]
+
+        result = recommend_products({"style": "richGirl", "faceAnalysis": {
+            "skinTone": {"lab": [70.0, 10.0, 18.0], "labReliable": True}
+        }}, candidates)
+
+        foundation = next(item for item in result["products"] if item["category"] == "base")
+        self.assertIn("粉底液", foundation["name"])
 
     def test_strict_foundation_matches_are_ranked_by_smallest_delta_e(self):
         farther_first = {
@@ -377,8 +535,8 @@ class RecommendationContractTests(unittest.TestCase):
         )
         shades = result["shadeRecommendation"]
         self.assertEqual(shades["method"], "lab_lightness_approximation")
-        self.assertEqual(shades["lighter"]["label"], "較明亮的替代色")
-        self.assertEqual(shades["darker"]["label"], "較深的替代色")
+        self.assertEqual(shades["lighter"]["label"], "淺一階")
+        self.assertEqual(shades["darker"]["label"], "深一階")
         self.assertEqual(shades["selectionScope"], "same_brand_same_series")
         self.assertEqual(shades["alternativeMaxDeltaE"], 5.0)
         self.assertLessEqual(shades["lighter"]["anchorDeltaE"], 5.0)

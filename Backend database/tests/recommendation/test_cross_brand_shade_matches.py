@@ -52,7 +52,7 @@ class CrossBrandShadeMatchTests(unittest.TestCase):
 
     @patch.object(app_module, "_catalog_rows")
     @patch.object(app_module, "_catalog_item_by_id")
-    def test_low_confidence_match_hides_percentage(self, by_id, rows):
+    def test_low_confidence_match_still_exposes_percentage(self, by_id, rows):
         by_id.return_value = self.source
         distant = foundation(20, "YSL", [90.0, 50.0, 50.0], "Distant")
         rows.return_value = [self.source, distant]
@@ -60,9 +60,9 @@ class CrossBrandShadeMatchTests(unittest.TestCase):
         response = self.client.get("/api/products/10/shade-matches")
 
         match = response.get_json()["items"][0]["shadeMatch"]
-        self.assertFalse(match["displayScore"])
-        self.assertIsNone(match["matchPercent"])
-        self.assertEqual(match["recommendationLabel"], "根據臉部分析結果推薦")
+        self.assertTrue(match["displayScore"])
+        self.assertIsInstance(match["matchPercent"], int)
+        self.assertEqual(match["recommendationLabel"], f"推薦契合度 {match['matchPercent']}%")
 
     @patch.object(app_module, "_catalog_item_by_id")
     def test_non_foundation_is_rejected(self, by_id):

@@ -1,8 +1,16 @@
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, SubmitField, IntegerField
-from wtforms.validators import DataRequired, Email, EqualTo, Length, ValidationError
+from wtforms.validators import DataRequired, Email, EqualTo, Length, Regexp, ValidationError
 import re
 from models import Members
+from password_policy import PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH, PASSWORD_POLICY_MESSAGE
+
+
+PASSWORD_LENGTH_VALIDATOR = Length(
+    min=PASSWORD_MIN_LENGTH,
+    max=PASSWORD_MAX_LENGTH,
+    message=PASSWORD_POLICY_MESSAGE,
+)
 
 #forms.py 的內容是用來定義Flask 應用程式中所有使用者介面表單的結構、欄位類型和驗證規則，並且使用了 Flask-WTF 庫，該庫是基於 WTForms 的 Flask 整合套件
 # 註冊表單
@@ -10,7 +18,7 @@ class RegistrationForm(FlaskForm):
     phone_number = StringField('電話號碼 (會員ID)', validators=[DataRequired(), Length(min=8, max=20)])
     name = StringField('姓名', validators=[DataRequired(), Length(min=2, max=50)])
     email = StringField('電子郵件', validators=[DataRequired(), Length(max=100)])
-    password = PasswordField('密碼', validators=[DataRequired(), Length(min=6)])
+    password = PasswordField('密碼', validators=[DataRequired(), PASSWORD_LENGTH_VALIDATOR])
     confirm_password = PasswordField('確認密碼', validators=[
         DataRequired(),
         EqualTo('password', message='密碼必須一致')
@@ -49,8 +57,11 @@ class ForgotPasswordRequestForm(FlaskForm):
 
 class ResetPasswordForm(FlaskForm):
     email = StringField('註冊電子郵件', validators=[DataRequired(), Email()])
-    otp = StringField('驗證碼', validators=[DataRequired(), Length(min=6, max=6)])
-    new_password = PasswordField('新密碼', validators=[DataRequired(), Length(min=6)])
+    otp = StringField('驗證碼', validators=[
+        DataRequired(),
+        Regexp(r'^\d{6}$', message='驗證碼固定為 6 位數字'),
+    ])
+    new_password = PasswordField('新密碼', validators=[DataRequired(), PASSWORD_LENGTH_VALIDATOR])
     confirm_new_password = PasswordField('確認新密碼', validators=[
         DataRequired(),
         EqualTo('new_password', message='新密碼必須一致')
@@ -64,7 +75,7 @@ class ChangePasswordForm(FlaskForm):
     old_password = PasswordField('舊密碼', validators=[DataRequired()])
 
     # 新密碼的長度要求
-    new_password = PasswordField('新密碼', validators=[DataRequired(), Length(min=6)])
+    new_password = PasswordField('新密碼', validators=[DataRequired(), PASSWORD_LENGTH_VALIDATOR])
 
     # 確認新密碼，確保與新密碼欄位一致
     confirm_new_password = PasswordField('確認新密碼', validators=[

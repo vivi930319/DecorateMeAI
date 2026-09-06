@@ -3,7 +3,10 @@ services:
     build: .
     container_name: empower-beauty-api
     ports:
-      - "${PORT:-5000}:5000"
+      # Port 5000 is reserved for the current Windows product/member service.
+      # Binding this legacy container to localhost:5000 also claimed IPv6 ::1,
+      # causing cloudflared's `localhost:5000` origin to serve the stale catalog.
+      - "127.0.0.1:${LEGACY_APP_PORT_PUBLISHED:-5001}:5000"
     environment:
       FLASK_DEBUG: "0"
       PORT: "5000"
@@ -19,12 +22,18 @@ services:
       OTP_EXPIRE_SECONDS: "${OTP_EXPIRE_SECONDS:-300}"
       OTP_SEND_WINDOW_SECONDS: "${OTP_SEND_WINDOW_SECONDS:-900}"
       OTP_SEND_MAX_ATTEMPTS: "${OTP_SEND_MAX_ATTEMPTS:-5}"
+      USD_TO_TWD_RATE: "${USD_TO_TWD_RATE:-31.685}"
+      USD_TO_TWD_RATE_AS_OF: "${USD_TO_TWD_RATE_AS_OF:-2026-08-30T09:25:00+08:00}"
       SMTP_USER: "${SMTP_USER:-}"
       SMTP_PASS: "${SMTP_PASS:-}"
       # The current Gateway does not attach X-Gateway-Key to member auth calls.
       # Turn this off only after Gateway has been deployed with that header.
-      UPSTREAM_MEMBER_API_KEY: "${UPSTREAM_MEMBER_API_KEY:-}"
+      # 管理員的 DELETE／PATCH 委派必須有這把金鑰。禁止以空值啟動，避免
+      # 後台可讀取資料但所有管理寫入都失敗。
+      UPSTREAM_MEMBER_API_KEY: "${UPSTREAM_MEMBER_API_KEY:?請使用 scripts/start-member-service.ps1 從 Secret Manager 啟動服務}"
       GATEWAY_KEY_LOOSE_MODE: "${GATEWAY_KEY_LOOSE_MODE:-true}"
+      SAVED_LOOK_LIMIT: "${SAVED_LOOK_LIMIT:-100}"
+      MEMBER_SESSION_TTL_SECONDS: "${MEMBER_SESSION_TTL_SECONDS:-28800}"
       OLLAMA_HOST: "${OLLAMA_HOST:-}"
       SD_HOST: "${SD_HOST:-}"
     depends_on:
@@ -48,7 +57,10 @@ services:
       POSTGRES_PASSWORD: "${DB_PASSWORD:-postgres}"
       POSTGRES_DB: "${DB_NAME:-empower_beauty}"
     ports:
-      - "${DB_PORT_PUBLISHED:-5432}:5432"
+      # Windows PostgreSQL already owns host port 5432. Publishing this second
+      # cluster on the same port made the two member stores look interchangeable.
+      # Port 5433 is the single canonical database endpoint for host-side tools.
+      - "${DB_PORT_PUBLISHED:-5433}:5432"
     volumes:
       # PostgreSQL 18 stores clusters in versioned subdirectories; mount its
       # parent directory rather than the legacy /data directory.

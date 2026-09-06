@@ -17,6 +17,10 @@ import hmac
 import hashlib
 import re
 import secrets
+import gzip
+import threading
+import shutil
+import subprocess
 from dotenv import load_dotenv
 import redis
 import base64
@@ -47,10 +51,15 @@ from crawler_preview import (
     CrawlerError, build_product_preview, preview_rate_limiter,
     public_product_url, sanitized_url,
 )
+from price_conversion import display_price, price_for_frontend
+from password_policy import password_policy_error
 
 load_dotenv()
 
 app = Flask(__name__)
+# The service currently runs through a cost-saving tunnel in debug mode.  Do
+# not let Flask's debug pretty-printer inflate large catalog responses.
+app.json.compact = True
 
 
 def _configured_origins():
@@ -62,9 +71,40 @@ def _configured_origins():
 ALLOWED_ORIGINS = _configured_origins()
 CORS(app, supports_credentials=True, origins=list(ALLOWED_ORIGINS))
 
-# Gateway API key for authenticating public endpoints (Phase 4)
-GATEWAY_API_KEY = os.getenv("UPSTREAM_MEMBER_API_KEY")
-PRODUCT_ADMIN_API_KEY = os.getenv("PRODUCT_ADMIN_API_KEY")
+# 收藏本身只保存短網址與 JSON 摘要，主要儲存成本在 GCS 圖片。前後端統一為 100。
+SAVED_LOOK_LIMIT = max(1, int(os.getenv("SAVED_LOOK_LIMIT", "100")))
+
+
+def _runtime_secret(env_name, gcp_secret_name):
+    """Read local tunnel credentials without committing plaintext secrets.
+
+    Cloud Run supplies normal environment variables.  The cost-saving local
+    service has the gcloud CLI but no managed secret injection, so it reads the
+    same Secret Manager versions at process start.  Values are captured in
+    memory and are never printed or written to `.env`.
+    """
+    configured = os.getenv(env_name)
+    if configured:
+        return configured
+    if os.getenv("DISABLE_LOCAL_GCLOUD_SECRET_BOOTSTRAP", "false").casefold() in {"1", "true", "yes"}:
+        return None
+    gcloud = shutil.which("gcloud")
+    if not gcloud:
+        return None
+    try:
+        result = subprocess.run(
+            [gcloud, "secrets", "versions", "access", "latest",
+             f"--secret={gcp_secret_name}", "--project=decorate-me"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
+
+
+# Gateway API keys for delegated member administration and product management.
+GATEWAY_API_KEY = _runtime_secret("UPSTREAM_MEMBER_API_KEY", "decorate-me-member-upstream-key")
+PRODUCT_ADMIN_API_KEY = _runtime_secret("PRODUCT_ADMIN_API_KEY", "product-admin-api-key")
 # Public endpoints must be authenticated by the Gateway in production.  Local
 # development can opt in to loose mode explicitly, never by default.
 # The current Gateway authenticates normal member requests with its own session
@@ -72,6 +112,40 @@ PRODUCT_ADMIN_API_KEY = os.getenv("PRODUCT_ADMIN_API_KEY")
 # Validate the header when present, but keep the upstream compatible until the
 # Gateway contract is upgraded to send it for every request.
 GATEWAY_KEY_LOOSE_MODE = os.getenv("GATEWAY_KEY_LOOSE_MODE", "true").lower() in ("1", "true", "yes")
+
+
+class _GatewayAdminActor:
+    """Non-PII service actor used only after both admin headers validate."""
+    email = "gateway-admin@service.invalid"
+    phone_number = "gateway-admin"
+    status = "active"
+
+    @staticmethod
+    def member_role():
+        return "admin"
+
+
+GATEWAY_ADMIN_ACTOR = _GatewayAdminActor()
+
+
+def _gateway_service_authenticated():
+    """Return whether the request came from the configured trusted Gateway."""
+    provided = request.headers.get("X-Gateway-Key", "")
+    if not GATEWAY_API_KEY or not provided:
+        return False
+    return hmac.compare_digest(provided, GATEWAY_API_KEY)
+
+
+def _gateway_admin_actor():
+    """Authenticate Gateway-delegated admin operations.
+
+    ``X-Admin-Request`` is never trusted by itself because a browser can forge
+    it. The member service accepts it only alongside the configured shared
+    Gateway key, compared in constant time. Loose-mode does not apply here.
+    """
+    if request.headers.get("X-Admin-Request", "").strip() != "1":
+        return None
+    return GATEWAY_ADMIN_ACTOR if _gateway_service_authenticated() else None
 
 
 def _check_gateway_key():
@@ -98,7 +172,9 @@ def _check_gateway_key():
 # Public endpoints that require gateway key validation
 PUBLIC_ENDPOINTS = frozenset({
     "/api/register", "/api/send-otp", "/api/verify-otp", "/api/login",
+    "/api/forgot-password", "/api/reset-password",
     "/send-otp", "/verify-otp", "/register", "/login",
+    "/forgot_password", "/reset_password",
 })
 
 
@@ -128,7 +204,9 @@ login_manager.init_app(app)
 
 # ========== PostgreSQL Session 系統 ==========
 MEMBER_SESSION_COOKIE = 'member_session'
-SESSION_MAX_AGE = 7200  # 2 小時
+# 必須與 Gateway 的 GATEWAY_SESSION_TTL_SECONDS 一致，否則 Gateway 尚顯示登入中，
+# 上游會員 Session 卻已過期，收藏妝容等寫入會在中途收到 HTTP 401。
+SESSION_MAX_AGE = max(300, int(os.getenv("MEMBER_SESSION_TTL_SECONDS", "28800")))
 MAX_SESSIONS_PER_SOURCE = 5  # 同裝置/來源最多同時並存 session 數
 
 # 拋棄式/一次性 email 域名黑名單
@@ -447,6 +525,22 @@ def after_request(response):
         response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PATCH, DELETE, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Cookie, X-Requested-With'
         response.headers['Vary'] = 'Origin'
+    if request.method == "GET" and request.path == "/api/products":
+        response.headers["Cache-Control"] = "public, max-age=10, stale-while-revalidate=20"
+    accepted_encoding = request.headers.get("Accept-Encoding", "").casefold()
+    if ("gzip" in accepted_encoding and not response.direct_passthrough
+            and response.status_code == 200 and response.is_json
+            and not response.headers.get("Content-Encoding")):
+        raw = response.get_data()
+        if len(raw) >= 1024:
+            compressed = gzip.compress(raw, compresslevel=5)
+            if len(compressed) < len(raw):
+                response.set_data(compressed)
+                response.headers["Content-Encoding"] = "gzip"
+                response.headers["Content-Length"] = str(len(compressed))
+                vary = {value.strip() for value in response.headers.get("Vary", "").split(",") if value.strip()}
+                vary.add("Accept-Encoding")
+                response.headers["Vary"] = ", ".join(sorted(vary, key=str.casefold))
     return response
 
 
@@ -476,7 +570,14 @@ def member_profile_payload(member):
         "role": member.member_role(),
         "status": member.status or "active",
         "emailVerified": member.email_verified,
-        "allowedPages": member.allowed_pages or _default_allowed_pages(member),
+        # An administrator's authority comes from the server-side role, never
+        # from a previously saved page checklist.  Old/incomplete
+        # ``allowed_pages`` values must not hide admin features after login.
+        "allowedPages": (
+            _default_allowed_pages(member)
+            if member.member_role() == "admin"
+            else (member.allowed_pages or _default_allowed_pages(member))
+        ),
         "vipRequested": member.vip_requested or False,
         "points": member.points or 0,
         "lifetime": member.lifetime_points or member.total_earned_points or 0,
@@ -523,6 +624,8 @@ def error_response(code, message, status_code, request_id=None, details=None):
 
 
 def require_admin():
+    if _gateway_admin_actor() is not None:
+        return None
     bearer_member = None
     bearer_error = None
     if read_bearer_token():
@@ -544,6 +647,20 @@ def require_admin():
     return None
 
 
+def require_member_directory_admin():
+    """Authorize the read-only member directory.
+
+    The Gateway already rejects the bare member-list route for non-admin
+    claims. Accepting its shared service credential here keeps that read path
+    available if an older proxy revision omits ``X-Admin-Request``. All
+    state-changing member routes continue to use ``require_admin`` and still
+    require the explicit admin marker or a real administrator login.
+    """
+    if request.method == "GET" and _gateway_service_authenticated():
+        return None
+    return require_admin()
+
+
 def require_product_audit_admin():
     """Accept the Gateway product-admin credential or an authenticated admin session."""
     token = read_bearer_token()
@@ -553,6 +670,9 @@ def require_product_audit_admin():
 
 
 def authenticated_member():
+    gateway_actor = _gateway_admin_actor()
+    if gateway_actor is not None:
+        return gateway_actor, None
     if read_bearer_token():
         member, error = member_from_bearer_token()
         if error == "ACCOUNT_SUSPENDED":
@@ -666,6 +786,9 @@ def _create_pending_registration(phone, name, email, password, age):
     now = datetime.utcnow()
     PendingRegistration.query.filter(PendingRegistration.expires_at <= now).delete(synchronize_session=False)
     pending = PendingRegistration.query.filter_by(email=email).first()
+    phone_owner = PendingRegistration.query.filter_by(phone_number=phone).first()
+    if phone_owner is not None and phone_owner.email != email:
+        raise ValueError("PHONE_PENDING")
     if pending is None:
         pending = PendingRegistration(email=email)
         db.session.add(pending)
@@ -699,15 +822,16 @@ def _remove_legacy_unverified_member(member):
     db.session.delete(member)
 
 
-def _otp_rate_limit_key(email):
+def _otp_rate_limit_key(email, purpose="registration"):
     digest = hashlib.sha256(email.encode("utf-8")).hexdigest()
-    return f"otp:send-rate:{digest}"
+    safe_purpose = re.sub(r"[^a-z0-9_-]", "", str(purpose).casefold()) or "otp"
+    return f"otp:send-rate:{safe_purpose}:{digest}"
 
 
-def _allow_otp_send(email):
+def _allow_otp_send(email, purpose="registration"):
     """Limit OTP delivery without retaining addresses in Redis keys."""
     try:
-        key = _otp_rate_limit_key(email)
+        key = _otp_rate_limit_key(email, purpose)
         attempts = r.incr(key)
         if attempts == 1:
             r.expire(key, OTP_SEND_WINDOW_SECONDS)
@@ -887,33 +1011,89 @@ def login():
 
 
 # ========== OTP ==========
+def _request_password_reset_otp(email):
+    """Issue a reset OTP only for an existing, usable account."""
+    member = Members.query.filter_by(email=email).first()
+    if member is None:
+        return False, "EMAIL_NOT_REGISTERED", "此電子郵件尚未註冊，請確認信箱後再試", 404
+    if not member.email_verified and member.member_role() != "admin":
+        return False, "EMAIL_NOT_VERIFIED", "此帳號尚未完成電子郵件驗證，請先完成註冊驗證", 403
+    if member.status in {"suspended", "deleted"}:
+        return False, "ACCOUNT_UNAVAILABLE", "此帳號目前無法重設密碼，請聯絡管理員", 403
+    try:
+        ttl = r.ttl(redis_key(email))
+        if ttl != -2 and ttl > (OTP_EXPIRE - 60):
+            return True, "OTP_ALREADY_SENT", "驗證碼已寄出，請先檢查收件匣或垃圾郵件；60 秒後可重新申請", 200
+        if not _allow_otp_send(email, purpose="password_reset"):
+            return False, "OTP_RATE_LIMITED", "驗證碼申請次數過多，請稍後再試", 429
+        otp = generate_otp()
+        r.set(redis_key(email), bcrypt.generate_password_hash(otp).decode("utf-8"), ex=OTP_EXPIRE)
+        r.delete(attempt_key(email))
+        send_otp_email(email, otp, OTP_EXPIRE)
+        return True, "OTP_SENT", "驗證碼已寄出，請於 5 分鐘內完成密碼重設", 200
+    except RedisError:
+        app.logger.exception("forgot-password Redis operation failed")
+        return False, "OTP_SERVICE_UNAVAILABLE", "驗證碼服務暫時無法使用，請稍後再試", 503
+    except Exception:
+        try:
+            r.delete(redis_key(email))
+        except RedisError:
+            pass
+        app.logger.exception("forgot-password email delivery failed")
+        return False, "OTP_SEND_FAILED", "驗證碼寄送失敗，請確認信箱或稍後再試", 502
+
+
+def _reset_password_with_otp(email, otp, new_password):
+    """Validate one reset OTP and update the password using the shared policy."""
+    policy_error = password_policy_error(new_password)
+    if policy_error:
+        return False, "INVALID_PASSWORD", policy_error, 422
+    member = Members.query.filter_by(email=email).first()
+    if member is None:
+        return False, "EMAIL_NOT_REGISTERED", "此電子郵件尚未註冊", 404
+    try:
+        stored = r.get(redis_key(email))
+        if stored is None:
+            return False, "OTP_EXPIRED", "驗證碼不存在或已過期，請重新申請", 410
+        attempts = r.incr(attempt_key(email))
+        r.expire(attempt_key(email), OTP_EXPIRE)
+        if attempts > 5:
+            r.delete(redis_key(email))
+            r.delete(attempt_key(email))
+            return False, "OTP_TOO_MANY_ATTEMPTS", "驗證碼錯誤次數過多，請重新申請", 429
+        if not bcrypt.check_password_hash(stored, otp):
+            return False, "OTP_INVALID", "驗證碼不正確，請重新輸入", 400
+        member.password = new_password
+        revoke_all_member_sessions(member)
+        db.session.commit()
+        try:
+            r.delete(redis_key(email))
+            r.delete(attempt_key(email))
+        except RedisError:
+            # The password is already committed.  Cleanup failure must not
+            # make the user think the reset failed; the OTP still expires.
+            app.logger.warning("reset-password succeeded but OTP cleanup failed")
+        return True, "PASSWORD_RESET", "密碼已重設，請使用新密碼登入", 200
+    except RedisError:
+        db.session.rollback()
+        app.logger.exception("reset-password Redis operation failed")
+        return False, "OTP_SERVICE_UNAVAILABLE", "驗證碼服務暫時無法使用，請稍後再試", 503
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("reset-password failed")
+        return False, "PASSWORD_RESET_FAILED", "密碼重設失敗，請稍後再試", 500
+
+
 @app.route("/forgot_password", methods=['GET', 'POST'])
 def forgot_password():
     form = ForgotPasswordRequestForm()
     if form.validate_on_submit():
         email = form.email.data.strip().lower()
-        member = Members.query.filter_by(email=email).first()
-        try:
-            if member:
-                ttl = r.ttl(redis_key(email))
-                if ttl != -2 and ttl > (OTP_EXPIRE - 60):
-                    flash('系統訊息', 'warning')
-                    return redirect(url_for('reset_password', email=email))
-                otp = generate_otp()
-                r.set(redis_key(email), bcrypt.generate_password_hash(otp).decode("utf-8"), ex=OTP_EXPIRE)
-                r.delete(attempt_key(email))
-                send_otp_email(email, otp, OTP_EXPIRE)
-            flash('系統訊息', 'info')
+        success, code, message, _ = _request_password_reset_otp(email)
+        flash(message, 'success' if code == "OTP_SENT" else ('warning' if success else 'danger'))
+        if success:
             return redirect(url_for('reset_password', email=email))
-        except RedisError:
-            flash('系統訊息', 'danger')
-        except Exception:
-            try:
-                r.delete(redis_key(email))
-            except RedisError:
-                pass
-            flash('系統訊息', 'danger')
-    return render_template('forgot_password.html', title='敹?撖Ⅳ', form=form)
+    return render_template('forgot_password.html', title='忘記密碼', form=form)
 
 
 @app.route("/reset_password", methods=['GET', 'POST'])
@@ -926,38 +1106,97 @@ def reset_password():
     if form.validate_on_submit():
         email = form.email.data.strip().lower()
         otp = form.otp.data.strip()
-        member = Members.query.filter_by(email=email).first()
-        if not member:
-            flash('系統訊息', 'danger')
-            return render_template('reset_password.html', title='?身撖Ⅳ', form=form)
-        try:
-            stored = r.get(redis_key(email))
-            if stored is None:
-                flash('系統訊息', 'danger')
-                return redirect(url_for('forgot_password'))
-            attempts = r.incr(attempt_key(email))
-            r.expire(attempt_key(email), OTP_EXPIRE)
-            if attempts > 5:
-                r.delete(redis_key(email))
-                r.delete(attempt_key(email))
-                flash('系統訊息', 'danger')
-                return redirect(url_for('forgot_password'))
-            if not bcrypt.check_password_hash(stored, otp):
-                flash('系統訊息', 'danger')
-                return render_template('reset_password.html', title='?身撖Ⅳ', form=form)
-            member.password = form.new_password.data
-            revoke_all_member_sessions(member)
-            db.session.commit()
-            r.delete(redis_key(email))
-            r.delete(attempt_key(email))
-            flash('系統訊息', 'success')
+        success, code, message, _ = _reset_password_with_otp(email, otp, form.new_password.data)
+        flash(message, 'success' if success else 'danger')
+        if success:
             return redirect(url_for('login'))
-        except RedisError:
-            flash('系統訊息', 'danger')
-        except Exception:
-            db.session.rollback()
-            flash('系統訊息', 'danger')
-    return render_template('reset_password.html', title='?身撖Ⅳ', form=form)
+        if code in {"OTP_EXPIRED", "OTP_TOO_MANY_ATTEMPTS"}:
+            return redirect(url_for('forgot_password'))
+    return render_template('reset_password.html', title='重設密碼', form=form)
+
+
+@app.route("/api/forgot-password", methods=["POST"])
+def api_forgot_password():
+    data = request.get_json(silent=True) or {}
+    email = normalized_email(data.get("email"))
+    if not email:
+        return error_response("INVALID_EMAIL", "Email 格式不正確", 400)
+    success, code, message, status = _request_password_reset_otp(email)
+    if not success:
+        return error_response(code, message, status)
+    return jsonify({
+        "success": True,
+        "code": code,
+        "message": message,
+        "otpSent": code == "OTP_SENT",
+        "expiresIn": OTP_EXPIRE,
+        "resendAfter": 60,
+        "passwordPolicy": {"minLength": 6, "maxLength": 128},
+    }), status
+
+
+@app.route("/api/reset-password", methods=["POST"])
+def api_reset_password():
+    data = request.get_json(silent=True) or {}
+    email = normalized_email(data.get("email"))
+    otp = data.get("otp")
+    new_password = data.get("newPassword", data.get("new_password"))
+    confirmation = data.get("confirmPassword", data.get("confirm_password"))
+    if not email:
+        return error_response("INVALID_EMAIL", "Email 格式不正確", 400)
+    if not isinstance(otp, str) or not re.fullmatch(r"\d{6}", otp.strip()):
+        return error_response("OTP_INVALID", "驗證碼固定為 6 位數字", 400)
+    if confirmation is not None and confirmation != new_password:
+        return error_response("PASSWORD_MISMATCH", "兩次輸入的新密碼不一致", 422)
+    success, code, message, status = _reset_password_with_otp(email, otp.strip(), new_password)
+    if not success:
+        return error_response(code, message, status)
+    return jsonify({"success": True, "code": code, "message": message}), status
+
+
+@app.route("/api/change-password", methods=["POST"])
+def api_change_password():
+    """Change the signed-in member's password and revoke every old session."""
+    actor, err = require_actor()
+    if err:
+        return err
+
+    data = request.get_json(silent=True) or {}
+    current_password = data.get(
+        "currentPassword", data.get("current_password", data.get("oldPassword"))
+    )
+    new_password = data.get("newPassword", data.get("new_password"))
+    confirmation = data.get("confirmPassword", data.get("confirm_password"))
+
+    if not isinstance(current_password, str) or not current_password:
+        return error_response("CURRENT_PASSWORD_REQUIRED", "請輸入目前密碼", 400)
+    if confirmation is not None and confirmation != new_password:
+        return error_response("PASSWORD_MISMATCH", "兩次輸入的新密碼不一致", 422)
+    policy_error = password_policy_error(new_password)
+    if policy_error:
+        return error_response("INVALID_PASSWORD", policy_error, 422)
+    if not actor.verify_password(current_password):
+        return error_response("CURRENT_PASSWORD_INCORRECT", "目前密碼不正確", 401)
+    if actor.verify_password(new_password):
+        return error_response("PASSWORD_UNCHANGED", "新密碼不可與目前密碼相同", 422)
+
+    try:
+        actor.password = new_password
+        revoke_all_member_sessions(actor)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("authenticated password change failed")
+        return error_response("PASSWORD_CHANGE_FAILED", "密碼變更失敗，請稍後再試", 500)
+
+    response = make_response(jsonify({
+        "success": True,
+        "code": "PASSWORD_CHANGED",
+        "message": "密碼已更新，請使用新密碼重新登入",
+        "logoutRequired": True,
+    }), 200)
+    response.delete_cookie(MEMBER_SESSION_COOKIE, path="/")
+    return response
 
 
 @app.route("/change_password", methods=['GET', 'POST'])
@@ -991,7 +1230,7 @@ def create_and_send_otp(email, purpose="registration"):
     email = normalized_email(email)
     if not email:
         return False, "Email 不得為空", 400
-    if purpose == "registration" and not _allow_otp_send(email):
+    if purpose == "registration" and not _allow_otp_send(email, purpose="registration"):
         return False, "驗證碼發送過於頻繁，請稍後再試", 429
     now = datetime.utcnow()
     # Invalidate any existing unused OTPs for this email
@@ -1057,6 +1296,40 @@ def verify_otp():
         OTPCode.attempts < 5
     ).order_by(OTPCode.created_at.desc()).first()
     if not record:
+        # The current frontend uses the shared verify-otp step for both
+        # registration and password reset. Registration OTPs live in
+        # PostgreSQL, while password-reset OTPs live in Redis. Fall back to
+        # the reset store only when no active registration OTP exists.
+        try:
+            stored_reset_otp = r.get(redis_key(email))
+            reset_member = Members.query.filter_by(email=email).first()
+            if stored_reset_otp is not None and reset_member is not None:
+                reset_attempts = r.incr(attempt_key(email))
+                r.expire(attempt_key(email), OTP_EXPIRE)
+                if reset_attempts > 5:
+                    r.delete(redis_key(email))
+                    r.delete(attempt_key(email))
+                    return error_response(
+                        "OTP_TOO_MANY_ATTEMPTS",
+                        "驗證碼錯誤次數過多，請重新申請",
+                        429,
+                    )
+                if not bcrypt.check_password_hash(stored_reset_otp, otp):
+                    return error_response("OTP_INVALID", "驗證碼不正確，請重新輸入", 400)
+                return jsonify({
+                    "success": True,
+                    "message": "OTP 驗證成功，請設定新密碼",
+                    "otpVerified": True,
+                    "purpose": "password_reset",
+                    "registrationCompleted": False,
+                }), 200
+        except RedisError:
+            app.logger.exception("verify password-reset OTP Redis operation failed")
+            return error_response(
+                "OTP_SERVICE_UNAVAILABLE",
+                "驗證碼服務暫時無法使用，請稍後再試",
+                503,
+            )
         return error_response("OTP_EXPIRED", "驗證碼不存在或已逾時", 400)
     record.attempts += 1
     db.session.commit()
@@ -1214,6 +1487,9 @@ def api_register():
         return error_response("INVALID_EMAIL", "Email 格式不正確", 400)
     if not isinstance(password, str) or not all([phone, name, password]) or age is None:
         return error_response("MISSING_FIELDS", "缺少必填欄位", 400)
+    policy_error = password_policy_error(password)
+    if policy_error:
+        return error_response("INVALID_PASSWORD", policy_error, 422)
     email, error_code, error_message = validate_registration_email(email)
     if error_code:
         return error_response(error_code, error_message, 400)
@@ -1239,10 +1515,21 @@ def api_register():
             "otpSent": True,
             "registrationPending": True,
         }), 202
-    except (TypeError, ValueError):
+    except ValueError as exc:
+        db.session.rollback()
+        if str(exc) == "PHONE_PENDING":
+            return error_response(
+                "PHONE_PENDING",
+                "此電話號碼已有尚未完成的註冊流程，請使用原信箱完成驗證或稍後再試",
+                409,
+            )
+        return error_response("INVALID_AGE", "年齡格式無效", 400)
+    except TypeError:
+        db.session.rollback()
         return error_response("INVALID_AGE", "年齡格式無效", 400)
     except Exception:
         db.session.rollback()
+        app.logger.exception("registration transaction failed")
         return error_response("REGISTER_FAILED", "註冊失敗", 500)
 
 
@@ -1290,11 +1577,19 @@ def favorites_page():
             item = model_class.query.get(f.item_id)
             if item:
                 item_vector = getattr(item, 'qdrant_vector_12d', None) or getattr(item, 'color_vector', None) or []
+                frontend_price = _price_for_frontend(
+                    getattr(item, 'price', None), getattr(item, 'currency', 'TWD')
+                )
                 product_list.append({
                     "id": f.item_id, "type": f.item_type,
                     "name": getattr(item, 'name', '?芰??'),
                     "brand": getattr(item, 'brand', ''),
-                    "price": f"NT${item.price:.0f}" if getattr(item, 'price', None) else "NT$0",
+                    "price": frontend_price["display"],
+                    "priceValue": frontend_price["amount"],
+                    "currency": frontend_price["currency"],
+                    "priceConverted": frontend_price["converted"],
+                    "priceNote": frontend_price["note"],
+                    "priceConversion": frontend_price["conversion"],
                     "image_url": getattr(item, 'image_webp_url', '') or getattr(item, 'image_url', ''),
                     "desc": getattr(item, "description", None) or "憓溶憟賣除?莎?靽桅ˇ?頛芸?",
                     "hex": getattr(item, "hex_primary", None) or "#E8A0B4",
@@ -1327,11 +1622,19 @@ def get_user_favorites(phone):
             item = model_class.query.get(f.item_id)
             if item:
                 item_vector = getattr(item, 'qdrant_vector_12d', None) or getattr(item, 'color_vector', None) or []
+                frontend_price = _price_for_frontend(
+                    getattr(item, 'price', None), getattr(item, 'currency', 'TWD')
+                )
                 product_list.append({
                     "id": f.item_id, "type": f.item_type,
                     "name": getattr(item, 'name', getattr(item, 'product_name', '?芰??')),
                     "brand": getattr(item, 'brand', ''),
-                    "price": f"NT${item.price:.0f}" if getattr(item, 'price', None) else "NT$0",
+                    "price": frontend_price["display"],
+                    "priceValue": frontend_price["amount"],
+                    "currency": frontend_price["currency"],
+                    "priceConverted": frontend_price["converted"],
+                    "priceNote": frontend_price["note"],
+                    "priceConversion": frontend_price["conversion"],
                     "image_url": getattr(item, 'image_webp_url', '') or getattr(item, 'image_url', ''),
                     "description": getattr(item, 'description', '?怎?膩'),
                     "desc": getattr(item, "description", None) or "憓溶憟賣除?莎?靽桅ˇ?頛芸?",
@@ -1437,7 +1740,7 @@ def admin_dashboard():
 # ========== 管理員 API ==========
 @app.route('/api/members', methods=['GET'])
 def get_members_api():
-    admin_err = require_admin()
+    admin_err = require_member_directory_admin()
     if admin_err:
         return admin_err
     members = Members.query.filter(Members.status != "deleted").all()
@@ -1623,8 +1926,8 @@ def update_member_api(email):
         return error_response("MEMBER_NOT_FOUND", "找不到會員", 404)
     data = request.get_json(silent=True) or {}
     old_level = member.level_label()
-    old_role = member.role
-    old_status = member.status
+    old_role = member.member_role()
+    old_status = member.status or "active"
     if "level" in data:
         level = member_level_value(data.get("level"))
         if level is None:
@@ -1635,18 +1938,27 @@ def update_member_api(email):
         role = data.get("role")
         if role not in {"member", "admin"}:
             return error_response("INVALID_ROLE", "角色無效", 400)
-        member.role = role
-        revoke_all_member_sessions(member)
-        log_audit(actor.email, email, "role_change", "role", old_role, role)
+        # The admin UI saves every row as a batch, including unchanged rows.
+        # Revoking sessions for an admin -> admin no-op logs the operator out
+        # midway through the batch and makes every later PATCH fail with 401.
+        if role != old_role:
+            member.role = role
+            revoke_all_member_sessions(member)
+            log_audit(actor.email, email, "role_change", "role", old_role, role)
     if "status" in data:
         status = data.get("status")
         if status not in {"active", "suspended"}:
             return error_response("INVALID_STATUS", "狀態無效", 400)
-        member.status = status
-        revoke_all_member_sessions(member)
-        log_audit(actor.email, email, "status_change", "status", old_status, status)
+        if status != old_status:
+            member.status = status
+            revoke_all_member_sessions(member)
+            log_audit(actor.email, email, "status_change", "status", old_status, status)
     if "allowedPages" in data:
-        member.allowed_pages = data.get("allowedPages")
+        member.allowed_pages = (
+            _default_allowed_pages(member)
+            if member.member_role() == "admin"
+            else data.get("allowedPages")
+        )
     if "vipRequested" in data:
         member.vip_requested = data.get("vipRequested")
     if "renderQuota" in data:
@@ -1765,7 +2077,7 @@ def get_products_api():
 
 @app.route('/api/products', methods=['POST'])
 def create_product_api():
-    admin_err = require_admin()
+    admin_err = require_product_audit_admin()
     if admin_err:
         return admin_err
     data = request.get_json(silent=True) or {}
@@ -1779,9 +2091,17 @@ def create_product_api():
     if not product_type and raw_category:
         product_type = category_to_frontend_type(cat_to_product_category(raw_category))
     if product_type not in _PRODUCT_CATALOG_TABLES or product_type == "products":
-        return error_response("INVALID_CATEGORY", "type 必須是合法的商品分類代碼", 422)
+        return error_response(
+            "INVALID_CATEGORY", "type 必須是合法的商品分類代碼", 422,
+            details={"field": "type", "allowed": sorted(
+                value for value in _PRODUCT_CATALOG_TABLES if value != "products"
+            )},
+        )
     if raw_category and type_aliases.get(raw_category, product_type) != product_type:
-        return error_response("INVALID_CATEGORY", "category 與 type 不相符", 422)
+        return error_response(
+            "INVALID_CATEGORY", "category 與 type 不相符", 422,
+            details={"field": "category", "allowed": sorted(category_labels.values())},
+        )
 
     name = str(data.get("name") or "").strip()
     brand = str(data.get("brand") or "").strip()
@@ -1791,6 +2111,11 @@ def create_product_api():
     source_product_id = str(data.get("sourceProductId") or "").strip()
     sku = str(data.get("sku") or "").strip()
     shade_name = str(data.get("shadeName") or data.get("shade_name") or "").strip()
+    colour_required = product_type in {"foundations", "blushes", "lipsticks"}
+    # 眼線等非敏感類別可沒有色號；用明確的 N/A 值保持 API 欄位形狀，
+    # 不捏造顏色，也不讓前端把空字串誤認為爬蟲漏抓。
+    if not shade_name and not colour_required:
+        shade_name = "官方單一規格"
     currency = str(data.get("currency") or "").strip().upper()
     missing = [field for field, value in (("name", name), ("brand", brand),
                                           ("type", product_type), ("price", data.get("price")),
@@ -1824,7 +2149,7 @@ def create_product_api():
         return error_response("PRODUCT_VALIDATION_FAILED", "paletteColors 必須是陣列", 422)
     palette_image_url = str(data.get("paletteImageUrl") or "").strip()
     if palette_colors and (
-            not palette_image_url or
+            not _is_https_url(palette_image_url) or
             any(not isinstance(pan, dict) or not str(pan.get("name") or "").strip()
                 or pan.get("position") is None for pan in palette_colors)):
         return error_response("PRODUCT_VALIDATION_FAILED", "多色盤的色格與圖片資料不完整", 422)
@@ -1837,7 +2162,8 @@ def create_product_api():
     lab = None if palette_colors else lab
     if hex_primary and not re.fullmatch(r"#[0-9A-Fa-f]{6}", str(hex_primary)):
         return error_response("PRODUCT_VALIDATION_FAILED", "hex 格式無效", 422)
-    if not palette_colors and shade_name != "官方單一規格" and (not hex_primary or lab is None):
+    if (colour_required and not palette_colors and shade_name != "官方單一規格"
+            and (not hex_primary or lab is None)):
         return error_response("PRODUCT_VALIDATION_FAILED", "單色色號必須提供官方 hex 與 lab", 422)
 
     sale_page_id = str(data.get("salePageId") or f"admin-{uuid.uuid4().hex[:16]}")[:50]
@@ -1884,6 +2210,7 @@ def create_product_api():
                              after_data={"catalogId": catalog_id, "name": name, "brand": brand},
                              product_type=product_type)
         db.session.commit()
+        _invalidate_catalog_cache()
         return jsonify({"ok": True, "product": _catalog_item_by_id(catalog_id)}), 201
     except IntegrityError:
         db.session.rollback()
@@ -1896,7 +2223,7 @@ def create_product_api():
 
 @app.route('/api/products/<int:product_id>', methods=['PATCH'])
 def update_product_api(product_id):
-    admin_err = require_admin()
+    admin_err = require_product_audit_admin()
     if admin_err:
         return admin_err
     return _catalog_update_response(product_id, request.get_json(silent=True) or {})
@@ -2120,6 +2447,7 @@ def delete_product_api(product_id):
             db.text("DELETE FROM public.product_catalog WHERE id = :id"), {"id": product_id}
         )
         db.session.commit()
+        _invalidate_catalog_cache()
         deleted_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         return jsonify({
             "ok": True, "mode": "hard", "id": product_id, "deletedAt": deleted_at,
@@ -2132,6 +2460,311 @@ def delete_product_api(product_id):
         return error_response(
             "DELETE_FAILED", "刪除商品失敗，資料庫已回復原狀", 409, request_id=request_id
         )
+
+
+def _staging_contract_payload(row):
+    """Project both the legacy and the current staging schema consistently."""
+    row = dict(row)
+    specs = row.get("specs") if isinstance(row.get("specs"), dict) else {}
+    images = [
+        row.get(key) for key in (
+            "image_original_url", "image_1280_url", "image_640_url",
+            "image_320_url", "image_url",
+        ) if str(row.get(key) or "").startswith("https://")
+    ]
+    validation_errors = row.get("validation_errors")
+    if not isinstance(validation_errors, list):
+        validation_errors = []
+    if row.get("error_code"):
+        validation_errors.append({
+            "code": row.get("error_code"),
+            "message": row.get("error_summary") or "資料驗證失敗",
+        })
+    return {
+        "id": int(row["id"]),
+        "sourceSite": row.get("source_site"),
+        "sourceProductId": row.get("source_product_id"),
+        "sourceUrl": row.get("source_url"),
+        "name": row.get("product_name") or row.get("name"),
+        "brand": row.get("brand"),
+        "price": float(row["price"]) if row.get("price") is not None else None,
+        "currency": row.get("currency") or "TWD",
+        "description": row.get("description") or "",
+        "category": row.get("category"),
+        "sku": row.get("sku"),
+        "shadeCode": row.get("shade_code") or specs.get("shade"),
+        "hex": row.get("hex_primary"),
+        "specs": specs,
+        "imageUrl": images[0] if images else None,
+        "imageUrls": images,
+        "inStock": row.get("in_stock") is not False,
+        "status": row.get("status"),
+        "validationErrors": validation_errors,
+        "crawledAt": row.get("crawled_at").isoformat() if row.get("crawled_at") else None,
+        "reviewedAt": row.get("reviewed_at").isoformat() if row.get("reviewed_at") else None,
+        "importedAt": row.get("imported_at").isoformat() if row.get("imported_at") else None,
+        "importedProductRef": row.get("imported_product_ref"),
+    }
+
+
+def _staging_row(staging_id):
+    return db.session.execute(
+        db.text("SELECT * FROM public.crawler_staging_products WHERE id=:id"),
+        {"id": staging_id},
+    ).mappings().first()
+
+
+@app.route('/api/crawler-staging/products', methods=['GET'])
+def crawler_staging_products_api():
+    admin_err = require_product_audit_admin()
+    if admin_err:
+        return admin_err
+    status = (request.args.get("status") or "pending").strip().casefold()
+    if status not in {"pending", "approved", "rejected", "imported", "failed", "all"}:
+        return error_response("INVALID_STATUS", "status 無效", 422)
+    try:
+        limit = int(request.args.get("limit", 100))
+        offset = int(request.args.get("cursor", 0) or 0)
+        if not 1 <= limit <= 200 or offset < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return error_response("INVALID_PAGINATION", "limit 或 cursor 格式無效", 422)
+    where = "" if status == "all" else "WHERE status=:status"
+    params = {"status": status, "limit": limit, "offset": offset}
+    total = int(db.session.execute(
+        db.text(f"SELECT COUNT(*) FROM public.crawler_staging_products {where}"), params
+    ).scalar() or 0)
+    rows = db.session.execute(db.text(f"""
+        SELECT * FROM public.crawler_staging_products {where}
+        ORDER BY COALESCE(updated_at,crawled_at) DESC,id DESC
+        LIMIT :limit OFFSET :offset
+    """), params).mappings().all()
+    next_cursor = str(offset + limit) if offset + limit < total else None
+    return jsonify({
+        "ok": True, "items": [_staging_contract_payload(row) for row in rows],
+        "total": total, "nextCursor": next_cursor,
+    }), 200
+
+
+@app.route('/api/crawler-staging/products/<int:staging_id>', methods=['GET', 'PATCH'])
+def crawler_staging_product_api(staging_id):
+    admin_err = require_product_audit_admin()
+    if admin_err:
+        return admin_err
+    row = _staging_row(staging_id)
+    if row is None:
+        return error_response("STAGING_PRODUCT_NOT_FOUND", "找不到暫存商品", 404)
+    if request.method == "GET":
+        return jsonify({"ok": True, "item": _staging_contract_payload(row)}), 200
+    if row["status"] == "imported":
+        return error_response("INVALID_STATE", "已匯入商品不可再修改", 409)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return error_response("INVALID_PAYLOAD", "請提供 JSON 商品資料", 400)
+    columns = _product_relation_columns("crawler_staging_products")
+    field_map = {
+        "name": "product_name", "brand": "brand", "description": "description",
+        "category": "category", "price": "price", "currency": "currency",
+        "sku": "sku", "shadeCode": "shade_code", "hex": "hex_primary",
+        "inStock": "in_stock", "imageUrl": "image_original_url", "status": "status",
+    }
+    updates = {
+        column: data[key] for key, column in field_map.items()
+        if key in data and column in columns
+    }
+    requested_status = updates.get("status")
+    if requested_status is not None and requested_status not in {"pending", "approved", "rejected", "failed"}:
+        return error_response("INVALID_STATUS", "status 無效", 422)
+    if "category" in updates and updates["category"] not in {
+        value for value in _PRODUCT_CATALOG_TABLES if value != "products"}:
+        return error_response("INVALID_CATEGORY", "category 無效", 422)
+    if "price" in updates:
+        try:
+            if float(updates["price"]) <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return error_response("INVALID_PRICE", "price 必須大於 0", 422)
+    if not updates:
+        return error_response("NO_UPDATABLE_FIELDS", "沒有可更新欄位", 400)
+    assignments = [f"{column}=:{column}" for column in updates]
+    if "updated_at" in columns:
+        assignments.append("updated_at=CURRENT_TIMESTAMP")
+    if requested_status in {"approved", "rejected"}:
+        if "reviewed_at" in columns:
+            assignments.append("reviewed_at=CURRENT_TIMESTAMP")
+        if "reviewed_by" in columns:
+            updates["reviewed_by"] = _product_delete_actor()
+            assignments.append("reviewed_by=:reviewed_by")
+    updates["id"] = staging_id
+    db.session.execute(db.text(
+        "UPDATE public.crawler_staging_products SET " + ",".join(assignments) + " WHERE id=:id"
+    ), updates)
+    db.session.commit()
+    return jsonify({"ok": True, "item": _staging_contract_payload(_staging_row(staging_id))}), 200
+
+
+def _staging_image_url(row):
+    return next((str(row.get(key) or "").strip() for key in (
+        "image_original_url", "image_1280_url", "image_640_url", "image_320_url", "image_url"
+    ) if str(row.get(key) or "").startswith("https://")), "")
+
+
+@app.route('/api/crawler-staging/products/<int:staging_id>/import', methods=['POST'])
+def import_crawler_staging_product_api(staging_id):
+    admin_err = require_product_audit_admin()
+    if admin_err:
+        return admin_err
+    row = _staging_row(staging_id)
+    if row is None:
+        return error_response("STAGING_PRODUCT_NOT_FOUND", "找不到暫存商品", 404)
+    if row["status"] == "imported":
+        return jsonify({"ok": True, "mode": "idempotent", "item": _staging_contract_payload(row)}), 200
+    if row["status"] in {"rejected", "failed"}:
+        return error_response("INVALID_STATE", "被拒絕或驗證失敗的商品不可匯入", 409)
+
+    row = dict(row)
+    specs = row.get("specs") if isinstance(row.get("specs"), dict) else {}
+    category = str(row.get("category") or "")
+    name = str(row.get("product_name") or row.get("name") or "").strip()
+    brand = str(row.get("brand") or "").strip()
+    source_url = str(row.get("source_url") or "").strip()
+    source_product_id = str(row.get("source_product_id") or "").strip()
+    sku = str(row.get("sku") or source_product_id).strip()
+    shade = str(row.get("shade_code") or specs.get("shade") or "官方單一規格").strip()
+    image_url = _staging_image_url(row)
+    currency = str(row.get("currency") or "TWD").strip().upper()
+    palette_colors = specs.get("paletteColors") if isinstance(specs.get("paletteColors"), list) else []
+    palette_image_url = str(specs.get("paletteImageUrl") or "").strip() or None
+    hex_primary = str(row.get("hex_primary") or "").strip().lower() or None
+    errors = []
+    if category not in {value for value in _PRODUCT_CATALOG_TABLES if value != "products"}:
+        errors.append("category")
+    for field, value in (("name", name), ("brand", brand), ("sourceUrl", source_url),
+                         ("sourceProductId", source_product_id), ("sku", sku),
+                         ("shadeCode", shade), ("imageUrl", image_url)):
+        if not value:
+            errors.append(field)
+    if not source_url.startswith("https://") or not image_url.startswith("https://"):
+        errors.append("httpsUrl")
+    try:
+        price = int(float(row.get("price") or 0))
+        if price <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        price = 0
+        errors.append("price")
+    if currency not in {"TWD", "USD", "JPY", "KRW", "EUR", "GBP", "CNY", "HKD"}:
+        errors.append("currency")
+    if str(row.get("image_validation_status") or "") != "valid":
+        errors.append("imageValidation")
+    if palette_colors and (not _is_https_url(palette_image_url) or any(
+            not isinstance(pan, dict) or not pan.get("name") or pan.get("position") is None
+            for pan in palette_colors)):
+        errors.append("paletteColors")
+    if not palette_colors and hex_primary and not re.fullmatch(r"#[0-9a-f]{6}", hex_primary):
+        errors.append("hex")
+    if category in {"foundations", "blushes", "lipsticks"} and not palette_colors and not hex_primary:
+        errors.append("officialColour")
+    if errors:
+        return error_response(
+            "STAGING_PRODUCT_INCOMPLETE", "暫存商品欄位不完整，未匯入正式表", 422,
+            details={"fields": sorted(set(errors))},
+        )
+
+    lab = None
+    if hex_primary:
+        rgb = hex_to_rgb(hex_primary)
+        lab = list(rgb_to_lab(*rgb)) if rgb else None
+    category_label = next(item["name"] for item in MAKEUP_CATEGORIES if item["type"] == category)
+    sale_raw = re.sub(r"[^A-Za-z0-9._-]", "-", f"{brand}-{source_product_id}").strip("-")
+    sale_page_id = (sale_raw[:50] if len(sale_raw) <= 50 else
+                    f"stage-{hashlib.sha1(sale_raw.encode()).hexdigest()[:20]}")
+    table = category
+    try:
+        found = db.session.execute(db.text(f"""
+            SELECT id FROM public.{table} WHERE UPPER(brand)=:brand AND
+              (source_product_id=:source_product_id OR sale_page_id=:sale_page_id OR
+               (source_url=:source_url AND sku=:sku)) LIMIT 1
+        """), {"brand": brand.upper(), "source_product_id": source_product_id,
+               "sale_page_id": sale_page_id, "source_url": source_url, "sku": sku}).scalar()
+        params = {
+            "sale_page_id": sale_page_id, "name": name, "brand": brand, "price": price,
+            "description": str(row.get("description") or f"{brand} 官方商品；色號 {shade}"),
+            "image_url": image_url, "hex_primary": hex_primary,
+            "lab": json.dumps(lab) if lab is not None else None,
+            "palette_colors": json.dumps(palette_colors, ensure_ascii=False),
+            "palette_image_url": palette_image_url, "sku": sku, "category_label": category_label,
+            "category": category, "in_stock": row.get("in_stock") is not False,
+            "currency": currency, "image_urls": json.dumps([image_url]),
+            "source_url": source_url, "source_site": urlparse(source_url).hostname,
+            "source_product_id": source_product_id, "shade_name": shade,
+        }
+        if found:
+            params["id"] = int(found)
+            db.session.execute(db.text(f"""UPDATE public.{table} SET
+                name=:name,brand=:brand,price=:price,description=:description,image_webp_url=:image_url,
+                hex_primary=:hex_primary,lab=CAST(:lab AS jsonb),palette_colors=CAST(:palette_colors AS jsonb),
+                palette_image_url=:palette_image_url,sku=:sku,category=:category_label,product_type=:category,
+                status='active',review_status='approved',in_stock=:in_stock,currency=:currency,
+                image_urls=CAST(:image_urls AS jsonb),source_url=:source_url,source_site=:source_site,
+                source_product_id=:source_product_id,shade_name=:shade_name,deleted_at=NULL,
+                version=version+1,updated_at=CURRENT_TIMESTAMP WHERE id=:id"""), params)
+            source_id = int(found)
+            mode = "updated"
+        else:
+            source_id = int(db.session.execute(db.text(f"""INSERT INTO public.{table}(
+                sale_page_id,name,brand,price,description,image_webp_url,hex_primary,lab,palette_colors,
+                palette_image_url,sku,category,product_type,status,review_status,in_stock,currency,image_urls,
+                source_url,source_site,source_product_id,shade_name,version,updated_at)
+                VALUES(:sale_page_id,:name,:brand,:price,:description,:image_url,:hex_primary,CAST(:lab AS jsonb),
+                CAST(:palette_colors AS jsonb),:palette_image_url,:sku,:category_label,:category,'active','approved',
+                :in_stock,:currency,CAST(:image_urls AS jsonb),:source_url,:source_site,:source_product_id,
+                :shade_name,1,CURRENT_TIMESTAMP) RETURNING id"""), params).scalar_one())
+            mode = "inserted"
+        if category == "foundations":
+            series_id = f"{brand.casefold()}::{hashlib.sha1(source_url.encode()).hexdigest()[:16]}" if hex_primary else None
+            db.session.execute(db.text("""UPDATE public.foundations
+                SET shade_code=:shade,series_id=:series_id WHERE id=:id"""),
+                               {"shade": shade, "series_id": series_id, "id": source_id})
+        elif category == "lipsticks":
+            db.session.execute(db.text("UPDATE public.lipsticks SET shade_code=:shade WHERE id=:id"),
+                               {"shade": shade[:30], "id": source_id})
+        catalog_id = int(db.session.execute(db.text("""INSERT INTO public.product_catalog(product_type,source_id)
+            VALUES(:category,:source_id) ON CONFLICT(product_type,source_id)
+            DO UPDATE SET product_type=EXCLUDED.product_type RETURNING id"""),
+                                            {"category": category, "source_id": source_id}).scalar_one())
+        staging_columns = _product_relation_columns("crawler_staging_products")
+        set_parts = ["status='imported'", "reviewed_at=CURRENT_TIMESTAMP"]
+        stage_params = {"id": staging_id, "actor": _product_delete_actor()}
+        if "imported_at" in staging_columns:
+            set_parts.append("imported_at=CURRENT_TIMESTAMP")
+        if "imported_product_ref" in staging_columns:
+            set_parts.append("imported_product_ref=:product_ref")
+            stage_params["product_ref"] = f"{category}:{source_id}"
+        if "reviewed_by" in staging_columns:
+            set_parts.append("reviewed_by=:actor")
+        db.session.execute(db.text(
+            "UPDATE public.crawler_staging_products SET " + ",".join(set_parts) + " WHERE id=:id"
+        ), stage_params)
+        _write_product_audit(
+            f"{category}:{source_id}", "import", _product_delete_actor(),
+            after_data={"stagingId": staging_id, "catalogId": catalog_id, "mode": mode},
+            product_type=category,
+        )
+        db.session.commit()
+        _invalidate_catalog_cache()
+        return jsonify({
+            "ok": True, "mode": mode, "id": catalog_id,
+            "item": _staging_contract_payload(_staging_row(staging_id)),
+            "product": _catalog_item_by_id(catalog_id),
+        }), 201 if mode == "inserted" else 200
+    except IntegrityError:
+        db.session.rollback()
+        return error_response("PRODUCT_ALREADY_EXISTS", "商品已存在", 409)
+    except Exception:
+        db.session.rollback()
+        app.logger.exception("staging import failed staging_id=%s", staging_id)
+        return error_response("STAGING_IMPORT_FAILED", "暫存商品匯入失敗", 500)
 
 
 # ========== Crawler ==========
@@ -2236,8 +2869,10 @@ def get_saved_looks(email):
         return err
     if not Members.query.filter_by(email=target_email, status="active").first():
         return error_response("MEMBER_NOT_FOUND", "找不到會員", 404)
-    looks = SavedLook.query.filter_by(member_email=target_email).order_by(SavedLook.created_at.desc()).limit(50).all()
+    looks = SavedLook.query.filter_by(member_email=target_email).order_by(SavedLook.created_at.desc()).limit(
+        SAVED_LOOK_LIMIT).all()
     return jsonify({
+        "limit": SAVED_LOOK_LIMIT,
         "looks": [{
             "id": look.id, "style": look.style,
             "beforeImageUrl": look.before_image_url,
@@ -2274,8 +2909,8 @@ def create_saved_look(email):
             400,
         )
     count = SavedLook.query.filter_by(member_email=target_email).count()
-    if count >= 50:
-        return error_response("SAVED_LOOK_LIMIT", "收藏妝容已達 50 筆上限", 409)
+    if count >= SAVED_LOOK_LIMIT:
+        return error_response("SAVED_LOOK_LIMIT", f"收藏妝容已達 {SAVED_LOOK_LIMIT} 筆上限", 409)
     look = SavedLook(
         member_email=target_email, style=style.strip(),
         before_image_url=before_url,
@@ -2301,16 +2936,19 @@ def delete_saved_look(email, look_id):
     target_email, err = require_self_or_admin(actor, email)
     if err:
         return err
-    look = SavedLook.query.filter_by(id=look_id, member_email=target_email).first()
-    if not look:
-        return error_response("LOOK_NOT_FOUND", "找不到收藏妝容", 404)
     try:
-        db.session.delete(look)
+        # 直接發出 SQL DELETE；不做 soft delete，也不只刪除後台畫面快取。
+        deleted = SavedLook.query.filter_by(id=look_id, member_email=target_email).delete(
+            synchronize_session=False
+        )
+        if deleted != 1:
+            db.session.rollback()
+            return error_response("LOOK_NOT_FOUND", "找不到收藏妝容", 404)
         db.session.commit()
     except Exception:
         db.session.rollback()
         return error_response("DELETE_FAILED", "刪除失敗", 500)
-    return jsonify({"ok": True, "action": "saved_look_deleted"}), 200
+    return jsonify({"ok": True, "action": "saved_look_hard_deleted", "id": look_id}), 200
 
 
 # ========== 色碼 ==========
@@ -2360,7 +2998,8 @@ def cat_to_product_category(cat_type: str) -> str:
         "blusher": "blush", "腮紅": "blush",
         "contour": "contour", "修容": "contour",
         "highlighter": "highlight", "打亮": "highlight",
-        "eyebrow": "brow", "眉妝": "brow", "眉筆": "brow",
+        "eyebrow": "brow", "眉毛": "brow", "眉毛彩妝": "brow",
+        "眉妝": "brow", "眉筆": "brow", "染眉": "brow", "染眉膏": "brow",
     }
     return aliases.get(normalized, normalized)
 
@@ -2379,17 +3018,9 @@ def find_makeup_category(category_type):
     return None
 
 
-def display_price(value, currency="TWD"):
-    currency = str(currency or "TWD").upper()
-    if value is None:
-        return "NT$0" if currency == "TWD" else f"{currency} 0"
-    try:
-        amount = float(value)
-        if currency == "TWD": return f"NT${amount:.0f}"
-        if currency == "USD": return f"US${amount:.2f}"
-        return f"{currency} {amount:.2f}"
-    except (TypeError, ValueError):
-        return str(value)
+def _price_for_frontend(value, currency="TWD"):
+    """Compatibility wrapper retained for existing callers and tests."""
+    return price_for_frontend(value, currency)
 
 
 def get_product_vector(item):
@@ -2398,11 +3029,18 @@ def get_product_vector(item):
 
 def product_card_payload(item, category_type):
     pv = get_product_vector(item)
+    frontend_price = _price_for_frontend(
+        getattr(item, "price", None), getattr(item, "currency", "TWD")
+    )
     return {
         "id": item.id, "type": category_type,
         "brand": getattr(item, "brand", "") or "",
         "name": getattr(item, "name", None) or getattr(item, "product_name", None) or "未命名商品",
-        "price": display_price(getattr(item, "price", None)),
+        "price": frontend_price["display"], "priceValue": frontend_price["amount"],
+        "currency": frontend_price["currency"],
+        "priceConverted": frontend_price["converted"],
+        "priceNote": frontend_price["note"],
+        "priceConversion": frontend_price["conversion"],
         "description": getattr(item, "description", "") or "暫無描述",
         "image_src": getattr(item, "image_url",
                              getattr(item, "image_webp_url", "https://via.placeholder.com/300x300.png")),
@@ -2470,8 +3108,26 @@ _PRODUCT_CATALOG_TABLES = {
     "highlighters": "highlighters", "contouring": "contouring", "products": "products",
 }
 
+_CATALOG_CACHE_TTL_SECONDS = 10.0
+_catalog_cache_lock = threading.Lock()
+_catalog_cache_expires_at = 0.0
+_catalog_cache_items = None
+
+
+def _invalidate_catalog_cache():
+    global _catalog_cache_expires_at, _catalog_cache_items
+    with _catalog_cache_lock:
+        _catalog_cache_expires_at = 0.0
+        _catalog_cache_items = None
+
 
 def _catalog_rows(include_incomplete=False):
+    global _catalog_cache_expires_at, _catalog_cache_items
+    now = time.monotonic()
+    with _catalog_cache_lock:
+        if _catalog_cache_items is not None and now < _catalog_cache_expires_at:
+            cached = [dict(item) for item in _catalog_cache_items]
+            return cached if include_incomplete else [item for item in cached if _catalog_item_is_publishable(item)]
     selects = []
     for product_type, table in _PRODUCT_CATALOG_TABLES.items():
         if product_type == "products":
@@ -2509,7 +3165,12 @@ def _catalog_rows(include_incomplete=False):
             """)
     rows = db.session.execute(db.text(" UNION ALL ".join(selects))).mappings().all()
     items = [_catalog_payload(row) for row in rows]
-    return items if include_incomplete else [item for item in items if _catalog_item_is_publishable(item)]
+    _attach_foundation_shades(items)
+    with _catalog_cache_lock:
+        _catalog_cache_items = [dict(item) for item in items]
+        _catalog_cache_expires_at = time.monotonic() + _CATALOG_CACHE_TTL_SECONDS
+    result = [dict(item) for item in items]
+    return result if include_incomplete else [item for item in result if _catalog_item_is_publishable(item)]
 
 
 def _catalog_availability_sets(catalog_items):
@@ -2524,6 +3185,7 @@ def _catalog_availability_sets(catalog_items):
 
 def _catalog_payload(row):
     source_url = str(row["source_url"] or "").strip()
+    frontend_price = _price_for_frontend(row["price"], row["currency"])
     palette_colors = row["palette_colors"] if isinstance(row["palette_colors"], list) else []
     if palette_colors:
         color_representation = "palette"
@@ -2537,8 +3199,12 @@ def _catalog_payload(row):
         "id": int(row["global_id"]), "sourceId": int(row["source_id"]), "type": row["product_type"],
         "candidateKey": f"{row['product_type']}:{row['source_id']}",
         "name": row["name"] or "未命名商品", "brand": row["brand"] or "",
-        "price": display_price(row["price"], row["currency"]), "priceValue": float(row["price"] or 0),
-        "currency": str(row["currency"] or "TWD"), "description": row["description"] or "暫無描述",
+        "price": frontend_price["display"], "priceValue": frontend_price["amount"],
+        "currency": frontend_price["currency"],
+        "priceConverted": frontend_price["converted"],
+        "priceNote": frontend_price["note"],
+        "priceConversion": frontend_price["conversion"],
+        "description": row["description"] or "暫無描述",
         "imageUrl": row["image_url"] or "", "image_url": row["image_url"] or "", "image_src": row["image_url"] or "",
         "sourceUrl": source_url if source_url.startswith(("https://", "http://")) else None,
         "sourceSite": row["source_site"] or None, "sourceProductId": row["source_product_id"] or None,
@@ -2547,8 +3213,13 @@ def _catalog_payload(row):
         "category": row["category"] or "", "shades": row["shades"] or [],
         "seasonTags": row["season_tags"] or [], "undertone": row["undertone"] or "",
         "shadeCode": row["shade_code"] or None, "shadeName": row["shade_name"] or "",
-        "seriesId": row["series_id"] or None,
-        "depthIndex": int(row["depth_index"]) if row["depth_index"] is not None else None,
+        # Only a verified single-colour shade may participate in a shade
+        # ladder.  Primers, removers and other colourless products are valid
+        # catalogue rows, but must never become a fake brighter/deeper option.
+        "seriesId": (row["series_id"] or None) if color_representation == "single" else None,
+        "depthIndex": (int(row["depth_index"])
+                       if color_representation == "single" and row["depth_index"] is not None
+                       else None),
         "version": int(row["version"] or 1), "hex": row["hex_primary"],
         "hex_primary": row["hex_primary"], "lab": row["lab"] or None,
         "paletteColors": palette_colors,
@@ -2562,15 +3233,69 @@ def _catalog_payload(row):
     }
 
 
+def _attach_foundation_shades(items):
+    """Attach the complete, ordered shade family to every foundation payload.
+
+    ``depth_index`` is currently derived from official swatch Lab L* (light to
+    deep), not copied from a brand-published ordinal.  Expose that provenance
+    explicitly so the storefront uses "brighter/deeper alternative" wording
+    and never presents the computed order as an official brand shade ladder.
+    """
+    by_series = {}
+    for item in items:
+        if (item.get("type") == "foundations"
+                and item.get("colorRepresentation") == "single"
+                and item.get("seriesId")
+                and item.get("hex_primary")
+                and isinstance(item.get("lab"), list)
+                and len(item["lab"]) == 3):
+            by_series.setdefault(item["seriesId"], []).append(item)
+    for members in by_series.values():
+        members.sort(key=lambda member: (
+            member.get("depthIndex") is None,
+            member.get("depthIndex") if member.get("depthIndex") is not None else 10 ** 9,
+            -(float(member["lab"][0]) if isinstance(member.get("lab"), list)
+                                         and len(member["lab"]) == 3 else float("-inf")),
+            str(member.get("shadeCode") or ""),
+        ))
+        shades = [{
+            "id": member["id"],
+            "shadeCode": member.get("shadeCode"),
+            "depthIndex": member.get("depthIndex"),
+            "lab": member.get("lab"),
+            "hex": member.get("hex_primary"),
+            "hex_primary": member.get("hex_primary"),
+        } for member in members]
+        for member in members:
+            # Copy the list container so a consumer cannot mutate a sibling's
+            # top-level array while normalizing its own response object.
+            member["shades"] = list(shades)
+            member["shadeCount"] = len(shades)
+            member["depthIndexOfficial"] = False
+            member["shadeOrderSource"] = "lab_lightness"
+
+
 def _catalog_item_is_publishable(item):
     """Keep incomplete crawler rows out of every storefront/recommendation API."""
     required_text = ("name", "brand", "description", "imageUrl", "sourceUrl", "salePageId",
-                     "category", "currency", "sku", "sourceProductId", "shadeName", "shadeCode")
+                     "category", "currency", "sku", "sourceProductId")
+    colour_required = item.get("type") in {"foundations", "blushes", "lipsticks"}
+    has_required_shade_identity = (
+            not colour_required
+            or bool(str(item.get("shadeName") or "").strip()
+                    and str(item.get("shadeCode") or "").strip())
+    )
+    has_verified_colour = (
+            item.get("type") not in {"foundations", "blushes", "lipsticks"}
+            or item.get("colorRepresentation") in {"single", "palette", "not_applicable"}
+    )
     return (
             item.get("status") == "active"
             and item.get("reviewStatus") == "approved"
             and all(str(item.get(field) or "").strip() for field in required_text)
             and float(item.get("priceValue") or 0) > 0
+            and has_required_shade_identity
+            and has_verified_colour
     )
 
 
@@ -2666,9 +3391,28 @@ def _catalog_list_response():
         "minPrice": min_price, "maxPrice": max_price, "sort": sort_by,
     }
     raw_limit = request.args.get("limit")
+
+    def response_payload(page_items, next_cursor, **extra):
+        payload = {
+            "ok": True,
+            "items": page_items,
+            "total": len(items),
+            "nextCursor": next_cursor,
+            "facets": facets,
+            "appliedFilters": applied_filters,
+            **extra,
+        }
+        # ``products`` used to duplicate the complete items array and doubled
+        # every catalog response.  The deployed storefront reads ``items``
+        # first.  Keep an explicit compatibility switch for older clients
+        # without penalising every mobile request.
+        legacy_aliases = (request.args.get("legacyAliases") or "").strip().casefold()
+        if legacy_aliases in {"1", "true", "yes"}:
+            payload["products"] = page_items
+        return payload
+
     if raw_limit is None:
-        return jsonify({"ok": True, "items": items, "products": items, "total": len(items),
-                        "nextCursor": None, "facets": facets, "appliedFilters": applied_filters})
+        return jsonify(response_payload(items, None))
     try:
         limit = int(raw_limit)
         if not 1 <= limit <= 200:
@@ -2691,9 +3435,7 @@ def _catalog_list_response():
         next_cursor = base64.urlsafe_b64encode(str(offset + limit).encode()).decode().rstrip("=")
     else:
         next_cursor = None
-    return jsonify({"ok": True, "items": page, "products": page, "total": len(items),
-                    "nextCursor": next_cursor, "query": query or None,
-                    "facets": facets, "appliedFilters": applied_filters})
+    return jsonify(response_payload(page, next_cursor, query=query or None))
 
 
 def _catalog_numeric_price(value):
@@ -2752,9 +3494,14 @@ def _comparable_foundation_lab(item):
     return lab
 
 
+def _is_https_url(value):
+    """Accept only ordinary HTTPS URLs; palette assets must not be blank or HTTP."""
+    parsed = urlparse(str(value or "").strip())
+    return parsed.scheme == "https" and bool(parsed.netloc) and not parsed.username and not parsed.password
+
+
 def _cross_brand_shade_presentation(distance):
-    """Keep low-confidence percentages out of the customer-facing response."""
-    display_score = distance <= 5.0
+    """Return a consistent, customer-facing similarity score for every match."""
     match_percent = max(0, min(100, round(100 - distance * 4)))
     if distance <= 2.0:
         tier = "strong_match"
@@ -2764,11 +3511,9 @@ def _cross_brand_shade_presentation(distance):
         tier = "reference_only"
     return {
         "deltaE": round(float(distance), 2),
-        "matchPercent": match_percent if display_score else None,
-        "displayScore": display_score,
-        "recommendationLabel": (
-            f"配對程度 {match_percent}%" if display_score else "根據臉部分析結果推薦"
-        ),
+        "matchPercent": match_percent,
+        "displayScore": True,
+        "recommendationLabel": f"推薦契合度 {match_percent}%",
         "tier": tier,
     }
 
@@ -2908,7 +3653,12 @@ def _catalog_update_response(product_id, data):
     if result.rowcount != 1:
         db.session.rollback()
         return error_response("VERSION_CONFLICT", "商品已被其他管理員更新，請重新載入", 409)
+    _write_product_audit(
+        f"{item['type']}:{item['sourceId']}", "update", _product_delete_actor(),
+        before_data=item, after_data=updates, product_type=item["type"],
+    )
     db.session.commit()
+    _invalidate_catalog_cache()
     updated = _catalog_item_by_id(product_id)
     response = jsonify(updated)
     response.headers["ETag"] = str(updated["version"])
@@ -3060,6 +3810,7 @@ def recommend_products_api():
                 "coverage": result["coverage"], "skinToneLabReliable": result["skinToneLabReliable"],
                 "colorDifferencePolicy": result["colorDifferencePolicy"],
                 "foundationMatchStatus": result["foundationMatchStatus"],
+                "foundationCrossBrandAlternatives": result["foundationCrossBrandAlternatives"],
                 "primary": [], "alternates": [], "threshold": result["threshold"],
                 "personalization": result["personalization"], "shadeRecommendation": None,
             },
@@ -3068,7 +3819,8 @@ def recommend_products_api():
                         "fallbackReasons": result["fallbackReasons"], "coverage": result["coverage"],
                         "skinToneLabReliable": result["skinToneLabReliable"],
                         "colorDifferencePolicy": result["colorDifferencePolicy"],
-                        "foundationMatchStatus": result["foundationMatchStatus"]}), 200
+                        "foundationMatchStatus": result["foundationMatchStatus"],
+                        "foundationCrossBrandAlternatives": result["foundationCrossBrandAlternatives"]}), 200
     response_package = {
         "id": analysis_package.get("id"),
         "schemaVersion": analysis_package.get("schemaVersion"),
@@ -3084,6 +3836,7 @@ def recommend_products_api():
             "primary": result["primary"], "alternates": result["alternates"], "threshold": result["threshold"],
             "personalization": result["personalization"],
             "shadeRecommendation": result["shadeRecommendation"],
+            "foundationCrossBrandAlternatives": result["foundationCrossBrandAlternatives"],
         },
     }
     return jsonify({
@@ -3095,6 +3848,7 @@ def recommend_products_api():
         "skinToneLabReliable": result["skinToneLabReliable"],
         "colorDifferencePolicy": result["colorDifferencePolicy"],
         "foundationMatchStatus": result["foundationMatchStatus"],
+        "foundationCrossBrandAlternatives": result["foundationCrossBrandAlternatives"],
         "personalization": result["personalization"],
     }), 200
 
@@ -3131,21 +3885,36 @@ def get_all_makeup_categories():
     return jsonify({"categories": [category_payload(c) for c in MAKEUP_CATEGORIES]})
 
 
+def _legacy_category_item_payload(item, category):
+    """Keep legacy category routes usable without losing price provenance."""
+    frontend_price = _price_for_frontend(
+        getattr(item, 'price', None), getattr(item, 'currency', 'TWD')
+    )
+    return {
+        "id": item.id, "type": category["type"],
+        "brand": getattr(item, 'brand', ''),
+        "name": getattr(item, 'name', '') or getattr(item, 'product_name', '') or '未命名商品',
+        "price": frontend_price["display"],
+        "priceValue": frontend_price["amount"],
+        "currency": frontend_price["currency"],
+        "priceConverted": frontend_price["converted"],
+        "priceNote": frontend_price["note"],
+        "priceConversion": frontend_price["conversion"],
+        "description": getattr(item, 'description', ''),
+        "image_url": getattr(item, 'image_webp_url', '') or getattr(item, 'image_url', ''),
+        "lab_json": decode_text(getattr(item, 'lab', '')),
+        "qdrant_vector_12d": get_product_vector(item),
+        "sale_page_id": getattr(item, 'sale_page_id', ''),
+    }
+
+
 for cat in MAKEUP_CATEGORIES:
     def make_route(category):
         def route():
             items = category["model"].query.all()
-            return jsonify({"products": [{
-                "id": i.id, "type": category["type"],
-                "brand": getattr(i, 'brand', ''),
-                "name": getattr(i, 'name', '') or getattr(i, 'product_name', '') or '未命名商品',
-                "price": f"NT${i.price:.0f}" if getattr(i, 'price', None) else "NT$0",
-                "description": getattr(i, 'description', ''),
-                "image_url": getattr(i, 'image_webp_url', '') or getattr(i, 'image_url', ''),
-                "lab_json": decode_text(getattr(i, 'lab', '')),
-                "qdrant_vector_12d": get_product_vector(i),
-                "sale_page_id": getattr(i, 'sale_page_id', '')
-            } for i in items]})
+            return jsonify({"products": [
+                _legacy_category_item_payload(item, category) for item in items
+            ]})
 
         route.__name__ = f"get_{category['type']}"
         return route
