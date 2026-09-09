@@ -342,8 +342,9 @@ def _detect_pose(contents: bytes):
     if not hasattr(face, "pose") or face.pose is None:
         raise UnusableImageError("無法取得臉部角度")
 
-    yaw = float(face.pose[0])
-    pitch = float(face.pose[1])
+    # InsightFace landmark.get() exports [pitch, yaw, roll].
+    pitch = float(face.pose[0])
+    yaw = float(face.pose[1])
     roll = float(face.pose[2]) if len(face.pose) > 2 else 0.0
     abs_yaw = abs(yaw)
     if abs_yaw <= 8 and abs(pitch) <= 12:
@@ -847,8 +848,8 @@ class FaceAnalyzer:
 
             if hasattr(face, "pose") and face.pose is not None:
                 # 一律保存臉部角度，讓 export_json 標示不可靠的分析欄位。
-                self.pose_yaw = float(face.pose[0])
-                self.pose_pitch = float(face.pose[1])
+                self.pose_pitch = float(face.pose[0])
+                self.pose_yaw = float(face.pose[1])
                 if strict_angle and (
                     abs(self.pose_yaw) > self.YAW_LIMIT or abs(self.pose_pitch) > self.PITCH_LIMIT
                 ):

@@ -160,20 +160,40 @@ def _dedup_key(image: str, prompt: str, strength: float, owner_id: str = "") -> 
     return h.hexdigest()
 
 
-def _dedup_get(key: str):
+def _dedup_get(key: str, image: str | None = None):
+    """`image` 是這次請求的原圖，命中時用來補建缺少的妝前圖。
+
+    少了它，`_response_from_completed_job` 的補建分支在快取命中這條路上等於死碼：
+    來源 job 若沒有 beforeImageUrl（那個功能 2026-07-22 才上線，更早的 job 都沒有），
+    回去的就是 beforeImageUrl=None，建出一個從出生就缺妝前圖的 job——正是那個函式
+    的說明裡說要避免的事。
+    """
     if RENDER_DEDUP_TTL_SECONDS <= 0:
         return None
     now = time.time()
     with _dedup_lock:
         entry = _dedup_cache.get(key)
-        if entry and now - entry[0] <= RENDER_DEDUP_TTL_SECONDS:
-            return entry[1]
-        if entry:
+        if entry and now - entry[0] > RENDER_DEDUP_TTL_SECONDS:
             _dedup_cache.pop(key, None)
-    return None
+            entry = None
+    if not entry:
+        return None
+    response = dict(entry[1])
+    source_id = response.pop("_cacheSourceJobId", None)
+    if source_id:
+        # 另一個執行個體也可能刪除／retain 來源。只清本機 cache 不夠，
+        # 命中時仍須確認 durable ownership record，不能復活已刪的網址。
+        source = job_store.get(RENDER_JOBS_COLLECTION, source_id)
+        if not source or source.get("status") != "completed":
+            with _dedup_lock:
+                if _dedup_cache.get(key) is entry:
+                    _dedup_cache.pop(key, None)
+            return None
+        return _response_from_completed_job(source, image)
+    return response
 
 
-def _dedup_set(key: str, result: dict):
+def _dedup_set(key: str, result: dict, source_job_id: str | None = None):
     if RENDER_DEDUP_TTL_SECONDS <= 0:
         return
     now = time.time()
@@ -184,7 +204,10 @@ def _dedup_set(key: str, result: dict):
         if len(_dedup_cache) > 200:
             for k in sorted(_dedup_cache, key=lambda k: _dedup_cache[k][0])[:50]:
                 _dedup_cache.pop(k, None)
-        _dedup_cache[key] = (now, result)
+        value = dict(result)
+        if source_job_id:
+            value["_cacheSourceJobId"] = source_job_id
+        _dedup_cache[key] = (now, value)
 
 
 def _dedup_claim(key: str, job_id: str = "", result_token: str = "") -> bool:
@@ -592,13 +615,24 @@ def _epoch(value, fallback: float) -> float:
 
 
 def _artifact_is_shared(job: dict, field: str, url: str) -> bool:
-    """有沒有別的 retained job 也指向這個物件（dedup 會讓多個 job 共用一張圖）。"""
-    references = job_store.find_by_field(RENDER_JOBS_COLLECTION, field, url, limit=50)
+    """任何仍存在的其他 job 都是引用，包含尚未收藏的已完成工作。"""
+    # 一份 job 文件最多只會出現一次，所以兩筆就能判定是否有其他引用；
+    # 不用掃完共享同一張圖的全部工作，也不會被前 50 筆的截斷影響。
+    references = job_store.find_by_field(RENDER_JOBS_COLLECTION, field, url, limit=2)
     current_id = str(job.get("jobId") or "")
     return any(
-        str(reference.get("jobId") or "") != current_id and reference.get("retained")
+        str(reference.get("jobId") or "") != current_id
         for reference in references
     )
+
+
+def _invalidate_artifact_cache(job: dict) -> None:
+    """Do not resurrect deleted objects through the in-process dedup cache."""
+    urls = {job.get(field) for field in ("afterImageUrl", "beforeImageUrl") if job.get(field)}
+    with _dedup_lock:
+        for key, (_, response) in list(_dedup_cache.items()):
+            if any(response.get(field) in urls for field in ("afterImageUrl", "beforeImageUrl")):
+                _dedup_cache.pop(key, None)
 
 
 def _delete_job_artifact(job: dict, force: bool = False) -> bool:
@@ -607,6 +641,7 @@ def _delete_job_artifact(job: dict, force: bool = False) -> bool:
     妝前圖是使用者自己的臉。他刪掉收藏之後那張圖若留在 GCS 上，那不是浪費空間，
     是隱私事故——所以這裡兩個欄位都處理，任何新增的圖片欄位也必須加進來。
     """
+    _invalidate_artifact_cache(job)
     deleted = True
     after_url = job.get("afterImageUrl")
     if after_url and job.get("isPermanent"):
@@ -638,7 +673,6 @@ def _mark_artifact_delete_failure(job_id: str, message: str) -> None:
 def _cleanup_render_jobs() -> None:
     now = time.time()
     jobs = job_store.all_jobs(RENDER_JOBS_COLLECTION)
-    to_delete = []
     for job in jobs:
         job_id = job.get("jobId")
         status = job.get("status")
@@ -673,19 +707,31 @@ def _cleanup_render_jobs() -> None:
                 continue
             finished_at = _epoch(job.get("finishedAt") or job.get("createdAt"), now)
             if now - finished_at > RENDER_JOB_RETENTION_SECONDS:
+                # 文件必須在圖片刪掉之後**立刻**移除，不能收集起來最後一起刪。
+                #
+                # `_artifact_is_shared` 把「還存在的其他 job」都算成引用。兩個共用同一張
+                # 圖的 job（去重命中會讓新 job 沿用來源的 afterImageUrl 與 beforeImageUrl）
+                # 若在同一輪一起過期，先處理的那個會看到後面那個還在文件庫裡，判定成
+                # 有人共用而跳過刪除；輪到後面那個時，前面那個也還在，於是同樣跳過。
+                # 兩份文件接著被刪光，GCS 上的物件就再也沒有任何東西指得到它。
+                # 漏掉的 beforeImageUrl 是使用者自己的臉——那是 _delete_job_artifact
+                # 的說明裡講的隱私事故，不只是浪費空間。
+                #
+                # 邊刪邊移除文件的話，後處理的那個會發現前一個已經不在，引用數歸零，
+                # 由它真正把物件刪掉。下面的容量清理本來就是這樣寫的。
                 if _delete_job_artifact(job):
-                    to_delete.append(job_id)
+                    job_store.delete(RENDER_JOBS_COLLECTION, job_id)
                 else:
                     _mark_artifact_delete_failure(job_id, "Expired render artifact deletion failed.")
 
-    for job_id in to_delete:
-        job_store.delete(RENDER_JOBS_COLLECTION, job_id)
-
     remaining = job_store.all_jobs(RENDER_JOBS_COLLECTION)
-    if len(remaining) > RENDER_JOB_MAX_COUNT:
-        removable = [job for job in remaining if not job.get("retained")]
+    removable = [job for job in remaining
+                 if not job.get("retained") and job.get("status") in {"completed", "failed"}]
+    # 上限只計可清理的終態工作。永久收藏不能佔掉新工作的名額，
+    # queued/running 只能由上方 timeout 判定結束，不能被容量清理直接刪掉。
+    if len(removable) > RENDER_JOB_MAX_COUNT:
         ordered = sorted(removable, key=lambda item: float(item.get("createdAt") or 0))
-        for job in ordered[: max(0, len(remaining) - RENDER_JOB_MAX_COUNT)]:
+        for job in ordered[: len(removable) - RENDER_JOB_MAX_COUNT]:
             job_id = job.get("jobId")
             if job_id:
                 if _delete_job_artifact(job):
@@ -769,13 +815,13 @@ async def render(
     # 去重也用同一個身分。 這裡原本吃 x_user_email，而那個標頭 Gateway 從來沒送過，
     # 所以去重的 key 少了「是誰」這一維：兩個人送同一張圖同一個風格會共用結果。
     key = _dedup_key(req.image, prompt, req.strength, str(x_user_id or "").strip())
-    cached = _dedup_get(key)
+    cached = _dedup_get(key, req.image)
     if cached is not None:
         return {**cached, "deduped": True}
     durable = _durable_dedup_job(key)
     if durable is not None:
         response = _response_from_completed_job(durable, req.image)
-        _dedup_set(key, response)
+        _dedup_set(key, response, str(durable.get("jobId") or ""))
         return {**response, "deduped": True}
     if not _dedup_claim(key):
         raise HTTPException(
@@ -903,7 +949,7 @@ def _run_render_job(
             },
         )
         if did_complete:
-            _dedup_set(dedup_key, response)  # 只快取成功結果
+            _dedup_set(dedup_key, response, job_id)  # 只快取成功結果
         else:
             # cleanup 可能已把 job 標成 timeout，避免 late result 留下永久圖片。
             # 兩張都要刪——妝前圖是使用者的臉，留在 bucket 裡沒有任何紀錄指向它，
@@ -985,7 +1031,7 @@ async def create_render_job(
         )
     key = _dedup_key(req.image, prompt, req.strength, owner_id)
 
-    cached = _dedup_get(key)
+    cached = _dedup_get(key, req.image)
     if cached is not None:
         job = {
             **cached,

@@ -1852,6 +1852,29 @@ class FaceTrainingRunTest(unittest.TestCase):
         self.assertEqual(r.status_code, 409, r.text)
         self.assertEqual(r.json()["error"]["code"], "TRAINING_RETRY_NOT_ALLOWED")
 
+    def test_retry_follows_all_failed_generations_and_rejoins_active_tail(self):
+        source = "TR-chain-root"
+        self.run_docs[source] = {"runId": source, "status": "failed", "selections": {"FB-JOB-1": {"眉型": "一字眉"}}}
+        self.feedback["FB-JOB-1"]["trainingRunId"] = source
+        for _ in range(4):
+            response = self._retry(source)
+            self.assertEqual(response.status_code, 202, response.text)
+            tail = response.json()["runId"]
+            again = self._retry(source)
+            self.assertEqual(again.status_code, 202, again.text)
+            self.assertEqual(again.json()["runId"], tail)
+            self.assertTrue(again.json()["deduped"])
+            self.run_docs[tail]["status"] = "failed"
+        self.assertEqual(len(self.run_docs), 5)
+
+    def test_retry_refuses_a_cycle_without_creating_a_batch(self):
+        self.run_docs["TR-root"] = {"runId": "TR-root", "status": "failed", "retryRunId": "TR-child"}
+        self.run_docs["TR-child"] = {"runId": "TR-child", "status": "failed", "retryOf": "TR-root", "retryRunId": "TR-root"}
+        response = self._retry("TR-root")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["error"]["code"], "TRAINING_RETRY_CHAIN_INVALID")
+        self.assertEqual(self.created, [])
+
 
 class TrainingRunsAreAppendOnlyTest(unittest.TestCase):
     """訓練批次紀錄只能新增與更新，不能刪除。

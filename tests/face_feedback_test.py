@@ -410,6 +410,8 @@ class ReviewRouteTest(unittest.TestCase):
             "contributed": True,
         }
         self.deleted = []
+        original_delete = ff.face_contributions.delete_for_job
+        self.addCleanup(setattr, ff.face_contributions, "delete_for_job", original_delete)
         ff.face_contributions.delete_for_job = lambda job_id: (self.deleted.append(job_id) or 1)
 
     def test_one_rejection_is_recorded_as_partial_not_rejected(self):

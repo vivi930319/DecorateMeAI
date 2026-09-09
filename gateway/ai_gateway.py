@@ -1005,6 +1005,71 @@ async def validate_upstream_member_session(request: Request, claims: dict) -> st
     return await _validate_upstream_member_cookie(request, upstream_cookie, str(claims.get("sub") or ""))
 
 
+async def require_pro_analysis_access(request: Request, claims: dict, sealed: str = "") -> tuple[str, str]:
+    """Authorize a new PRO job from the trusted member service, not browser state.
+
+    Return the old/new member cookie so a rotated session is preserved. Existing
+    job polling and feedback remain available after a plan change.
+    """
+    if str(claims.get("status") or "active").lower() != "active":
+        raise HTTPException(403, detail={"error": {"code": "PRO_ACCESS_DENIED", "message": "目前帳號狀態無法使用 PRO 分析。"}})
+    if str(claims.get("role") or "").lower() == "admin":
+        # Gateway-issued admin identity also supports the built-in admin account.
+        return "", ""
+    subject = str(claims.get("sub") or "").strip().lower()
+    if not subject or not MEMBER_DATABASE_URL:
+        raise HTTPException(503, detail={"error": {"code": "PRO_PERMISSION_UNAVAILABLE", "message": "目前無法確認 PRO 權限，請稍後再試。", "retryable": True}})
+    cookie = unseal_member_cookie(sealed) if MULTI_SESSION_ENABLED else require_upstream_member_cookie(request)
+    try:
+        response = await request.app.state.http_client.get(
+            f"{MEMBER_DATABASE_URL}/api/members/{quote(subject, safe='')}",
+            headers=with_member_gateway_key({"Accept": "application/json", "Cookie": cookie}),
+            timeout=10,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(503, detail={"error": {"code": "PRO_PERMISSION_UNAVAILABLE", "message": "目前無法確認 PRO 權限，請稍後再試。", "retryable": True}}) from exc
+    if response.status_code in {401, 403, 404}:
+        raise HTTPException(403, detail={"error": {"code": "PRO_ACCESS_DENIED", "message": "無法確認有效的 PRO 會員身分。"}})
+    try:
+        data = response.json() if response.is_success else None
+        member = data.get("member", data) if isinstance(data, dict) else None
+        if not isinstance(member, dict):
+            raise ValueError("Member payload is not an object")
+    except (ValueError, TypeError) as exc:
+        # 回的不是能解析的 JSON 物件——這才是真正的「暫時看不出來」，值得重試。
+        raise HTTPException(503, detail={"error": {"code": "PRO_PERMISSION_UNAVAILABLE", "message": "目前無法確認 PRO 權限，請稍後再試。", "retryable": True}}) from exc
+    # 上游對「這一列是誰」有三種欄位拼法。member_directory_emails()（本檔 api/members
+    # 名冊的讀法）三種都認，這裡只認 email 的話，資料列用 memberEmail 或 account 存
+    # 信箱的會員就會被判成身分不符，然後拿到一個標著 retryable 的 503：畫面說「請稍後
+    # 再試」，但欄位名不會因為等一下就改變，他重試幾次都一樣，永遠開不了 PRO 也不知道
+    # 為什麼。兩處對同一份資料的讀法必須一致。
+    identity = ""
+    for field in ("email", "memberEmail", "account"):
+        candidate = str(member.get(field) or "").strip().lower()
+        if candidate:
+            identity = candidate
+            break
+    if not identity:
+        # 三種拼法都沒有。這筆是用 /api/members/<subject> 指名取回的，URL 本身已經
+        # 圈定了對象，再要求回應複述一次只是多一層防護；欄位不存在時那層防護量不到
+        # 東西，不該因此把人擋在門外。留一筆警告，讓上游改了格式時看得出來。
+        logging.warning("會員資料未帶身分欄位，改以 URL 指名為準 subject=%s", subject)
+    elif identity != subject:
+        # 指名要 A 卻拿回 B。這是權限問題不是暫時故障，回不可重試的 403，
+        # 不要用 503 叫人去重試一個永遠不會變的結果。
+        logging.warning("會員資料身分不符 subject=%s", subject)
+        raise HTTPException(403, detail={"error": {"code": "PRO_ACCESS_DENIED", "message": "無法確認有效的 PRO 會員身分。"}})
+    permission = member.get("permission") if isinstance(member.get("permission"), dict) else {}
+    status = str(member.get("status") or permission.get("status") or "active").lower()
+    role = str(member.get("role") or member.get("member_role") or permission.get("role") or "").lower()
+    pages = member.get("allowedPages") or permission.get("allowedPages") or []
+    allowed = (role == "admin" or member.get("level") in {"VIP會員", "PRO會員", "管理員"}
+               or (isinstance(pages, list) and "analysisPro" in pages))
+    if status != "active" or not allowed:
+        raise HTTPException(403, detail={"error": {"code": "PRO_ACCESS_DENIED", "message": "此帳號尚未開通 PRO 分析權限。"}})
+    return cookie, merge_upstream_cookies(cookie, response) or cookie
+
+
 def opaque_actor_id(subject: str) -> str:
     digest = hashlib.sha256(f"{SESSION_SECRET}:{subject.strip().lower()}".encode("utf-8")).hexdigest()
     return f"actor_{digest[:24]}"
@@ -1517,6 +1582,30 @@ app.add_middleware(
     max_age=3600,
 )
 install_api_error_handling(app, "ai-gateway")
+
+
+# 這道 middleware 必須在 install_api_error_handling 之後註冊：後註冊的在最外層，
+# 拿到的是錯誤處理器與 normalize_error_response 都跑完的那個最終回應物件，
+# 在它上面設 cookie 才不會被後面重建回應的步驟丟掉。
+@app.middleware("http")
+async def _apply_pending_member_cookie(request: Request, call_next):
+    """把處理過程中輪替出來的會員 session 補到最終回應上。
+
+    上游輪替 session 之後，舊的那份在上游就作廢了。若只在成功的那條路徑把新的封回
+    瀏覽器，任何一種失敗（逾時、502、503、被拋出的 HTTPException）都會讓瀏覽器留著
+    一份已經作廢的 cookie，下一個請求直接被登出——使用者看到的卻是「分析逾時」，
+    兩件事之間沒有任何線索可以連起來。
+
+    所以改成由這個單一出口統一補。端點只要把「怎麼補」放進 request.state。
+    """
+    response = await call_next(request)
+    apply = getattr(request.state, "apply_member_cookie", None)
+    if apply is not None:
+        try:
+            apply(response)
+        except Exception:  # noqa: BLE001 — 補不上就維持原樣，不能讓它蓋掉真正的回應
+            logging.exception("重新封裝輪替後的會員 session 失敗")
+    return response
 
 
 @app.get("/health")
@@ -2898,36 +2987,35 @@ async def admin_retry_face_training_run(run_id: str, request: Request):
     # 失敗的重試批次是例外：它不是「已經處理完」，而是使用者要求再給一次機會。
     # 如果只要看到 retryOf 就永遠去重，第一次重試也失敗時，原批次就會被永久鎖死。
     # queued/running/done 繼續去重；failed 則沿著失敗的子批次開下一個新批次。
-    existing_retries = await asyncio.to_thread(
-        job_store.find_by_field, FACE_TRAINING_RUNS_COL, "retryOf", source_run_id, 1)
-    existing_retry = existing_retries[0] if existing_retries else None
-    previous_retry_id = str(source.get("retryRunId") or "").strip()
-    if existing_retry is None and previous_retry_id:
-        existing_retry = await asyncio.to_thread(
-            job_store.get, FACE_TRAINING_RUNS_COL, previous_retry_id)
     retry_source = source
-    if existing_retry:
-        existing_status = str(existing_retry.get("status") or "queued")
-        if existing_status != "failed":
-            return JSONResponse(
-                status_code=202,
-                content={"status": existing_retry.get("status") or "queued",
-                         **existing_retry, "deduped": True},
-            )
+    visited: set[str] = set()
+    # 追到整條鏈的尾端，而非只看第一個子批次。缺件、分叉或循環時停止，
+    # 不猜哪個批次才是目前有效的，也不建立另一條可能重複訓練的分支。
+    while True:
+        if source_run_id in visited or len(visited) >= 100:
+            raise HTTPException(409, detail={"error": {"code": "TRAINING_RETRY_CHAIN_INVALID", "message": "訓練重試紀錄有循環或鏈過長，請先核對批次紀錄。"}})
+        visited.add(source_run_id)
+        existing_retries = await asyncio.to_thread(
+            job_store.find_by_field, FACE_TRAINING_RUNS_COL, "retryOf", source_run_id, 2)
+        previous_retry_id = str(retry_source.get("retryRunId") or "").strip()
+        if len(existing_retries) > 1:
+            raise HTTPException(409, detail={"error": {"code": "TRAINING_RETRY_CHAIN_INVALID", "message": "同一批次有多筆重試紀錄，請先核對批次紀錄。"}})
+        existing_retry = existing_retries[0] if existing_retries else None
+        if existing_retry is None and previous_retry_id:
+            existing_retry = await asyncio.to_thread(job_store.get, FACE_TRAINING_RUNS_COL, previous_retry_id)
+            if existing_retry is None:
+                raise HTTPException(409, detail={"error": {"code": "TRAINING_RETRY_RECORD_MISSING", "message": "目前讀不到已建立的重試批次，請重新載入後再試。"}})
+        if existing_retry is None:
+            break
+        child_id = str(existing_retry.get("runId") or "").strip()
+        if (not child_id or child_id in visited
+                or (previous_retry_id and child_id != previous_retry_id)
+                or existing_retry.get("retryOf") != source_run_id):
+            raise HTTPException(409, detail={"error": {"code": "TRAINING_RETRY_CHAIN_INVALID", "message": "訓練重試的來源關聯不一致，請先核對批次紀錄。"}})
+        if str(existing_retry.get("status") or "queued") != "failed":
+            return JSONResponse(status_code=202, content={"status": "queued", **existing_retry, "deduped": True})
         retry_source = existing_retry
-    if existing_retry is None and previous_retry_id:
-        # 上面的 get 已經查過 marker 指向的文件。走到這裡代表 marker 有值但文件
-        # 真的不存在；若直接建立，可能跟尚未讀到的 Firestore 文件撞批次，所以保留
-        # 明確錯誤，讓管理員先重新載入確認，而不是假裝安全。
-        raise HTTPException(
-            status_code=409,
-            detail={"error": {"code": "TRAINING_RETRY_RECORD_MISSING",
-                               "message": "這個批次已建立重試紀錄，但目前讀不到重試批次，請重新載入後再試。"}},
-        )
-    if existing_retry and str(existing_retry.get("status") or "") == "failed":
-        # retry_source 會在下方決定 selections 與 feedback 所屬批次；新的關聯也
-        # 直接指向這個失敗子批次，歷史鏈會是 source -> failed retry -> new retry。
-        source_run_id = str(retry_source.get("runId") or source_run_id)
+        source_run_id = child_id
 
     raw_selections = retry_source.get("selections")
     if not isinstance(raw_selections, dict) or not raw_selections:
@@ -3406,6 +3494,57 @@ async def proxy(service: str, path: str, request: Request):
         enforce_expected_actor(request, acting_owner_id)
     target_email = _authorize_member_path(claims, path) if service == "member-database" else None
     target_owner_id = opaque_actor_id(target_email) if target_email else acting_owner_id
+    pro_member_cookie, pro_rotated_cookie = "", ""
+    if service == "face-pro" and request.method == "POST" and path in {"v1/face/jobs/pro", "v1/face/analyze/pro"}:
+        pro_member_cookie, pro_rotated_cookie = await require_pro_analysis_access(request, claims, selected_sealed)
+
+    def attach_rotated_member_cookie(target, original_cookie: str, rotated_cookie: str):
+        """把輪替過的上游 session 重新封裝進要送回瀏覽器的那個回應。
+
+        PRO 權限預檢會先去會員資料庫查一次，那一次就可能讓上游輪替 session
+        （`merge_upstream_cookies`）。輪替之後舊的那份在上游已經作廢，所以**不論這次
+        請求最後是成功還是失敗，新的都得封回去**。
+
+        原本只有正常回傳那條路徑會做，逾時（face-pro 的上游 timeout 是 120 秒，PRO
+        工作很容易撞到）、502、503 與重新拋出的 HTTPException 全部跳過——瀏覽器於是
+        留著一份上游已經換掉的 cookie，下一個請求就被登出，而使用者只看到「渲染逾時」。
+        """
+        if not rotated_cookie or rotated_cookie == original_cookie:
+            return target
+        try:
+            sealed = seal_member_cookie(rotated_cookie)
+        except HTTPException:
+            # The upstream work already succeeded.  Failing to refresh the
+            # sealed jar must not turn that into an error the caller will
+            # retry; the previous cookie stays valid until it expires.
+            return target
+        if sealed and MULTI_SESSION_ENABLED:
+            # 只更新「正在操作的那個帳號」的槽位；這個瀏覽器上其他已登入帳號的
+            # 封裝 cookie 必須原封不動保留。
+            rebuilt: list[tuple[str, str]] = []
+            replaced = False
+            for token, slot_sealed in read_session_slots(request):
+                slot_claims = _slot_claims(token)
+                slot_actor = opaque_actor_id(str(slot_claims.get("sub") or "").strip().lower()) if slot_claims else ""
+                if slot_actor == acting_owner_id:
+                    rebuilt.append((account["token"], sealed))
+                    replaced = True
+                else:
+                    rebuilt.append((token, slot_sealed))
+            if not replaced:
+                rebuilt.append((account["token"], sealed))
+            set_session_slots(target, rebuilt)
+        elif sealed:
+            set_session_cookie(target, request_access_token(request), sealed)
+        return target
+
+    if pro_rotated_cookie and pro_rotated_cookie != pro_member_cookie:
+        # 交給出口的 middleware 去補，而不是在每一個 return 前面各寫一次。這個函式有
+        # 五、六個出口（成功、504、502、503、重新拋出的 HTTPException、未預期例外），
+        # 逐一補的話下次新增一個出口又會漏掉，而漏掉的症狀是使用者被靜默登出，
+        # 極難連回這裡。
+        request.state.apply_member_cookie = (
+            lambda target: attach_rotated_member_cookie(target, pro_member_cookie, pro_rotated_cookie))
     is_admin = str(claims.get("role") or "").strip().lower() == "admin"
     # 管理員身分做的寫入（停權、刪帳號、改權限）多過一關 CSRF。一般會員寫自己的資料
     # 不套用：那條路徑已經強制帶 `X-Expected-Actor`（自訂標頭跨站送不出來），再加一層
@@ -3447,7 +3586,7 @@ async def proxy(service: str, path: str, request: Request):
             upstream_headers = with_member_gateway_key(upstream_headers)
         if upstream_member_cookie:
             upstream_headers["Cookie"] = upstream_member_cookie
-        if service == "render-service":
+        if service in {"render-service", "face-basic", "face-pro"}:
             upstream_headers["X-User-ID"] = acting_owner_id
 
         prefetched_media: list[str] = []
@@ -3620,33 +3759,11 @@ async def proxy(service: str, path: str, request: Request):
 
     result = Response(content=response_content, status_code=result_status, headers=response_headers)
     if service == "member-database":
-        rotated_cookie = merge_upstream_cookies(upstream_member_cookie, response)
-        if rotated_cookie and rotated_cookie != upstream_member_cookie:
-            try:
-                sealed = seal_member_cookie(rotated_cookie)
-            except HTTPException:
-                # The upstream work already succeeded.  Failing to refresh the
-                # sealed jar must not turn that into an error the caller will
-                # retry; the previous cookie stays valid until it expires.
-                sealed = ""
-            if sealed and MULTI_SESSION_ENABLED:
-                # 只更新「正在操作的那個帳號」的槽位；這個瀏覽器上其他已登入帳號的
-                # 封裝 cookie 必須原封不動保留。
-                rebuilt: list[tuple[str, str]] = []
-                replaced = False
-                for token, slot_sealed in read_session_slots(request):
-                    slot_claims = _slot_claims(token)
-                    slot_actor = opaque_actor_id(str(slot_claims.get("sub") or "").strip().lower()) if slot_claims else ""
-                    if slot_actor == acting_owner_id:
-                        rebuilt.append((account["token"], sealed))
-                        replaced = True
-                    else:
-                        rebuilt.append((token, slot_sealed))
-                if not replaced:
-                    rebuilt.append((account["token"], sealed))
-                set_session_slots(result, rebuilt)
-            elif sealed:
-                set_session_cookie(result, request_access_token(request), sealed)
+        # 會員資料庫這條的輪替是從**這次上游回應**讀出來的，只有走到這裡才知道，
+        # 所以留在成功路徑上處理。PRO 預檢那份是在請求早期就拿到的，已經交給出口的
+        # middleware，逾時與錯誤路徑也會補上。
+        attach_rotated_member_cookie(
+            result, upstream_member_cookie, merge_upstream_cookies(upstream_member_cookie, response))
     return result
 
 

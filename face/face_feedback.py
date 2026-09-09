@@ -727,6 +727,14 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
                 detail={"error": {"code": "FORBIDDEN",
                                   "message": "只能刪除自己的資料"}},
             )
-        removed = face_contributions.delete_for_owner(owner_id)
+        try:
+            removed = face_contributions.delete_for_owner(owner_id)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail={"error": {"code": "FACE_DATA_DELETE_INCOMPLETE",
+                                  "message": "臉部影像尚未清除完成，請稍後重試。",
+                                  "retryable": True}},
+            ) from exc
         logging.info("刪除會員臉部貢獻樣本 owner=%s removed=%d", owner_id, removed)
         return {"status": "deleted", "contributions": removed}

@@ -3,6 +3,9 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import cv2
+import numpy as np
+
 from fastapi import BackgroundTasks, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -18,7 +21,8 @@ import face_feedback
 import face_corrections
 import basic_roi_shadow
 import pro_nose_side_model
-from Face_analyzer_BASIC import FaceAnalyzer, MAX_IMAGE_PIXELS, MAX_UPLOAD_BYTES, fail_job
+from Face_analyzer_BASIC import (
+    FaceAnalyzer, MAX_IMAGE_PIXELS, MAX_IMAGE_SIZE, MAX_UPLOAD_BYTES, _get_insight, fail_job)
 from dev_server_utils import get_cors_origins, run_dev_server
 from image_safety import sanitize_upload
 
@@ -80,11 +84,33 @@ async def _read_image(file: UploadFile, label: str) -> bytes:
     return contents
 
 
+def _side_has_face(frame) -> bool:
+    """側面照裡到底有沒有一張臉。
+
+    在這道檢查補上之前，這條路徑只做 `cv2.imdecode`：任何解得開的圖——風景照、
+    截圖、隨手拍的桌面——都會被直接餵進 `pro_nose_side_model.predict`，而分類器對
+    非人臉照樣回一個帶 label 的結果，接著被 `_merge_basic_and_pro` 當成真的「側臉鼻型」
+    報出去，還標上「側面照已使用: True」。使用者看到的是一個看起來很確定的分析結果，
+    但它跟他的臉沒有任何關係。
+
+    這裡刻意**只問「有沒有偵測到臉」**，不看角度也不看品質：側臉本來就是這條路徑的
+    正常輸入，套上角度門檻會把真正的側面照擋掉。原本用的 `FaceAnalyzer` 之所以被拿掉，
+    是因為它依賴 FaceMesh，而 FaceMesh 認不得真正的側臉（73.5%）且失敗率依鼻型類別
+    偏斜（塌鼻 60.4%、翹鼻 93.4%），拿它當閘門會把類別分布扭曲。InsightFace 的偵測器
+    沒有那個問題，所以只借用它的偵測結果是否為空。
+    """
+    h0, w0 = frame.shape[:2]
+    scale = MAX_IMAGE_SIZE / max(h0, w0)
+    if scale < 1:
+        frame = cv2.resize(frame, (int(w0 * scale), int(h0 * scale)), interpolation=cv2.INTER_AREA)
+    return bool(_get_insight().get(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+
+
 def _analyze_side_supplementary(side_bytes: bytes) -> dict | None:
     """
     對側面照做輔助分析：側臉鼻型分類。
-    使用 strict_angle=False 跳過正面角度驗證。
-    失敗時靜默回傳 None，不中斷主流程。
+    整張側面照直接交給分類器，不依賴正面角度或 Face Mesh。
+    已收到照片但無結果時回空 dict；None 僅表示未提供照片。
 
     這裡刻意**不算膚色**。側面照的頰部 ROI 是 FaceMesh 在透視壓縮下給的，遠側臉頰
     更是整塊腦補出來的，可信度判定在上面量不到東西——實測 120 張側面照，MAD 中位數
@@ -93,7 +119,15 @@ def _analyze_side_supplementary(side_bytes: bytes) -> dict | None:
     去擋，不如不要把側面照混進膚色。
     """
     try:
-        analyzer = FaceAnalyzer(side_bytes, strict_angle=False, require_insight=False)
+        frame = cv2.imdecode(np.frombuffer(side_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            raise ValueError("側面照無法解碼")
+        if not _side_has_face(frame):
+            # 沒有臉就沒有鼻型可言。回空 dict（＝「收到照片但沒有結果」），
+            # 讓 _merge_basic_and_pro 據此報「側面照已使用: False」，
+            # 而不是給出一個對不上本人的結果。
+            logging.info("PRO 側面照未偵測到人臉，略過側臉鼻型")
+            return {}
         result = {}
 
         # 側臉鼻型（2026-07-31 接上）。餵整張圖，不做 landmark 裁切——
@@ -102,12 +136,13 @@ def _analyze_side_supplementary(side_bytes: bytes) -> dict | None:
         #
         # 這是加值資訊，不是主要答案：除了塌鼻，各類驗證樣本只有 36~46 張。
         # predict 自帶 caveat 欄位，回應要原樣帶出去，不要在這裡拿掉。
-        side_nose = pro_nose_side_model.predict(analyzer.frame)
+        side_nose = pro_nose_side_model.predict(frame)
         if side_nose:
             result["側臉鼻型"] = side_nose
         return result
     except Exception:
-        return None
+        logging.exception("PRO 側面照輔助分析失敗，保留正面分析結果")
+        return {}
 
 
 def _merge_basic_and_pro(front_result: dict, side_result: dict | None = None) -> dict:
@@ -117,7 +152,10 @@ def _merge_basic_and_pro(front_result: dict, side_result: dict | None = None) ->
     side_available = side_result is not None
     # 明講「有沒有用到側面照」，不要讓下游再從 LAB來源 的字串反推——膚色不再雙角度平均
     # 之後那個字串永遠是「正面照」，但側面照其實有在用（側臉鼻型）。
-    result["側面照已使用"] = side_available
+    result["側面照已接收"] = side_available
+    side_nose = (side_result or {}).get("側臉鼻型")
+    side_used = isinstance(side_nose, dict) and bool(side_nose.get("label"))
+    result["側面照已使用"] = side_used
 
     # 膚色一律只採正面照，側面照不參與。
     #
@@ -141,7 +179,11 @@ def _merge_basic_and_pro(front_result: dict, side_result: dict | None = None) ->
 
     has_symmetry = bool(front_result.get("臉部對稱性"))
     result["精細分析狀態"] = {
-        "多角度照片": "已接收，用於側臉鼻型（膚色僅採正面照）" if side_available else "未提供側面照",
+        "多角度照片": (
+            "已接收，用於側臉鼻型（膚色僅採正面照）" if side_used
+            else "已收到側面照，但側臉鼻型分析未完成" if side_available
+            else "未提供側面照"
+        ),
         "臉部對稱性": "已計算" if has_symmetry else "無法計算",
         "鼻型精細分類": (
             "已完成側臉鼻型分類（僅供參考）"

@@ -94,6 +94,33 @@ def _client():
     return storage.Client()
 
 
+def _store_absent(exc: BaseException) -> bool:
+    """這個例外代表「這裡從來沒有資料」，而不是「刪除失敗」嗎？
+
+    兩種情況要分開。沒有 GCS 憑證（`DefaultCredentialsError`）表示這台機器根本沒有
+    連過儲存空間——貢獻功能預設就是關的（`FACE_CONTRIB_ENABLED` 預設 "0"），這是常態
+    而不是故障。bucket 不存在（`NotFound`）同理。這兩種都該回 0 筆。
+
+    把它們當成刪除失敗的後果很嚴重：`face_feedback` 會回 503，Gateway 收到之後回
+    `MEMBER_MEDIA_DELETE_INCOMPLETE`，於是**每一位會員都刪不掉自己的帳號**——正是
+    `ai_gateway.py` 那條清理旁邊的註解說要避免的事。
+
+    反過來，列舉到一半斷線、或某幾個 blob 刪不掉，那是真的沒刪乾淨，必須往上拋。
+    """
+    try:
+        from google.auth.exceptions import DefaultCredentialsError
+    except Exception:  # noqa: BLE001 — 套件沒裝就等於沒有這個例外類別
+        DefaultCredentialsError = ()
+    try:
+        from google.api_core.exceptions import NotFound
+    except Exception:  # noqa: BLE001
+        NotFound = ()
+    # ImportError 也算：套件沒裝就是這台機器沒有儲存空間可言。
+    absent = (ImportError,) + tuple(
+        t for t in (DefaultCredentialsError, NotFound) if isinstance(t, type))
+    return isinstance(exc, absent)
+
+
 def _decode(image_bytes: bytes):
     frame = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
     if frame is None:
@@ -312,16 +339,36 @@ def delete_for_owner(owner_id: str) -> int:
 
     用 metadata 過濾而不是路徑：路徑刻意不含 ownerId（那會讓 bucket 的檔名洩漏
     誰貢獻了什麼），所以只能逐一檢查 metadata。樣本量不大，這個代價可以接受。
+
+    「儲存空間根本不存在」與「刪不乾淨」是兩回事，見 `_store_absent`。前者回 0，
+    後者往上拋——這條路徑的失敗會一路變成「會員刪不掉帳號」，不能兩種都當失敗。
     """
     if not owner_id:
         return 0
-    removed = 0
     try:
         client = _client()
+    except Exception as exc:  # noqa: BLE001 — 下面依例外種類分流
+        if _store_absent(exc):
+            # 貢獻功能沒開（預設狀態）時這裡沒有憑證也沒有 bucket，
+            # 「沒有東西可刪」就是正確答案，不是刪除失敗。
+            logging.info("略過貢獻樣本清理：沒有可用的儲存空間 owner=%s", owner_id)
+            return 0
+        logging.exception("刪除會員貢獻樣本失敗（建立 client）owner=%s", owner_id)
+        raise
+    removed = 0
+    try:
         for blob in client.list_blobs(BUCKET, prefix=f"{PREFIX}/"):
             if (blob.metadata or {}).get("ownerId") == str(owner_id):
                 blob.delete()
                 removed += 1
-    except Exception:
-        logging.exception("刪除會員貢獻樣本失敗 owner=%s", owner_id)
+    except Exception as exc:  # noqa: BLE001 — 下面依例外種類分流
+        if _store_absent(exc) and removed == 0:
+            # bucket 不存在＝從來沒存過。已經刪掉幾筆才出錯的話不算這種，
+            # 那是列舉中途出事，必須往上拋。
+            logging.info("略過貢獻樣本清理：bucket 不存在 owner=%s", owner_id)
+            return 0
+        logging.exception("刪除會員貢獻樣本失敗 owner=%s removed=%d", owner_id, removed)
+        # 包括列舉中斷與部分刪除失敗；不能把它當成「這位會員沒有照片」。
+        # 即使貢獻功能目前關閉，也要清理先前已儲存的資料。
+        raise
     return removed
