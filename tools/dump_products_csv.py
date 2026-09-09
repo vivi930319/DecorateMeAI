@@ -4,27 +4,32 @@
 featureTags / avoidTags 這幾欄就是辭典要對的東西，而在網頁上一頁一頁看沒辦法比對。
 
 直接打上游而不是經 Gateway： Gateway 那條公開商品路徑會套用它自己的分頁與欄位
-裁切，這裡要的是原始資料。上游網址是會變動的 Cloudflare 快速通道，所以做成參數，
-預設值取自 Gateway 目前的 PRODUCT_DATABASE_URL。
+裁切，這裡要的是原始資料。上游網址是會變動的 Cloudflare 快速通道，所以只能從外面
+給：`PRODUCT_API_URL` 環境變數，或 `--base-url`。值就是 Gateway 現在的
+`PRODUCT_DATABASE_URL`（`gcloud run services describe ai-gateway` 看得到）。
 
 用法
 ----
-    python tools/dump_products_csv.py
+    PRODUCT_API_URL=<商品 API 的網址> python tools/dump_products_csv.py
     python tools/dump_products_csv.py --out 商品清單.csv
-    python tools/dump_products_csv.py --base-url https://xxx.trycloudflare.com
+    python tools/dump_products_csv.py --base-url <商品 API 的網址>
 """
 from __future__ import annotations
 
 import argparse
 import csv
 import json
+import os
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
-DEFAULT_BASE = "https://wichita-motels-counties-invitations.trycloudflare.com"
+# 不放預設網址。Tunnel 每次重啟就換一組，寫死的那個隔天就是錯的——而錯的網址跑起來
+# 像「商品服務掛了」，不像「腳本過期了」，會讓人去查錯的地方。它同時也是 CI 秘密掃描
+# 擋下的東西：暫時性網址不該躺在會被部署的程式裡。
+DEFAULT_BASE = os.getenv("PRODUCT_API_URL", "").strip()
 
 # 欄位順序照「整理辭典時的閱讀順序」排，不是照 API 回傳順序：
 # 先認出是哪個商品，再看它被標成什麼，最後才是價格與來源。
@@ -83,6 +88,14 @@ def main() -> int:
     parser.add_argument("--out", default="商品清單.csv")
     parser.add_argument("--page-size", type=int, default=100)
     args = parser.parse_args()
+
+    # 網址缺了就在這裡停，不要帶著空字串去組 URL——那會打到 `/api/products`
+    # 這種相對路徑，然後以「抓取失敗」收場，訊息指不到真正的原因。
+    if not args.base_url:
+        raise SystemExit(
+            "請先設定 PRODUCT_API_URL，或用 --base-url 指定商品 API 的網址。\n"
+            "現行值可從 Gateway 讀： gcloud run services describe ai-gateway "
+            "--region=asia-east1 --format=\"value(spec.template.spec.containers[0].env)\"")
 
     rows = []
     cursor = None
