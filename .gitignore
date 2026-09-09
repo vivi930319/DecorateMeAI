@@ -141,6 +141,10 @@
 # Demo 要七台同時，兩組值差很多而且必須成套改——留在某個人的終端機歷史裡，
 # 換人操作或隔一段時間就會漏掉其中一項。
 !tools/demo_scale.ps1
+# 負載測試後的實測報告。七台同時是唯一有併發樣本的時候，而證據散在四個地方
+# （Firestore 的 job、Monitoring 的資源、Logging 的 OOM、Replicate 的計費），
+# 手動查最容易漏掉「有沒有 OOM」——它不會出現在任何成功率統計裡。
+!tools/load_test_report.py
 # training/ 跟 tools/ 一樣是原始碼，不是產物，所以整個資料夾的 .py 都要進版本控制。
 #
 # 先前這裡沒有放行，而這份 .gitignore 是「* 全擋」的白名單，於是 training/ 底下只有

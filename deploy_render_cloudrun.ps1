@@ -8,6 +8,16 @@
     [string]$GcsBucketName = "",
     # 必須指向和 Gateway 使用同一個 Ollama 建議服務；不要把會變動的 tunnel 網址寫死在腳本。
     [string]$SuggestionServiceUrl = $env:SUGGESTION_SERVICE_URL,
+    # 常駐實例數。預設 0，也就是沒人用的時候不計費。
+    #
+    # 這裡原本寫死 1，於是**每一次部署都會把規模設定悄悄改回去**：2026-09-09 把它
+    # 調成 0（常駐一台每月約 NT$1,700，而它一週只收 9,131 次請求，錢多半花在沒人用
+    # 的時候），當天稍晚一次例行部署就還原了，過程中沒有任何訊息提到這件事。
+    #
+    # Demo 要熱機請用 tools/demo_scale.ps1 -Mode demo，那支會連臉部服務一起調，
+    # 而且結束後有對應的 -Mode restore。把它留在部署腳本裡，等於每次部署都替
+    # 那個決定重新投一次票。
+    [int]$MinInstances = 0,
     # 測試壞掉還是要硬上（只在緊急回復時用，而且要自己知道在做什麼）
     [switch]$SkipTests
 )
@@ -78,7 +88,7 @@ gcloud run deploy $ServiceName `
   --platform=managed `
   --timeout=300s `
   --concurrency=4 `
-  --min-instances=1 `
+  --min-instances=$MinInstances `
   --no-cpu-throttling `
   --no-allow-unauthenticated `
   --update-env-vars "SUGGESTION_SERVICE_URL=$SuggestionServiceUrl,REQUIRE_PERSONALIZED_RENDER_PROMPT=1"
