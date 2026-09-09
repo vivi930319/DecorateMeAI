@@ -3632,9 +3632,9 @@ const AdminStore = {
     },
     canUseProAnalysis(profile) {
         const p = profile || Auth.getProfile();
-        if (this.isVip(p)) return true;
         const permission = this.permissionSnapshot(p);
         if (permission.status === 'suspended') return false;
+        if (this.isVip(p)) return true;
         return permission.allowedPages.includes('analysisPro');
     },
     _isGuestProfile(profile) {

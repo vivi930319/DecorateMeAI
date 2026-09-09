@@ -3479,6 +3479,7 @@ const Router = {
     },
 
     stopAnalysisCameras() {
+        this._analysisGeneration = (this._analysisGeneration || 0) + 1;
         if (this.proScanTimer) clearInterval(this.proScanTimer);
         this.proScanTimer = null;
         this.proScanBusy = false;
@@ -3538,7 +3539,14 @@ const Router = {
         bar.hidden = false;
         bar.classList.toggle('is-done', status === 'deployed');
         bar.classList.toggle('is-failed', status === 'failed');
-        this._paintPromotion(row, status, active);
+        // 這條進度條只顯示最新那一筆，但佇列可以同時有好幾筆。連按兩次的時候畫面
+        // 顯示的是後登記的（排隊中），而先登記的那筆其實正在跑——看起來像「完全
+        // 沒動靜」，實際上機器忙得很。把其他還沒做完的一起帶下去，才講得出
+        // 「你排在誰後面」，而不是空口說機器沒開。
+        const inFlight = (res.promotions || []).filter(other =>
+            other && other.promotionId !== row.promotionId
+            && ['claimed', 'running'].includes(String(other.status || '')));
+        this._paintPromotion(row, status, active, inFlight);
         return active;
     },
 
@@ -3546,7 +3554,7 @@ const Router = {
         return ['queued', 'claimed', 'running'].includes(String(row?.status || ''));
     },
 
-    _paintPromotion(row, status, active) {
+    _paintPromotion(row, status, active, inFlight = []) {
         const STEPS = [
             { key: 'queued', label: '登記' },
             { key: 'swapping', label: '換檔案' },
@@ -3610,10 +3618,17 @@ const Router = {
         const lines = [];
         if (parts) lines.push(`部位：${parts}`);
         if (row.runId) lines.push(`批次 ${row.runId}`);
-        // 這一句是這整條進度條存在的理由。停在「登記」不代表快好了，
-        // 而是根本還沒開始——而且畫面自己不會前進，要等那台機器被打開。
-        if (status === 'queued') {
-            lines.push('換模型是訓練機在做的。那台機器沒開，就會一直停在這一步——這裡不會自己往前走。');
+        // 停在「登記」不代表快好了，而是還沒開始。但**為什麼**還沒開始有兩種答案，
+        // 之前一律講成「那台機器沒開」——那是在沒有查證的情況下斷定原因。實際上
+        // 換模型機一次只做一筆，先登記的那筆正在跑時，後面這筆本來就該等，
+        // 機器好得很。把兩種情況講成同一種，會讓人跑去重開一台其實在忙的機器。
+        if (status === 'queued' && inFlight.length) {
+            const ahead = inFlight[0];
+            lines.push(`換模型機正在處理另一筆（批次 ${ahead.runId || ahead.promotionId}），`
+                     + '這一筆排在它後面。一次只做一筆，前一筆結束後才會輪到這裡。');
+        } else if (status === 'queued') {
+            lines.push('還沒有被接手。換模型是訓練機在做的，那台機器沒開就會一直停在這一步'
+                     + '——這裡不會自己往前走。看門狗每 5 分鐘會自動拉一次，批次不會遺失。');
         } else if (status !== 'failed' && row.note) {
             lines.push(String(row.note));
         }
@@ -8674,8 +8689,29 @@ const PageInit = {
                 fbCurrentMetrics = data?.currentMetrics || null;
                 const currentParts = trainParts(trainLatestRegisteredMetrics(data?.currentMetrics || {}, runs));
                 if (fbCurrentScore) {
-                    // currentMetrics 是已登記指標，不是部署憑證；歷史批次也可能未上線。
-                    fbCurrentScore.textContent = `已登記 macro（不代表已上線）：${Object.keys(TRAIN_PART_ZH).map(part => {
+                    // 標題要講出處，不要用一句話否定全部。
+                    //
+                    // 原本掛「不代表已上線」，是因為這一行混了兩種來源：currentMetrics
+                    // 是換上線成功後由 promotion worker 寫回的（source: promotion），
+                    // 那就是線上的數字；而某個部位讀不到時會退回歷史批次，那才真的
+                    // 不保證上線。用一句話把兩種都否定，等於把可信的數字也講成不可信
+                    // ——被問「線上到底是哪一版」的時候答不出來，而答案其實一直都在。
+                    //
+                    // 改成標題講線上版本與上線時間（後端有寫才顯示），每個部位各自標
+                    // 自己的來源；退回歷史值的那幾個原本就已經標出來了。
+                    const live = data?.currentMetrics || {};
+                    const at2 = (n) => String(n).padStart(2, '0');
+                    const t = Date.parse(live.updatedAt || '');
+                    const when = t
+                        ? `${new Date(t).getMonth() + 1}/${new Date(t).getDate()} `
+                          + `${at2(new Date(t).getHours())}:${at2(new Date(t).getMinutes())}`
+                        : '';
+                    // 版本是 2026-09-09 之後的換上線才會寫；在那之前上線的沒有這個欄位。
+                    // 沒有就照實說「未記錄」，不要猜一個版本號填上去。
+                    const head = live.version
+                        ? `線上模型 ${live.version}${when ? `　${when} 上線` : ''}`
+                        : `目前 macro（版本未記錄${when ? `｜更新於 ${when}` : ''}）`;
+                    fbCurrentScore.textContent = `${head}：${Object.keys(TRAIN_PART_ZH).map(part => {
                         const entry = currentParts[part];
                         const macro = trainMacro(entry);
                         const source = entry?.historicalRunId ? `（歷史值｜來源批次：${entry.historicalRunId}）` : '';
