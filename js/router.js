@@ -3901,6 +3901,26 @@ const PageInit = {
         const basicModeBtn = document.getElementById('basicModeBtn');
         const proModeBtn = document.getElementById('proModeBtn');
 
+        const pageGeneration = Router._analysisGeneration = (Router._analysisGeneration || 0) + 1;
+        const analysisPageIsCurrent = () => Router._analysisGeneration === pageGeneration
+            && document.getElementById('analyzeBtn') === analyzeBtn;
+        let analysisBusy = false;
+        let analysisRunId = 0;
+        let lockedAnalysisControls = [];
+        const setAnalysisBusy = (busy) => {
+            analysisBusy = busy;
+            if (!analysisPageIsCurrent()) return;
+            if (busy) {
+                const controls = new Set([analyzeBtn, basicModeBtn, proModeBtn,
+                    ...document.querySelectorAll('#basicPanel input, #basicPanel button, #proPanel input, #proPanel button, #brightnessPanel input, #brightnessPanel button')]);
+                lockedAnalysisControls = [...controls].map(el => [el, el.disabled]);
+                lockedAnalysisControls.forEach(([el]) => { el.disabled = true; });
+            } else {
+                lockedAnalysisControls.forEach(([el, disabled]) => { el.disabled = disabled; });
+                lockedAnalysisControls = [];
+            }
+        };
+
         Router.analyzeMode = Router.analyzeMode || 'basic';
         Router.selectedFile = null;
         Router.proFiles = { front: null, left45: null, right45: null, side: null };
@@ -3983,22 +4003,19 @@ const PageInit = {
             compressionRatio: null
         });
 
-        const compressImagesForPackage = async () => {
-            const files = Router.analyzeMode === 'basic'
-                ? { front: Router.selectedFile }
-                : Router.proFiles;
+        const compressImagesForPackage = async (files) => {
             const images = {};
-            Router.packageImageFiles = {};
+            const imageFiles = {};
             for (const [role, file] of Object.entries(files)) {
                 if (!file) continue;
                 const compressed = await ImagePipeline.compressForPackage(file, { role });
-                Router.packageImageFiles[role] = compressed.file;
+                imageFiles[role] = compressed.file;
                 images[role] = {
                     ...compressed.meta,
                     compressedDataUrl: compressed.dataUrl && compressed.dataUrl.length < 900000 ? compressed.dataUrl : null
                 };
             }
-            return images;
+            return { images, imageFiles };
         };
 
         const saveDraft = (status = 'draft') => {
@@ -4156,7 +4173,7 @@ const PageInit = {
                     role,
                     await bpTransform(bpOriginals[role], factor)
                 ]));
-                if (version !== bpApplyVersion) return;
+                if (version !== bpApplyVersion || !analysisPageIsCurrent()) return;
                 processed.forEach(([role, file]) => {
                     if (Router.analyzeMode === 'basic' && role === 'basic') {
                         Router.selectedFile = file;
@@ -4170,7 +4187,7 @@ const PageInit = {
                 saveDraft('image-selected');
                 bpRefreshPanel();
             } catch (err) {
-                if (version !== bpApplyVersion) return;
+                if (version !== bpApplyVersion || !analysisPageIsCurrent()) return;
                 if (bpStatus) bpStatus.textContent = '提亮失敗，已保留原圖。';
                 showAlert('照片提亮失敗：' + err.message, { type:'error' });
             }
@@ -4179,6 +4196,7 @@ const PageInit = {
         async function bpRegisterFile(role, file) {
             bpOriginals[role] = file;
             const lum = await bpDetectLuminance(file);
+            if (!analysisPageIsCurrent() || analysisBusy || bpOriginals[role] !== file) return;
             bpLuminance[role] = lum;
             // 首次上傳且滑桿在 0 時，自動建議提亮值（暗部照片）
             if (Number(bpSlider.value) === 0 && lum < 110) {
@@ -4234,6 +4252,7 @@ const PageInit = {
         };
 
         const clearProShot = (role) => {
+            if (analysisBusy || !analysisPageIsCurrent()) return;
             Router.proFiles[role] = null;
             bpOriginals[role] = null;
             bpLuminance[role] = null;
@@ -4252,11 +4271,13 @@ const PageInit = {
         }
 
         const setMode = (mode) => {
+            if (analysisBusy || !analysisPageIsCurrent()) return;
             if (mode === 'pro' && !isProUnlocked) {
                 showAlert('PRO 臉部分析為 VIP 會員專屬功能，請聯繫管理員升級帳號', { type: 'error' });
                 return;
             }
             Router.analyzeMode = mode;
+            ++bpApplyVersion; // 不讓前一模式尚未完成的提亮結果寫入這一模式。
             basicModeBtn.classList.toggle('active', mode === 'basic');
             proModeBtn.classList.toggle('active', mode === 'pro');
             basicPanel.classList.toggle('active', mode === 'basic');
@@ -4278,7 +4299,7 @@ const PageInit = {
         // 每次開啟檔案選擇器前清空 value，否則使用者分析失敗後重新選同一張照片，
         // 瀏覽器可能不觸發 change，畫面就會像「不能上傳」一樣沒有任何反應。
         const openFilePicker = (input) => {
-            if (!input) return;
+            if (!input || analysisBusy || !analysisPageIsCurrent()) return;
             input.value = '';
             input.click();
         };
@@ -4286,6 +4307,7 @@ const PageInit = {
             if (event.target !== fileInput) openFilePicker(fileInput);
         };
         fileInput.onchange = async (e) => {
+            if (analysisBusy || !analysisPageIsCurrent()) return;
             const file = e.target.files[0];
             if (!file) return;
             Router.selectedFile = file;
@@ -4302,6 +4324,7 @@ const PageInit = {
                 if (event.target !== input) openFilePicker(input);
             };
             input.onchange = async (e) => {
+                if (analysisBusy || !analysisPageIsCurrent()) return;
                 const file = e.target.files[0];
                 if (!file) return;
                 Router.proFiles[key] = file;
@@ -4351,6 +4374,7 @@ const PageInit = {
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(video, 0, 0);
             canvas.toBlob(async blob => {
+                if (analysisBusy || !analysisPageIsCurrent()) return;
                 if (!blob) {
                     showAlert('拍照失敗', { type:'error' });
                     return;
@@ -4409,6 +4433,7 @@ const PageInit = {
         });
 
         const storeProScanPhoto = async (role, blob, pose = {}) => {
+            if (analysisBusy || !analysisPageIsCurrent()) return;
             const file = new File([blob], `pro-${role}-${Date.now()}.jpg`, { type: 'image/jpeg' });
             Router.proFiles[role] = file;
             const nameEl = document.getElementById(`${role}FileName`);
@@ -4561,6 +4586,7 @@ const PageInit = {
         };
 
         analyzeBtn.onclick = async () => {
+            if (analysisBusy || !analysisPageIsCurrent()) return;
             setResultState(false);
             if (Router.analyzeMode === 'basic' && !Router.selectedFile) {
                 showAlert('請先選擇照片或拍照');
@@ -4571,33 +4597,44 @@ const PageInit = {
                 return;
             }
 
-            // 確保任何未完成的亮度調整都已套用，再把調色後的照片送往後端
-            if (bpSliderTimer) {
+            const startedAt = Date.now();
+            const runId = ++analysisRunId;
+            const mode = Router.analyzeMode;
+            const actor = Api._pinnedActor?.() || '';
+            let files = null;
+            const runIsCurrent = () => analysisPageIsCurrent() && runId === analysisRunId
+                && Router.analyzeMode === mode && (Api._pinnedActor?.() || '') === actor
+                && (!files || (mode === 'basic'
+                    ? Router.selectedFile === files.front
+                    : Object.entries(files).every(([role, file]) => Router.proFiles[role] === file)));
+            setAnalysisBusy(true);
+            stopProScan();
+            try {
+                // 重新執行並等待最後一次提亮。這也使較早的非同步提亮結果失效。
                 clearTimeout(bpSliderTimer);
                 bpSliderTimer = null;
                 await bpApplyMode();
-            }
-
-            const startedAt = Date.now();
-            if (!Router.analysisPackage) saveDraft('queued');
-            Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
-                status: 'preparing-image',
-                async: { ...Router.analysisPackage.async, startedAt: new Date(startedAt).toISOString(), error: null }
-            });
-            AnalysisDraft.save(Router.analysisPackage);
-            updatePackageStatus();
-            const brightnessApplied = Number(bpSlider?.value || 0) !== 0;
-            setLoadingStatus(brightnessApplied ? '調色後照片送出分析中' : '照片送出分析中', true);
-            bar.style.display = 'block'; fill.style.width = '30%';
-            try {
+                if (!runIsCurrent()) return;
+                files = mode === 'basic' ? { front: Router.selectedFile } : { ...Router.proFiles };
+                if (!Router.analysisPackage) saveDraft('queued');
+                Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
+                    status: 'preparing-image',
+                    async: { ...Router.analysisPackage.async, startedAt: new Date(startedAt).toISOString(), error: null }
+                });
+                AnalysisDraft.save(Router.analysisPackage);
+                updatePackageStatus();
+                const brightnessApplied = Number(bpSlider?.value || 0) !== 0;
+                setLoadingStatus(brightnessApplied ? '調色後照片送出分析中' : '照片送出分析中', true);
+                bar.style.display = 'block'; fill.style.width = '30%';
                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, { status: 'analyzing' });
                 AnalysisDraft.save(Router.analysisPackage);
                 updatePackageStatus();
                 setLoadingStatus('正在準備分析', true);
                 fill.style.width = '45%';
-                const job = Router.analyzeMode === 'basic'
-                    ? await Api.createFaceJob(Router.selectedFile)
-                    : await Api.createFaceProJob(Router.proFiles);
+                const job = mode === 'basic'
+                    ? await Api.createFaceJob(files.front)
+                    : await Api.createFaceProJob(files);
+                if (!runIsCurrent()) return;
                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
                     status: 'queued',
                     async: {
@@ -4620,7 +4657,8 @@ const PageInit = {
                 updatePackageStatus();
                 setLoadingStatus('已送出照片，等待分析…', true);
 
-                const response = await Api.waitForFaceJob(Router.analyzeMode, job.jobId, job.resultToken, latestJob => {
+                const response = await Api.waitForFaceJob(mode, job.jobId, job.resultToken, latestJob => {
+                    if (!runIsCurrent()) throw new Error('ANALYSIS_SUPERSEDED');
                     const progress = Number(latestJob.progress || 0);
                     fill.style.width = `${Math.max(45, Math.min(88, 45 + progress * 0.4))}%`;
                     Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
@@ -4637,6 +4675,7 @@ const PageInit = {
                     updatePackageStatus();
                     setLoadingStatus(`分析中 ${progress}%`, true);
                 });
+                if (!runIsCurrent()) return;
                 const data = response.result || response.data || response;
                 Router.analysisResult = data;
                 // 拿到結果就先記下來，不要等畫面畫完。
@@ -4645,17 +4684,19 @@ const PageInit = {
                 // 任何一個元素不存在就整段拋例外 —— 分析其實成功了，卻既沒寫進紀錄、
                 // 畫面又顯示「分析失敗」。紀錄是這次分析的成果，畫面只是呈現，
                 // 呈現壞掉不該讓成果跟著消失。
-                History.add({ ...data, analysisPackageId: Router.analysisPackage.id, mode: Router.analyzeMode });
+                History.add({ ...data, analysisPackageId: Router.analysisPackage.id, mode });
                 setLoadingStatus('分析完成，正在整理結果', true);
-                const packagedImages = await compressImagesForPackage();
+                const { images: packagedImages, imageFiles } = await compressImagesForPackage(files);
+                if (!runIsCurrent()) return;
+                Router.packageImageFiles = imageFiles;
                 const completedAt = Date.now();
                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
                     status: 'completed',
                     images: packagedImages,
-                    faceAnalysis: AnalysisPackage.fromRawFaceAnalysis(data, Router.analyzeMode),
+                    faceAnalysis: AnalysisPackage.fromRawFaceAnalysis(data, mode),
                     analysis: {
                         ...Router.analysisPackage.analysis,
-                        [Router.analyzeMode]: data
+                        [mode]: data
                     },
                     generativeText: {
                         ...Router.analysisPackage.generativeText,
@@ -4682,7 +4723,7 @@ const PageInit = {
                 updatePackageStatus();
                 fill.style.width = '100%';
                 setLoadingStatus('分析完成', false);
-                setTimeout(() => { bar.style.display = 'none'; fill.style.width = '0'; }, 400);
+                setTimeout(() => { if (runIsCurrent()) { bar.style.display = 'none'; fill.style.width = '0'; } }, 400);
 
                 // 分析是非同步流程；使用者可能在回應回來前離開分析頁，或頁面
                 // 正在被重新掛載。結果已經寫入 History／analysisPackage，呈現層
@@ -4727,6 +4768,7 @@ const PageInit = {
                 if (goStyleBtn) goStyleBtn.style.display = 'inline-block';
                 renderAnalysisFeedback(data, Router.analysisPackage.id);
             } catch (err) {
+                if (!runIsCurrent()) return;
                 bar.style.display = 'none'; fill.style.width = '0';
                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
                     status: 'failed',
@@ -4745,6 +4787,8 @@ const PageInit = {
                     ? '目前無法連接臉部分析服務，請稍後再試。'
                     : (photoProblem ? err.message : '分析失敗：' + err.message),
                     { type:'error', code: err.code || '' });
+            } finally {
+                if (runId === analysisRunId) setAnalysisBusy(false);
             }
         };
 
