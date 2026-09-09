@@ -1,3 +1,4 @@
+import asyncio
 import os
 import logging
 import uuid
@@ -6,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import cv2
 import numpy as np
 
-from fastapi import BackgroundTasks, FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -406,7 +407,6 @@ async def analyze_pro(
 
 @app.post("/v1/face/jobs/pro")
 async def create_pro_job(
-    background_tasks: BackgroundTasks,
     front: UploadFile = File(...),
     left45: UploadFile | None = File(default=None),
     right45: UploadFile | None = File(default=None),
@@ -437,14 +437,21 @@ async def create_pro_job(
         "expiresAt": datetime.now(timezone.utc) + timedelta(seconds=FACE_JOB_RETENTION_SECONDS),
     }
     job_store.create(_COL, job_id, job_data)
-    background_tasks.add_task(
+    # 分析在請求裡跑完，理由與 BASIC 相同（見 Face_analyzer_BASIC.create_basic_job）：
+    # BackgroundTasks 在回應之後才跑，那需要 Cloud Run 的「CPU 一律配置」，
+    # 而那個模式下實例活著的每一秒都計費。PRO 更極端——一週 254 次請求卻計費
+    # 83,104 秒，真正在運算的不到 1%。
+    #
+    # PRO 收多角度、跑的模型也多，比 BASIC 久（約 20 秒）。Gateway 的逾時是 120 秒，
+    # 仍有餘裕；真的不夠的話要調 AI_GATEWAY_FACE_TIMEOUT_SECONDS，不是改回背景執行。
+    await asyncio.to_thread(
         _run_pro_job,
         job_id,
         front_bytes,
         angle_bytes,
         job_data["ownerId"],
     )
-    return _job_view(job_data, include_token=True)
+    return _job_view(job_store.get(_COL, job_id) or job_data, include_token=True)
 
 
 @app.get("/v1/face/jobs/{job_id}")

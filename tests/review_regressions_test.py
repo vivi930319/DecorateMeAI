@@ -404,6 +404,47 @@ def test_pro_session_rotation_survives_an_upstream_timeout(monkeypatch):
     set_cookie.assert_called_once()
 
 
+@pytest.mark.parametrize("module,endpoint,kwargs,runner", [
+    (basic, "create_basic_job",
+     {"file": None, "brightness_mode": "none", "brightness_level": 1.0, "x_user_id": "actor_fixture"},
+     "_run_basic_job"),
+    (pro, "create_pro_job",
+     {"front": None, "left45": None, "right45": None, "side": None, "x_user_id": "actor_fixture"},
+     "_run_pro_job"),
+])
+def test_analysis_finishes_inside_the_request(monkeypatch, memory, module, endpoint, kwargs, runner):
+    """分析要在請求裡跑完，不可以交回 BackgroundTasks。
+
+    BackgroundTasks 在回應送出之後才執行，而那段程式只有在 Cloud Run 的
+    「CPU 一律配置」模式下拿得到 CPU——那個模式下**實例活著的每一秒都計費**，
+    不管有沒有人在用。實測 face-basic 一週計費 99,576 秒，真正在運算的約 1,900 秒；
+    face-pro 更極端，254 次請求計費 83,104 秒。98% 以上的錢付給閒置。
+
+    改回背景執行不會有任何錯誤訊息，功能也照常運作——只有帳單會知道。
+    所以這條測的是「回來的時候工作已經做完了」，那是唯一從外面看得出差別的地方。
+    """
+    ran = []
+
+    async def fake_read(_file, _label=""):
+        return b"fixture-image-bytes"
+
+    def fake_run(job_id, *_args):
+        ran.append(job_id)
+        job_store.patch(module._COL, job_id, {"status": "completed", "stage": "done"})
+
+    monkeypatch.setattr(module, "_read_clean_image" if module is basic else "_read_image", fake_read)
+    monkeypatch.setattr(module, runner, fake_run)
+    monkeypatch.setattr(module.face_corrections, "image_hash", lambda _b: "hash-fixture")
+
+    view = asyncio.run(getattr(module, endpoint)(**kwargs))
+
+    assert ran, "分析沒有在請求裡執行——多半是又被丟回 BackgroundTasks 了"
+    # 回傳的是跑完之後的狀態，不是剛建立時的 queued。
+    assert view["status"] == "completed"
+    # token 仍要帶回去，否則前端拿不到結果。
+    assert view.get("resultToken")
+
+
 def _live_metrics():
     return {"model": "ConvNeXt-Tiny", "source": "promotion", "parts": {
         "face_shape": {"macroAccuracy": 0.534},

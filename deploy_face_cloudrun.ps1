@@ -10,7 +10,12 @@
     # Demo／口試要完全沒有冷啟動時用 -MinInstances 1 部署；結束後照平常方式部署就會
     # 回到 0。不必記得改回來——那正是把預設值設成 0 的用意，靠註解提醒是沒有用的。
     [ValidateRange(0, 10)]
-    [int]$MinInstances = 0
+    [int]$MinInstances = 0,
+    # 每個執行個體的 vCPU。同樣讓省錢當預設：4 顆是舊值，而實測 99 百分位只用到
+    # 0.85 顆。Demo 當天要 4 顆請用 tools/demo_scale.ps1 -Mode demo，它會連
+    # min-instances 一起調，而且有對應的 -Mode restore。
+    [ValidateSet("1", "2", "4", "8")]
+    [string]$Cpu = "2"
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,7 +38,12 @@ $common = @(
     "--region", $Region,
     "--platform", "managed",
     "--image", $image,
-    "--cpu", "4",
+    # 4 顆是 2026-09-09 之前的值。實測尖峰只用到 0.85 顆（99 百分位），降到 2 顆
+    # 仍有兩倍餘裕。Demo 要調回 4 請用 tools/demo_scale.ps1 -Mode demo，不要改這裡——
+    # 寫死在部署腳本裡等於每次部署都替那個決定重新投一次票。
+    "--cpu", "$Cpu",
+    # 記憶體刻意維持 8 GiB。尖峰只用 2.7 GiB 看起來很浪費，但那是在幾乎沒有併發的
+    # 週次量到的；而 CPU 不夠只是慢，記憶體不夠是整個容器被殺（使用者看到 503）。
     "--memory", "8Gi",
     "--concurrency", "6",
     "--timeout", "300s",
@@ -43,7 +53,18 @@ $common = @(
     # 或直接看計費：常駐一個 instance 的服務，billable_instance_time 會是每天 86400 秒。
     "--min-instances", "$MinInstances",
     "--max-instances", "10",
-    "--no-cpu-throttling",
+    # 預設的「只在處理請求時計費」。這一項改過一次來回，理由要留著：
+    #
+    # 原本是 --no-cpu-throttling，因為分析跑在 FastAPI 的 BackgroundTasks 裡，
+    # 而那段程式在回應送出之後才執行——CPU 被節流的話它會停在那裡不動。
+    # 代價是實例活著的每一秒都計費：face-basic 一週計費 99,576 秒，真正在運算的
+    # 只有約 1,900 秒；face-pro 是 83,104 秒對不到 1%。
+    #
+    # 2026-09-10 把分析搬進請求裡（見 create_basic_job 的說明），所以節流可以開回來。
+    # **兩者是綁在一起的**：要是哪天分析又被丟回背景執行，這裡就必須跟著改回
+    # --no-cpu-throttling，否則工作會做不完；反過來，這裡改回去而分析仍是同步的，
+    # 就是白白多付一筆閒置費用。
+    "--cpu-throttling",
     "--cpu-boost",
     "--quiet"
 )

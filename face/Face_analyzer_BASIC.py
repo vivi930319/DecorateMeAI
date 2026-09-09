@@ -1,3 +1,4 @@
+import asyncio
 import cv2
 import math
 import numpy as np
@@ -10,7 +11,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from threading import Lock
-from fastapi import BackgroundTasks, FastAPI, UploadFile, HTTPException, File, Form, Header, Query
+from fastapi import FastAPI, UploadFile, HTTPException, File, Form, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, JSONResponse
 from insightface.app import FaceAnalysis as InsightFaceApp
@@ -531,7 +532,6 @@ def _run_basic_job(job_id, contents, brightness_mode="none", brightness_level=1.
 
 @app.post("/v1/face/jobs/basic")
 async def create_basic_job(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     brightness_mode: str   = Form("none"),
     brightness_level: float = Form(1.0),
@@ -557,7 +557,23 @@ async def create_basic_job(
         "expiresAt": datetime.now(timezone.utc) + timedelta(seconds=FACE_JOB_RETENTION_SECONDS),
     }
     job_store.create(_COL, job_id, job_data)
-    background_tasks.add_task(
+    # 分析在請求裡跑完，不要交給 BackgroundTasks。
+    #
+    # BackgroundTasks 在回應送出**之後**才執行，而 Cloud Run 只有在「CPU 一律配置」
+    # （--no-cpu-throttling）的模式下才會讓那段程式拿得到 CPU。那個模式的代價是
+    # **實例活著的每一秒都計費**，不管有沒有人在用：實測一週計費 99,576 秒，其中
+    # 真正在運算的只有約 1,900 秒——98% 的錢付給閒置。
+    #
+    # 搬進請求裡之後，計費時間就等於運算時間，Cloud Run 可以改回預設的「只在處理
+    # 請求時計費」。臉部兩支服務因此從每月約 NT$1,315 降到 NT$25 上下。
+    #
+    # 對前端沒有影響：job 文件的狀態機沒有改，回傳的仍是 job 視圖，輪詢照舊——
+    # 只是第一次輪詢就會看到 completed。實測 BASIC 約 7 秒，而 Gateway 對臉部服務
+    # 的逾時是 120 秒，冷啟動最慢 27 秒加上去也還有很大餘裕。
+    #
+    # 用 to_thread 而不是直接呼叫：分析是純 CPU 的同步程式，直接在 event loop 上跑
+    # 會擋住同一個實例的其他請求（包括健康檢查與別人的輪詢）。
+    await asyncio.to_thread(
         _run_basic_job,
         job_id,
         contents,
@@ -565,7 +581,9 @@ async def create_basic_job(
         brightness_level,
         job_data["ownerId"],
     )
-    return _job_view(job_data, include_token=True)
+    # 回傳跑完之後的狀態。讀不回來就退回原本那份（至少 jobId 與 token 是對的，
+    # 前端還能靠輪詢拿到結果），不要因為這一步失敗就把一次成功的分析變成錯誤。
+    return _job_view(job_store.get(_COL, job_id) or job_data, include_token=True)
 
 
 @app.get("/v1/face/jobs/{job_id}")
