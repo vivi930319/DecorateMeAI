@@ -26,7 +26,7 @@
 ### 會員與帳號安全
 
 - 註冊資料先保存於 pending_registrations；完成 Email OTP 驗證後才建立正式會員。
-- 驗證 Email 格式、MX 記錄與一次性信箱網域；admin@decorateme.local 是唯一允許的非標準網域管理帳號。
+- 驗證 Email 格式、MX 記錄與一次性信箱網域
 - OTP 具有效期限、寄送次數與驗證嘗試限制；Redis 用於 TTL 與限流。
 - 密碼統一採 6～128 碼規則，使用 Bcrypt 雜湊。
 - 登入後建立資料庫 Session，並支援 HttpOnly Cookie 與 Bearer Token。
