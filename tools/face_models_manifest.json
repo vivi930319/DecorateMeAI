@@ -1,12 +1,12 @@
 {
-  "version": "20260909_brow",
-  "gcsPrefix": "gs://decorate-me-models/20260909_brow",
+  "version": "20260909_face",
+  "gcsPrefix": "gs://decorate-me-models/20260909_face",
   "files": [
     {
       "path": "models/basic_features_roi/face_shape.onnx",
       "object": "basic_features_roi/face_shape.onnx",
       "size": 111380415,
-      "sha256": "9bd059024278e85006d5c7a27677dacc8685bd9aed04ef49418f71a93102af32"
+      "sha256": "8a9fb4dd91a0e2771665cca4bacd8d976684bb450b779b9666e1b0c4b0a642be"
     },
     {
       "path": "models/basic_features_roi/brow_shape.onnx",
