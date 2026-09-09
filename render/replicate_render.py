@@ -45,6 +45,10 @@ GCS_ALLOWED_PREFIXES = (GCS_RENDER_PREFIX, GCS_RETAINED_PREFIX, GCS_LEGACY_PREFI
 GCS_SIGNED_URL_SECONDS = max(60, min(int(os.getenv("GCS_SIGNED_URL_SECONDS", "600")), 3600))
 GCS_SIGNING_SERVICE_ACCOUNT = os.getenv("GCS_SIGNING_SERVICE_ACCOUNT", "").strip()
 REPLICATE_HTTP_TIMEOUT_SECONDS = max(60, int(os.getenv("REPLICATE_HTTP_TIMEOUT_SECONDS", "300")))
+# 輪詢間隔。SDK 預設 0.5 秒，而 gpt-image-2 要跑 100～170 秒，等於每張圖打兩三百次
+# 狀態查詢。放寬到 3 秒把它降到四十幾次，代價是最多多等 3 秒——那在兩分鐘的等待裡
+# 看不出來。
+REPLICATE_POLL_INTERVAL_SECONDS = max(0.5, float(os.getenv("REPLICATE_POLL_INTERVAL", "3")))
 OPENAI_HTTP_TIMEOUT_SECONDS = max(60, int(os.getenv("OPENAI_HTTP_TIMEOUT_SECONDS", "300")))
 REPLICATE_OPENAI_QUALITY = os.getenv("REPLICATE_OPENAI_QUALITY", "medium").strip().lower() or "medium"
 MAX_RENDER_IMAGE_BYTES = int(os.getenv("MAX_RENDER_IMAGE_BYTES", str(8 * 1024 * 1024)))
@@ -942,6 +946,9 @@ def get_replicate_client() -> replicate.Client:
             pool=60.0,
         )
         _replicate_client = replicate.Client(api_token=api_token, timeout=timeout)
+        # SDK 是從環境變數讀這個值的，改欄位比要求部署環境多設一個變數可靠：
+        # 忘了設的後果（每張圖多打兩百次查詢）不會有任何錯誤訊息。
+        _replicate_client.poll_interval = REPLICATE_POLL_INTERVAL_SECONDS
     return _replicate_client
 
 
@@ -1019,9 +1026,31 @@ def call_replicate_render(image_data_url: str, prompt: str) -> dict[str, Any]:
             "guidance": RENDER_GUIDANCE,
         }
 
+    # wait=False 是這裡唯一重要的參數，不要拿掉。
+    #
+    # run() 預設 wait=True，那會走 Replicate 的「阻塞式」建立介面：送出
+    # `Prefer: wait` 標頭，並且**對那一個請求另外設一個逾時**——
+    # replicate 1.0.7 的 prediction.py 是這樣算的：
+    #
+    #     read_timeout = 60.0 if isinstance(wait, bool) else wait
+    #     return httpx.Timeout(5.0, read=read_timeout + 0.5)
+    #
+    # 也就是 60.5 秒，而且它是 per-request 的設定，會蓋掉我們給 client 的 300 秒。
+    # gpt-image-2 實測 100～170 秒，每一張圖都比那個數字長，所以只要 Replicate 沒有
+    # 在 60 秒內回覆那個建立請求，我們就 ReadTimeout 放棄——
+    # **而它那邊會繼續把圖跑完、成功、計費**。我們手上沒有 prediction id，撈不回來。
+    #
+    # 2026-08-17 至今發生約 12 次，每次 $0.13，而使用者看到的是「生成失敗」。
+    # 對照過 Replicate 的紀錄：我方失敗的那兩筆在它那邊都是 succeeded（145 秒、100 秒）。
+    # 失敗與否跟圖跑多久無關——100 秒的失敗過，101 秒的成功過，純粹看那 60 秒內
+    # 回不回得來。
+    #
+    # wait=False 讓 _create_prediction_timeout 回 None（不覆寫），建立請求變成一次
+    # 快速的 POST，之後由 prediction.wait() 輪詢直到終態，全程受我們的 300 秒管。
     output = get_replicate_client().run(
         model_name,
         input=replicate_input,
+        wait=False,
     )
 
     # replicate SDK 1.x: output.url 是字串屬性；舊版才是 callable

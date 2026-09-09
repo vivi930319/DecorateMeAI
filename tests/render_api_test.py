@@ -925,5 +925,55 @@ class RenderFailureIsClassifiedTest(unittest.TestCase):
             self.assertTrue(retryable, repr(exc))
 
 
+class BlockingCreateIsNotUsedTest(unittest.TestCase):
+    """建立 prediction 不可以用 SDK 的阻塞式介面。
+
+    run() 預設 wait=True，那條路徑會對「建立」那一個請求另外設 60.5 秒的逾時
+    （replicate 1.0.7 prediction.py：`read_timeout = 60.0 if isinstance(wait, bool)`，
+    然後 `httpx.Timeout(5.0, read=read_timeout + 0.5)`），而且它是 per-request 的，
+    會蓋掉我們給 client 的 300 秒。
+
+    gpt-image-2 每一張圖都要 100～170 秒，全部長於那個數字，所以只要 Replicate 沒在
+    60 秒內回覆建立請求就會 ReadTimeout——**而它那邊仍然把圖跑完、成功、計費**。
+    2026-08-17 至今約 12 次，每次 $0.13，使用者看到的卻是「生成失敗」。
+
+    wait=False 看起來像個可有可無的參數，這條測試存在的理由就是它不是。
+    """
+
+    def _fake_client(self, calls):
+        class FakeOutput:
+            url = "https://replicate.example/out.jpg"
+
+        class FakeClient:
+            def run(self, model, **kwargs):
+                calls.append({"model": model, **kwargs})
+                return FakeOutput()
+
+        return FakeClient()
+
+    def test_create_does_not_block_on_the_prefer_wait_interface(self):
+        import replicate_render
+
+        calls = []
+        with mock.patch.object(replicate_render, "get_replicate_client",
+                               return_value=self._fake_client(calls)), \
+             mock.patch.object(replicate_render, "upload_to_permanent_storage",
+                               return_value="https://storage.example/final.jpg"), \
+             mock.patch.object(replicate_render, "current_provider", return_value="replicate"):
+            result = replicate_render.call_replicate_render(TINY_PNG, "a prompt")
+
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0].get("wait"), False,
+                      "少了 wait=False 就會退回 60.5 秒的阻塞式建立，"
+                      "圖照樣生成計費，我們卻拿不到結果")
+        self.assertEqual(result["status"], "completed")
+
+    def test_polling_does_not_hammer_the_api(self):
+        """SDK 預設 0.5 秒輪詢一次，兩分鐘的渲染等於兩三百次查詢。"""
+        import replicate_render
+
+        self.assertGreaterEqual(replicate_render.REPLICATE_POLL_INTERVAL_SECONDS, 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
