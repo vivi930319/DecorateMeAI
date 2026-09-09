@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+from io import BytesIO
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_TAB_ALIGNMENT, WD_TAB_LEADER
@@ -8,18 +9,22 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
 except ImportError:  # pragma: no cover - the bundled runtime normally has Pillow
-    Image = ImageDraw = ImageFont = None
+    Image = ImageDraw = ImageFont = ImageOps = None
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = Path(r"C:\Users\isach\Downloads\專題系統文件書 (1).docx")
 # 目前上一版正式檔正在預覽，因此先輸出不覆蓋舊檔的新正式版。
-OUTPUT = ROOT / "專題系統文件書_妝識你的美_實際資料版.docx"
+OUTPUT = ROOT / "專題系統文件書_妝識你的美_初版格式_整合模型Worker前端演算法與Ollama_2026-09-06.docx"
 FIGURES = ROOT / "docs" / "figures"
 USER_FACE_ACTIVITY = FIGURES / "face-analysis-activity-user.png"
 USER_GATEWAY_SWIMLANE = FIGURES / "gateway-frontend-swimlane-user.png"
+ALGORITHM_FLOW_SOURCE = FIGURES / "algorithm_supplement_1.png"
+ALGORITHM_ACTIVITY_SOURCE = FIGURES / "algorithm_supplement_2.png"
+ALGORITHM_FLOW = FIGURES / "商品推薦系統整體流程圖_黑白.png"
+ALGORITHM_ACTIVITY = FIGURES / "個人化推薦演算法活動圖_黑白.png"
 
 
 def set_run_font_family(run, east_asia="標楷體", latin="Times New Roman"):
@@ -65,7 +70,7 @@ def clear_cell(cell):
 def cell_text(cell, text, bold=False, size=12):
     p = clear_cell(cell)
     p.paragraph_format.space_after = Pt(0)
-    p.paragraph_format.line_spacing = 1.05
+    p.paragraph_format.line_spacing = 1.0
     run = p.add_run(str(text))
     # 報告內文規格統一為 12pt；size 保留在函式介面，避免既有呼叫端失效。
     font_run(run, size=12, bold=bold)
@@ -79,6 +84,15 @@ def new_table(doc, headers, rows, widths=None, size=9.5):
     table.autofit = False
     for i, header in enumerate(headers):
         cell_text(table.rows[0].cells[i], header, bold=True, size=size)
+    # 表格跨頁時重複欄名，且避免欄名列單獨落在頁尾。
+    header_row = table.rows[0]
+    tr_pr = header_row._tr.get_or_add_trPr()
+    tbl_header = OxmlElement("w:tblHeader")
+    tbl_header.set(qn("w:val"), "true")
+    tr_pr.append(tbl_header)
+    for cell in header_row.cells:
+        for paragraph in cell.paragraphs:
+            paragraph.paragraph_format.keep_with_next = True
     for row in rows:
         cells = table.add_row().cells
         for i, value in enumerate(row):
@@ -97,7 +111,7 @@ def new_table(doc, headers, rows, widths=None, size=9.5):
 
 def new_body(doc, text, elements, indent=True, size=12, bold=False):
     p = doc.add_paragraph()
-    p.paragraph_format.line_spacing = 1.5
+    p.paragraph_format.line_spacing = 1.0
     p.paragraph_format.space_after = Pt(0)
     p.paragraph_format.first_line_indent = Cm(0.74) if indent else Cm(0)
     run = p.add_run(text)
@@ -109,7 +123,7 @@ def new_body(doc, text, elements, indent=True, size=12, bold=False):
 def new_heading(doc, text, elements, level=2):
     p = doc.add_paragraph(style=f"Heading {level}")
     p.paragraph_format.keep_with_next = True
-    p.paragraph_format.line_spacing = 1.2
+    p.paragraph_format.line_spacing = 1.0
     p.paragraph_format.space_before = Pt(10 if level == 1 else 6)
     p.paragraph_format.space_after = Pt(4)
     p.paragraph_format.first_line_indent = Cm(0)
@@ -121,7 +135,7 @@ def new_heading(doc, text, elements, level=2):
 
 def new_bullet(doc, text, elements):
     p = doc.add_paragraph(style="List Bullet")
-    p.paragraph_format.line_spacing = 1.25
+    p.paragraph_format.line_spacing = 1.0
     p.paragraph_format.space_after = Pt(2)
     p.paragraph_format.first_line_indent = Cm(0)
     run = p.add_run(text)
@@ -139,17 +153,17 @@ def new_page_break(doc, elements):
 def add_toc_line(doc, label, level, elements):
     """用範本的逐行目錄格式：分層、點引線、右側頁碼欄位。"""
     p = doc.add_paragraph()
-    p.paragraph_format.line_spacing = 1.15
+    p.paragraph_format.line_spacing = 1.0
     p.paragraph_format.space_after = Pt(1)
     p.paragraph_format.left_indent = Cm(0.0 if level == 1 else 0.8 if level == 2 else 1.55)
     p.paragraph_format.first_line_indent = Cm(0)
     p.paragraph_format.tab_stops.add_tab_stop(Cm(15.4), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
     r = p.add_run(label)
-    font_run(r, size=12 if level == 1 else 11.5, bold=level == 1)
+    font_run(r, size=12, bold=level == 1)
     tab = p.add_run("\t")
-    font_run(tab, size=11.5)
+    font_run(tab, size=12)
     page = p.add_run("—")
-    font_run(page, size=11.5)
+    font_run(page, size=12)
     elements.append(p._p)
 
 
@@ -193,7 +207,7 @@ def configure_doc(doc):
     normal_rfonts.set(qn("w:cs"), "Times New Roman")
     normal_rfonts.set(qn("w:eastAsia"), "標楷體")
     normal.font.size = Pt(12)
-    normal.paragraph_format.line_spacing = 1.5
+    normal.paragraph_format.line_spacing = 1.0
     normal.paragraph_format.space_after = Pt(0)
     for name, size in (("Heading 1", 14), ("Heading 2", 14), ("Heading 3", 14)):
         style = doc.styles[name]
@@ -208,6 +222,10 @@ def configure_doc(doc):
         style.font.color.rgb = RGBColor(0, 0, 0)
     if "Hyperlink" in doc.styles:
         doc.styles["Hyperlink"].font.color.rgb = RGBColor(0, 0, 0)
+        doc.styles["Hyperlink"].font.underline = False
+    if "Followed Hyperlink" in doc.styles:
+        doc.styles["Followed Hyperlink"].font.color.rgb = RGBColor(0, 0, 0)
+        doc.styles["Followed Hyperlink"].font.underline = False
 
 
 def _figure_font(size, bold=False):
@@ -373,6 +391,28 @@ def create_flowchart_images():
     image.save(FIGURES / "渲染端輸入輸出流程圖_黑白.png")
 
 
+def prepare_algorithm_figures():
+    """整理演算法端提供的兩張圖，移除原文件內嵌的舊圖號，交由本文統一編號。"""
+    if Image is None or ImageDraw is None:
+        raise RuntimeError("Bundled Python runtime 缺少 Pillow，無法整理演算法流程圖")
+    for source, target, title, cover_height in [
+        (ALGORITHM_FLOW_SOURCE, ALGORITHM_FLOW, "商品推薦系統整體流程", 92),
+        (ALGORITHM_ACTIVITY_SOURCE, ALGORITHM_ACTIVITY, "個人化推薦演算法 UML 活動圖", 78),
+    ]:
+        if not source.exists():
+            raise RuntimeError(f"找不到演算法端提供的流程圖：{source}")
+        with Image.open(source) as original:
+            image = original.convert("RGB")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, image.width, cover_height), fill=(255, 255, 255))
+        font = _figure_font(45, bold=True)
+        bbox = draw.textbbox((0, 0), title, font=font)
+        x = (image.width - (bbox[2] - bbox[0])) // 2 - bbox[0]
+        y = 18 - bbox[1]
+        draw.text((x, y), title, font=font, fill=(0, 0, 0))
+        image.save(target)
+
+
 def add_figure(doc, image_path, caption, elements, width_cm=16.0):
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -385,7 +425,7 @@ def add_figure(doc, image_path, caption, elements, width_cm=16.0):
     cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
     cap.paragraph_format.space_after = Pt(6)
     r = cap.add_run(caption)
-    font_run(r, size=10, bold=True)
+    font_run(r, size=12, bold=True)
     elements.append(cap._p)
 
 
@@ -443,7 +483,7 @@ def classify_original(doc):
                 font_run(r, size=14, bold=True)
         else:
             p.style = doc.styles["Normal"]
-            p.paragraph_format.line_spacing = 1.5
+            p.paragraph_format.line_spacing = 1.0
             p.paragraph_format.first_line_indent = Cm(0.74)
             for r in p.runs:
                 font_run(r, size=12)
@@ -452,6 +492,9 @@ def classify_original(doc):
 def fix_known_typos(doc):
     """修正原始文件中已確認的技術名詞拼字與大小寫。"""
     replacements = (
+        ("Decorate Me AI 個人化彩妝分析與推薦系統", "妝識你的美"),
+        ("Decorate Me AI", "妝識你的美"),
+        ("DecorateMe", "妝識你的美"),
         ("ollamma文字建議", "Ollama 文字建議"),
         ("ollamma", "Ollama"),
         ("api資安管理", "API 資安管理"),
@@ -519,7 +562,7 @@ def normalize_document_fonts(doc):
         if is_heading:
             apply(paragraph, size=14)
         elif is_caption:
-            apply(paragraph, size=10)
+            apply(paragraph, size=12)
         elif is_index_line or is_cover:
             apply(paragraph)
         elif text:
@@ -561,6 +604,62 @@ def remove_shading_and_force_black(doc):
                 color.set(qn("w:val"), "000000")
                 color.attrib.pop(qn("w:themeColor"), None)
 
+    # 初版文件的參考文獻有部分文字放在文字方塊中，python-docx 的
+    # paragraphs API 讀不到這些內容；若只處理一般段落，Word 轉 PDF
+    # 時仍會把原始超連結樣式顯示成藍字。這裡直接清理文件 XML 中
+    # 所有文字執行屬性，保留網址文字但取消藍色、底線與 Hyperlink 樣式。
+    xml_roots = [doc.element, doc.styles.element]
+    for section in doc.sections:
+        xml_roots.extend([section.header._element, section.footer._element])
+    for root in xml_roots:
+        for rpr in root.iter(qn("w:rPr")):
+            rstyle = rpr.find(qn("w:rStyle"))
+            if rstyle is not None and rstyle.get(qn("w:val")) in {"Hyperlink", "FollowedHyperlink"}:
+                rpr.remove(rstyle)
+            underline = rpr.find(qn("w:u"))
+            if underline is not None:
+                rpr.remove(underline)
+            highlight = rpr.find(qn("w:highlight"))
+            if highlight is not None:
+                rpr.remove(highlight)
+            shd = rpr.find(qn("w:shd"))
+            if shd is not None:
+                rpr.remove(shd)
+            color = rpr.find(qn("w:color"))
+            if color is None:
+                color = OxmlElement("w:color")
+                rpr.append(color)
+            color.set(qn("w:val"), "000000")
+            for attr in ("themeColor", "themeTint", "themeShade"):
+                color.attrib.pop(qn(f"w:{attr}"), None)
+        for shd in list(root.iter(qn("w:shd"))):
+            parent = shd.getparent()
+            if parent is not None:
+                parent.remove(shd)
+
+
+def grayscale_initial_reference_pages(doc):
+    """把初版內嵌的參考文獻頁面轉成灰階，保留原文與網址但去除藍色。"""
+    if Image is None or ImageOps is None:
+        return 0
+    converted = 0
+    for part in doc.part.package.iter_parts():
+        if type(part).__name__ != "ImagePart" or not hasattr(part, "blob"):
+            continue
+        try:
+            image = Image.open(BytesIO(part.blob))
+        except Exception:
+            continue
+        # 初版的參考文獻是 1192px 寬的截圖；其他系統畫面與流程圖不套用此處理。
+        if image.size[0] != 1192 or image.size[1] not in {1061, 1684}:
+            continue
+        gray = ImageOps.grayscale(image.convert("RGB")).convert("RGB")
+        payload = BytesIO()
+        gray.save(payload, format="PNG")
+        part._blob = payload.getvalue()
+        converted += 1
+    return converted
+
 
 def insert_elements_before(target, elements):
     for element in elements:
@@ -569,6 +668,25 @@ def insert_elements_before(target, elements):
 
 def find_paragraph(doc, predicate):
     return next((p for p in doc.paragraphs if predicate(p.text.strip())), None)
+
+
+def compact_conclusion_spacing(doc):
+    """只收斂結論區塊的段前段後，避免最後一行孤立成單獨一頁。"""
+    rules = (
+        ("陸、", 4, 2),
+        ("一、\t總結", 2, 0),
+        ("二、\t對未來", 2, 0),
+        ("1.未來工作", 2, 0),
+        ("2.未來商業模式", 2, 0),
+        ("3.技術延伸方向", 2, 0),
+    )
+    for paragraph in doc.paragraphs:
+        text = paragraph.text.strip()
+        for prefix, before, after in rules:
+            if text.startswith(prefix):
+                paragraph.paragraph_format.space_before = Pt(before)
+                paragraph.paragraph_format.space_after = Pt(after)
+                break
 
 
 def chinese_number(number):
@@ -636,7 +754,7 @@ def _caption_line_paragraph(doc, text):
     p.paragraph_format.space_before = Pt(3)
     p.paragraph_format.space_after = Pt(3)
     r = p.add_run(text)
-    font_run(r, size=10, bold=True)
+    font_run(r, size=12, bold=True)
     return p
 
 
@@ -738,6 +856,23 @@ def add_caption_numbering(doc):
             "發現問題": "UAT 測試工作流",
             "成果": "模型成果檔案與部署驗證",
             "端別": "跨端資料補件清單",
+            "處理項目": "前端照片前處理與資料",
+            "工作類型／集合": "Worker 狀態機與工作留",
+            "工作面向": "Worker 升版判定與執行細節",
+            "項目": "Worker 未完成事項與阻塞原因",
+            "測試檔／情境": "Worker 測試涵蓋與限制",
+            "資料來源類型": "出版與原始資料來源",
+            "服務／模型": "Ollama 服務與模型設定",
+            "輸入資料": "Ollama 輸入資料",
+            "輸出區塊": "Ollama 輸出欄位",
+            "組合順序": "Ollama 回應驗證與渲染提示組合",
+            "Ollama 項目": "Ollama 安全邊界與目前驗證界線",
+            "推薦入口": "商品推薦入口與個人化邊界",
+            "資料區段": "商品推薦資料欄位",
+            "商品類別": "商品推薦計分權重",
+            "前端畫面／元件": "商品推薦 API 與前端呈現",
+            "回傳欄位": "商品推薦回傳欄位",
+            "困難": "演算法端新增內容的困難與處理",
         }
         title = title_map.get(header_key, "資料整理表")
         caption = f"表 {current_chapter}-{counter}　{title}"
@@ -801,9 +936,14 @@ def build_cover_and_static_toc(doc, figure_entries=None, table_entries=None):
         ("三、資料與模型分析流程", 2),
         ("四、會員與權限", 2),
         ("五、回饋與送訓", 2),
-        ("十一、模型分析與使用者回饋資料流程", 2),
-        ("（一）前端與 Gateway 的實際責任邊界", 3),
-        ("（二）渲染端的輸入與輸出", 3),
+        ("六、模型分析與使用者回饋資料流程", 2),
+        ("（一）前端照片前處理與提亮功能的技術界線", 3),
+        ("（二）前端與 Gateway 的實際責任邊界", 3),
+        ("（三）目前程式與測試中已存在的資料範例", 3),
+        ("（四）渲染端的輸入與輸出", 3),
+        ("（五）Ollama 個人化妝容建議模組", 3),
+        ("（六）商品推薦演算法與排序流程", 3),
+        ("（七）演算法端新增內容的困難與驗證", 3),
         ("肆、系統開發工具與使用環境", 1),
         ("伍、系統實作及實驗結果", 1),
         ("一、系統功能詳細描述", 2),
@@ -815,6 +955,8 @@ def build_cover_and_static_toc(doc, figure_entries=None, table_entries=None):
         ("七、模型訓練方法與實驗結果", 2),
         ("八、UAT 測試工作流", 2),
         ("九、模型成果檔案與部署驗證", 2),
+        ("十、Worker 技術細節與完成界線", 2),
+        ("十一、出版與原始資料來源", 2),
         ("陸、結論及未來發展", 1),
         ("一、總結主要貢獻", 2),
         ("二、未來研究或發展建議", 2),
@@ -868,7 +1010,8 @@ def add_model_history_under_related_tech(doc):
 def add_system_data_flow_under_design(doc):
     target = find_paragraph(doc, lambda t: t.startswith("肆、") and "系統開發工具" in t)
     elements = []
-    section_number = chinese_number(next_subheading_number(doc, "參、", target))
+    # 參章原有一至五節，這段整合資料沿用初版格式接在其後，固定為「六」。
+    section_number = "六"
     new_heading(doc, f"{section_number}、模型分析與使用者回饋資料流程", elements, 2)
     new_body(doc, "系統使用者上傳照片後，先由前端把需求送到 Gateway。因為前端和 Gateway 是我這邊掌握最完整的部分，所以這一段記錄得最細：前端負責畫面狀態、欄位組裝、輪詢和錯誤呈現；Gateway 負責登入身分、訪客額度、路由白名單、上游服務驗證、錯誤語意轉換、私人媒體路徑和 job 串接。經過 Gateway 後，才由 Face Mesh 取得臉部關鍵點，再依部位裁出 ROI，交給對應模型產生臉型、眉型、眼型、鼻型與唇型結果。", elements)
     new_code = doc.add_paragraph()
@@ -878,7 +1021,20 @@ def add_system_data_flow_under_design(doc):
     font_run(r, size=10, name="Consolas")
     elements.append(new_code._p)
 
-    new_heading(doc, "（一）前端與 Gateway 的實際責任邊界", elements, 3)
+    new_heading(doc, "（一）前端照片前處理與提亮功能的技術界線", elements, 3)
+    new_body(doc, "臉部分析前端在送出照片前，會先處理檔案格式、讀取影像尺寸與必要的圖片打包資料。BASIC 使用正面照片，PRO 則可分別傳送 front、left45、right45 與 side。這裡的影像處理要和模型訓練的 augmentation 分開：前端處理的是使用者這一次上傳的檔案，訓練 augmentation 則是訓練期間對資料做的變化，不能把兩者寫成同一個步驟。", elements)
+    frontend_image_table = new_table(doc, ["處理項目", "目前核對到的技術與資料", "送往哪裡／判讀方式", "目前判定"], [
+        ["照片來源", "使用者選取的 image File 或相機擷取後的 Blob；BASIC 欄位為 file，PRO 欄位為 front、left45、right45、side。", "以 FormData 送至 face Basic／Pro 分析路由；PRO 的側面照片是選填，正面照片是必要輸入。", "已在前端 API 程式中看到"],
+        ["影像解碼與尺寸", "使用 createImageBitmap(file) 讀取 originalWidth、originalHeight；Worker 完成後呼叫 bitmap.close()。", "尺寸資料寫入 imageMeta，用於追蹤原始照片，不等於模型分類結果。", "已在 image-worker.js 中看到"],
+        ["Worker 圖片打包", "使用 OffscreenCanvas drawImage；storageMaxEdge=1024、storageJpegQuality=0.78；輸出 image/jpeg 的 blob 與 dataUrl。", "主要給 analysisPackage 後續建議／渲染使用；meta 會記錄 compressedWidth、compressedHeight、compressedSize、compressionRatio 與 processedBy。", "已在 image-worker.js／api.js 中看到"],
+        ["主執行緒備援", "瀏覽器不支援 Worker、OffscreenCanvas 或 createImageBitmap，或 Worker 發生錯誤／逾時時，改用 document.createElement('canvas')、drawImage 與 canvas.toBlob。Worker timeout 為 30000 ms。", "備援輸出仍是 JPEG File 與 dataUrl，processedBy 會標記 main-thread。", "已在 api.js 中看到"],
+        ["臉部分析送出檔案", "analyzeFace 與 analyzeFacePro 直接把 file／各角度 files 放入 FormData；ImagePipeline.metaFromFile 另外產生 role、originalName、originalType、originalSize、width 與 height。", "分析 API 收到的是檔案與欄位；imageMeta 是前端紀錄資料，不能直接當成後端已保存的影像。", "已在 api.js 中看到"],
+        ["照片提亮", "本次核對的 image-worker.js 與 api.js 只有解碼、縮放、JPEG 壓縮與 Worker 備援，沒有看到 ctx.filter='brightness(...)'、像素逐點加亮或其他會改變上傳照片亮度的程式。CSS 中的 filter:brightness 是介面視覺效果，不能代表照片已被提亮。", "若另一個前端版本確實有照片提亮，必須補上該版本檔案或 commit；目前文件不能把它寫成已驗證功能。", "NOT VERIFIED"],
+    ], [3.0, 7.0, 5.0, 2.6], 8.4)
+    elements.append(frontend_image_table._tbl)
+    new_body(doc, "因此本系統目前可以明確說明的前端影像技術是『檔案檢查、影像解碼、尺寸縮放、JPEG 壓縮、data URL 產生、Worker 執行與主執行緒備援』。如果使用者介面上看到照片變亮，還要確認那是預覽 CSS 效果、相機自動曝光，還是實際送往 Face Basic／Face Pro 前的像素處理；三者的資料位置不同，不能只看畫面顏色判定。", elements)
+
+    new_heading(doc, "（二）前端與 Gateway 的實際責任邊界", elements, 3)
     new_body(doc, "前端不是直接把公開金鑰交給每一個內部服務，而是把操作送到我們的 Gateway。Gateway 先取得目前使用者或訪客的 actor 身分，再依路徑和 HTTP method 判斷是否允許，之後才用服務端認得的 API key 或內部標頭呼叫臉部、建議、渲染、會員與商品服務。這樣前端只需要知道穩定的 Gateway 路徑，不必知道各服務的內部 URL、GCS 原始網址或上游供應商細節。", elements)
     gateway_table = new_table(doc, ["層次", "我這邊實際處理的內容", "送出／回傳的關鍵資料"], [
         ["前端輸入", "照片、妝容風格、strength、分析結果包、faceJobId；畫面保存 loading、queued、running、completed、failed。", "image data URL、styleId、strength、analysisPackage、faceJobId。"],
@@ -889,7 +1045,7 @@ def add_system_data_flow_under_design(doc):
     ], [2.6, 8.2, 5.2], 8.2)
     elements.append(gateway_table._tbl)
 
-    new_heading(doc, "（二）目前程式與測試中已存在的資料範例", elements, 3)
+    new_heading(doc, "（三）目前程式與測試中已存在的資料範例", elements, 3)
     new_body(doc, "下面這些不是我另外編的示意值，而是目前專案程式、測試 fixture、模型 manifest 與 promotion ledger 裡已經存在的資料。我把會在每次執行時變動的 token、時間和雜湊識別碼標成動態欄位；文件中的固定值則可以直接回到來源檔案核對。這樣在口試時，我可以說明 Gateway 實際收到什麼、臉部服務建立什麼，以及模型版本如何留下證據。", elements)
     actual_gateway_table = new_table(doc, ["資料位置／端點", "目前實際存在的值", "在流程中的用途"], [
         ["Gateway 臉部 BASIC 路由", "POST /v1/face/pose；POST /v1/face/analyze/basic；POST /v1/face/jobs/basic；GET /v1/face/jobs/{jobId}；GET /v1/face/jobs/{jobId}/result；POST /v1/face/jobs/{jobId}/feedback", "前端只能透過 Gateway 使用白名單路徑，不能自行指定任意上游 URL。"],
@@ -912,7 +1068,7 @@ def add_system_data_flow_under_design(doc):
     elements.append(actual_model_table._tbl)
     new_body(doc, "我在這裡特別把「程式契約」、「測試資料」、「模型檔案」和「部署 ledger」分開，因為它們代表的證據層級不同：測試 fixture 可以證明流程和權限規則，manifest 可以證明檔案版本與完整性，promotion ledger 才能證明哪一次模型 promotion 被記錄；三者不能混在一起說成同一筆線上使用者資料。", elements)
 
-    new_heading(doc, "（三）渲染端的輸入與輸出", elements, 3)
+    new_heading(doc, "（四）渲染端的輸入與輸出", elements, 3)
     new_body(doc, "渲染端不是只收到一張照片。正式請求以 `POST /render/jobs` 的非同步方式處理，輸入至少包含 image、styleId、strength，並可帶 analysisPackage、faceJobId，以及由建議服務簽出的 renderPromptEn、promptSignature 和 promptSignatureVersion。渲染端先驗證圖片格式、大小與 style，再決定採用已簽 prompt 或安全的風格規則；建立 job 後立即回傳識別資料，背景工作才呼叫 Replicate，完成後把妝前／妝後圖和 renderPrompt 寫回工作紀錄。", elements)
     render_table = new_table(doc, ["階段", "渲染端收到／產生的資料", "前端或後台要怎麼判讀"], [
         ["輸入", "image=data:image/...; styleId；strength；analysisPackage；faceJobId；可選的已簽 renderPromptEn。", "這些欄位屬於同一次渲染，不能只把 image 當成完整上下文。"],
@@ -935,6 +1091,135 @@ def add_system_data_flow_under_design(doc):
         ["promotion 完成", "manifest、hash、revision、health／smoke、rollback", "只有本地檔案變新"],
     ], [3.8, 10.0, 6.8], 8.8)
     elements.append(table._tbl)
+    new_heading(doc, "（五）Ollama 個人化妝容建議模組", elements, 3)
+    new_body(doc, "Ollama 在本系統中不是拿來重新判斷使用者臉型的工具，而是位於臉部分析與圖片渲染之間的個人化建議層。臉型、眉型、眼型、鼻型、唇型與四季型先由前段臉部分析模組產生結構化資料；Ollama 再由 Gemma3 將這些資料、使用者選擇的妝容風格與 userNote 整理成可顯示的文字建議。正面照片存在時，LLaVA 可補充皮膚質感、膚色視覺狀態與整體平衡，但不能覆蓋原本的結構化五官分類。", elements)
+    new_body(doc, "所以本系統的實際方向不是『照片直接交給 LLM，讓模型自己猜臉型並生圖』，而是『電腦視覺分析、結構化特徵、固定妝容規則與 LLM 文字個人化』一起工作。文字建議和圖片渲染使用的 renderPromptEn 也分開處理：Gemma3 負責自然語言，Python 後端的規則組合器負責把身份保留、妝容風格、可見度與強度限制組成渲染提示。", elements)
+    ollama_port_table = new_table(doc, ["服務／模型", "目前文件記載的設定", "在本系統中的責任"], [
+        ["Ollama 原生 API", "http://127.0.0.1:11434；原生路徑包含 /api/generate 與 /api/tags。", "實際執行 Gemma3 與 LLaVA；不直接暴露給瀏覽器。"],
+        ["Ollama Suggestion Service", "FastAPI／Uvicorn，http://127.0.0.1:8010；提供 POST /suggest 與 GET /health。", "把本系統的輸入契約、驗證、Fallback 與 Prompt Builder 包起來，讓前端與 Gateway 不必知道原生 API 細節。"],
+        ["Gemma3", "文字模型預設為 gemma3；呼叫時記載 format=json、stream=false、num_predict=4096、temperature=0.35、top_p=0.85。", "產生 overall、六個 parts 與 personalization 等個人化妝容文字建議。"],
+        ["LLaVA", "視覺補充模型預設為 llava:latest；有正面照片時才使用。", "輸出 100 字以下英文 vision_feedback，作為 Gemma3 與 Render Prompt Builder 的補充上下文。"],
+    ], [3.5, 7.0, 6.0], 8.2)
+    elements.append(ollama_port_table._tbl)
+    new_body(doc, "目前要把兩個 Port 分開講清楚：11434 是 Ollama 原生推論服務，8010 是我們另外建立的 Suggestion Service。開發測試期間可透過 Cloudflare Quick Tunnel 把本機 127.0.0.1:8010 暫時提供給雲端 Gateway，但這只是一條連線通道，不能寫成 Ollama 部署在 Cloudflare，也不能把 Quick Tunnel 當成正式 production 架構。", elements)
+
+    ollama_input_table = new_table(doc, ["輸入資料", "來源", "用途與限制"], [
+        ["faceAnalysis／analysisPackage", "前段 Face Mesh、ROI 與五官分類結果。", "提供 faceShape、browShape、eyeShape、noseShape、lipShape、season 等結構化特徵；不是 Gemma3 自己看照片猜出的分類。"],
+        ["style", "使用者從前端選取的妝容風格。", "決定文字建議、固定 Style DNA、妝容可見度與強度規則。"],
+        ["userNote", "使用者在前端輸入的偏好或限制。", "補充個人需求，不取代結構化五官資料和固定 Style 規則。"],
+        ["analysisPackage.images.front.compressedDataUrl", "前端壓縮後的正面照片；有提供時才送 LLaVA。", "作為視覺補充，不是必要輸入；缺少圖片時改用結構化參數。"],
+    ], [4.5, 6.0, 6.0], 8.2)
+    elements.append(ollama_input_table._tbl)
+    new_body(doc, "Suggestion Service 的輸出要先經過 JSON parse、欄位檢查與 Server Validation，不能把模型回傳的自然語言直接當成前端固定欄位。後端會用這一次真正收到的 structured features 覆蓋 personalization.sourceFeatures，避免模型改寫分類名稱、漏掉欄位或自行補出不存在的特徵。", elements)
+    ollama_output_table = new_table(doc, ["輸出區塊", "目前資料內容", "使用位置"], [
+        ["overall", "整體妝容摘要。", "前端快速顯示這次推薦的整體方向。"],
+        ["parts", "base、eyebrow、eyes、contour、cheeks、lips 六個部位；各部位至少有 analysis、steps、avoid。", "前端顯示可執行的化妝步驟與避免事項。"],
+        ["personalization", "title、profileSummary、sourceFeatures、featureAdjustments、combinationNote、styleConnection、personalizedStory。", "說明哪個特徵影響哪個妝容決策，讓推薦可追溯。"],
+        ["renderPromptEn／fluxPromptEn", "由 Python Rule Builder 組合的英文渲染提示；目前文件記載兩者保持相同以維持相容。", "交給圖片渲染服務；不是把 Gemma3 的自然語言整段直接當成唯一 Prompt。"],
+        ["promptSignature", "有設定 Signing Secret 時供後續驗簽。", "讓渲染端判斷提示是否由受信任的建議服務產生；正式簽章契約仍須依實際端點核對。"],
+    ], [4.0, 8.0, 4.5], 8.0)
+    elements.append(ollama_output_table._tbl)
+
+    new_heading(doc, "Ollama 回應驗證與渲染提示組合", elements, 3)
+    new_body(doc, "Gemma3 呼叫時會要求 format=json、stream=false，讓服務可以等待完整結果後執行 json.loads()。如果回傳仍包含 Markdown code fence，後端先移除標記再解析；如果缺少 overall 或 parts 的必要部位，才套用預設 fallback。這裡的 fallback 是為了避免前端因欄位缺失而崩潰，不代表模型一定產生了正確內容，也不代表正式 200 組 request／response 已經完成驗收。", elements)
+    new_body(doc, "目前補件文件記載的結構化方式，是以 JSON 欄位和受控詞彙保存 preferredColors、finishTags、avoidColors 與 avoidTags；同時保留自然語言 summary 作畫面顯示。Ollama 文件也明確指出，format=json 不等於完整 Business Schema Validation，後續仍可再加更嚴格的 JSON Schema。這一點要和已存在的 parse／欄位補齊分開描述。", elements)
+    prompt_table = new_table(doc, ["組合順序", "由誰處理", "作用"], [
+        ["1. Identity Preservation", "Python Rule Builder", "保留人物身份、五官與臉型的限制。"],
+        ["2. Skin Retouching", "Python Rule Builder", "限制皮膚修飾範圍，避免把修圖寫成換臉。"],
+        ["3. Personalized Face Adaptation", "Python Rule Builder＋實際 features", "把臉部分析結果轉成個人化妝容調整。"],
+        ["4. Selected Style＋Fixed Style DNA", "服務端固定規則", "維持不同妝容風格的必要元素與差異。"],
+        ["5. Style Visibility／Intensity Controls", "服務端固定規則", "強度 4／5、5／5 的元素必須清楚可見；0／5 的排除元素必須避免。"],
+        ["6. Final Makeup Enforcement", "Python Rule Builder", "在交給渲染服務前再次補足必要妝容條件。"],
+    ], [5.0, 5.0, 6.5], 8.0)
+    elements.append(prompt_table._tbl)
+    new_body(doc, "以新版日雜清透妝為例，補件文件記載 Style DNA 為『JAPANESE AIRY PLAYFUL IGARI MAKEUP』，並將『BLUSH — PRIMARY FEATURE』設為主要特徵，同時排除 Korean mocha eye makeup、strong aegyo-sal、Korean glass skin 與 structured lash clusters。這些規則是用來控制 Style 差異，不是由單次 Gemma3 文字自由決定。", elements)
+    new_body(doc, "LLaVA 的 vision_feedback 只能作額外觀察，因為照片會受光線、白平衡、遮擋、解析度與壓縮影響。正式五官分類仍以結構化分析為優先；而 identity lock 關閉後的實際妝前／妝後輸出比對目前仍是 NOT VERIFIED，不能用 Prompt 中有 Identity Preservation 就宣稱圖片一定保留本人特徵。", elements)
+
+    new_heading(doc, "Ollama 的安全邊界與目前驗證界線", elements, 3)
+    ollama_security_table = new_table(doc, ["Ollama 項目", "目前記載的作法", "完成界線"], [
+        ["前端呼叫位置", "Browser／Gateway 呼叫 FastAPI :8010，不直接呼叫 Ollama :11434。", "正式 200 組 request／response、認證轉送與完整錯誤碼仍需由 Ollama 端補資料；目前不能寫成已完成端到端驗收。"],
+        ["API Key", "Suggestion Service 以 X-API-Key 與 hmac.compare_digest() 做基本驗證；正式環境應放環境變數。", "不能把文件中的設定範例當成實際秘密值，也不能把 health response 當成完整權限驗證。"],
+        ["Health check", "GET /health 再查 Ollama /api/tags，用來區分 FastAPI 存活與 Ollama 可連線。", "health 200 只能證明服務回應，不等於正式模型版本、輸出內容或 E2E 已驗證。"],
+        ["Cloudflare Quick Tunnel", "開發測試期間將本機 :8010 暫時建立外部連線。", "Quick Tunnel 不是正式 production 部署；正式環境仍需穩定且受保護的推論服務。"],
+        ["正式 request／response", "目前補件文件有欄位說明與結構範例，另有 Prompt 規則命中案例。", "正式 200 組 request／response 尚未取得，狀態保留為 NOT VERIFIED／待 Ollama 端補件。"],
+    ], [4.0, 7.5, 5.0], 8.0)
+    elements.append(ollama_security_table._tbl)
+    new_body(doc, "因此口試時我會把 Ollama 說成『個人化妝容文字建議與 Prompt 組合層』，而不是主要臉部辨識模型。它的價值在於把已經結構化的五官結果、Style 與使用者需求轉成可讀建議，同時由 Server 端保留輸入證據、固定 Style 規則、欄位驗證與 fallback。", elements)
+
+    new_heading(doc, "（六）商品推薦演算法與排序流程", elements, 3)
+    new_body(doc, "商品推薦端新增的重點，是把一般商品清單、商品搜尋、商品詳情延伸推薦、臉部分析個人化推薦與會員行為推薦分開。一般清單和搜尋本質上是查詢與排序，不應因為畫面上使用『推薦』字樣就被解釋成已經讀取使用者膚色；只有收到 analysisPackage 或會員行為資料時，才稱為個人化推薦。", elements)
+    add_figure(doc, ALGORITHM_FLOW, "圖 3-3　商品推薦系統整體流程圖", elements, 16.0)
+    new_body(doc, "上圖的判斷點是是否帶有 analysisPackage。沒有時走一般商品清單；有時才解析膚色、四季型、妝容與 Ollama 結構化文字，接著由商品資料庫提供候選，最後進行候選評分、多樣性重排與推薦理由產生。商品資料庫是候選資料來源，不是 Ollama 自行生成商品。", elements)
+    add_figure(doc, ALGORITHM_ACTIVITY, "圖 3-4　個人化推薦演算法活動圖", elements, 16.0)
+    new_body(doc, "活動圖把同一筆個人化請求拆成可以重現的步驟：先驗證資料包與商品候選，再並行計算 Lab／CIEDE2000、四季型與冷暖底調、使用者風格字典以及 Ollama JSON 偏好詞，之後依 Lab 是否可靠選擇粉底加權或後備計分，最後做品牌、系列與近分穩定輪替並回傳推薦結果。", elements)
+
+    recommendation_entry_table = new_table(doc, ["推薦入口", "使用資料", "排序／比對方式", "是否個人化"], [
+        ["一般商品清單", "商品名稱、品牌、類別、價格、狀態。", "依關鍵字、類別、品牌與價格篩選，再依指定欄位排序。", "否"],
+        ["商品搜尋結果", "查詢字串與商品文字欄位。", "符合條件後依名稱、價格、新舊或預設順序排列。", "僅依當次查詢"],
+        ["商品詳情／同系列色號", "目前粉底與同系列色號 Lab。", "找出目前色號、較亮色與較深色；MAC 額外遵守 N／NC／NW 色調軌道。", "否"],
+        ["商品詳情／同品牌其他系列", "目前粉底及同品牌不同系列 Lab。", "以 CIEDE2000 由近至遠，每個系列保留一項。", "否"],
+        ["商品詳情／跨品牌近似色", "目前粉底與其他品牌粉底 Lab。", "排除同品牌後，以 CIEDE2000 選出各品牌近似色。", "否"],
+        ["商品詳情／相似商品", "目前商品、類別、色彩、價格與文字標籤。", "色彩 40%、文字／風格 25%、類別 20%、價格 15%。", "否"],
+        ["臉部分析個人化推薦", "膚色 Lab、四季型、底調、妝容與 Ollama 建議。", "多訊號加權、避用詞扣分、類別與品牌多樣性重排。", "是"],
+        ["會員行為偏好推薦", "收藏、試妝保存、購物車與商品資料。", "收藏 1.0、試妝 0.8、購物車 0.65 建立品牌與類別偏好。", "是；相容／舊版引擎"],
+    ], [4.0, 6.0, 5.0, 2.0], 7.8)
+    elements.append(recommendation_entry_table._tbl)
+    new_body(doc, "這張表的重點是把資料來源和個人化程度標出來。否則同一個商品在清單頁、商品詳情頁和臉部分析結果頁都叫推薦，使用者會以為全部都依自己的膚色排序；實際上它們使用的資料與演算法不同。", elements)
+
+    recommendation_data_table = new_table(doc, ["資料區段", "主要欄位", "用途"], [
+        ["faceAnalysis", "skinTone.lab。", "計算粉底與膚色的 CIEDE2000 色差。"],
+        ["faceAnalysis", "skinTone.season、undertone。", "比對春夏秋冬與冷暖底調。"],
+        ["analysisPackage", "style。", "使用者明確選擇的妝容風格。"],
+        ["generativeText", "styleTags、preferredColors、finishTags。", "Ollama 結構化偏好。"],
+        ["generativeText", "avoidTags、avoidColors、advice。", "避用條件與自然語言後備提取。"],
+        ["商品資料庫", "lab、hex、seasonTags、undertone。", "商品色彩與季型特徵。"],
+    ], [4.0, 7.0, 6.0], 8.2)
+    elements.append(recommendation_data_table._tbl)
+    new_body(doc, "粉底的主要比較使用使用者 skinTone.lab 和商品 lab 計算 CIEDE2000，色差越小表示在相同量測條件下越接近，再將色差轉成 exp(-ΔE00／8) 的衰減分數。文件端記載粉底總分中 Lab 色差占 70%，其餘再合併季型、風格、Ollama 偏好與庫存；實際每個商品的 scoreBreakdown 仍要以 API 回傳核對，不能只看總分。", elements)
+    recommendation_weight_table = new_table(doc, ["商品類別", "計分重點", "補件文件記載的現行權重"], [
+        ["粉底", "Lab 色差、季型、風格、Ollama 偏好、庫存。", "70%／12%／8%／5%／5%"],
+        ["唇彩", "風格、季型、Ollama 偏好、臉部特徵、庫存。", "45%／20%／20%／5%／10%"],
+        ["其他彩妝", "色彩、風格、季型、Ollama 偏好、臉部特徵、庫存。", "20%／35%／20%／15%／5%／5%"],
+    ], [4.0, 8.0, 4.5], 8.2)
+    elements.append(recommendation_weight_table._tbl)
+    new_body(doc, "上表保留演算法端補件原本的權重排列，但文件沒有另外提供每一列百分比與欄位的一一對應順序，所以我不自行替它增加對應解釋。正式答辯若要逐項說明，仍應以演算法程式或 API 的 scoreBreakdown 再核對。", elements)
+
+    new_heading(doc, "商品推薦 API、前端呈現與結果證據", elements, 3)
+    recommendation_api_table = new_table(doc, ["前端畫面／元件", "呼叫來源", "應呈現內容"], [
+        ["商品清單／搜尋頁", "GET /api/products。", "符合篩選的商品與清楚的目前排序方式；不標示為膚色個人化。"],
+        ["商品詳情頁", "GET /api/products/{id}。", "商品本體、同系列色號、同品牌其他系列與跨品牌近似色。"],
+        ["相似商品區塊", "GET /api/products/{id}/similar。", "相似商品與 lighter、darker、same_brand、budget_alt 或 same_style_alt 關係。"],
+        ["跨品牌色號區塊", "GET /api/products/{id}/shade-matches。", "其他品牌粉底、色號、ΔE00 與相似度。"],
+        ["個人化妝容結果", "POST /recommend-products。", "完整妝容、主粉底、替代色號、理由與 scoreBreakdown。"],
+        ["會員偏好區塊", "會員推薦相容端點。", "依收藏、試妝與購物車推算的偏好；畫面要標示資料依據。"],
+    ], [5.0, 5.5, 6.0], 8.0)
+    elements.append(recommendation_api_table._tbl)
+    recommendation_output_table = new_table(doc, ["回傳欄位", "說明"], [
+        ["recommendations.styleDictionary", "字典版本及是否成功套用。"],
+        ["recommendations.personalizationInputs", "實際讀取的 Lab、季型、風格及 Ollama 詞彙。"],
+        ["products[].scoreBreakdown", "各項評分明細。"],
+        ["foundationMatchStatus", "主粉底色差與色號狀態。"],
+        ["foundationSameBrandAlternatives", "同品牌其他系列替代選項。"],
+        ["foundationCrossBrandAlternatives", "跨品牌近似色。"],
+    ], [6.5, 10.0], 8.2)
+    elements.append(recommendation_output_table._tbl)
+    new_body(doc, "前端不能只顯示 Ollama 的文字而忽略後端實際商品 ID，也不能把一般清單的預設排序包裝成膚色個人化推薦。若同一商品同時符合多個入口，畫面應保留來源標籤，例如同品牌其他系列、跨品牌近似色或依暖春型推薦，讓使用者知道這一項為什麼出現。", elements)
+
+    new_heading(doc, "（七）演算法端新增內容的困難與驗證", elements, 3)
+    new_body(doc, "演算法端補件把新增內容整理成幾個實際遇到的問題。下面的處理方式是補件文件記載的版本；其中『完成』只表示文件描述該項修改或驗證已完成，不能延伸成所有資料來源、線上版本和完整 E2E 都已經驗收。", elements)
+    recommendation_problem_table = new_table(doc, ["困難", "原因", "處理方式"], [
+        ["不同使用者取得相同商品", "舊標籤 daily、natural 過度集中。", "改用 Lab、HSL、季型和 NLP 多訊號計分。"],
+        ["MAC NW7 出現頻率過高", "服務曾明定 MAC 為粉底錨點。", "移除品牌硬編碼，依實際總分選主粉底。"],
+        ["同系列之外沒有替代品", "原介面只提供較亮與較深色。", "新增同品牌其他系列及跨品牌替代清單。"],
+        ["Ollama 回覆格式不固定", "自由文字可能漏欄位或誤判否定語意。", "JSON Schema 優先，並保留受控詞彙後備解析；完整 Schema 契約仍需與 Ollama 端核對。"],
+        ["相近商品排序長期固定", "大量商品分數完全或幾乎相同。", "使用分析包 ID 做小幅穩定輪替，保持相同資料包可重現。"],
+        ["照片與商品色彩受環境影響", "光源、白平衡、螢幕及品牌色票不等於實測膚色。", "保留試色聲明，避免宣稱絕對準確。"],
+        ["一般清單與個人化推薦混淆", "多個畫面都以推薦字樣呈現，但資料來源不同。", "逐一標示入口、端點、演算法與是否個人化。"],
+        ["線上服務與資料庫相容引擎並存", "兩處皆有推薦路由，可能造成文件或前端誤接。", "以現行 Product Service 為主，舊引擎明確標為相容用途。"],
+    ], [4.2, 6.0, 5.8], 7.8)
+    elements.append(recommendation_problem_table._tbl)
+    new_body(doc, "演算法端文件記載的 2026 年 9 月 6 日驗證案例，使用三組資料包進行本機線上服務驗證：暖春韓系資料取得 CHANEL B10、暖秋港風資料取得 ESTEE LAUDER 商品、冷夏千金資料取得 CHANEL B30；三組腮紅、唇彩、眼影及修容商品 ID 不同，回傳 season 分別為 spring、autumn、summer。文件另記載自動測試共五項通過，涵蓋品牌不強制、同品牌其他系列、Ollama 文字提取、季型正規化及穩定輪替。這些數字與案例是新增演算法文件提供的紀錄，不延伸解讀成模型準確率或完整線上 E2E。", elements)
+    new_body(doc, "CIEDE2000 的公開技術依據保留原始連結：https://www.cie.co.at/publications/colorimetry-part-6-ciede2000-colour-difference-formula-1；影像色差評估方法：https://www.cie.co.at/publications/methods-evaluating-colour-differences-images。Ollama 結構化輸出與 Generate API 也保留原始連結：https://docs.ollama.com/capabilities/structured-outputs、https://docs.ollama.com/api/generate。", elements)
     insert_elements_before(target, elements)
 
 
@@ -1026,6 +1311,71 @@ def add_model_worklog_under_implementation(doc):
     elements.append(table._tbl)
     new_body(doc, "目前文件內的歷史結果，例如 ConvNeXt-Tiny 五折 Macro Accuracy 臉型 0.561、眉型 0.603、眼型 0.693、鼻型 0.881、唇型 0.640，必須和當時的資料、類別與 protocol 一起引用。工作區另外存在現行 `cv_report_summary.json` 的 accuracy、Balanced Accuracy、Macro-F1，它們不是同一張考卷，不能直接混成一個最新準確率。", elements)
     new_body(doc, "模型工作真正完成的定義是：資料與類別版本清楚、訓練可以重現、結果可以解釋、模型檔和類別檔一致、服務載入正確版本、線上 smoke 通過，而且出問題時能回到上一版。只有完成這些步驟，我才會把它寫成已部署；單純看到地端訓練跑完，不代表線上使用者已經用到新模型。", elements)
+
+    new_heading(doc, f"{chinese_number(worklog_number + 4)}、Worker 技術細節與完成界線", elements, 2)
+    new_body(doc, "模型訓練和模型換版不是同一個動作。管理員在後台按下送訓或升版後，Gateway 只負責建立 queued 工作並留下請求身分；真正需要訓練機檔案、模型輸出、gcloud 認證與服務部署的工作，交由本機 Worker 執行。這樣才能把 face_training_runs、face_model_promotions、face_service_deployments 的狀態、runId、版本、metrics、manifest、hash 和失敗原因留在同一條工作流裡。", elements)
+    new_body(doc, "目前 ONNX 模型檔的體積約為每個 111 MB，訓練機與 Cloud Run 的檔案系統及認證環境不同，所以 Cloud Run 後台不能直接執行地端訓練。Worker 的功能是把後台決定轉成可追蹤的訓練、升版與部署工作；Worker 本身不是模型，也不能把 queued、running 或 health 200 直接當成模型已換版。", elements)
+    worker_role_table = new_table(doc, ["元件／程式", "實際責任與資料集合", "目前完成界線"], [
+        ["training_worker.py", "執行訓練，讀寫 face_training_runs，回報 stage、progress、metrics、成功或失敗原因；訓練時寫入 face_training_workers。", "有訓練 heartbeat、啟動回收自己中斷的 running 批次與 Windows 睡眠抑制；claim 仍不是原子操作。"],
+        ["promotion_worker.py", "執行 promotion、模型檔搬移、manifest／hash 檢查、build 與部署，讀寫 face_model_promotions、face_service_deployments。", "沒有 heartbeat；輪詢迴圈每 300 秒做 stale sweep；可用 RELOAD_EXIT_CODE 86 讓外殼重新啟動。"],
+        ["Gateway／後台", "依 actor、權限、路由與去重規則建立 queued 工作，提供工作狀態與錯誤給前端。", "不直接訓練或換版；後台按鈕尚未完成實機驗收，不能只用 API 或單元測試宣稱已驗收。"],
+        ["Ollama 建議服務", "接收臉部分析結果、妝容風格與使用者需求，產生文字建議；不屬於 promotion_worker 的服務部署清單。", "Ollama 的正式 request／response 與目前通道仍要由該端補齊，不能由 Worker 資料推定。"],
+    ], [3.2, 9.0, 5.8], 8.4)
+    elements.append(worker_role_table._tbl)
+    new_body(doc, "表中的『完成界線』是為了區分已存在的程式行為和還沒做完的保證。training_worker 有 heartbeat，不代表 promotion_worker 也有；promotion_worker 有 stale sweep，也不代表已經具備 lease；promotion ledger 有完整性檢查，也不代表 claim 已經具備並發安全。", elements)
+
+    worker_state_table = new_table(doc, ["工作類型／集合", "實際狀態流程", "識別欄位與工作留"], [
+        ["訓練批次／face_training_runs", "queued → claimed → running → done；失敗時為 failed。", "runId 使用 TR- 加 16 位十六進位識別；保存 feedbackIds、selections、sampleCount、workerId、startedAt、finishedAt、metrics、artifact 與 error。"],
+        ["換模型／face_model_promotions", "queued → claimed → running → deployed；使用 prepare-only 時可為 prepared；失敗時為 failed。", "promotionId 使用 PM- 加 16 位十六進位識別；保存 runId、parts、stage、version、backup、results、requestedBy。"],
+        ["服務部署／face_service_deployments", "queued → claimed → running → deployed 或 failed。", "deploymentId 使用 DP- 加 16 位十六進位識別；services 表示 face、gateway、render 的部署子集；stage 與 note 用來判讀進度。"],
+        ["Worker 存活／face_training_workers", "training、idle、offline。", "目前只有 training_worker 寫入 workerId、state、detail、lastSeenAt 與存活指標；promotion_worker 沒有心跳文件。"],
+        ["模型指標／face_model_metrics", "保存線上或升版比較所使用的 metrics。", "metrics 必須和資料版本、類別版本、protocol、runId 對照；不能用單一 health 結果代替模型評估。"],
+    ], [3.5, 6.0, 8.5], 8.4)
+    elements.append(worker_state_table._tbl)
+    new_body(doc, "Worker 的 claim 目前是先讀再寫，不是原子操作。程式先讀取工作並確認 status 為 queued，再寫入 claimed、claimedAt、workerId 等欄位；training_worker 與 promotion_worker 都有這個限制。現有 REST 儲存層沒有 transaction 或條件式更新，shared/job_store.py 的 patch_if_status 也沒有被兩支 Worker 使用，所以不能把單 Worker 測試通過解讀成多 Worker 並發安全。", elements)
+    new_body(doc, "stale 回收目前也不是完整 lease。training_worker 啟動時只回收 workerId 等於自己的 running 批次；promotion_worker 在輪詢迴圈每 300 秒掃描 claimed 或 running 超過固定 30 分鐘的工作，清除 stage、留下原因並放回 queued。這個判定只看固定時間，沒有 heartbeat、lease expiry 或 claim token 驗證，因此合法但執行超過 30 分鐘的工作可能被誤回收。", elements)
+    new_body(doc, "目前只有 training_worker 寫入 heartbeat；它會把 state、detail 與 lastSeenAt 寫入 face_training_workers，也可推送 Cloud Monitoring 存活指標。heartbeat 寫入失敗不會中止訓練。promotion_worker 沒有心跳，這項差異必須保留在文件中。", elements)
+    worker_limit_table = new_table(doc, ["項目", "狀態", "目前限制與阻塞原因"], [
+        ["Claim 原子性", "NOT DONE", "兩支 Worker 都是先讀再寫；REST 層沒有 transaction 或條件式更新，存在並發取得同一筆工作的風險。"],
+        ["Heartbeat／lease 判定 stale", "NOT DONE", "目前只用固定 30 分鐘的 claimedAt 判定，沒有 heartbeat 或 lease expiry；長時間工作可能被誤放回排隊。"],
+        ["Claim token 驗證", "NOT DONE", "目前沒有 claim token，後續狀態寫入也沒有驗證持有正確 token 的 Worker。"],
+        ["promotion_worker 心跳", "NOT DONE", "只有 training_worker 寫入 face_training_workers 與存活指標，promotion_worker 尚未提供心跳。"],
+        ["訓練批次的 feedback 關聯失敗", "未決定", "目前關聯寫入失敗仍不影響 API 回傳，API 仍回 202 queued；是否改成失敗即阻擋尚未決定。"],
+        ["後台按鈕實機驗收", "NOT RUN", "後台權限、渲染次數與模型工作按鈕尚未完成實際登入後的點擊驗收。"],
+        ["膚色分塊取樣準確率", "NOT VERIFIED", "目前有取樣行為與結果紀錄，但沒有足以判定準確率的人工標註 holdout；不能寫成準確率提升。"],
+        ["Render prompt identity lock 關閉後的輸出比對", "NOT VERIFIED", "identity lock 關閉後尚未完成妝前／妝後實際輸出比對，不能宣稱仍保留本人特徵。"],
+    ], [4.4, 2.4, 11.2], 8.4)
+    elements.append(worker_limit_table._tbl)
+    new_body(doc, "以上 NOT DONE、NOT VERIFIED、NOT RUN 與未決定都是目前正式的完成界線。後續只有補上程式、測試、日誌、人工標註或實機操作證據，才可以更新狀態；不能以本機 health、截圖或單次成功執行代替。", elements)
+
+    worker_test_table = new_table(doc, ["測試檔／情境", "目前涵蓋內容", "不能由此測試推出的結論"], [
+        ["tests/deployment_queue_test.py", "部署回收、輪詢 stale sweep、避免單一情境重複執行、promotion ledger 完整性。", "不能推出並發 claim 已原子化，也不能取代後台真實登入後的按鈕驗收。"],
+        ["tests/training_worker_test.py", "訓練機睡眠抑制的設定與還原。", "不能推出 training_worker 有 claim token、lease 或模型準確率結果。"],
+        ["tests/training_run_store_test.py", "訓練失敗時的狀態與告警指標。", "不能推出 feedback 關聯失敗的處理取捨已經決定；目前 API 仍回 202 的行為仍待確認。"],
+        ["tests/promotion_margin_test.py", "誤差計算與無法計算時的保守阻擋。", "不能推出 identity lock 關閉後輸出保留本人特徵，也不能推出膚色分塊取樣的人工準確率。"],
+        ["Worker 並發 claim", "目前沒有兩個 Worker 同時 claim 同一筆工作的完整測試。", "此情境是 NOT DONE；單 Worker 通過不代表多 Worker 安全。"],
+    ], [4.5, 7.6, 5.9], 8.2)
+    elements.append(worker_test_table._tbl)
+    new_body(doc, "測試通過只代表對應案例通過，不能取代尚未執行的並發、長時間、真實雲端、人工標註與實機 UAT。", elements)
+
+    new_heading(doc, f"{chinese_number(worklog_number + 5)}、出版與原始資料來源", elements, 2)
+    new_body(doc, "本節採出版資料常用的來源格式：『[編號] 作者／機構。（年份或 n.d.）。資料標題。網址或原始檔案位置。』公開技術文件以 n.d. 表示原頁面未提供可直接核對的出版年份；本專案程式、測試與工作留則保留原始檔案位置。網址只作為來源與查核入口，不代表本次已重新驗證服務目前可用。", elements)
+    source_table = new_table(doc, ["資料來源類型", "出版／原始資料格式", "用途與可信度邊界"], [
+        ["[S1] 前端原始程式", "妝識你的美專題前端。（2026）。`js/api.js`、`js/image-worker.js`。C:\\Users\\isach\\Downloads\\專題前端 (Remix) (Remix) (1).zip。", "核對照片欄位、ImagePipeline、Worker 壓縮、尺寸與 data URL；本次未在這兩個檔案確認像素提亮。"],
+        ["[S2] 臉部分析與模型程式", "妝識你的美專案。（2026）。`face/`、`training/`、`models/`。C:\\Users\\isach\\PycharmProjects\\PythonProject12。", "核對 Face Mesh、ROI、分類模型、資料切分、訓練與模型檔；程式存在不等於線上版本一定已載入。"],
+        ["[S3] Worker 與測試", "妝識你的美專案。（2026）。`tools/training_worker.py`、`tools/promotion_worker.py`、`tests/`。C:\\Users\\isach\\PycharmProjects\\PythonProject12。", "核對 Worker 狀態、工作留、測試涵蓋與未完成界線；測試只證明被測情境。"],
+        ["[S4] 前端正式部署原始網址", "妝識你的美專題。（2026）。前端正式站。https://decorate-me.web.app。", "原始部署入口；網址原樣保留，但專題名稱在本文統一為妝識你的美，站點目前狀態仍需重新驗證。"],
+        ["[S5] Face Basic／Face Pro／Render", "妝識你的美專題。（2026）。服務健康檢查。https://face-basic-258021445391.asia-east1.run.app/health；https://face-pro-258021445391.asia-east1.run.app/health；https://replicate-render-258021445391.asia-east1.run.app/health。", "原始工作留中的服務入口；health 200 只能表示服務回應，不代表模型版本、完整 E2E 或圖片輸出已驗證。"],
+        ["[S6] MediaPipe", "Google。（n.d.）。MediaPipe Face Landmarker。https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker。", "臉部關鍵點與 landmark 方法來源。"],
+        ["[S7] Ollama", "Ollama。（n.d.）。Ollama API 文件。https://docs.ollama.com/。", "文字建議服務 API 的公開技術來源；不代表本專題的正式通道已由本文件重新驗證。"],
+        ["[S8] Replicate", "Replicate。（n.d.）。API 文件。https://replicate.com/docs。", "渲染服務上游串接的公開技術來源。"],
+        ["[S9] 色差方法", "CIE。（n.d.）。Colorimetry Part 6 CIEDE2000。https://cie.co.at/publications/colorimetry-part-6-ciede2000-colour-difference-formula。", "粉底與商品色號比較的公開方法來源。"],
+        ["[S10] GCS／Firebase", "Google Cloud。（n.d.）。Signed URLs 與 Object Lifecycle Management。https://cloud.google.com/storage/docs/access-control/signed-urls；https://cloud.google.com/storage/docs/lifecycle。Firebase。（n.d.）。Hosting。https://firebase.google.com/docs/hosting。", "核對私人媒體、物件生命週期與前端部署概念；實際 bucket、權限與服務狀態仍以本專案設定及驗收為準。"],
+        ["[S11] 演算法端新增技術文件", "演算法端。（2026）。妝識你的美商品推薦系統與演算法技術文件。C:\\Users\\isach\\Downloads\\Decorate_Me_智慧彩妝推薦系統_商品推薦技術文件.docx。", "補充商品推薦入口、CIEDE2000／HSL／四季型、排序權重、API 欄位、困難處理與驗證案例；文件記載不取代程式與線上端點核對。"],
+        ["[S12] Ollama 端新增技術文件", "Ollama 端。（2026）。妝識你的美個人化妝容建議模組詳細技術說明。C:\\Users\\isach\\Downloads\\DECORATE_ME_Ollama_個人化妝容建議模組_詳細技術說明.md。", "補充 Gemma3、LLaVA、Suggestion Service、JSON 驗證、Fallback、Render Prompt、安全與開發測試架構；正式 200 組 request／response 仍未取得。"],
+    ], [3.5, 10.0, 4.5], 8.0)
+    elements.append(source_table._tbl)
+    new_body(doc, "來源中的正式服務 URL、歷史 Quick Tunnel、本機網址與公開技術文件要分開判讀。歷史網址可以保留作為工作留，但不能因此宣稱目前固定端點；本機路徑可以指向原始程式，但不能把本機檔案存在寫成雲端已部署。", elements)
     insert_elements_before(target, elements)
 
 
@@ -1058,6 +1408,7 @@ def add_gap_under_conclusion(doc):
 
 def main():
     create_flowchart_images()
+    prepare_algorithm_figures()
     doc = Document(SOURCE)
     configure_doc(doc)
     fix_known_typos(doc)
@@ -1071,6 +1422,8 @@ def main():
     remove_unnecessary_blank_paragraphs(doc)
     normalize_document_fonts(doc)
     remove_shading_and_force_black(doc)
+    reference_pages = grayscale_initial_reference_pages(doc)
+    compact_conclusion_spacing(doc)
     # Word 開啟時更新頁碼欄位；目錄本身是預先填好的黑白文字，不是空白 TOC field。
     settings = doc.settings._element
     update = settings.find(qn("w:updateFields"))
@@ -1080,7 +1433,7 @@ def main():
     update.set(qn("w:val"), "true")
     doc.save(OUTPUT)
     check = Document(OUTPUT)
-    required = ["臉部分析模型訓練工作流", "UAT 測試工作流", "渲染端的輸入與輸出", "前端與 Gateway 的實際責任邊界", "圖目錄", "表目錄", "妝識你的美"]
+    required = ["臉部分析模型訓練工作流", "UAT 測試工作流", "渲染端的輸入與輸出", "前端與 Gateway 的實際責任邊界", "Ollama 個人化妝容建議模組", "商品推薦演算法與排序流程", "圖目錄", "表目錄", "妝識你的美"]
     for needle in required:
         if not any(needle in p.text for p in check.paragraphs):
             raise RuntimeError(f"輸出缺少：{needle}")
@@ -1089,6 +1442,7 @@ def main():
     print(f"TABLES={len(check.tables)}")
     print(f"UAT_COLUMNS={len(next(t for t in check.tables if t.rows and t.rows[0].cells[0].text == '發現問題').columns)}")
     print("BLACK_WHITE_FORMAT=True")
+    print(f"REFERENCE_PAGES_GRAYSCALE={reference_pages}")
 
 
 if __name__ == "__main__":
