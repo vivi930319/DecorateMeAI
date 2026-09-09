@@ -13,8 +13,9 @@
 $urls = @(
     "https://face-basic-258021445391.asia-east1.run.app/health",
     "https://face-pro-258021445391.asia-east1.run.app/health",
-    # replicate-render 目前維持 min-instances=1（常駐，不會冷啟動）。
-    # 這裡打它只是順便確認它還活著，不是為了暖機。
+    # replicate-render 從 2026-09-09 起也是 min-instances=0（常駐一台每月約 NT$1,700，
+    # 而它一週只收 9,131 次請求，錢多數花在沒人用的時候）。所以它現在**也會冷啟動**，
+    # 這一行不再只是探活，是真的要暖它。
     "https://replicate-render-258021445391.asia-east1.run.app/health"
 )
 

@@ -137,6 +137,10 @@
 !tools/setup_training_task.ps1
 # 部署腳本共用的錯誤診斷。三支部署腳本都 dot-source 它，少了它們連解析都過不了。
 !tools/deploy_helpers.ps1
+# Demo 當天的規模切換。平時是省錢設定（min-instances=0、臉部服務 2 vCPU），
+# Demo 要七台同時，兩組值差很多而且必須成套改——留在某個人的終端機歷史裡，
+# 換人操作或隔一段時間就會漏掉其中一項。
+!tools/demo_scale.ps1
 # training/ 跟 tools/ 一樣是原始碼，不是產物，所以整個資料夾的 .py 都要進版本控制。
 #
 # 先前這裡沒有放行，而這份 .gitignore 是「* 全擋」的白名單，於是 training/ 底下只有
