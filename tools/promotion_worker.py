@@ -437,8 +437,14 @@ def process(promotion: dict, project: str, dry_run: bool, prepare_only: bool = F
     # 所以只記一行，不讓它把一次成功的換上線變成失敗。
     if not prepare_only:
         try:
-            publish_live_model_metrics(project, LIVE_DIR)
-            print("  已更新後台的線上比較基準。")
+            # 版本／請求／批次一起寫進去，後台才講得出「線上是哪一版、什麼時候上的」。
+            # 這幾個值就是上面剛寫進 promotion 文件的那一組，來源是 ledger，
+            # 也就是 promote_model 真的做完之後留下的紀錄，不是這裡推測出來的。
+            publish_live_model_metrics(project, LIVE_DIR,
+                                       version=entry.get("version"),
+                                       promotion_id=promotion_id,
+                                       run_id=run_id)
+            print(f"  已更新後台的線上比較基準（版本 {entry.get('version')}）。")
         except Exception as exc:  # noqa: BLE001
             print(f"  ! 線上比較基準沒更新（{exc}）。模型已上線，但後台仍會拿舊基準比較。")
 

@@ -139,3 +139,41 @@ class TestLiveMetricsPublishing:
         assert written["doc_id"] == "current"
         assert written["payload"]["source"] == "promotion"
         assert written["payload"]["parts"]["eye_shape"]["valCount"] == 169
+
+    def _publish(self, tmp_path, monkeypatch, **kwargs):
+        import training_run_store as store
+
+        written = {}
+        monkeypatch.setattr(store, "patch_document",
+                            lambda project, collection, doc_id, payload: written.update(payload))
+        (tmp_path / "eye_shape_classes.json").write_text(
+            json.dumps({"classes": ["a", "b"]}), encoding="utf-8")
+        (tmp_path / "eye_shape_metrics.json").write_text(
+            json.dumps(_metrics(0.688, [0.7, 0.68], [90, 79], 169)), encoding="utf-8")
+        store.publish_live_model_metrics("decorate-me", tmp_path, **kwargs)
+        return written
+
+    def test_publish_records_where_the_numbers_came_from(self, tmp_path, monkeypatch):
+        """光有分數證明不了它是線上的。
+
+        原本只寫分數，後台於是有正確的數字卻講不出「這是哪一版換上去的」，只能在
+        標題掛一句「不代表已上線」自保——而那句話會讓看的人以為數字不可信，實際上
+        它就是線上的。少的不是資料，是出處。
+        """
+        written = self._publish(tmp_path, monkeypatch, version="20260909_brow",
+                                promotion_id="PM-7c3eed1295cb2b81", run_id="TR-b673609456f9cb05")
+        assert written["version"] == "20260909_brow"
+        assert written["promotionId"] == "PM-7c3eed1295cb2b81"
+        assert written["runId"] == "TR-b673609456f9cb05"
+
+    def test_publish_never_blanks_an_existing_version(self, tmp_path, monkeypatch):
+        """沒帶版本時要**不寫這個欄位**，不是寫成 None。
+
+        patch_document 是合併寫入，塞 None 會把上一次的正確版本蓋掉。畫面於是從
+        「不知道版本」變成「明確顯示沒有版本」——後者看起來像是查證過的結論。
+        """
+        written = self._publish(tmp_path, monkeypatch)
+        assert "version" not in written
+        assert "promotionId" not in written
+        assert "runId" not in written
+        assert written["source"] == "promotion"

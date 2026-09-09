@@ -520,7 +520,8 @@ def read_model_metrics(model_dir: Path) -> dict:
     return result
 
 
-def publish_live_model_metrics(project: str, model_dir: Path) -> dict:
+def publish_live_model_metrics(project: str, model_dir: Path, version: str | None = None,
+                               promotion_id: str | None = None, run_id: str | None = None) -> dict:
     """把「線上目錄現在實際是什麼分數」寫成 face_model_metrics/current。
 
     Gateway 已經優先讀這一份，讀不到才退回「往回找最後一個回報該部位的歷史批次」。
@@ -530,12 +531,29 @@ def publish_live_model_metrics(project: str, model_dir: Path) -> dict:
 
     所以換上線一成功就把這份寫回去。這只能在訓練機上做：線上模型檔在它的檔案系統，
     Cloud Run 讀不到。
+
+    `version` / `promotion_id` / `run_id` 是這份分數的出處
+    -------------------------------------------------------
+    原本只寫分數，沒寫「這是哪一版換上去的」。後台於是有正確的數字卻證明不了它是
+    線上的，只能在標題掛一句「不代表已上線」自保——而那句話會讓看的人以為數字不可信，
+    實際上它就是線上的。少的不是資料，是出處。
+
+    帶上版本之後，標題可以講完整的一句話：「線上模型 20260909_brow，09/09 09:50 上線」。
+    被問到「你確定線上是這一版嗎」時，指得出版本號、時間與那一筆換上線請求。
+
+    三個都是選填：舊的呼叫端（測試、手動修補）不帶也能用，只是後台顯示不出出處。
     """
     metrics = read_model_metrics(model_dir)
-    patch_document(project, METRICS_COLLECTION, "current", {
+    document = {
         **metrics,
         "model": metrics.get("architecture", "ConvNeXt-Tiny"),
         "updatedAt": now_iso(),
         "source": "promotion",
-    })
+    }
+    # 只寫有值的欄位。寫進 None 會把上一次的正確版本蓋成空的——那比沒有欄位更糟，
+    # 因為畫面會從「不知道版本」變成「明確顯示沒有版本」。
+    for key, value in (("version", version), ("promotionId", promotion_id), ("runId", run_id)):
+        if value:
+            document[key] = str(value)
+    patch_document(project, METRICS_COLLECTION, "current", document)
     return metrics

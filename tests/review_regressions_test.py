@@ -402,3 +402,84 @@ def test_pro_session_rotation_survives_an_upstream_timeout(monkeypatch):
     apply(Mock())
     seal.assert_called_once_with("session=rotated")
     set_cookie.assert_called_once()
+
+
+def _live_metrics():
+    return {"model": "ConvNeXt-Tiny", "source": "promotion", "parts": {
+        "face_shape": {"macroAccuracy": 0.534},
+        "brow_shape": {"macroAccuracy": 0.592},
+    }}
+
+
+def _queue(run_id, part_key, macro, promotion_id, created_at, status="queued", part_zh="臉型"):
+    job_store.create(gateway.FACE_TRAINING_RUNS_COL, run_id, {
+        "runId": run_id, "status": "done",
+        "modelAfter": {"parts": {part_key: {"macroAccuracy": macro}}}})
+    job_store.create(gateway.FACE_MODEL_PROMOTIONS_COL, promotion_id, {
+        "promotionId": promotion_id, "runId": run_id, "parts": [part_zh],
+        "status": status, "createdAt": created_at})
+
+
+def test_queued_promotions_move_the_comparison_baseline(memory):
+    """按下換上線時要比的，是佇列跑完之後的分數，不是此刻線上的。
+
+    換上線是排隊執行的。佇列裡已經有一筆要把臉型換成 61.0% 的話，現在登記的那一筆
+    上線時前一手就是 61.0%，不是線上的 53.4%。拿線上的去比，畫面會說有進步，
+    實際跑起來卻是退步——然後被 promote_model 用真實數字擋回來。
+    """
+    live = _live_metrics()
+    _queue("TR-queued", "face_shape", 0.61, "PM-1", "2026-09-09T14:23:48+00:00")
+
+    baseline, pending = asyncio.run(gateway._effective_model_baseline(live, []))
+
+    assert baseline["parts"]["face_shape"]["macroAccuracy"] == 0.61
+    # 佇列沒碰到的部位維持線上的數字，不能整份被換掉。
+    assert baseline["parts"]["brow_shape"]["macroAccuracy"] == 0.592
+    # 傳進去的那份是「線上此刻」，標題還要用它，不可以被就地改掉。
+    assert live["parts"]["face_shape"]["macroAccuracy"] == 0.534
+    assert [p["promotionId"] for p in pending] == ["PM-1"]
+
+
+def test_last_queued_promotion_wins_for_the_same_part(memory):
+    """同一個部位排了兩筆時，基準是**最後一筆**，不是分數最高的那筆。
+
+    worker 照建立順序做，後做的覆蓋先做的。所以「兩筆都比現在高」不代表兩筆都算數，
+    最終線上會是最後執行的那一版——即使它比前一筆低。
+    """
+    _queue("TR-first", "face_shape", 0.70, "PM-1", "2026-09-09T14:23:22+00:00")
+    _queue("TR-second", "face_shape", 0.58, "PM-2", "2026-09-09T14:23:48+00:00")
+
+    baseline, pending = asyncio.run(gateway._effective_model_baseline(_live_metrics(), []))
+
+    assert baseline["parts"]["face_shape"]["macroAccuracy"] == 0.58
+    assert [p["promotionId"] for p in pending] == ["PM-1", "PM-2"]
+
+
+@pytest.mark.parametrize("status", ["deployed", "failed", "prepared"])
+def test_finished_promotions_do_not_move_the_baseline(memory, status):
+    """做完的不算。deployed 的結果已經反映在線上分數裡，再套一次是重複計算；
+    failed 的根本沒上線。只有還沒做完的才會改變下一筆要比的對象。"""
+    _queue("TR-done", "face_shape", 0.61, "PM-1", "2026-09-09T10:00:00+00:00", status=status)
+
+    baseline, pending = asyncio.run(gateway._effective_model_baseline(_live_metrics(), []))
+
+    assert baseline["parts"]["face_shape"]["macroAccuracy"] == 0.534
+    assert pending == []
+
+
+def test_baseline_survives_a_queue_entry_whose_run_is_missing(memory):
+    """佇列裡的批次讀不到時，跳過那一筆就好，不能把其他筆的修正一起丟掉。
+
+    批次不一定落在畫面取回的那幾筆裡（預設只取 5 筆），補讀也可能失敗。
+    退回「完全不修正」等於悄悄回到舊行為，而畫面上看不出差別。
+    """
+    job_store.create(gateway.FACE_MODEL_PROMOTIONS_COL, "PM-ghost", {
+        "promotionId": "PM-ghost", "runId": "TR-not-there", "parts": ["眉型"],
+        "status": "running", "createdAt": "2026-09-09T14:00:00+00:00"})
+    _queue("TR-real", "face_shape", 0.61, "PM-real", "2026-09-09T14:23:48+00:00")
+
+    baseline, pending = asyncio.run(gateway._effective_model_baseline(_live_metrics(), []))
+
+    assert baseline["parts"]["face_shape"]["macroAccuracy"] == 0.61
+    assert baseline["parts"]["brow_shape"]["macroAccuracy"] == 0.592
+    assert len(pending) == 2

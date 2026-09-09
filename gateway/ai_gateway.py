@@ -88,6 +88,16 @@ DEPLOYABLE_SERVICES = ("face", "gateway", "render")
 PROMOTABLE_PARTS = ("臉型", "眉型", "眼型", "鼻型", "唇型")
 FACE_MODEL_METRICS_COL = "face_model_metrics"
 
+# 中文部位名 → 模型檔的部位代號。換上線請求記的是中文（後台、回饋表、訓練報告都用
+# 中文），但分數是以代號為鍵存在 face_model_metrics 的 parts 底下，要比較就得換算。
+# 這份對應在 training/import_feedback_samples.py 與 tools/apply_review.py 也各有一份；
+# Gateway 匯入不到那兩個模組（容器裡的檔案是攤平複製的，training/ 不在裡面），
+# 所以這裡只能再寫一次。改任何一份都要三份一起改。
+PART_MODEL_KEYS = {
+    "臉型": "face_shape", "眉型": "brow_shape", "眼型": "eye_shape",
+    "鼻型": "nose_shape", "唇型": "lip_shape",
+}
+
 # 「這筆還沒做完」的狀態。換模型與部署共用同一組，因為兩邊的生命週期一樣：
 #   queued → claimed → running → deployed / prepared / failed
 #
@@ -3345,6 +3355,65 @@ async def admin_deployments(request: Request):
     return {"deployments": rows, "deployableServices": list(DEPLOYABLE_SERVICES)}
 
 
+async def _effective_model_baseline(current: dict, runs: list) -> tuple[dict, list]:
+    """把佇列裡還沒做完的換上線套到線上分數上，算出「按下去時實際要比的基準」。
+
+    為什麼不能只跟線上比
+    ----------------------
+    換上線是排隊執行的。佇列裡若已經有一筆要把臉型換成 A，那麼此刻再登記的那一筆
+    上線時，臉型的前一手就是 A，不是現在線上的分數。拿線上的去比，畫面會說「+5.2」，
+    實際跑起來卻是「-1.4」——然後被 promote_model 用真實數字擋回來。
+
+    這跟 publish_live_model_metrics 修掉的是同一種錯誤，只是換一個來源：那次是基準
+    停在換模型之前，這次是基準看不見還沒執行的那幾筆。兩者的症狀一模一樣——按鈕在
+    被按之前就已經講錯了。
+
+    同一個部位被多筆佇列覆蓋時，最後一筆贏，因為 worker 就是照建立順序做的。
+
+    回傳 (套用後的基準, 待執行的請求清單)。讀不到佇列時回原本的線上分數並附空清單：
+    少了這層修正只是退回舊行為，不該讓整頁掛掉。
+    """
+    baseline = json.loads(json.dumps(current)) if current else {}
+    try:
+        promotions = await asyncio.to_thread(
+            job_store.all_jobs, FACE_MODEL_PROMOTIONS_COL, limit=50,
+            order_by="createdAt", descending=False)
+    except Exception:
+        logging.exception("讀取換上線佇列失敗，比較基準退回線上分數")
+        return baseline, []
+
+    pending = [p for p in promotions if str(p.get("status") or "") in IN_FLIGHT_STATUSES]
+    if not pending:
+        return baseline, []
+
+    known_runs = {str(r.get("runId") or ""): r for r in runs}
+    parts_map = dict(baseline.get("parts") or {})
+    for promo in pending:
+        run_id = str(promo.get("runId") or "")
+        run = known_runs.get(run_id)
+        if run is None:
+            # 佇列裡的批次不一定落在剛才取回的那幾筆裡（預設只取 5 筆）。
+            # 補讀一次；讀不到就跳過這一筆，不要讓它把其他筆的修正也一起丟掉。
+            try:
+                run = await asyncio.to_thread(job_store.get, FACE_TRAINING_RUNS_COL, run_id)
+            except Exception:
+                logging.exception("讀取佇列批次失敗 run=%s", run_id)
+                run = None
+            known_runs[run_id] = run
+        after_parts = ((run or {}).get("modelAfter") or {}).get("parts") or {}
+        for part in (promo.get("parts") or []):
+            key = PART_MODEL_KEYS.get(str(part))
+            if key and isinstance(after_parts.get(key), dict):
+                parts_map[key] = after_parts[key]
+    if parts_map:
+        baseline["parts"] = parts_map
+    baseline["source"] = "live+queued"
+    return baseline, [
+        {k: promo.get(k) for k in ("promotionId", "runId", "parts", "status", "createdAt")}
+        for promo in pending
+    ]
+
+
 @app.get("/admin-api/face-training/runs")
 async def admin_face_training_runs(request: Request):
     """回傳最近五次訓練與最新 ConvNeXt 指標，供後台顯示可驗證的狀態。"""
@@ -3383,6 +3452,8 @@ async def admin_face_training_runs(request: Request):
                 current = {"model": run.get("model", "ConvNeXt-Tiny"), **(run.get("modelAfter") or {})}
                 break
 
+    effective, pending_promotions = await _effective_model_baseline(current, runs)
+
     # 訓練機狀態。挑最近回報的那一台就夠了——實務上只有一台，而「最近一次有人回報
     # 是什麼時候」正是畫面要回答的問題。讀不到不算錯誤：worker 從來沒跑過的時候
     # 這個集合根本不存在，那本身就是有意義的答案（沒有訓練機）。
@@ -3398,7 +3469,12 @@ async def admin_face_training_runs(request: Request):
     return JSONResponse(content={
         "status": "ok", "model": "ConvNeXt-Tiny", "runs": runs,
         "recentRuns": runs, "latest": runs[0] if runs else None,
+        # currentMetrics 是**線上此刻**的分數，effectiveMetrics 是**下一筆換上線會比到**
+        # 的基準（線上疊上佇列）。兩個都給：標題要顯示線上是什麼，而進步幅度要用
+        # effective 去算，混用其中一個都會講錯話。佇列是空的時候兩者相同。
         "currentMetrics": current or None,
+        "effectiveMetrics": effective or None,
+        "pendingPromotions": pending_promotions,
         "worker": worker,
     })
 
