@@ -1,6 +1,6 @@
 {
-  "version": "20260904_eye_lip",
-  "gcsPrefix": "gs://decorate-me-models/20260904_eye_lip",
+  "version": "20260909_brow",
+  "gcsPrefix": "gs://decorate-me-models/20260909_brow",
   "files": [
     {
       "path": "models/basic_features_roi/face_shape.onnx",
@@ -12,7 +12,7 @@
       "path": "models/basic_features_roi/brow_shape.onnx",
       "object": "basic_features_roi/brow_shape.onnx",
       "size": 111377337,
-      "sha256": "d1d210039f869332d0b9d99c5e76a4943c1592441c178bb8402192f45b9bee5b"
+      "sha256": "1f711eab9089fa7cc9afd05816417668139222f5f825cf2608035191975abe9a"
     },
     {
       "path": "models/basic_features_roi/eye_shape.onnx",
