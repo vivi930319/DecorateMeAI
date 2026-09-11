@@ -4758,3 +4758,46 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     .home-hero { grid-template-columns:minmax(0,1fr) 30%; }
     .hh-title { font-size:clamp(24px,6.6vw,32px); }
 }
+
+/* ═══ 色彩驗證契約的色塊與警語（2026-09-11）═══
+   規格：《前端必接：色彩驗證欄位、色盤商品、圖片不符與三色階現況》
+
+   這一區的設計目標只有一個：**讓「已驗證」和「僅示意」在視覺上分得出來**。
+   上架 3,981 筆商品裡只有 511 筆通過官方數值驗證，其餘照樣有 hex。
+   如果兩者畫成一樣的色塊，使用者會把爬來的估計值當成官方色號抄去店裡對色。
+
+   ⚠️ 這裡用到的每個變數都先確認過 :root 有定義（--line、--line-gold、--mid、
+   --ink-2、--glass）。CSS 不會為打錯的變數名報錯，只會安靜地不上色——
+   這一份檔案上面的 .shade-rec 就踩過一次（用了不存在的 --paper-soft）。 */
+
+/* 單色色塊。已驗證：實心、有邊框，看起來是個確定的顏色。 */
+.sw-single { display:inline-block; width:22px; height:22px; border-radius:50%;
+    border:1px solid var(--line); vertical-align:middle; }
+
+/* 僅示意：降低不透明度並改成虛線邊框。
+   兩個訊號一起用是刻意的——只降透明度會被當成「淺色商品」，
+   只改邊框在小尺寸下看不出來。 */
+.sw-muted { opacity:.55; border-style:dashed; }
+
+/* 多色盤。官方有幾格就畫幾格，不可壓成一個色塊。 */
+.sw-palette { display:inline-flex; gap:4px; vertical-align:middle; flex-wrap:wrap; }
+.sw-cell { display:inline-block; width:20px; height:20px; border-radius:4px;
+    border:1px solid var(--line); }
+/* 官方沒公布色值的格子。顯示格名而不是留白：留白會被當成載入失敗，
+   補一個預設色則是憑空發明官方沒給的顏色。 */
+.sw-cell-pending { width:auto; min-width:20px; padding:2px 6px; border-style:dashed;
+    font-size:10px; line-height:16px; color:var(--mid); white-space:nowrap; }
+
+/* 透明／無色商品。不畫色塊——畫了會變成一塊白色，而白色是一個很具體的顏色。 */
+.sw-none { display:inline-block; padding:2px 8px; border:1px dashed var(--line);
+    border-radius:10px; font-size:11px; color:var(--mid); vertical-align:middle; }
+
+/* 色彩警語。文字由後端依情境給（透明與完整色盤回 null），前端只負責排版。 */
+.sw-warn { margin:6px 0 0; font-size:11.5px; line-height:1.7; color:var(--mid); }
+
+/* 圖片所屬色號與商品不符時的說明。放在圖片下方而不是蓋在圖上：
+   蓋上去會擋住那張（雖然不對但仍有參考價值的）官方色票圖。 */
+.pd-img.is-mismatch { position:relative; }
+.pd-img-warn { margin:8px 0 0; padding:6px 10px; border:1px dashed var(--line-gold);
+    border-radius:8px; background:var(--glass);
+    font-size:11.5px; line-height:1.7; color:var(--mid); }

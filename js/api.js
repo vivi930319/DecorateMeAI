@@ -1278,6 +1278,35 @@ const Api = {
             foundationMatchStatus: (product.foundationMatchStatus
                 && typeof product.foundationMatchStatus === 'object')
                 ? product.foundationMatchStatus : null,
+
+            // ── 色彩驗證契約（《前端必接：色彩驗證欄位…》2026-09-11）──────────────
+            //
+            // 這一組必須原樣帶下來，不要在這裡下判斷。判斷集中在 router.js 的
+            // colorContract()，因為同一份規則要同時服務商品卡、詳情頁與推薦卡；
+            // 分兩個地方各判一次，三個畫面就會出現三種說法。
+            //
+            // 最重要的一條：**`hex` 有值不代表可信**。3,981 筆上架商品裡只有 511 筆
+            // 通過官方數值驗證，其餘 3,313 筆照樣有 hex（爬來的估計值）。
+            // 真正的訊號是 `colorMatchReady`，以及 `lab` 是不是 null。
+            colorRepresentation: String(product.colorRepresentation || '') || null,
+            colorVerificationStatus: String(product.colorVerificationStatus || '') || null,
+            // 缺欄位時一律當成「不可用於比色」。舊版商品服務沒有這個欄位，
+            // 預設 true 會讓那些商品全部被當成已驗證——寧可少標示，不要誤標。
+            colorMatchReady: product.colorMatchReady === true,
+            colorEstimated: product.colorEstimated === true,
+            colorWarning: String(product.colorWarning || '') || null,
+            lab: Array.isArray(product.lab) ? product.lab.slice(0, 3) : null,
+            // 多色盤（四色眼影這類）。hex 會是 null，顏色在這裡。
+            paletteColors: Array.isArray(product.paletteColors) ? product.paletteColors : null,
+            // 每一格都要有可用色值才算完成（後端 2026-09-11 修正過這個判定）。
+            // 缺欄位時當成未完成：標「資料尚未齊全」的代價小於謊報齊全。
+            paletteComplete: product.paletteComplete === true,
+            paletteImageUrl: String(product.paletteImageUrl || '') || '',
+            // 圖片所屬色號與商品不符。只有 'mismatch' 與 'not_revalidated' 兩種值，
+            // 後者是正常情況（尚未重新核對），**不可因此隱藏商品**。
+            imageIdentityStatus: String(product.imageIdentityStatus || '') || null,
+            imageWarning: String(product.imageWarning || '') || null,
+
             apiType, // 原始 type slug（例如 lipsticks），呼叫 /api/product/{type}/{id} 這類單品 API 要用
             cat,
             name: product.name || '推薦商品',
@@ -3292,7 +3321,12 @@ const AnalysisPackage = {
             id: `AN-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             mode,
             client: 'web',
-            userId: null,
+            // userId 拿掉了。它從頭到尾就是寫死的 null：沒有任何地方填值、沒有任何地方
+            // 讀取，送給推薦端的 body 是白名單重組（見 recommendProducts）也不含它。
+            // 一個永遠是 null 的欄位不會讓人以為身分沒帶到，只會讓人以為身分帶到了但是空的。
+            //
+            // 使用者身分實際上走 HTTP 標頭 X-User-ID，不在這包資料裡。要改回由資料包
+            // 攜帶身分的話，先跟推薦端談欄位名，不要直接把這行加回來。
             status,
             createdAt: now,
             updatedAt: now,

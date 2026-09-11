@@ -31,7 +31,10 @@ const cut = (s, sig) => {
 const sb = { Router: {}, escapeHtml: (s) => String(s), console,
              AnalysisDraft: { load: () => null } };
 vm.createContext(sb);
-vm.runInContext(cut(src, 'function hasMatch(node) {') + '\n'
+vm.runInContext(cut(src, 'function colorContract(p) {') + '\n'
+  // colorContract：色彩驗證契約 2026-09-11。未驗證的顏色不得出現膚色／色差文案，
+  // 而 shadeRecommendationHtml 與 recommendationPanelHtml 都用它判斷。
+    + cut(src, 'function hasMatch(node) {') + '\n'
   // 色差與門檻兩句由 foundationSkinLines 統一產生，推薦面板與色號比較區共用；
   // 抽了用它的函式沒抽它，測試會在執行時炸 ReferenceError。
     + cut(src, 'function foundationSkinLines(skin) {') + '\n'
@@ -156,6 +159,9 @@ const closestProduct = {
     // 是那個限制加入之前寫的，沒有 type 就會被判成非粉底，色差入口整個消失——
     // 而失敗的樣子是「入口不見了」，看起來像入口壞掉，不像資料少一個欄位。
     type: 'foundations',
+    // 同一個陷阱又發生一次，2026-09-11：色彩驗證契約規定顏色未經官方數值驗證
+    // 就不得顯示色差與膚色文案，所以 colorMatchReady 也成了這組檢查的前提。
+    colorMatchReady: true,
     showMatchPercent: false,
     foundationMatchStatus: { code: 'FOUNDATION_CLOSEST_AVAILABLE', status: 'closest_available',
                              rawSkinDeltaE: 2.54,
@@ -240,6 +246,9 @@ console.log('=== 6. 詳情頁不得把同一組背書印兩次 ===');
 // 同一件事講兩次不會更有說服力，只會讓人以為那是兩個各自算出來的判斷。
 const mergedProduct = {
   id: 'api-foundations-968',
+  // 這組檢查量的是「膚色結論句與門檻句各只出現一次」，所以顏色必須是可比色的，
+  // 否則那兩句會被色彩驗證閘門擋掉、變成出現 0 次（色彩驗證契約 2026-09-11 §2）。
+  colorMatchReady: true,
   recommendationPresentation: {
     systemLabel: '根據系統演算法推薦', matchPercent: 84,
     headline: '很適合你的整體妝容', suitedTraits: ['春季', '白皙自然色', '千金妝'],

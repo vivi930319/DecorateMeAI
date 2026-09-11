@@ -37,7 +37,13 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 vm.runInContext(
-  cut('function recommendationCardHtml(p) {') + '\n'
+  // colorContract：recommendationPanelHtml 用它決定能不能講膚色／色差文案
+  // （色彩驗證契約 2026-09-11 §2）。同上——抽了用它的函式沒抽它就會炸。
+  cut('function colorContract(p) {') + '\n'
+  // isFoundationProduct：shadeRecommendationHtml 在沒有色階時要判斷是不是粉底，
+  // 只有粉底顯示「目前無法提供色號比較」，眼影腮紅沒有色階這個概念。
+  + cut('function isFoundationProduct(p) {') + '\n'
+  + cut('function recommendationCardHtml(p) {') + '\n'
   // 推薦標籤由 recLabel 統一產生（契約 2026-08-28 §5 改了措辭）。
   // 抽了用它的函式沒抽它，測試會在執行時炸 ReferenceError。
   + cut('function recLabel(raw) {') + '\n'

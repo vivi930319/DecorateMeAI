@@ -948,6 +948,91 @@ function recLabel(raw) {
     return text;
 }
 
+// ═══ 色彩驗證契約（《前端必接：色彩驗證欄位、色盤商品、圖片不符與三色階現況》2026-09-11）═══
+//
+// 一句話：**看到 hex 不能就當試色依據**。上架 3,981 筆裡只有 511 筆通過官方數值驗證，
+// 其餘 3,313 筆照樣有 hex（爬來的估計值）。唯一能拿來做色彩比對的判斷依據是
+// `colorMatchReady`，而 `lab === null` 是它的具體訊號。
+//
+// 為什麼集中在這裡判：同一份規則要同時服務商品卡、詳情頁色塊與推薦卡的配對度文案。
+// 三個畫面各判一次，就會出現三種說法，而使用者不知道該信哪一個——這跟
+// recommendationCardHtml 上面那段「技術分數翻成人話只能有一個地方做」是同一個理由。
+function colorContract(p) {
+    const representation = String(p?.colorRepresentation || 'single');
+    const ready = p?.colorMatchReady === true;
+    const palette = Array.isArray(p?.paletteColors) ? p.paletteColors : null;
+    return {
+        representation,
+        ready,                                   // 可否做色彩比對／標「官方色號」
+        estimated: p?.colorEstimated === true,   // 有 hex 但不是官方驗證值
+        warning: String(p?.colorWarning || '') || '',
+        hex: String(p?.hex || '') || '',
+        isPalette: representation === 'palette' && Array.isArray(palette),
+        isTransparent: representation === 'transparent',
+        // rejected_synthetic：顯示商品，但不顯示任何顏色（那個 hex 是合成出來的，不是官方值）
+        isRejected: String(p?.colorVerificationStatus || '') === 'rejected_synthetic',
+        palette: palette || [],
+        paletteComplete: p?.paletteComplete === true,
+        paletteImageUrl: String(p?.paletteImageUrl || '') || '',
+    };
+}
+
+// 色塊。四種呈現方式互斥，不可壓成同一個色塊。
+function productSwatchHtml(p) {
+    const c = colorContract(p);
+    // 透明／無色商品不畫色塊。畫了會變成一塊白色，而白色是一個看起來很具體的顏色。
+    if (c.isTransparent) return '<span class="sw-none">透明／無色</span>';
+    // 合成色被後端退回，就不是官方值，也不該拿來示意。
+    if (c.isRejected) return '';
+    if (c.isPalette) {
+        // 官方有幾格就畫幾格。用單一色塊代表整盤會讓四色眼影看起來只有一個顏色。
+        const cells = c.palette.map((cell, i) => {
+            const hex = String(cell?.hex || '');
+            const name = String(cell?.name || '');
+            // data-pos 用後端給的 position（1 起算），缺的話退回陣列順序。
+            // 它不只是給測試數格子用——盤面上的格子要能對回官方第幾格，
+            // 否則使用者說「第三格顏色不對」時沒有東西可以對照。
+            const pos = Number(cell?.position) || (i + 1);
+            return hex
+                ? `<span class="sw-cell" data-pos="${pos}" style="background:${escapeHtml(hex)}" title="${escapeHtml(name)}"></span>`
+                // 沒有官方色值時顯示格名＋待核對。留空白會被當成載入失敗，
+                // 補預設色則是憑空發明一個官方沒公布的顏色。
+                : `<span class="sw-cell sw-cell-pending" data-pos="${pos}" title="${escapeHtml(name)}">待官方核對</span>`;
+        }).join('');
+        return `<span class="sw-palette">${cells}</span>`;
+    }
+    if (!c.hex) return '';
+    // 未驗證的色塊只能當視覺示意，所以加 muted；文案那邊也不得寫「官方色號」。
+    return `<span class="sw-single${c.ready ? '' : ' sw-muted'}" style="background:${escapeHtml(c.hex)}"></span>`;
+}
+
+// 色彩警語。後端 2026-09-11 起已依情境給不同文案（透明與完整色盤回 null），
+// 所以這裡可以直接印，不需要前端自己依 representation 拼。
+function productColorWarningHtml(p) {
+    const c = colorContract(p);
+    if (!c.warning) return '';
+    return `<p class="sw-warn">${escapeHtml(c.warning)}</p>`;
+}
+
+// 圖片。`imageUrl` 會是**空字串**而不是 null，所以不能只判 null。
+// `<img src="">` 會讓瀏覽器重新載入當前頁，這是空字串比 null 危險的地方。
+//
+// imageIdentityStatus 只有兩種值，不要把它們當成同一件事：
+//   'mismatch'        圖片所屬色號與商品不符 → 顯示 placeholder ＋ 警語
+//   'not_revalidated' 尚未重新核對，**正常情況** → 照常顯示，不可因此隱藏商品
+function productImageState(p) {
+    const src = String(p?.img || p?.imageUrl || '');
+    const mismatch = String(p?.imageIdentityStatus || '') === 'mismatch';
+    return {
+        // 色號不符時不要顯示那張錯的圖；沒有圖時也不要給空字串。
+        src: (mismatch || !src) ? '' : src,
+        mismatch,
+        warning: String(p?.imageWarning || '') || '',
+        // 色盤商品即使 imageUrl 是空的也會有官方色票圖，可以直接當盤面圖用。
+        fallback: String(p?.paletteImageUrl || '') || '',
+    };
+}
+
 // 唇彩可以顯示推薦契合度，但不能把推薦契合度誤畫成唇色色差；
 // 色差明細入口只允許粉底使用，避免使用者把綜合排序數字當成唇部 ΔE。
 function isLipProduct(p) {
@@ -1033,6 +1118,16 @@ function foundationSkinLines(skin) {
 function colorDiffInfo(p) {
     const kind = String(p?.apiType || p?.type || p?.category || p?.cat || '').trim().toLowerCase();
     if (!['foundations', 'foundation', 'base', '底妝'].includes(kind)) return null;
+    // 顏色沒通過官方數值驗證就不能講色差（色彩驗證契約 2026-09-11 §2）。
+    //
+    // 這一條擋的是**色彩主張**，不是整張推薦卡：`colorMatchReady: false` 的商品
+    // 照樣可以有「推薦契合度」，因為那是風格排序（styleRecommendationReady），
+    // 跟顏色無關。商品 1114 就是這個組合——displayReady: true、
+    // styleRecommendationReady: true、recommendationReady: false。
+    //
+    // 會落到這裡的原因是 lab 為 null：沒有 LAB 就算不出 ΔE，而後端若仍回了
+    // colorDifferenceExplanation，那個值的來源就是不可信的估計 hex。
+    if (!colorContract(p).ready) return null;
     const info = p?.recommendationPresentation?.colorDifferenceExplanation;
     if (!info || typeof info !== 'object') return null;
     // ⚠️ 不能用 truthy 判斷 value：色差 0 是「完全相同」，是最好的結果，
@@ -1146,14 +1241,22 @@ function recommendationPanelHtml(p) {
     const traits = Array.isArray(pr.suitedTraits) ? pr.suitedTraits.filter(Boolean).slice(0, 4) : [];
     // closest_available 不能沿用 matched／校正成功的膚色文案；它只顯示
     // foundationMatchStatus 的「資料庫目前最接近」說明。
-    const { matchWord, gate } = closestAvailable
+    // 顏色未經官方數值驗證時，連膚色文案一起擋掉（色彩驗證契約 2026-09-11 §2）。
+    // matchWord 的內容正是「此色號與您的膚色相近（色差 1.3）」這一類，而那個 1.3
+    // 是用不可信的估計 hex 算出來的——講出來比不講更糟。
+    const colorClaimAllowed = colorContract(p).ready;
+    const { matchWord, gate } = (closestAvailable || !colorClaimAllowed)
         ? { matchWord: '', gate: '' }
         : foundationSkinLines(p?.foundationSkinMatch);
     // 後端的 reasonTexts 常有一句就是「此色號與您的膚色相近（色差 1.3）」，
     // 而 matchWord 正要說同一件事。兩句並排讀起來像系統把同一個理由算了兩次，
     // 所以 matchWord 在場時濾掉講色差的那幾句，由 matchWord 統一說。
+    //
+    // 顏色不可比色時要濾得更徹底：matchWord 被擋掉了，但 reasonTexts 裡那幾句
+    // 仍然會講色差與膚色相近，那是同一個主張換一個出口。
     const reasons = backendReasons
         .filter(r => !(matchWord && String(r).includes('色差')))
+        .filter(r => colorClaimAllowed || !/色差|膚色相近|與您的膚色|與你膚色/.test(String(r)))
         .slice(0, 3);
 
     return `<section class="rec-panel">
@@ -1401,9 +1504,28 @@ function userSkinRow() {
 function shadeRecommendationHtml(p) {
     const sr = currentShadeRecommendation(p);
     // 沒有後端回傳的結構化色階就不畫，也不由 foundationSkinMatch、seriesId
-    // 或本機商品清單猜測。後端若要說明「沒有色階」，應在 shadeRecommendation
-    // 回傳 status/reasonText，前端只顯示該文字。
-    if (!sr || !sr.anchor) return '';
+    // 或本機商品清單猜測。
+    //
+    // 但「不畫」在粉底頁上是個壞答案：使用者看得到粉底推薦，卻完全沒有色號比較，
+    // 也沒有任何說明——他會以為畫面壞了。所以粉底改成顯示一句降級提示。
+    //
+    // `shadeRecommendation` 為 null 是**正常的降級狀態，不是錯誤**（色彩驗證契約
+    // 2026-09-11 §5），所以這裡只回一段靜態文字，不跳 error toast、不重試。
+    // 2026-09-11 當下的成因是 MAC 被降級成未驗證，而它是粉底的主推薦錨點，
+    // 於是沒有可比色的錨點；MAC 官方色票已補證，資料庫升級套用後會自行恢復，
+    // 契約與欄位名稱都不變，所以這段提示不需要跟著改。
+    //
+    // 非粉底維持原本的「不出現」——眼影腮紅本來就沒有色階這個概念，
+    // 對它們顯示「無法提供色號比較」是無中生有的壞消息。
+    if (!sr || !sr.anchor) {
+        if (!isFoundationProduct(p)) return '';
+        // 沿用既有的 .shade-rec / .shade-rec-empty 樣式，不要另造一組 class。
+        // `.shade-rec-empty` 本來就是為這個空狀態寫的（虛線框＋次要文字色），
+        // 只是從來沒有人接上去——在這之前色階為 null 是整塊不出現。
+        return `<div class="shade-rec"><div class="shade-rec-empty">
+            <p>目前無法提供色號比較，請至實體專櫃試色。</p>
+        </div></div>`;
+    }
     // 只在看的就是主推薦那件商品時顯示，否則會出現在不相干的商品頁上。
     const anchorId = String(sr.anchor.product?.id ?? '');
     if (anchorId && String(p?.id ?? '') !== anchorId) return '';
@@ -5375,10 +5497,12 @@ const PageInit = {
             // 色號不保證一致——在美妝情境下，一個看起來很篤定卻不保證正確的顏色，
             // 比沒有顏色更糟。
             //
-            // 欄位與轉換函式都留著（`Api.labToRgb` / `Api.labToHex` 仍在）：
-            // 等資料庫端把 `hex_primary` 補回來（見《給資料庫端_商品顏色資料遺失回報》），
-            // `p.hex` 一有值，色塊與色碼就會自動出現，這裡不必再改。
-            const swatchColor = p.hex || null;
+            // 欄位與轉換函式都留著（`Api.labToRgb` / `Api.labToHex` 仍在）。
+            //
+            // 但「`p.hex` 一有值色塊與色碼就自動出現」這個舊行為已經不對了：
+            // hex 補回來了（3,981 筆裡絕大多數都有），可是只有 511 筆通過官方數值
+            // 驗證。現在改看 colorMatchReady，由 productSwatchHtml 與 hexLabelText
+            // 決定要畫什麼、要不要標色碼。
             // 色名：資料庫的 shade_name 從頭到尾都是空的（`給資料庫端_商品資料現況與需求_2026-07-20.md`
             // §2.4 已經問過），但**色名一直都在商品名稱裡**——實測 100/100 筆都是
             // 「商品名 - 色名」的格式（例：「Za 午後花園柔霧唇膏 - 櫻桃陷阱」）。
@@ -5390,13 +5514,34 @@ const PageInit = {
                 return parts.length > 1 ? parts[parts.length - 1].trim() : '';
             })();
             const shadeName = String(p.shadeCode || p.shadeName || p.shade_name || '').trim() || shadeFromName;
-            // color 與 hexLabel 只會在商品端真的給了色碼時有值；沒有就只顯示色名。
+            // 色塊改由 productSwatchHtml 統一產生（色彩驗證契約 2026-09-11）。
+            //
+            // 原本是「`p.hex` 一有值就畫色塊並標色碼」，而那正是契約要禁止的事：
+            // 3,981 筆上架商品裡 3,313 筆有 hex 卻未經官方數值驗證，照舊寫法會把
+            // 那些估計值畫成看起來權威的色塊，還附上色碼。
+            //
+            // 四種情況由 productSwatchHtml 分開處理：已驗證／未驗證（調暗、僅示意）／
+            // 多色盤（畫 N 格）／透明（不畫色塊）。
+            const colorInfo = colorContract(p);
+            const swatchHtml = productSwatchHtml(p);
+            // 色碼只在通過官方驗證時顯示。未驗證的 hex 印出來會被當成官方色號，
+            // 而「可以抄下來去店裡對」正是它最危險的用法。
+            const hexLabelText = colorInfo.ready ? colorInfo.hex : '';
             const renderColorBox = (color, hexLabel, shade) => (color || shade)
                 ? `<div class="pd-color"><div class="pd-color-label">色號 <span>Shade</span></div><div class="pd-shades">`
-                  + (color ? `<span class="shade active" style="background:${escapeHtml(color)}" aria-label="商品色號"></span>` : '')
+                  + (color ? color : '')
                   + (shade ? `<span style="margin-left:${color ? '10px' : '0'};font-family:var(--cjk);font-size:13.5px;color:var(--ink-2);">${escapeHtml(shade)}</span>` : '')
                   + (hexLabel ? `<code style="margin-left:8px;font-size:12px;color:var(--mid);">${escapeHtml(hexLabel)}</code>` : '')
-                  + `</div></div>`
+                  + `</div>`
+                  // 警語接在色塊底下。後端 2026-09-11 起依情境回不同文案，透明商品與
+                  // 完整色盤回 null，所以這裡直接印就對，不需要前端自己挑文案。
+                  + productColorWarningHtml(p)
+                  // 色盤資料不齊時明確標示。paletteComplete 的判定後端已修正成
+                  // 「每一格都要有可用色值才算完成」——先前四格全是 null 的 CHANEL
+                  // 四色眼影會謊報 true。
+                  + (colorInfo.isPalette && !colorInfo.paletteComplete
+                      ? '<p class="sw-warn">色盤資料尚未齊全</p>' : '')
+                  + `</div>`
                 : '';
             // 「你的膚色」對照：把使用者自己量到的膚色放在商品旁邊，讓他自己比。
             //
@@ -5443,14 +5588,25 @@ const PageInit = {
                            <button class="pd-close" aria-label="關閉" data-back-cat="${escapeHtml(String(p.cat || ''))}">×</button>`}
                 </div>
                 <div class="pd-wrap">
-                    <!-- 詳情頁是唯一要看清楚商品的地方，用原圖；清單一律用 img 的縮圖版本。 -->
-                    <div class="pd-img">${phBox('', p.name, p.imgFull || p.img)}</div>
+                    <!-- 詳情頁是唯一要看清楚商品的地方，用原圖；清單一律用 img 的縮圖版本。
+                         圖片所屬色號與商品不符時不顯示那張圖（CHANEL 有整組色號都指向
+                         同一張 64 號圖），改顯示佔位與後端給的警語。色盤商品即使
+                         imageUrl 是空的也會有官方色票圖，拿它當主圖比留空白有用。 -->
+                    ${(() => {
+                        const im = productImageState(p);
+                        const src = im.src || (im.mismatch ? '' : im.fallback) || im.fallback;
+                        return `<div class="pd-img${im.mismatch ? ' is-mismatch' : ''}">`
+                            + phBox('', p.name, im.mismatch ? im.fallback : (p.imgFull || im.src))
+                            + (im.mismatch && im.warning
+                                ? `<p class="pd-img-warn">${escapeHtml(im.warning)}</p>` : '')
+                            + `</div>`;
+                    })()}
                     <div class="pd-info">
                         <div class="pd-en">${CAT_EN[p.cat]||'BEAUTY'}</div>
                         <div class="pd-name">${escapeHtml(p.name)}</div>
                         ${p.brand ? `<div class="pd-en">${escapeHtml(p.brand)}</div>` : ''}
                         <div class="pd-price-lg">${escapeHtml(p.price)}</div>
-                        <div id="pdColorBox">${renderColorBox(swatchColor, p.hex || '', shadeName)}${isFoundationProduct(p) ? renderSkinCompare() : ''}</div>
+                        <div id="pdColorBox">${renderColorBox(swatchHtml, hexLabelText, shadeName)}${isFoundationProduct(p) ? renderSkinCompare() : ''}</div>
                         <!-- 鄰近色號緊接在「色號」那一格底下。
                              先前它排在整頁最後、連「查看商品原頁」都在它上面——
                              使用者看著自己的色號時，最想知道的就是旁邊還有哪幾支，

@@ -26,7 +26,10 @@ const cut = (sig) => {
 const sandbox = { escapeHtml: (s) => String(s), console };
 vm.createContext(sandbox);
 vm.runInContext(
-    cut('function colorDiffInfo(p) {') + '\n'
+    // colorContract 是 colorDiffInfo 的新依賴（色彩驗證契約 2026-09-11）：
+    // 顏色未經官方數值驗證就不得顯示色差，而那個判斷在 colorContract 裡。
+    cut('function colorContract(p) {') + '\n'
+    + cut('function colorDiffInfo(p) {') + '\n'
     + cut('function colorDiffEntryHtml(p) {') + '\n'
     + 'globalThis.__info = colorDiffInfo; globalThis.__entry = colorDiffEntryHtml;', sandbox);
 const info = sandbox.__info, entry = sandbox.__entry;
@@ -39,7 +42,10 @@ const check = (name, cond, detail) => {
 // type 是必要的：colorDiffInfo 只對粉底回傳資料（色差只有粉底有意義），
 // 少了它整組檢查會因為「這不是粉底」而全部落空——而失敗的樣子是
 // 「入口不見了」，看起來像入口壞掉，不像測試資料少一個欄位。
-const make = (cde) => ({ id: 'p1', type: 'foundations',
+// colorMatchReady 同理，而且是同一種失敗：色彩驗證契約（2026-09-11）規定顏色未經
+// 官方數值驗證就不得顯示色差，所以它現在也是這組檢查的前提。少了它，整組又會變成
+// 「入口不見了」——上面那段註解講的就是這個陷阱，只是當時少的欄位是 type。
+const make = (cde) => ({ id: 'p1', type: 'foundations', colorMatchReady: true,
     recommendationPresentation: { colorDifferenceExplanation: cde } });
 
 console.log('');
