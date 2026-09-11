@@ -334,9 +334,32 @@ GUEST_QUOTA_SPEND_PATHS = {"face-basic": _patterns(r"v1/face/jobs/basic")}
 # 切換 PRODUCT_DATABASE_URL 之後要能從正式站確認「Gateway 指到的是哪一版、幾筆商品」。
 # 沒有它就只能靠 `api/products` 的 total 猜，而那個數字不會說服務版本。
 # 它只回服務自己的版本與統計，沒有任何會員或商品明細。
+# 商品 id 那一段。排除 `.` 與 `..`，否則 `api/products/../shade-matches` 這種寫法
+# 會配對成功，然後被組成 `{PRODUCT_DATABASE_URL}/api/products/../shade-matches`
+# 送出去——上游（或中間任何一層）把它正規化之後就變成 `/api/shade-matches`，
+# 等於用一條公開、不需登入的路徑去打白名單沒放行的端點。
+#
+# 這個洞在 2026-09-11 之前就存在於 shade-matches 那條（`[^/]+` 擋得住斜線但擋不住點），
+# 只是當時沒有人試。補商品詳情時兩條一起收緊。
+# 注意 lookahead 要同時擋「點在結尾」與「點後面接斜線」。只寫 `(?!\.\.?$)` 的話，
+# `api/products/../shade-matches` 仍然會通過——那一段的 `..` 後面接的是 `/`，不是結尾。
+PRODUCT_ID_SEG = r"(?!\.\.?(?:/|$))[^/]+"
 PUBLIC_PRODUCT_PATHS = _patterns(r"api/products", r"recommend-products",
-                                 r"api/products/[^/]+/shade-matches",
+                                 # 商品詳情。2026-09-11 補上：`/shade-matches` 穿得過、裸 id
+                                 # 穿不過，於是推薦卡片點進商品詳情一律 404（而且是 Gateway
+                                 # 自己的錯誤格式，不是上游缺商品）。上游本來就有這支，
+                                 # 漏的只是這條白名單。
+                                 rf"api/products/{PRODUCT_ID_SEG}",
+                                 rf"api/products/{PRODUCT_ID_SEG}/shade-matches",
                                  r"health")
+# 公開商品路徑裡，只有這些收 POST；其餘一律只收 GET。
+#
+# 方向很重要。原本的寫法是「列出哪些路徑只收 GET」，那等於**新增白名單路徑時預設開放
+# 寫入**——忘記補進那串列舉，POST 就會被轉發到商品服務，而這整條路徑是**不需要登入**的。
+# 2026-09-11 補 api/products/{id} 時就差點踩到。
+#
+# 改成「預設 GET，要寫入的明確列出來」之後，漏掉的後果是 405 被擋下，不是放行。
+PUBLIC_PRODUCT_POST_PATHS = frozenset({"recommend-products"})
 SAVED_LOOK_PATH_RE = re.compile(r"^api/members/([^/]+)/saved-looks(?:/([^/]+))?$")
 MEMBER_PATH_RE = re.compile(r"^api/members/([^/]+)$")
 MEMBER_SCOPE_RE = re.compile(r"^api/members/([^/]+)(?:/|$)")
@@ -3482,7 +3505,10 @@ async def admin_face_training_runs(request: Request):
 async def proxy_public_product_request(request: Request, path: str):
     if not PRODUCT_DATABASE_URL or not any(pattern.fullmatch(path) for pattern in PUBLIC_PRODUCT_PATHS):
         raise HTTPException(status_code=404, detail={"error": {"code": "NOT_FOUND", "message": "Route not found."}})
-    if ((path in ("api/products", "health") or path.endswith("/shade-matches")) and request.method != "GET")             or (path == "recommend-products" and request.method != "POST"):
+    # 預設只收 GET；要寫入的路徑必須明確列進 PUBLIC_PRODUCT_POST_PATHS。
+    # 這個方向是刻意的——見該常數的說明：這整條路徑不需要登入，所以漏列的後果
+    # 必須是「被擋下」而不是「被放行」。
+    if request.method != ("POST" if path in PUBLIC_PRODUCT_POST_PATHS else "GET"):
         raise HTTPException(status_code=405, detail={"error": {"code": "METHOD_NOT_ALLOWED", "message": "Method not allowed."}})
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:

@@ -2050,13 +2050,49 @@ class PublicProductPathTest(unittest.TestCase):
         self.assertFalse(self._allowed("api/products/a/b/shade-matches"))
         self.assertFalse(self._allowed("api/products/../admin/shade-matches"))
 
+    def test_id_segment_cannot_be_a_dot_segment(self):
+        """光擋斜線不夠——點也要擋。
+
+        `[^/]+` 擋得住 `a/b`，但 `..` 裡沒有斜線，所以 `api/products/../shade-matches`
+        配對成功，被組成 `{PRODUCT_DATABASE_URL}/api/products/../shade-matches` 送出去；
+        上游（或中間任何一層）正規化之後就是 `/api/shade-matches`，等於用一條公開、
+        不需登入的路徑去打白名單沒放行的端點。
+
+        lookahead 必須同時擋「點在結尾」與「點後面接斜線」：只寫 `(?!\\.\\.?$)` 的話，
+        `api/products/..` 擋住了，`api/products/../shade-matches` 還是會過。
+        """
+        self.assertFalse(self._allowed("api/products/.."))
+        self.assertFalse(self._allowed("api/products/."))
+        self.assertFalse(self._allowed("api/products/../shade-matches"))
+        self.assertFalse(self._allowed("api/products/./shade-matches"))
+
     def test_health_is_allowed_for_deploy_verification(self):
         # 切換 PRODUCT_DATABASE_URL 之後要能從正式站確認指到哪一版。
         # 沒有它就只能看 api/products 的 total 猜，而那個數字不會說服務版本。
         self.assertTrue(self._allowed("health"))
 
+    def test_product_detail_is_allowed(self):
+        """商品詳情。2026-09-11 補上——在那之前推薦卡片點進詳情一律失敗。
+
+        症狀正是這個類別的 docstring 在講的那種：`/shade-matches` 穿得過、裸 id 穿不過，
+        而 Gateway 回的 404 跟「上游沒有這個商品」長得一模一樣。商品端實測
+        `GET http://127.0.0.1:5000/api/products/1114` 回 200，是我們沒開。
+        """
+        self.assertTrue(self._allowed("api/products/902"))
+        self.assertTrue(self._allowed("api/products/foundations:1663"))
+
+    def test_public_product_paths_are_get_only_except_recommendation(self):
+        """公開商品路徑預設只收 GET，要寫入的必須明確列出。
+
+        原本的方法檢查是「列出哪些路徑只收 GET」，那個方向等於**新增白名單路徑時
+        預設開放寫入**——而這整條路徑不需要登入。補 api/products/{id} 時就差點
+        讓 `POST /product-api/api/products/902` 被轉發到商品服務。
+        """
+        self.assertEqual(gateway.PUBLIC_PRODUCT_POST_PATHS, frozenset({"recommend-products"}))
+        for path in ("api/products", "api/products/902", "api/products/902/shade-matches", "health"):
+            self.assertNotIn(path, gateway.PUBLIC_PRODUCT_POST_PATHS, path)
+
     def test_other_product_routes_stay_closed(self):
-        self.assertFalse(self._allowed("api/products/902"))
         self.assertFalse(self._allowed("api/crawler-staging/products"))
         self.assertFalse(self._allowed("api/admin/product-audit-logs"))
 
