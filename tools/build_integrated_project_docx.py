@@ -1059,7 +1059,7 @@ def add_system_data_flow_under_design(doc):
     new_body(doc, "這張表的資料來源是 `gateway/ai_gateway.py`、`face/Face_analyzer_BASIC.py`、`tests/ai_gateway_test.py` 與 `face/face_feedback.py`。其中 `JOB-012345abcdef` 和 `FB-JOB-1` 是測試中真的拿來驗證權限、回饋與訪客額度的 fixture；它們不是宣稱目前線上資料庫一定還留著的 production job。", elements)
 
     actual_model_table = new_table(doc, ["臉部模型／資料項目", "目前實際存在的值", "驗證方式"], [
-        ["analysisPackage 契約", "schemaVersion=2026-08-v2；mode=BASIC；client=web；status=completed；faceAnalysis 包含 faceShape、browShape、eyeShape、noseFront、lipShape；generativeText.provider=ollama；render.provider=replicate。", "直接對照 face/analysis_package.py 的 build_analysis_package() 與 normalize_face_analysis()。"],
+        ["analysisPackage 契約", "schemaVersion=2026-08-v2；mode=BASIC；client=web；status=completed；faceAnalysis 包含 faceShape、browShape、eyeShape、noseFront、lipShape；generativeText.provider=ollama；render.provider=replicate。", "直接對照 face/analysis_package.py：契約欄位見 reference_build_analysis_package()（參考實作，無呼叫端），線上正規化見 normalize_face_analysis()。"],
         ["BASIC job 儲存與生命週期", "collection=face_jobs_basic；timeoutSeconds=180；retentionSeconds=3600；maxCount=200；job 狀態包含 queued、processing、completed、failed。", "直接對照 face/Face_analyzer_BASIC.py 的常數、job_data 與 /health 回應。"],
         ["現行五官分類表", "臉型：鵝蛋臉、圓形臉、方形臉、長形臉、心形臉；眉型：一字眉、彎月眉、挑眉、落尾眉；眼型：桃杏眼、圓眼、鳳眼、下垂眼；鼻型：標準鼻、寬鼻；唇型：厚唇、薄唇、微笑唇、花瓣唇。", "對照 face/analysis_package.py 與 models/basic_features_roi/*_classes.json；模型輸出再轉成對應 code。"],
         ["最近模型 promotion 紀錄", "runId=TR-0f4d71078deb5828；version=20260904_brow_nose；at=2026-09-04T00:42:26；眉型 newMacro=0.531836；鼻型 newMacro=0.902661。", "對照 models/promotion_ledger.json；這是已寫入 ledger 的部署紀錄，不把它誇大成所有部位都重新換模。"],
