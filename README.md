@@ -77,6 +77,6 @@ flowchart TB
 
 - [`dev_makeup`](../../tree/dev_makeup) — 網頁前端
 - [`Isa`](../../tree/Isa) — 臉部分析與 AI 渲染後端
-- [`lavien`](../../tree/lavien) — 會員 / 商品資料庫
+- [`lavien`](../../tree/lavien) — 會員 / 商品資料庫/商品推薦演算法
 - [`Amy`](../../tree/Amy) — Ollama 文字建議服務
 - [`dev`](../../tree/dev) — iOS App
