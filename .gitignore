@@ -1,61 +1,31 @@
-# IDE
-.idea/
-*.iml
-*.ipr
-*.iws
+# 1. 隱藏機密環境變數 (超級重要！)
+Backend database/.env
 
-# Python
+# 2. 忽略虛擬環境資料夾
+../.venv/
+venv/
+env/
+
+# 3. 忽略 Python 自動產生的快取檔
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 
-# Virtual Environment
-venv/
-ENV/
-env/
-.venv/
-
-# Environment files
-.env
-.env.local
-*.env
-
-# Logs
-*.log
-logs/
-
-# OS
+# 4. 忽略 Mac 系統自動產生的隱藏檔 (既然你有用 Mac 開發，這個必加)
 .DS_Store
-Thumbs.db
 
-# Test outputs
-*.txt
-test_output.txt
-minimal_test_output.txt
-step_test.txt
+# 5. 忽略編輯器 (PyCharm / VSCode) 的設定檔
+.idea/
+.vscode/
 
-# Temporary files
-*.tmp
-*.swp
-*.swo
-*~
+# 6. 忽略資料庫檔案 (如果你之後有用到 SQLite 的話)
+*.sqlite3
+instance/
 
-# Uploads
-static/uploads/
+# 資料庫備份 dump（含會員個資，不可進版控）
+backups/
+*.dump
+
+# 商品圖片鏡像的本機轉檔快取（已發布到 Firebase Hosting）
+Backend database/product_image_mirror/
+Backend database/run_local_5000.*.log
