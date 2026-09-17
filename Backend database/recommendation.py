@@ -13,6 +13,13 @@ import math
 import re
 from typing import Dict, List, Tuple, Optional, Any
 from makeup_keywords import MAKEUP_KEYWORD_WHITELIST, normalize_style
+from color_contract import delta_e
+# 色號比較的規則只有一套。商品頁 /api/products/<id> 的 shadeNeighbors 與這裡的
+# shadeRecommendation 共用同一組門檻，否則同一對色號會在兩個畫面得到不同說法。
+from shade_neighbors import (
+    MIN_LIGHTNESS_STEP, STEP_MAX_DELTA_E, TONE_MATCH_MAX_DELTA_E,
+    is_concealer as _is_concealer_product,
+)
 
 SCHEMA_VERSION = "2026-08-v2"
 FOUNDATION_SKIN_MAX_DELTA_E = 2.0
@@ -59,6 +66,9 @@ def _minimized_analysis_package(value: dict) -> dict:
     skin = face.get("skinTone") or {}
     if not isinstance(skin, dict):
         skin = {}
+    baseline_skin = face.get("baselineSkin") or {}
+    if not isinstance(baseline_skin, dict):
+        baseline_skin = {}
     generated = value.get("generativeText") or {}
     if not isinstance(generated, dict):
         generated = {}
@@ -66,7 +76,7 @@ def _minimized_analysis_package(value: dict) -> dict:
     # A legacy client sometimes sends labReliable=false together with a valid
     # Lab triple.  The numeric measurement is authoritative: only missing,
     # non-finite or out-of-range Lab values are rejected.
-    lab_reliable = _usable_lab(lab)
+    lab_reliable = _usable_lab(lab) and skin.get("labReliable") is not False
     return {
         "style": str(value.get("style") or "")[:120],
         "faceAnalysis": {
@@ -81,6 +91,19 @@ def _minimized_analysis_package(value: dict) -> dict:
                 "labReliable": lab_reliable,
                 "sourceLabReliable": skin.get("labReliable") if isinstance(skin.get("labReliable"), bool) else None,
             },
+            # `baselineSkin` is captured from the original, before-makeup
+            # analysis once per beauty session.  Post-render / post-makeup
+            # photos may change cheeks, highlights and shadows, but may never
+            # replace this foundation comparison target.
+            "baselineSkin": {
+                "lab": baseline_skin.get("lab"),
+                "season": str(baseline_skin.get("season") or skin.get("season") or "unknown")[:40],
+                "level": str(baseline_skin.get("level") or skin.get("level") or "")[:80],
+                "labReliable": _usable_lab(baseline_skin.get("lab"))
+                    and baseline_skin.get("labReliable") is not False,
+                "source": "before_makeup" if str(baseline_skin.get("source") or "").casefold()
+                    in {"before_makeup", "pre_makeup"} else None,
+            } if baseline_skin else None,
             "lipLab": face.get("lipLab"),
             # Brow/hair colour is intentionally separate from skin tone.  A
             # brow product must never be ranked by proximity to cheek skin.
@@ -92,6 +115,10 @@ def _minimized_analysis_package(value: dict) -> dict:
             "styleTags": generated.get("styleTags") if isinstance(generated.get("styleTags"), list) else [],
             "preferredColors": generated.get("preferredColors") if isinstance(generated.get("preferredColors"), list) else [],
             "avoidTags": generated.get("avoidTags") if isinstance(generated.get("avoidTags"), list) else [],
+            "recommendedColors": generated.get("recommendedColors") if isinstance(generated.get("recommendedColors"), list) else [],
+            "colorTags": generated.get("colorTags") if isinstance(generated.get("colorTags"), list) else [],
+            "finishTags": generated.get("finishTags") if isinstance(generated.get("finishTags"), list) else [],
+            "avoidColors": generated.get("avoidColors") if isinstance(generated.get("avoidColors"), list) else [],
         },
     }
 
@@ -127,6 +154,58 @@ def get_avoid_tags(analysis_package: dict) -> List[str]:
     generative_text = analysis_package.get("generativeText", {}) or {}
     tags = generative_text.get("avoidTags")
     return [t.lower() for t in tags] if tags and isinstance(tags, list) else []
+
+
+def get_ollama_terms(analysis_package: dict) -> Tuple[List[str], List[str]]:
+    """Collect the structured Ollama terms used by ranking and UI evidence."""
+    generated = analysis_package.get("generativeText", {}) or {}
+    preferred, avoided = [], []
+    for key in ("preferredColors", "recommendedColors", "colorTags", "finishTags"):
+        if isinstance(generated.get(key), list):
+            preferred.extend(str(value).strip().casefold() for value in generated[key] if str(value).strip())
+    for key in ("avoidTags", "avoidColors"):
+        if isinstance(generated.get(key), list):
+            avoided.extend(str(value).strip().casefold() for value in generated[key] if str(value).strip())
+    return list(dict.fromkeys(preferred)), list(dict.fromkeys(avoided))
+
+
+def _ollama_match_evidence(product: dict, preferred: List[str], avoided: List[str],
+                           style: Optional[str] = None) -> dict:
+    fields = (
+        ("name", "商品名稱"), ("shadeName", "色號名稱"),
+        ("description", "商品描述"), ("finishTags", "妝效標籤"),
+        ("styleTags", "風格標籤"), ("tags", "商品標籤"),
+    )
+    normalized = []
+    for key, label in fields:
+        value = product.get(key)
+        text = " ".join(str(item) for item in value) if isinstance(value, (list, tuple, set)) else str(value or "")
+        normalized.append((key, label, text.casefold()))
+
+    def find(terms: List[str]) -> List[dict]:
+        result = []
+        for term in terms:
+            hit = next(((key, label) for key, label, text in normalized if term and term in text), None)
+            if hit and not any(row["term"] == term for row in result):
+                result.append({"term": term, "productField": hit[0], "productFieldLabel": hit[1]})
+        return result
+
+    positive, negative = find(preferred), find(avoided)
+    score = max(0.0, min(1.0, 0.5 + 0.18 * len(positive) - 0.30 * len(negative)))
+    # 每個命中詞附上它要配的風格，讓前端可以自行組句（例如
+    # 「暖銅光與你所選的 Soft Baddie 匹配」），不必解析中文理由字串。
+    for row in positive:
+        row["matchedStyle"] = style
+        row["termSource"] = "analysisPackage.generativeText"
+    for row in negative:
+        row["matchedStyle"] = style
+        row["termSource"] = "analysisPackage.generativeText"
+    return {
+        "matchedPreferredTerms": positive, "matchedAvoidedTerms": negative,
+        "matchedStyle": style,
+        "preferenceScore": round(score, 4), "source": "analysisPackage.generativeText",
+        "scoringRule": {"base": 0.5, "preferredTermBonus": 0.18, "avoidedTermPenalty": 0.30},
+    }
 
 
 # ============================================================
@@ -194,6 +273,21 @@ def _minimized_recommendation_options(value: Any) -> dict:
     mode = str(raw_mode).casefold() if isinstance(raw_mode, str) else ""
     if "mode" in price and (raw_mode is None or mode not in {"value", "low", "high"}):
         raise AnalysisContractError("INVALID_REQUEST")
+    # A person's known, currently-worn foundation is a non-identifying
+    # preference.  It is more reliable than a cheek sample taken under an
+    # unknown camera / daylight condition, but it is only used after we find a
+    # verified catalogue colour for the declared brand and shade code.
+    declared_anchor = value.get("foundationAnchor")
+    if declared_anchor is None:
+        foundation_anchor = None
+    elif not isinstance(declared_anchor, dict):
+        raise AnalysisContractError("INVALID_REQUEST")
+    else:
+        brand = str(declared_anchor.get("brand") or "").strip()
+        shade_code = str(declared_anchor.get("shadeCode") or "").strip()
+        if not brand or not shade_code or len(brand) > 80 or len(shade_code) > 80:
+            raise AnalysisContractError("INVALID_REQUEST")
+        foundation_anchor = {"brand": brand, "shadeCode": shade_code}
     return {
         "preferredBrands": _normalized_label_list(value.get("preferredBrands")),
         "avoidedBrands": _normalized_label_list(value.get("avoidedBrands")),
@@ -201,6 +295,7 @@ def _minimized_recommendation_options(value: Any) -> dict:
                             "mode": mode or None},
         # MAC 主軸的選色規則只由後端控制；前端不能切換，也不需要知道。
         "foundationShadePreference": _FOUNDATION_SHADE_POLICY,
+        "foundationAnchor": foundation_anchor,
     }
 
 
@@ -212,6 +307,41 @@ def _usable_lab(value: Any) -> bool:
         return False
     lightness, axis_a, axis_b = (float(component) for component in value)
     return 0 <= lightness <= 100 and abs(axis_a) <= 128 and abs(axis_b) <= 128
+
+
+def _shade_identity(value: Any) -> str:
+    """Normalize display-only shade identifiers for an exact catalogue lookup."""
+    return "".join(str(value or "").upper().split())
+
+
+def _declared_foundation_anchor(candidates: List[dict], option: Optional[dict]) -> Optional[dict]:
+    """Resolve a declared foundation to a verified, purchasable catalogue row.
+
+    Never manufacture a Lab value from a shade label.  If the precise catalogue
+    row or its verified colour evidence is missing, the caller falls back to the
+    photo analysis and reports that fact in the response metadata.
+    """
+    if not isinstance(option, dict):
+        return None
+    wanted_brand = str(option.get("brand") or "").strip().casefold()
+    wanted_shade = _shade_identity(option.get("shadeCode"))
+    if not wanted_brand or not wanted_shade:
+        return None
+    for product in candidates:
+        if (str(product.get("category") or "").casefold() != "base"
+                or _is_concealer_product(product)
+                or not product.get("inStock", True)
+                or product.get("colorMatchReady") is False):
+            continue
+        if str(product.get("brand") or "").strip().casefold() != wanted_brand:
+            continue
+        code = product.get("shadeCode") or product.get("shade_code") or product.get("shadeName")
+        if _shade_identity(code) != wanted_shade:
+            continue
+        lab = _parse_lab(product.get("lab"))
+        if lab is not None:
+            return {"product": product, "lab": lab}
+    return None
 
 
 def _price_as_number(value: Any) -> Optional[float]:
@@ -279,63 +409,12 @@ def _pivot_rgb(v: float) -> float:
     v = v / 255.0
     return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
 
-def rgb_to_lab(r: float, g: float, b: float) -> Tuple[float, float, float]:
-    r, g, b = _pivot_rgb(r), _pivot_rgb(g), _pivot_rgb(b)
-    x = (r * 0.4124 + g * 0.3576 + b * 0.1805) * 100
-    y = (r * 0.2126 + g * 0.7152 + b * 0.0722) * 100
-    z = (r * 0.0193 + g * 0.1192 + b * 0.9505) * 100
-    def _pivot_xyz(n: float) -> float: return n ** (1/3) if n > 0.008856 else (7.787 * n) + (16 / 116)
-    x, y, z = _pivot_xyz(x / 95.047), _pivot_xyz(y / 100.000), _pivot_xyz(z / 108.883)
-    return ((116 * y) - 16, 500 * (x - y), 200 * (y - z))
+def rgb_to_lab(r: float, g: float, b: float):
+    from color_contract import lab_from_rgb
+    return tuple(lab_from_rgb(r,g,b))
 
-def delta_e(lab1: Optional[Tuple[float, float, float]], lab2: Optional[Tuple[float, float, float]]) -> Optional[float]:
-    """Return CIEDE2000 ΔE (not the older CIE76 Euclidean distance)."""
-    if not lab1 or not lab2:
-        return None
-    l1, a1, b1 = lab1
-    l2, a2, b2 = lab2
-    c1 = math.hypot(a1, b1)
-    c2 = math.hypot(a2, b2)
-    c_bar = (c1 + c2) / 2.0
-    g = 0.5 * (1.0 - math.sqrt((c_bar ** 7) / (c_bar ** 7 + 25.0 ** 7)))
-    a1p, a2p = (1.0 + g) * a1, (1.0 + g) * a2
-    c1p, c2p = math.hypot(a1p, b1), math.hypot(a2p, b2)
-
-    def hue(a, b):
-        return math.degrees(math.atan2(b, a)) % 360.0 if a or b else 0.0
-
-    h1p, h2p = hue(a1p, b1), hue(a2p, b2)
-    delta_lp, delta_cp = l2 - l1, c2p - c1p
-    if c1p * c2p == 0:
-        delta_hp = 0.0
-    else:
-        delta_h = h2p - h1p
-        if delta_h > 180:
-            delta_h -= 360
-        elif delta_h < -180:
-            delta_h += 360
-        delta_hp = 2.0 * math.sqrt(c1p * c2p) * math.sin(math.radians(delta_h / 2.0))
-
-    l_bar, cp_bar = (l1 + l2) / 2.0, (c1p + c2p) / 2.0
-    if c1p * c2p == 0:
-        hp_bar = h1p + h2p
-    elif abs(h1p - h2p) <= 180:
-        hp_bar = (h1p + h2p) / 2.0
-    elif h1p + h2p < 360:
-        hp_bar = (h1p + h2p + 360) / 2.0
-    else:
-        hp_bar = (h1p + h2p - 360) / 2.0
-    t = (1 - 0.17 * math.cos(math.radians(hp_bar - 30))
-         + 0.24 * math.cos(math.radians(2 * hp_bar))
-         + 0.32 * math.cos(math.radians(3 * hp_bar + 6))
-         - 0.20 * math.cos(math.radians(4 * hp_bar - 63)))
-    delta_theta = 30 * math.exp(-((hp_bar - 275) / 25) ** 2)
-    rc = 2 * math.sqrt((cp_bar ** 7) / (cp_bar ** 7 + 25.0 ** 7))
-    sl = 1 + (0.015 * (l_bar - 50) ** 2) / math.sqrt(20 + (l_bar - 50) ** 2)
-    sc = 1 + 0.045 * cp_bar
-    sh = 1 + 0.015 * cp_bar * t
-    rt = -math.sin(math.radians(2 * delta_theta)) * rc
-    return math.sqrt((delta_lp / sl) ** 2 + (delta_cp / sc) ** 2 + (delta_hp / sh) ** 2 + rt * (delta_cp / sc) * (delta_hp / sh))
+# `delta_e` 的實作已移到 color_contract（與 sRGB→CIELAB 同一個色彩契約模組），
+# 這裡維持匯出名稱，既有的 `from recommendation import delta_e` 不受影響。
 
 def _base_fallback_color_score(product: dict, skin_tone: dict) -> float:
     """Use season/level metadata when cheek LAB sampling is marked unreliable."""
@@ -355,6 +434,36 @@ def lab_similarity_from_delta_e(de: Optional[float]) -> float:
     # every accepted shade a flat 1.0 made a 1.9 ΔE shade tie with a 0.2 ΔE
     # shade, so database order could decide the foundation recommendation.
     return max(0.0, 1.0 - (de / 20.0))
+
+
+def _foundation_warm_tone_bias_adjustment(target_lab: Optional[List[float]],
+                                          product_lab: Optional[List[float]],
+                                          season: str, style: str) -> float:
+    """Return a small *ranking-only* correction for catalogues skewed warm.
+
+    A scraped swatch is not changed and its real ΔE00 is never hidden from the
+    user. A catalogue with disproportionately many red/yellow swatches should
+    not make a warm candidate win repeatedly just because it is more densely
+    represented. The correction only applies when a product is redder or
+    yellower than the measured skin sample, and is deliberately capped.
+    """
+    if not target_lab or not product_lab:
+        return 0.0
+    excess_red = max(0.0, float(product_lab[1]) - float(target_lab[1]))
+    excess_yellow = max(0.0, float(product_lab[2]) - float(target_lab[2]))
+    raw = min(0.08, excess_red * 0.006 + excess_yellow * 0.003)
+    normalized_season = str(season or "").casefold()
+    normalized_style = str(style or "").casefold()
+    season_factor = {
+        "summer": 1.0, "冬季": 1.0, "winter": 1.0,
+        "spring": 0.60, "春季": 0.60,
+        "autumn": 0.55, "秋季": 0.55,
+    }.get(normalized_season, 0.75)
+    style_factor = {
+        "韓系亞裔": 1.0, "日雜清透": 1.0, "男士白開水": 0.95,
+        "港風": 0.60, "千金": 0.70, "soft baddie": 0.75,
+    }.get(normalized_style, 0.85)
+    return round(raw * season_factor * style_factor, 5)
 
 # ============================================================
 # 3. 風格匹配度計算 (升級：Jaccard 相似度演算法)
@@ -481,7 +590,8 @@ def get_dynamic_weights(category: str, style: str) -> Dict[str, float]:
         w["styleScore"] += 0.15
         w["colorScore"] = max(0.0, w["colorScore"] - 0.15)
 
-    return w
+    total = sum(w.values())
+    return {key: value / total for key, value in w.items()} if total else w
 
 # ============================================================
 # 6. 核心推薦函數
@@ -501,10 +611,32 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
 
     face_analysis = analysis_package.get("faceAnalysis", {}) or {}
     skin_tone = face_analysis.get("skinTone", {}) or {}
+    baseline_skin = face_analysis.get("baselineSkin") or {}
     brow_lab_raw = face_analysis.get("browLab") or face_analysis.get("hairLab")
 
     target_skin_lab = _parse_lab(skin_tone.get("lab"))
+    baseline_skin_lab = _parse_lab(baseline_skin.get("lab"))
+    baseline_skin_reliable = (
+        baseline_skin_lab is not None
+        and baseline_skin.get("labReliable") is not False
+        and str(baseline_skin.get("source") or "").casefold() in {"before_makeup", "pre_makeup"}
+    )
     target_brow_lab = _parse_lab(brow_lab_raw)
+    declared_anchor = _declared_foundation_anchor(
+        candidates, recommendation_options.get("foundationAnchor")
+    )
+    # A known shade is the foundation comparison target when the catalogue has
+    # a verified record for it.  The photo continues to drive style and all
+    # non-foundation categories; it must not overrule a user's actual shade
+    # simply because light, white balance or makeup altered one cheek sample.
+    foundation_target_lab = (
+        declared_anchor["lab"] if declared_anchor is not None
+        else baseline_skin_lab if baseline_skin_reliable else target_skin_lab
+    )
+    foundation_target_source = (
+        "declared_verified_shade" if declared_anchor else
+        "before_makeup_baseline" if baseline_skin_reliable else "photo_skin_lab"
+    )
 
     style = normalize_style(analysis_package.get("style"))
     if not style:
@@ -513,6 +645,7 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
     style_tags = get_style_tags(analysis_package)
     preferred_colors = get_preferred_colors(analysis_package)
     avoid_tags = get_avoid_tags(analysis_package)
+    ollama_preferred_terms, ollama_avoided_terms = get_ollama_terms(analysis_package)
     generative_text = analysis_package.get("generativeText", {}) or {}
     fallback_used = not (generative_text.get("styleTags") and isinstance(generative_text["styleTags"], list) and len(generative_text["styleTags"]) > 0)
     style_tag_fallback_reason = f"generativeText.styleTags missing; used style default tags for '{style}'" if fallback_used else None
@@ -549,6 +682,9 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
     foundation_delta_values: List[float] = []
     foundation_qualified_count = 0
     skin_lab_reliable = skin_tone.get("labReliable") is not False and target_skin_lab is not None
+    foundation_target_reliable = (
+        declared_anchor is not None or baseline_skin_reliable or skin_lab_reliable
+    )
     for prod, keyword_hits, searchable in active_candidates:
         cat = (prod.get("category") or "").lower()
         if (cat not in allowed_categories or not prod.get("inStock", True)
@@ -556,24 +692,49 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
             continue
         if str(prod.get("brand") or "").casefold() in set(recommendation_options["avoidedBrands"]):
             continue
+        if cat == "base" and any(word in str(prod.get("name") or "").casefold() for word in (
+            "concealer", "遮瑕乳", "遮瑕液", "遮瑕提亮液", "遮瑕筆", "遮瑕膏", "點點筆"
+        )):
+            continue
         if cat == "base":
+            # 色彩未通過數值驗證的粉底仍保留在候選集。它沒有 `lab`，因此
+            # `_foundationDeltaE` 會是 None，永遠進不了錨點池、也不會被判為
+            # accepted——不可能冒充合格配對。但它仍可作為跨品牌換色選項與
+            # 目錄展示，讓「資料庫沒有極近似色號」時不至於整區空白。
             foundation_candidate_types.add(
                 str(prod.get("coverageCategory") or prod.get("type") or cat)
             )
 
         prod_lab = _parse_lab(prod.get("lab"))
+        if cat == "base" and prod.get("colorMatchReady") is False:
+            # 未通過數值驗證的色值一律不參與色差比對，即使欄位裡有值。
+            # 商品本身仍留在候選集（可展示、可跨品牌換色），但它永遠拿不到
+            # `_foundationDeltaE`，因此進不了錨點池，也不可能被判為 accepted。
+            prod_lab = None
         if cat == "base":
-            target_color_lab = target_skin_lab
+            target_color_lab = foundation_target_lab
         else:
             target_color_lab = None
 
         # a. Color
-        use_base_fallback = cat == "base" and not skin_lab_reliable
+        use_base_fallback = cat == "base" and not foundation_target_reliable
         color_applicable = cat == "base"
         color_available = color_applicable and target_color_lab is not None and prod_lab is not None
         de = None if (use_base_fallback or not color_available) else delta_e(target_color_lab, prod_lab)
+        warm_tone_adjustment = (
+            _foundation_warm_tone_bias_adjustment(foundation_target_lab, prod_lab,
+                                                  skin_tone.get("season", ""), style)
+            # A declared verified shade has no photo-white-balance bias.  Keep
+            # its cross-brand comparison purely on the published colour data.
+            if cat == "base" and color_available and declared_anchor is None else 0.0
+        )
         color_score = (_base_fallback_color_score(prod, skin_tone) if use_base_fallback
                        else (lab_similarity_from_delta_e(de) if color_available else 0.0))
+        # Do not alter the actual ΔE measurement or strict match threshold. The
+        # adjustment merely prevents a red/yellow-heavy source catalogue from
+        # repeatedly winning a near tie in the ranking.
+        if cat == "base" and color_available:
+            color_score = max(0.0, color_score - warm_tone_adjustment)
         foundation_skin_match = None
         if cat == "base":
             accepted = bool(de is not None and 0.0 <= de <= FOUNDATION_SKIN_MAX_DELTA_E)
@@ -593,14 +754,27 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
                 foundation_qualified_count += 1
 
         # b. Style
-        prod_tags = prod.get("tags") or prod.get("styleTags") or []
+        prod_tags = list(dict.fromkeys((prod.get("tags") or []) + (prod.get("styleTags") or [])))
         style_score = style_tag_similarity(prod_tags, style_tags, preferred_colors, [])
         if keyword_hits:
             style_score = max(style_score, min(1.0, 0.65 + len(keyword_hits) * 0.1))
-        avoid_hits = [tag for tag in avoid_tags if tag and tag.casefold() in searchable]
-        preferred_color_hits = [color for color in preferred_colors if color and color.casefold() in searchable]
-        style_score = max(0.0, min(1.0, style_score + 0.12 * len(preferred_color_hits)
-                                   - 0.20 * len(avoid_hits)))
+        ollama_match = _ollama_match_evidence(prod, ollama_preferred_terms, ollama_avoided_terms, style)
+        avoid_hits = [row["term"] for row in ollama_match["matchedAvoidedTerms"]]
+        preferred_color_hits = [row["term"] for row in ollama_match["matchedPreferredTerms"]]
+        # Use the same auditable text score returned to the client.
+        if ollama_preferred_terms or ollama_avoided_terms:
+            style_score = max(0.0, min(1.0, style_score + ollama_match["preferenceScore"] - 0.5))
+        season_aliases = {"春季": "spring", "春": "spring", "夏季": "summer", "夏": "summer",
+                          "秋季": "autumn", "秋": "autumn", "冬季": "winter", "冬": "winter"}
+        raw_season = str(skin_tone.get("season") or "").strip().casefold()
+        season = season_aliases.get(raw_season, raw_season)
+        product_seasons = {season_aliases.get(str(tag).strip().casefold(), str(tag).strip().casefold())
+                           for tag in (prod.get("seasonTags") or [])}
+        known_seasons = product_seasons & {"spring", "summer", "autumn", "winter"}
+        season_score = None
+        # Explicit catalog tags only; unknown or universal tags are not evidence.
+        if cat != "base" and season in {"spring", "summer", "autumn", "winter"} and 0 < len(known_seasons) < 4:
+            season_score = 1.0 if season in known_seasons else 0.0
 
         # c. Feature
         face_score = feature_match_score(cat, face_analysis, searchable)
@@ -617,6 +791,8 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
             w["featureScore"] * face_score +
             w["availabilityScore"] * availability_score
         )
+        if season_score is not None:
+            cosmetic_score = 0.8 * cosmetic_score + 0.2 * season_score
 
         # Explicit price/brand choices are a modest re-ranking signal.  They
         # cannot override colour/style compatibility on their own.
@@ -636,7 +812,7 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
 
         # Deterministic score: identical input/data must yield identical output
         # so contract tests and Precision@K evaluation are reproducible.
-        final_score = base_final_score
+        final_score = max(0.0, min(1.0, base_final_score))
 
         reason_text, reason_evidence = _build_match_reason(
             cat, style, color_score, style_score, face_score, de, keyword_hits,
@@ -671,6 +847,13 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
             "priceConversion": prod.get("priceConversion"),
             "tags": prod_tags,
             "lab": prod_lab,
+            # 商品色塊與色彩證據等級：詳情頁要把使用者膚色色塊與商品色塊並排
+            # 比對，跨品牌換色也需要在未驗證時以 HEX 推導近似 Lab。
+            # `hex` 有值不代表已驗證，前端一律以 colorMatchReady 判斷。
+            "hex": prod.get("hex") or prod.get("hex_primary"),
+            "colorVerificationStatus": prod.get("colorVerificationStatus"),
+            "colorMatchReady": bool(prod.get("colorMatchReady")),
+            "colorWarning": prod.get("colorWarning"),
             "score": round(final_score, 4),
             "matchScore": round(final_score, 4),
             "colorMethod": ("season_level" if use_base_fallback else
@@ -679,13 +862,21 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
             # is removed before the response is returned; the public contract
             # continues to expose the rounded foundationSkinMatch.deltaE.
             "_foundationDeltaE": float(de) if cat == "base" and de is not None else None,
+            "_foundationRankDeltaE": (
+                float(de) + warm_tone_adjustment * 20.0
+                if cat == "base" and de is not None else None
+            ),
             "foundationSkinMatch": foundation_skin_match,
             "keywordMatches": keyword_hits,
             "matchedKeywords": keyword_hits,
             "avoidTagHits": avoid_hits,
             "preferredColorHits": preferred_color_hits,
+            "ollamaMatch": ollama_match,
             "scoreBreakdown": {
+                "seasonScore": season_score,
+                "textPreferenceScore": ollama_match["preferenceScore"],
                 "colorScore": round(color_score, 4),
+                "warmToneBiasAdjustment": warm_tone_adjustment,
                 "styleScore": round(style_score, 4),
                 "featureScore": round(face_score, 4),
                 "availabilityScore": round(availability_score, 4),
@@ -700,6 +891,25 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         scored[-1]["recommendationPresentation"] = _build_user_presentation(
             scored[-1], style, face_analysis, skin_tone
         )
+        # 理由要講出「哪一個詞」和「配上哪一個風格」，使用者才知道這句話是針對
+        # 他這次的輸入。`matchedPreferredTerms` 非空即代表詞來自本次
+        # generativeText（沒有 generativeText 時它會是空的，理由改走風格關鍵字
+        # 路徑），所以這裡可以安全地說「你所選的風格」而不會誤稱。
+        # 英文風格名（Soft Baddie）夾在中文裡要補空白，否則會黏成「的Soft Baddie匹配」。
+        style_label = f" {style} " if re.search(r"[A-Za-z]", str(style or "")) else str(style or "")
+        ollama_reasons = [
+            f"「{row['term']}」與你所選的{style_label}匹配（命中{row['productFieldLabel']}）。"
+            for row in ollama_match["matchedPreferredTerms"][:2]
+        ]
+        if season_score is not None:
+            ollama_reasons.append("商品季型標籤符合本次季型，已納入加分。" if season_score else
+                                 "商品季型標籤與本次季型不同，已在排序中降低權重。")
+        if ollama_match["matchedAvoidedTerms"]:
+            row = ollama_match["matchedAvoidedTerms"][0]
+            ollama_reasons.append(f"注意：商品含你希望避開的「{row['term']}」，已在排序中扣分。")
+        scored[-1]["recommendationPresentation"]["reasonTexts"] = list(dict.fromkeys(
+            scored[-1]["recommendationPresentation"]["reasonTexts"] + ollama_reasons
+        ))[:5]
 
     # Keep the complete foundation pool for same-series shade alternatives,
     # while exposing strict matches plus, when needed, one clearly-labelled
@@ -717,7 +927,7 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         if str(item.get("brand") or "").strip().casefold() == "mac"
         and item.get("_foundationDeltaE") is not None
     ]
-    foundation_anchor_brand = "MAC" if mac_foundation_items else None
+    foundation_anchor_brand = None
     # The user's actual routine is liquid foundation first, then cushion.
     # A concealer/"dot pen" must never outrank either merely because its Lab
     # value happens to be nearer.  Keep other base formats as a safe fallback
@@ -726,13 +936,19 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         item for item in mac_foundation_items
         if _foundation_format_rank(item) <= 1
     ]
-    foundation_anchor_pool = mac_preferred_format_items or mac_foundation_items or [
+    foundation_anchor_pool = [
         item for item in foundation_items if item.get("_foundationDeltaE") is not None
     ]
+    # MAC remains the preferred anchor, but never bypasses color evidence gates.
+    foundation_anchor_pool = mac_preferred_format_items or mac_foundation_items or foundation_anchor_pool
+    foundation_anchor_pool = [item for item in foundation_anchor_pool
+                              if not _is_concealer_product(item)]
     nearest_foundation_anchor = min(
         foundation_anchor_pool,
         key=lambda item: (
-            float(item.get("_foundationDeltaE")),
+            float(item.get("_foundationRankDeltaE")
+                  if item.get("_foundationRankDeltaE") is not None
+                  else item.get("_foundationDeltaE")),
             -float(item.get("score") or 0),
             str(item.get("candidateKey") or ""),
         ),
@@ -882,7 +1098,7 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         or item.get("candidateKey") in eligible_foundation_keys
     ]
     closest_display_foundation = None
-    if foundation_qualified_count == 0 and skin_lab_reliable:
+    if foundation_qualified_count == 0 and foundation_target_reliable:
         display_candidates = [
             item for item in foundation_anchor_pool
             if item.get("category") == "base"
@@ -910,9 +1126,10 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
             "displayStatus": "closest_available",
             "displayMaxInclusive": None,
         })
+        comparison_subject = "你已選的粉底色號" if declared_anchor is not None else "你膚色"
         closest_text = (
-            "資料庫目前沒有與你膚色極近似（色差 0～2）的色號；以下提供目前最相近的色號；"
-            + f"這支色號與膚色的色差為 {closest_delta:.1f}。"
+            f"資料庫目前沒有與{comparison_subject}極近似（色差 0～2）的色號；以下提供目前最相近的色號；"
+            + f"這支色號與{comparison_subject}的色差為 {closest_delta:.1f}。"
             + FOUNDATION_IN_STORE_DISCLAIMER
         )
         closest_display_foundation["matchReason"] = closest_text
@@ -959,10 +1176,10 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         foundation_match_status = "not_requested"
         foundation_status_code = None
         foundation_status_message = "本次候選沒有粉底液商品"
-    elif not skin_lab_reliable:
+    elif not foundation_target_reliable:
         foundation_match_status = "unavailable"
         foundation_status_code = "SKIN_TONE_LAB_UNRELIABLE"
-        foundation_status_message = "膚色 LAB 不可靠，無法驗證粉底色差是否在 0～2，因此未回傳粉底推薦"
+        foundation_status_message = "膚色 LAB 不可靠，且未提供可驗證的慣用粉底色號，因此未回傳粉底推薦"
     elif not foundation_delta_values:
         foundation_match_status = "unavailable"
         foundation_status_code = "FOUNDATION_PRODUCT_LAB_UNAVAILABLE"
@@ -1003,7 +1220,9 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
     }
     primary_by_type = {}
     for item in final:
-        primary_by_type.setdefault(item.get("coverageCategory") or item.get("type"), item)
+        if ((item.get("category") == "base" and (item.get("foundationSkinMatch") or {}).get("accepted"))
+                or (item.get("category") != "base" and item["matchScore"] >= 0.60)):
+            primary_by_type.setdefault(item.get("coverageCategory") or item.get("type"), item)
     primary = [
         {"type": product_type, "product": product, "matchScore": product["matchScore"]}
         for product_type, product in primary_by_type.items()
@@ -1057,6 +1276,12 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
         "fallbackReasons": fallback_reasons,
         "styleTagFallbackUsed": fallback_used,
         "styleTagFallbackReason": style_tag_fallback_reason,
+        "personalizationInputs": {
+            "ollamaPreferredTerms": ollama_preferred_terms,
+            "ollamaAvoidedTerms": ollama_avoided_terms,
+            "ollamaTextApplied": bool(ollama_preferred_terms or ollama_avoided_terms),
+            "selectedStyle": style,
+        },
         "coverage": {"requested": len(requested_categories), "returned": len(returned_categories), "skipped": skipped},
         "skinToneLabReliable": skin_tone.get("labReliable") is not False,
         "colorDifferencePolicy": {
@@ -1064,14 +1289,31 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
                 "metric": "CIEDE2000", "symbol": "ΔE00",
                 "minInclusive": 0.0, "maxInclusive": FOUNDATION_SKIN_MAX_DELTA_E,
                 "mode": "strict_primary_with_ranked_same_brand_alternatives",
-                "comparisonTarget": "使用者膚色與粉底色號",
+                "comparisonTarget": (
+                    "使用者已選粉底色號與商品色號"
+                    if declared_anchor is not None else "使用者膚色與粉底色號"
+                ),
             },
             "foundationAnchor": {
-                "brand": foundation_anchor_brand,
-                "mode": ("mac_primary_then_cross_brand_alternatives"
-                         if foundation_anchor_brand else "nearest_available_brand"),
-                "reason": ("膚色分類以 MAC 色號系統為主軸"
-                           if foundation_anchor_brand else "目前沒有可比較的 MAC 色號"),
+                "brand": preferred_foundation.get("brand") if preferred_foundation else None,
+                "shadeCode": preferred_foundation.get("shadeCode") if preferred_foundation else None,
+                "mode": ("declared_verified_shade" if declared_anchor is not None
+                         else ("mac_first_verified" if mac_foundation_items else "verified_brand_fallback")),
+                "preferredBrand": (recommendation_options.get("foundationAnchor") or {}).get("brand") or "MAC",
+                "preferredBrandAvailable": bool(mac_foundation_items),
+                "comparisonTargetSource": foundation_target_source,
+                "declaredAnchor": {
+                    "brand": declared_anchor["product"].get("brand"),
+                    "shadeCode": (declared_anchor["product"].get("shadeCode")
+                                  or declared_anchor["product"].get("shade_name")),
+                    "verified": True,
+                } if declared_anchor is not None else None,
+                "reason": (
+                    "已使用你選定且具色彩資料的慣用色號作為跨品牌比較基準；照片只用於妝容風格與其他類別推薦。"
+                    if declared_anchor is not None
+                    else ("以具色彩證據的 MAC 色號為基準，再提供跨品牌近色。" if mac_foundation_items
+                          else "MAC 目前沒有符合數值驗證與供應條件的色號，暫以其他已驗證品牌提供近色；請至專櫃試色。")
+                ),
             },
             "foundationClosestAvailable": {
                 "metric": "CIEDE2000", "symbol": "ΔE00",
@@ -1083,8 +1325,8 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
             "shadeAlternative": {
                 "metric": "CIEDE2000", "symbol": "ΔE00",
                 "minInclusive": 0.0, "maxInclusive": SHADE_ALTERNATIVE_MAX_DELTA_E,
-                "mode": "same_brand_same_series_guard",
-                "comparisonTarget": "主推薦粉底與淺／深替代色",
+                "mode": "same_brand_any_series_tone_guard",
+                "comparisonTarget": "主推薦粉底與較淺／較深參考色",
             },
         },
         "foundationMatchStatus": {
@@ -1098,7 +1340,7 @@ def recommend_products(analysis_package: dict, candidates: List[dict],
                 preferred_foundation.get("candidateKey") if preferred_foundation is not None else
                 closest_display_foundation.get("candidateKey") if closest_display_foundation is not None else None
             ),
-            "anchorBrand": foundation_anchor_brand,
+            "anchorBrand": preferred_foundation.get("brand") if preferred_foundation else None,
         },
         "primary": primary,
         "alternates": alternates,
@@ -1199,6 +1441,15 @@ def _build_user_presentation(product: dict, style: str, face_analysis: dict,
     headline, summary = category_copy.get(
         category, (tier, f"這款商品符合你的{style}妝風格與個人偏好。")
     )
+    if category != "base":
+        if percent < 60:
+            headline = "搭配備選・推薦依據有限"
+            summary = "這款目前的匹配依據不足，先保留供你比較，不代表已確認適合你的膚色或五官。"
+        else:
+            headline = f"呼應你這次的{style}妝"
+            evidence = product.get("keywordMatches") or product.get("preferredColorHits") or []
+            summary = (f"你這次選了{style}妝，這款的「{'、'.join(evidence[:3])}」呼應了這個方向，可以先從你喜歡的部分試起。"
+                       if evidence else "依本次風格與商品標籤挑選；實際顏色與妝效仍建議親自確認。")
     if category == "base" and product.get("colorMethod") == "season_level":
         headline = "符合你的膚色特徵與妝容風格"
         summary = "這次的照片可能受到光線影響，因此系統改用膚色明暗、季型與妝容風格提供建議。"
@@ -1332,7 +1583,7 @@ def _build_user_presentation(product: dict, style: str, face_analysis: dict,
         "comparisonExplanation": {"title": comparison["title"], "text": comparison["text"]},
         "colorDifferenceExplanation": color_difference_explanation,
         "suitedTraits": list(dict.fromkeys(traits)),
-        "reasonTexts": [reason.get("text") for reason in product.get("matchReasons", []) if reason.get("text")][:4],
+        "reasonTexts": list(dict.fromkeys(reason.get("text") for reason in product.get("matchReasons", []) if reason.get("text")))[:4],
         "disclaimer": (FOUNDATION_IN_STORE_DISCLAIMER if category == "base" else
                        "推薦匹配度是系統用於商品排序的綜合結果，不代表實際上妝效果或準確率保證。"),
     }
@@ -1343,6 +1594,9 @@ def _apply_recommendation_display_policy(item: dict) -> None:
     presentation = item.get("recommendationPresentation") or {}
     display_score = bool(presentation.get("showMatchPercent"))
     item["displayScore"] = display_score
+    item["recommendationRole"] = ("alternative" if float(item.get("matchScore") or 0) < 0.60 else "recommended")
+    if item.get("category") == "base" and not (item.get("foundationSkinMatch") or {}).get("accepted"):
+        item["recommendationRole"] = "requires_swatch"
     item["matchPercent"] = presentation.get("matchPercent")
     item["recommendationLabel"] = (
         presentation.get("matchLabel") if display_score else "根據臉部分析結果推薦"
@@ -1486,32 +1740,77 @@ def _mac_foundation_lighter_steps(anchor: dict, pool: List[dict], steps: int) ->
     return current if current is not anchor else None
 
 
+def comparable_lab(item: Optional[dict]) -> Optional[List[float]]:
+    """可用於 CIEDE2000 比色的 Lab；沒有可信色彩證據時回 None。
+
+    只有通過官方數值驗證的色號才有 `lab`（未驗證的會在 `color_payload` 與
+    候選集建構階段被清成 None）。這裡刻意不從未驗證的 HEX 反推色值：
+    「多給幾個選項」不值得用一個看起來像測量結果、實際上只是網頁截色的
+    數字去換。缺色彩證據時要少給選項，不是降低證據標準。
+    """
+    lab = item.get("lab") if isinstance(item, dict) else None
+    if not isinstance(lab, (list, tuple)) or len(lab) != 3:
+        return None
+    if any(isinstance(value, bool) or not isinstance(value, (int, float))
+           or not math.isfinite(float(value)) for value in lab):
+        return None
+    return [float(value) for value in lab]
+
+
+def _foundation_comparison_pool(pool: List[dict], anchor: dict) -> List[dict]:
+    """粉底色號比較的候選集：可信色值，且遮瑕與粉底不互相取代。"""
+    anchor_is_concealer = _is_concealer_product(anchor)
+    return [item for item in pool
+            if comparable_lab(item) and _is_concealer_product(item) == anchor_is_concealer]
+
+
+def _is_tone_compatible(anchor_lab: List[float], candidate_lab: List[float]) -> bool:
+    """先看冷暖再談深淺：把候選色搬到同一個明度後，色相與彩度仍須相近。
+
+    直接比 ΔE00 會讓「比較白」本身就拉開距離，於是偏粉的色號只要夠淺就
+    擠得進來。把 L* 對齊後再比，剩下的差距就只有底調，暖調不會被換成冷調。
+    """
+    tone_delta = delta_e(tuple(anchor_lab), (anchor_lab[0], candidate_lab[1], candidate_lab[2]))
+    return tone_delta is not None and tone_delta <= TONE_MATCH_MAX_DELTA_E
+
+
 def _cross_brand_foundation_alternatives(anchor: Optional[dict], pool: List[dict]) -> List[dict]:
-    """Return the nearest foundation shade per non-anchor brand."""
-    if anchor is None or not anchor.get("lab"):
+    """Return the nearest foundation shade per non-anchor brand.
+
+    比較範圍是整個品牌，不分系列：系列是上架時的資料切分，不是顏色事實。
+    但每一支都必須有可信的官方數值色彩證據，否則不入列。
+    """
+    anchor_lab = comparable_lab(anchor)
+    if anchor is None or not anchor_lab:
         return []
     anchor_brand = _normalized_product_text(anchor.get("brand"))
     by_brand = {}
-    for item in pool:
+    # Legacy foundations tables also contain standalone concealers.
+    # `_foundation_comparison_pool` 會擋掉，不會被當成可互換的粉底色號。
+    for item in _foundation_comparison_pool(pool, anchor):
         brand = _normalized_product_text(item.get("brand"))
-        if not brand or brand == anchor_brand or not item.get("lab"):
+        if not brand or brand == anchor_brand:
             continue
-        shade_delta = delta_e(anchor.get("lab"), item.get("lab"))
+        shade_delta = delta_e(tuple(anchor_lab), tuple(comparable_lab(item)))
         if shade_delta is None:
             continue
-        current = by_brand.get(brand)
         key = (float(shade_delta), str(item.get("candidateKey") or ""))
+        current = by_brand.get(brand)
         if current is None or key < current[0]:
             by_brand[brand] = (key, item)
     return [{
         "brand": item.get("brand"),
         "shadeCode": item.get("shadeCode") or item.get("shadeName"),
         "anchorDeltaE": round(key[0], 2),
+        "colorMatchVerified": True,
+        "colorEvidenceStatus": item.get("colorVerificationStatus") or "verified_official_numeric",
+        "comparisonScope": "cross_brand_any_series",
         "product": item,
         "comparisonAnchor": {
             "brand": anchor.get("brand"),
             "shadeCode": anchor.get("shadeCode") or anchor.get("shadeName"),
             "candidateKey": anchor.get("candidateKey"),
+            "colorMatchVerified": True,
         },
         "disclaimer": FOUNDATION_IN_STORE_DISCLAIMER,
     } for key, item in sorted(by_brand.values(), key=lambda value: value[0])]
@@ -1521,16 +1820,22 @@ def _foundation_shade_recommendation(scored: List[dict],
                                      shade_candidate_pool: Optional[List[dict]] = None) -> Optional[dict]:
     anchor_candidates = [
         item for item in scored
-        if item.get("category") == "base" and item.get("lab")
+        if item.get("category") == "base" and comparable_lab(item)
         and (bool((item.get("foundationSkinMatch") or {}).get("accepted"))
              or bool((item.get("foundationShadePreference") or {}).get("applied")))
     ]
+    # 沒有色號通過嚴格門檻時，仍要給出三色階：使用者需要「淺一階／主推薦／
+    # 深一階」來判斷方向，空白回應沒有任何幫助。改以目前最接近的粉底當錨點，
+    # 並由 `matchTier` 與 foundationMatchStatus 誠實標示這是未達門檻的近似結果。
+    strict_anchor_available = bool(anchor_candidates)
+    if not anchor_candidates:
+        anchor_candidates = [
+            item for item in scored
+            if item.get("category") == "base" and comparable_lab(item)
+            and (item.get("foundationSkinMatch") or {}).get("deltaE") is not None
+        ]
     if not anchor_candidates:
         return None
-    foundation_pool = [
-        item for item in (shade_candidate_pool if shade_candidate_pool is not None else scored)
-        if item.get("category") == "base" and item.get("lab")
-    ]
     anchor = min(anchor_candidates, key=lambda item: (
         0 if item.get("foundationRecommendationRole") == "primary" else 1,
         float(item.get("_foundationDeltaE") if item.get("_foundationDeltaE") is not None
@@ -1538,6 +1843,11 @@ def _foundation_shade_recommendation(scored: List[dict],
         -float(item.get("score") or 0),
         str(item.get("candidateKey") or ""),
     ))
+    foundation_pool = _foundation_comparison_pool(
+        [item for item in (shade_candidate_pool if shade_candidate_pool is not None else scored)
+         if item.get("category") == "base"],
+        anchor,
+    )
     series_id, depth_index = anchor.get("seriesId"), anchor.get("depthIndex")
     anchor_brand = _normalized_product_text(anchor.get("brand"))
     official = bool(series_id and depth_index is not None
@@ -1552,39 +1862,69 @@ def _foundation_shade_recommendation(scored: List[dict],
         darker = min((item for item in same_series if item["depthIndex"] > depth_index),
                      key=lambda item: item["depthIndex"], default=None)
     else:
-        anchor_l = anchor["lab"][0]
-        anchor_family = _foundation_family_key(anchor)
-        def is_safe_family_alternative(item: dict) -> bool:
-            shade_delta = delta_e(anchor.get("lab"), item.get("lab"))
-            return (
-                item is not anchor
-                and anchor_family is not None
-                and _foundation_family_key(item) == anchor_family
-                and shade_delta is not None
-                and shade_delta <= SHADE_ALTERNATIVE_MAX_DELTA_E
-            )
-        same_family = [
-            item for item in foundation_pool if is_safe_family_alternative(item)
-        ]
-        lighter = min((item for item in same_family if item["lab"][0] > anchor_l),
-                      key=lambda item: item["lab"][0] - anchor_l, default=None)
-        darker = min((item for item in same_family if item["lab"][0] < anchor_l),
-                     key=lambda item: anchor_l - item["lab"][0], default=None)
-    # Even an official adjacent shade should still be a plausible comparison.
-    # A large hue/chroma jump is more likely to confuse than help the shopper.
-    def within_alternative_delta_cap(item: Optional[dict]) -> Optional[dict]:
-        if item is None:
-            return None
-        shade_delta = delta_e(anchor.get("lab"), item.get("lab"))
-        return item if shade_delta is not None and shade_delta <= SHADE_ALTERNATIVE_MAX_DELTA_E else None
-    lighter = within_alternative_delta_cap(lighter)
-    darker = within_alternative_delta_cap(darker)
+        # 系列是上架時的資料切分，不是顏色事實：同品牌的另一條產品線本來就是
+        # 合理的比較對象，舊版把它擋掉只會讓大多數色號拿不到任何方向感。
+        # 放寬的是「跟誰比」，不是「憑什麼比」——色彩證據與冷暖護欄照舊。
+        anchor_lab = comparable_lab(anchor)
+        anchor_l = anchor_lab[0]
 
-    def choice(item, relation, label, description):
+        def depth_candidates(same_brand: bool) -> List[dict]:
+            selected = []
+            for item in foundation_pool:
+                if item is anchor:
+                    continue
+                item_brand = _normalized_product_text(item.get("brand"))
+                if bool(anchor_brand and item_brand == anchor_brand) != same_brand:
+                    continue
+                item_lab = comparable_lab(item)
+                shade_delta = delta_e(tuple(anchor_lab), tuple(item_lab))
+                # 明度差太小的不是另一階，只是同一階的另一支；色差太大的
+                # 已經不是鄰居；冷暖不同的再淺也不是同一個人的淺色選擇。
+                if (shade_delta is None or shade_delta > STEP_MAX_DELTA_E
+                        or abs(item_lab[0] - anchor_l) < MIN_LIGHTNESS_STEP
+                        or not _is_tone_compatible(anchor_lab, item_lab)):
+                    continue
+                selected.append(item)
+            return selected
+
+        def nearest(items: List[dict], lighter_side: bool) -> Optional[dict]:
+            return min((item for item in items
+                        if (comparable_lab(item)[0] > anchor_l) == lighter_side),
+                       key=lambda item: (abs(comparable_lab(item)[0] - anchor_l),
+                                         str(item.get("candidateKey") or "")),
+                       default=None)
+
+        same_brand_candidates = depth_candidates(same_brand=True)
+        cross_brand_candidates = depth_candidates(same_brand=False)
+        # 同品牌優先。同品牌該方向真的沒有合格色號時才跨品牌，並在 scope
+        # 標明來源，不會讓別家的色號看起來像這個品牌的上下一階。
+        lighter = nearest(same_brand_candidates, True) or nearest(cross_brand_candidates, True)
+        darker = nearest(same_brand_candidates, False) or nearest(cross_brand_candidates, False)
+
+    def reference_scope(item: Optional[dict]) -> Optional[str]:
         if item is None:
             return None
-        anchor_delta_e = delta_e(anchor.get("lab"), item.get("lab"))
-        lightness_difference = float(item["lab"][0]) - float(anchor["lab"][0])
+        if official:
+            return "same_brand_same_series"
+        return ("same_brand_any_series"
+                if anchor_brand and _normalized_product_text(item.get("brand")) == anchor_brand
+                else "cross_brand")
+
+    # 色差超過建議上限時不再整個拿掉：使用者需要方向感，空白比帶警示更糟。
+    # 改為保留並以 `withinAlternativeCap: false` 標示，由前端決定呈現方式。
+    def alternative_within_cap(item: Optional[dict]) -> bool:
+        if item is None:
+            return False
+        shade_delta = delta_e(comparable_lab(anchor), comparable_lab(item))
+        return shade_delta is not None and shade_delta <= SHADE_ALTERNATIVE_MAX_DELTA_E
+    lighter_within_cap = alternative_within_cap(lighter)
+    darker_within_cap = alternative_within_cap(darker)
+
+    def choice(item, relation, label, description, within_cap=True):
+        if item is None:
+            return None
+        anchor_delta_e = delta_e(comparable_lab(anchor), comparable_lab(item))
+        lightness_difference = float(comparable_lab(item)[0]) - float(comparable_lab(anchor)[0])
         return {
             "relation": relation, "label": label, "description": description,
             "shadeCode": item.get("shadeCode") or item.get("shadeName") or item.get("name"),
@@ -1593,13 +1933,35 @@ def _foundation_shade_recommendation(scored: List[dict],
             "lightnessDifference": round(lightness_difference, 2),
             "matchScore": round(float(item.get("matchScore") or 0), 4),
             "matchPercent": round(float(item.get("matchScore") or 0) * 100),
+            "colorMatchVerified": bool(item.get("lab")),
+            # 這支色號是從哪個範圍挑出來的，以及它是不是品牌自己公布的一階。
+            # 前端要靠這兩個欄位決定文案，不可一律寫成「淺一階／深一階」。
+            "scope": reference_scope(item),
+            "officialShadeLadder": bool(official) and relation != "anchor",
+            # 與主推薦的色差是否在建議範圍內。false 代表這是同系列中最接近的
+            # 選項，但跨度較大，前端應加註「差距較明顯」而非直接隱藏。
+            "withinAlternativeCap": bool(within_cap),
             "product": item,
         }
     return {
         "method": "official_depth_index" if official else "lab_lightness_approximation",
         "seriesId": series_id if official else None,
-        "selectionScope": "same_brand_same_series",
+        "selectionScope": ("same_brand_same_series" if official
+                           else "same_brand_any_series_then_cross_brand"),
         "alternativeMaxDeltaE": SHADE_ALTERNATIVE_MAX_DELTA_E,
+        # 沒有品牌官方色階時，較淺／較深是本站算出來的方向參考。
+        # 這組門檻與商品頁 shadeNeighbors 共用，兩邊說法不會不一致。
+        "depthReferencePolicy": None if official else {
+            "method": "lab_lightness_within_tone_guard",
+            "officialShadeLadder": False,
+            "scopeOrder": ["same_brand_any_series", "cross_brand"],
+            "minLightnessStep": MIN_LIGHTNESS_STEP,
+            "toneMaxDeltaE": TONE_MATCH_MAX_DELTA_E,
+            "stepMaxDeltaE": STEP_MAX_DELTA_E,
+        },
+        # 未達嚴格門檻時仍回三色階，但明確標示它是近似結果而非合格配對。
+        "matchTier": "strict" if strict_anchor_available else "closest_available",
+        "strictAnchorAvailable": strict_anchor_available,
         "anchor": choice(
             anchor, "anchor", "主推薦色號",
             "根據臉部分析結果選出的相近色號。",
@@ -1607,17 +1969,24 @@ def _foundation_shade_recommendation(scored: List[dict],
         # Anchor is already the server-selected main recommendation.  These
         # labels are relative to that visible anchor; the private skin-anchor
         # offset is intentionally not exposed to the client.
-        "lighter": choice(lighter, "lighter_variant", "淺一階",
-                           "適合希望提亮膚色或呈現較明亮妝效時比較。"),
-        "darker": choice(darker, "darker_variant", "深一階",
-                          "適合近期有日曬或偏好自然健康妝效時比較。"),
+        "lighter": choice(lighter, "lighter_variant",
+                          "淺一階" if official else "較淺相近色",
+                          "適合希望提亮膚色或呈現較明亮妝效時比較。",
+                          within_cap=lighter_within_cap),
+        "darker": choice(darker, "darker_variant",
+                         "深一階" if official else "較深相近色",
+                         "適合近期有日曬或偏好自然健康妝效時比較。",
+                         within_cap=darker_within_cap),
         "disclaimer": ("色階依同品牌同系列的正式深淺順序提供，且只回傳與主推薦色號 "
                        f"ΔE00 不超過 {SHADE_ALTERNATIVE_MAX_DELTA_E:.1f} 的相鄰色；"
                        "找不到符合條件的色號時會回傳空值。實際顏色仍可能受到光線、螢幕與上妝方式影響。"
+                       f"{FOUNDATION_IN_STORE_DISCLAIMER}"
                        if official else
-                       "目前缺少品牌正式色階順序；替代色只在同品牌、同產品系列內依 L* 明度尋找，"
-                       f"且與主推薦色號的 ΔE00 不得超過 {SHADE_ALTERNATIVE_MAX_DELTA_E:.1f}。"
-                       "找不到符合條件的色號時會回傳空值，不會跨品牌補色，也不代表品牌定義的淺一階或深一階。"),
+                       "目前缺少品牌正式色階順序；較淺／較深是先篩選冷暖與色相接近的色號，"
+                       "再比較 L* 明度得到的參考方向，優先取同品牌（不限系列），"
+                       "同品牌沒有合適色號時才跨品牌，並在 scope 標明來源。"
+                       "它不代表品牌定義的淺一階或深一階；找不到符合條件的色號時會回傳空值。"
+                       f"{FOUNDATION_IN_STORE_DISCLAIMER}"),
     }
 
 def _diversify_categories(scored: List[dict], limit: int) -> List[dict]:
@@ -1632,8 +2001,9 @@ def _diversify_categories(scored: List[dict], limit: int) -> List[dict]:
         if items and items[0].get("category") == "base":
             items.sort(key=lambda item: (
                 0 if item.get("foundationRecommendationRole") == "primary" else 1,
-                float(item.get("_foundationDeltaE") if item.get("_foundationDeltaE") is not None
-                      else (item.get("foundationSkinMatch") or {}).get("deltaE", float("inf"))),
+                float(item.get("_foundationRankDeltaE") if item.get("_foundationRankDeltaE") is not None
+                      else (item.get("_foundationDeltaE") if item.get("_foundationDeltaE") is not None
+                            else (item.get("foundationSkinMatch") or {}).get("deltaE", float("inf")))),
                 -float(item.get("score") or 0),
                 str(item.get("candidateKey") or ""),
             ))

@@ -20,6 +20,7 @@ def foundation(product_id, brand, lab, shade, ready=True):
         "status": "active",
         "reviewStatus": "approved",
         "recommendationReady": ready,
+        "colorMatchReady": ready,
     }
 
 
@@ -45,7 +46,8 @@ class CrossBrandShadeMatchTests(unittest.TestCase):
         body = response.get_json()
         self.assertEqual(body["comparisonMethod"], "CIEDE2000")
         self.assertEqual(body["source"]["shadeCode"], "NC25")
-        self.assertEqual(body["availableTargetBrands"], ["CHANEL", "YSL"])
+        # 指定品牌時，來源品牌本身也可選（用來顯示該品牌自己的三色階）。
+        self.assertEqual(body["availableTargetBrands"], ["CHANEL", "MAC", "YSL"])
         self.assertEqual([item["id"] for item in body["items"]], [20, 21])
         self.assertEqual(body["totalCandidates"], 2)
         self.assertTrue(body["items"][0]["shadeMatch"]["displayScore"])

@@ -23,6 +23,13 @@
 
 ## 系統功能
 
+### 本次文件同步重點（2026-09-17）
+
+- 粉底推薦已改為「具官方數值色彩證據才可做使用者膚色嚴格匹配」；資料不足時會明確降級，不會把網頁色票當成實測結果。
+- 商品詳情可取得以目前瀏覽粉底為基準的較淺、最相近、較深參考色；跨品牌結果只用於比較。
+- 商品圖片可經由已發布的同源鏡像清單提供，保留原始來源網址，降低品牌網站防盜連或驗證頁直接出現在使用者畫面的風險。
+- 已補齊色彩契約、色號鄰近、跨品牌、個人化、保存妝容與圖片鏡像的契約測試。
+
 ### 會員與帳號安全
 
 - 註冊資料先保存於 pending_registrations；完成 Email OTP 驗證後才建立正式會員。
@@ -42,6 +49,7 @@
 - 管理員會員管理、商品稽核與管理操作紀錄。
 - 商品相似推薦與同品類商品查詢。
 - 美元商品保留原始幣別，並提供揭露匯率與計算方式的新台幣顯示價格。
+- 商品回應同時保留原始商品圖片來源與可用的鏡像網址；找不到已驗證鏡像時會安全地保留原網址，不會自行偽造圖片。
 
 ### 商品推薦
 
@@ -50,6 +58,7 @@
 - 唇彩、眼影、腮紅、修容、打亮、眉彩以風格、關鍵字、色系偏好及適用特徵排序。
 - 登入會員可依既有收藏、試妝與購物車產生有限度的行為偏好重排。
 - 回傳推薦理由、色差說明、色號替代選項、覆蓋狀態與降級原因。
+- 色彩資料須有可追溯的官方數值證據才可用於粉底比色；透明商品、色盤、官方僅有色號名稱及未驗證色值會以不同方式標示，不會假裝是實體試色結果。
 
 ## 技術架構
 
@@ -71,7 +80,7 @@ flowchart LR
 | 快取 | Redis 7、redis-py | OTP、到期、寄送與驗證限制 |
 | 安全 | Bcrypt、Flask-Login、Flask-CORS、dnspython | 密碼、登入、跨域與網域驗證 |
 | 商品預覽 | requests、BeautifulSoup4 | 商品頁解析、URL 檢查與 SSRF 防護 |
-| 色彩與影像 | NumPy、OpenCV、Pillow | 色彩資料與影像處理支援 |
+| 色彩與影像 | NumPy、OpenCV、Pillow | CIELAB／CIEDE2000 色彩資料、圖片轉檔與鏡像處理支援 |
 | 部署 | Docker、Docker Compose | Flask、PostgreSQL、Redis 容器服務 |
 
 Qdrant、Ollama 與 Stable Diffusion 相關設定目前為預留整合；正式推薦流程不依賴它們。
@@ -174,6 +183,22 @@ flowchart TD
 3. 狀態符合 active、approved、in_stock、recommendation_ready。
 4. 提供名稱、品牌、價格、描述、分類、標籤與色彩資料。
 5. 粉底另提供可用 LAB；同系列色階功能需要正確 series_id、depth_index 與正式排序來源。
+
+### 色彩資料驗證
+
+色彩資料由 color_contract.py 統一處理，避免把網頁圖片、色名或未驗證 HEX 當作實體顏色測量。
+
+| 狀態／欄位 | 意義 |
+|---|---|
+| colorMatchReady | 官方數值色碼、SKU、來源網址與證據雜湊均可驗證時才為 true；只有此狀態可作為使用者膚色的嚴格粉底匹配依據。 |
+| colorReferenceReady | 有完整單色 HEX 並可依統一 sRGB→CIELAB 公式換算；可用於商品間的參考比較，證據等級低於 colorMatchReady。 |
+| colorEstimated | 有 HEX 但尚未通過完整官方數值驗證；可供目錄色票展示，不得宣稱為官方實測或使用者膚色正式匹配。 |
+| colorRepresentation | 區分 single、palette、transparent、official_name_only。 |
+| paletteComplete | 色盤每格都有可用官方色值時才為 true。 |
+| colorWarning | 前端可直接顯示的色彩資料限制或警語。 |
+| imageIdentityStatus | 圖片與商品色號核對狀態；若不符，後端不回傳該圖片供商品使用。 |
+
+透明商品、色盤與官方僅提供色號名稱的商品仍可出現在目錄與風格推薦中，但不會拿來做使用者膚色的粉底 CIEDE2000 嚴格匹配。商品間色號參考也會回傳證據等級與警語。
 
 ## 推薦演算法
 
@@ -280,9 +305,22 @@ FinalScore = (1 - BehaviorWeight) × ContentScore + BehaviorWeight × BehaviorSc
 - 單次候選上限為 5,000 筆，排序複雜度約為 O(n log n)。
 - 使用 candidateKey 去重，並優先讓不同品類都有曝光。
 - primary 提供各品類主推；alternates 提供達 threshold 0.80 的替代商品。
-- 粉底可回傳同品牌、同系列的淺一階與深一階色號；替代色與主推薦的 ΔE00 上限為 5。
+- 粉底的較淺／較深參考先限制色相與彩度（冷暖）在合理範圍，再比 L* 明度；優先同品牌（不限系列），同品牌該方向沒有合格色號時才跨品牌，並以 `scope` 標明來源。
+- 只有品牌自己公布色階順序（`depthIndexOfficial` 為 true）時才會使用「淺一階／深一階」字樣，並帶 `officialShadeLadder: true`；其餘一律是「較淺相近色／較深相近色」。
 - foundationCrossBrandAlternatives 提供非主品牌的相近粉底，以供比較，不取代主推薦。
+- 使用者膚色的正式粉底匹配只使用 `colorMatchReady`；色號鄰近比較另可使用 `colorReferenceReady`，並保留資料等級。遮瑕不會與粉底互相取代。
 - 每筆商品提供 matchScore、scoreBreakdown、matchReason、matchReasons 與 recommendationPresentation。
+
+粉底相關的主要輸出欄位：
+
+| 欄位 | 前端用途 |
+|---|---|
+| foundationSkinMatch | 使用者膚色與該粉底色號的 ΔE00、嚴格 0～2 門檻及顯示狀態。 |
+| foundationMatchStatus | 本次粉底是否 matched、closest_available、unavailable 或 not_requested。 |
+| shadeRecommendation | 主推薦粉底與較淺／較深參考色；`selectionScope`、每支的 `scope` 與 `officialShadeLadder` 說明取自同品牌哪個範圍、是否為官方色階，`depthReferencePolicy` 揭露冷暖與明度門檻。 |
+| foundationCrossBrandAlternatives | 相對於基準粉底的其他品牌比較色號；不等同使用者膚色匹配。 |
+| recommendationPresentation | 供畫面直接使用的標題、推薦理由、警語、是否顯示匹配度與色差 QA。 |
+| sourceImageUrl | 商品原始圖片來源；畫面用圖片可能已替換為同源鏡像，但來源資料不會被覆寫。 |
 
 matchScore 是排序分數，不是模型準確率，也不是使用者一定會喜歡的百分比。
 
@@ -296,7 +334,7 @@ matchScore 是排序分數，不是模型準確率，也不是使用者一定會
 | 認證 | POST /api/register、/api/send-otp、/api/verify-otp、/api/login、/api/logout、GET /api/me |
 | 密碼 | POST /api/forgot-password、/api/reset-password、/api/change-password |
 | 會員 | GET/PATCH/DELETE /api/members/<email>、會員稽核、點數、簽到、任務、主題、推薦碼 |
-| 商品 | GET/POST /api/products、GET/PATCH/DELETE /api/products/<id>、GET /api/products/<id>/similar |
+| 商品 | GET/POST /api/products、GET/PATCH/DELETE /api/products/<id>、GET /api/products/<id>/similar、GET /api/products/<id>/shade-matches |
 | 爬蟲 | POST /api/crawler/product-preview、爬蟲暫存查詢、核准、拒絕與匯入 |
 | 推薦 | POST /recommend-products、POST /api/tryon/save |
 | 收藏／購物車 | 收藏清單與 toggle、購物車 GET/PUT、品項 POST/PATCH/DELETE |
@@ -338,9 +376,14 @@ Backend database/
 ├── password_policy.py             # Web 與 JSON API 共用密碼規則
 ├── otp_utils.py                   # OTP、Redis、SMTP 輔助
 ├── recommendation.py              # 推薦、色彩、理由與色號替代規則
+├── color_contract.py               # 官方色值證據、sRGB→CIELAB、CIEDE2000 與色彩資料警語契約
+├── shade_neighbors.py             # 粉底色號鄰近色預先計算索引（同品牌不限系列、跨品牌）
 ├── makeup_keywords.py             # 妝容風格、別名與關鍵字字典
 ├── price_conversion.py             # 美元／新台幣顯示價與匯率揭露
 ├── crawler_preview.py             # 商品預覽、來源正規化與 SSRF 防護
+├── product_image_mirror.py         # 讀取圖片鏡像 manifest，將可用圖片網址改為同源鏡像
+├── mirror_product_images.py        # 下載、轉檔、驗證並發布商品圖片鏡像的維護工具
+├── product_image_mirror.json       # 原始圖片網址與已發布鏡像路徑的對照資料
 ├── sql.py / seed_data.py          # 開發資料匯入工具
 ├── postgre.sql                    # PostgreSQL 18 custom-format 資料庫匯出檔
 ├── Dockerfile                     # API 映像建置
@@ -351,8 +394,15 @@ Backend database/
 ├── scripts/                       # 啟動、資料比對與稽核輔助腳本
 ├── templates/                     # Jinja 網頁模板
 ├── tests/recommendation/          # 推薦、認證、商品、爬蟲、Session 契約測試
+│   ├── test_cross_brand_shade_matches.py # 跨品牌粉底比較契約測試
+│   ├── test_shade_neighbors.py    # 色號鄰近色索引、增量更新與商品頁比較測試
+│   ├── test_foundation_shade_references.py # 較淺／較深參考、冷暖護欄與色彩證據測試
+│   ├── test_personalization_regressions.py # MAC 主軸與個人化回歸測試
+│   └── test_recommendation_contract.py # 粉底門檻、色差解釋與推薦回應測試
 ├── cleanup_invalid_product_images.py # 商品圖片資料清理工具
 ├── deploy_firebase_password_reset_fix.py # Firebase 密碼重設部署輔助
+├── deploy_foundation_ladder_for_every_product.py # 商品詳情粉底色階前端部署輔助
+├── deploy_before_makeup_baseline.py # 妝前顯示基準前端部署輔助
 └── *_test.py、*_diagnostic.py 等  # 開發期手動測試與診斷工具
 ~~~
 
@@ -371,10 +421,18 @@ $env:PYTHONPATH = "."
 python tests\recommendation\test_recommendation_contract.py
 python tests\recommendation\test_catalog_filters.py
 python tests\recommendation\test_catalog_availability.py
+python tests\recommendation\test_cross_brand_shade_matches.py
+python tests\recommendation\test_shade_neighbors.py
+python tests\recommendation\test_foundation_shade_references.py
+python tests\recommendation\test_personalization_regressions.py
+python tests\recommendation\test_saved_looks_contract.py
+python tests\recommendation\test_product_image_mirror.py
 python tests\recommendation\test_crawler_preview.py
 python tests\recommendation\test_password_reset_contract.py
 python tests\recommendation\test_session_ttl_contract.py
 ~~~
+
+圖片鏡像與外部前端發布工具會連線至外部服務，僅應由具發布權限的人員在確認來源、帳號與目標環境後執行；一般測試不會發布任何內容。
 
 推薦品質評估工具：
 
@@ -391,4 +449,3 @@ python tests\recommendation\evaluate_precision_at_k.py gold.json predictions.jso
 - 商品推薦品質依賴商品名稱、分類、標籤、色彩與庫存資料完整度。
 - 粉底推薦只提供資料輔助；實際顏色受光線、螢幕與上妝方式影響，仍應以專櫃試色為準。
 - 正式環境應固定 HTTPS 網域、限制 CORS、關閉 GATEWAY_KEY_LOOSE_MODE、使用秘密管理工具提供金鑰，並定期驗證 OTP、權限、商品審核與資料庫還原流程。
-

@@ -10,12 +10,12 @@ class SavedLooksContractTests(unittest.TestCase):
         app_module.app.config.update(TESTING=True)
         self.actor = SimpleNamespace(email="member@example.com")
 
-    def test_default_limit_is_100(self):
-        self.assertEqual(app_module.SAVED_LOOK_LIMIT, 100)
+    def test_default_limit_is_200(self):
+        self.assertEqual(app_module.SAVED_LOOK_LIMIT, 200)
 
     def test_create_rejects_only_at_configured_limit(self):
         query = MagicMock()
-        query.filter_by.return_value.count.return_value = 100
+        query.filter_by.return_value.count.return_value = 200
         with app_module.app.test_request_context(
             "/api/members/member@example.com/saved-looks",
             method="POST",
@@ -31,7 +31,7 @@ class SavedLooksContractTests(unittest.TestCase):
 
         self.assertEqual(status, 409)
         self.assertEqual(response.get_json()["error"]["code"], "SAVED_LOOK_LIMIT")
-        self.assertIn("100", response.get_json()["error"]["message"])
+        self.assertIn("200", response.get_json()["error"]["message"])
 
     def test_delete_uses_hard_delete_and_commits(self):
         filtered = MagicMock()

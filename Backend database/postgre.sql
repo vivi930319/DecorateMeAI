@@ -1,31 +1,31 @@
-PGDMP$9~TKU18.418.4 .00ENCODINGENCODINGSET client_encoding = 'UTF8';
-false/00
-STDSTRINGS
-STDSTRINGS(SET standard_conforming_strings = 'on';
-false000
-SEARCHPATH
-SEARCHPATH8SELECT pg_catalog.set_config('search_path', '', false);
-false1126216815TKUDATABASECREATE DATABASE "TKU" WITH TEMPLATE = template0 ENCODING = 'UTF8' LOCALE_PROVIDER = libc LOCALE = 'English_United Kingdom.1252';
-DROP DATABASE "TKU";
-postgresfalse200DATABASE "TKU"ACL8GRANT CONNECT ON DATABASE "TKU" TO decorate_me_crawler;
-postgresfalse5681300
-SCHEMA publicACL5GRANT USAGE ON SCHEMA public TO decorate_me_crawler;
-pg_database_ownerfalse6307924000pgcrypto   EXTENSION<CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
-DROP EXTENSION pgcrypto;
-false400EXTENSION pgcryptoCOMMENT<COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
-false2124716965member_levelTYPETCREATE TYPE public.member_level AS ENUM (
+PGDMP                      ~            TKU    18.4    18.4 0   c           0    0    ENCODING    ENCODING        SET client_encoding = 'UTF8';
+                           false            d           0    0
+   STDSTRINGS
+   STDSTRINGS     (   SET standard_conforming_strings = 'on';
+                           false            e           0    0
+   SEARCHPATH
+   SEARCHPATH     8   SELECT pg_catalog.set_config('search_path', '', false);
+                           false            f           1262    16815    TKU    DATABASE     ?   CREATE DATABASE "TKU" WITH TEMPLATE = template0 ENCODING = 'UTF8' LOCALE_PROVIDER = libc LOCALE = 'English_United Kingdom.1252';
+    DROP DATABASE "TKU";
+                     postgres    false            g           0    0    DATABASE "TKU"    ACL     8   GRANT CONNECT ON DATABASE "TKU" TO decorate_me_crawler;
+                        postgres    false    5734            h           0    0
+   SCHEMA public    ACL     5   GRANT USAGE ON SCHEMA public TO decorate_me_crawler;
+                        pg_database_owner    false    6                        3079    24000    pgcrypto       EXTENSION     <   CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+    DROP EXTENSION pgcrypto;
+                        false            i           0    0    EXTENSION pgcrypto     COMMENT     <   COMMENT ON EXTENSION pgcrypto IS 'cryptographic functions';
+                             false    2            ?           1247    16965    member_level    TYPE     T   CREATE TYPE public.member_level AS ENUM (
     'bronze',
     'silver',
     'gold'
 );
-DROP TYPE public.member_level;
-publicpostgresfalse124720892member_level_enumTYPEYCREATE TYPE public.member_level_enum AS ENUM (
+    DROP TYPE public.member_level;
+       public               postgres    false            ?           1247    20892    member_level_enum    TYPE     Y   CREATE TYPE public.member_level_enum AS ENUM (
     'bronze',
     'silver',
     'gold'
 );
-$DROP TYPE public.member_level_enum;
-publicpostgresfalse@125519859daily_member_stats() PROCEDURECREATE PROCEDURE public.daily_member_stats()
+ $   DROP TYPE public.member_level_enum;
+       public               postgres    false            C           1255    19859    daily_member_stats()     PROCEDURE     ?   CREATE PROCEDURE public.daily_member_stats()
     LANGUAGE plpgsql
     AS $$
 BEGIN
@@ -33,43 +33,88 @@ BEGIN
     SELECT phone_number, level::VARCHAR, level::VARCHAR FROM members;
 END;
 $$;
-,DROP PROCEDURE public.daily_member_stats();
-publicpostgresfalse\125523819enforce_product_contract()FUNCTIONjCREATE FUNCTION public.enforce_product_contract() RETURNS trigger
+ ,   DROP PROCEDURE public.daily_member_stats();
+       public               postgres    false            `           1255    26955     enforce_product_color_evidence()    FUNCTION     &  CREATE FUNCTION public.enforce_product_color_evidence() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+ NEW.color_evidence := COALESCE(NEW.color_evidence,'{}'::jsonb);
+ -- Evidence belongs to one SKU, URL and value. A later edit must revalidate it.
+ IF NEW.color_evidence->>'status'='verified_official_numeric' AND
+    (COALESCE(NEW.color_evidence->>'sku','')<>COALESCE(NEW.sku,'') OR
+     COALESCE(NEW.color_evidence->>'sourceUrl','')<>COALESCE(NEW.source_url,'') OR
+     lower(COALESCE(NEW.color_evidence->>'hex',''))<>lower(COALESCE(NEW.hex_primary,''))) THEN
+    NEW.color_evidence := jsonb_build_object('status','unverified','reason','identity_or_color_changed');
+ END IF;
+ IF COALESCE(NEW.shade_name,'') ~* '(??|?∟|\mclear\M|\mtransparent\M)' THEN
+    NEW.hex_primary := NULL; NEW.lab := NULL;
+    NEW.color_evidence := NEW.color_evidence || '{"status":"transparent"}'::jsonb;
+ ELSIF jsonb_array_length(COALESCE(NEW.palette_colors,'[]'::jsonb))>0 OR
+       COALESCE(NEW.name,'') ~ '(?銝?鈭?迢銋?[0-9]+)??{0,8}(?弋?澆蔣)' THEN
+    NEW.hex_primary := NULL; NEW.lab := NULL;
+ ELSE
+    NEW.lab := product_hex_to_lab(NEW.hex_primary);
+ END IF;
+ NEW.recommendation_ready := COALESCE(NEW.status='active' AND NEW.review_status='approved' AND NEW.in_stock
+    AND NEW.color_evidence->>'status'='verified_official_numeric'
+    AND NULLIF(NEW.color_evidence->>'sha256','') IS NOT NULL
+    AND NEW.hex_primary IS NOT NULL AND NEW.lab IS NOT NULL
+    AND jsonb_array_length(COALESCE(NEW.palette_colors,'[]'::jsonb))=0,FALSE);
+ RETURN NEW;
+END $$;
+ 7   DROP FUNCTION public.enforce_product_color_evidence();
+       public               postgres    false            ^           1255    23819    enforce_product_contract()    FUNCTION     ?  CREATE FUNCTION public.enforce_product_contract() RETURNS trigger
     LANGUAGE plpgsql
     AS $_$
-                BEGIN
-                    NEW.category := CASE TG_TABLE_NAME
-                        WHEN 'blushes' THEN '腮紅' WHEN 'eyebrows' THEN '眉毛彩妝'
-                        WHEN 'eyeshadows' THEN '眼影' WHEN 'eyeliner_mascara' THEN '眼線/睫毛'
-                        WHEN 'contouring' THEN '修容' WHEN 'foundations' THEN '底妝'
-                        WHEN 'highlighters' THEN '打亮' WHEN 'lipsticks' THEN '唇彩' END;
-                    NEW.product_type := TG_TABLE_NAME;
-                    NEW.status := COALESCE(NEW.status,'active');
-                    NEW.review_status := COALESCE(NEW.review_status,'approved');
-                    NEW.in_stock := COALESCE(NEW.in_stock,TRUE);
-                    NEW.currency := COALESCE(NEW.currency,'TWD');
-                    NEW.sku := COALESCE(NULLIF(NEW.sku,''),NEW.sale_page_id);
-                    NEW.source_product_id := COALESCE(NEW.source_product_id,NEW.sale_page_id);
-                    NEW.source_site := COALESCE(NULLIF(NEW.source_site,''),substring(COALESCE(NEW.source_url,NEW.image_webp_url,'') from 'https?://([^/]+)'));
-                    NEW.image_urls := CASE WHEN COALESCE(NEW.image_webp_url,'')<>'' THEN jsonb_build_array(NEW.image_webp_url) ELSE '[]'::jsonb END;
-                    NEW.shade_name := COALESCE(NULLIF(NEW.shade_name,''),substring(NEW.name from ' - (.+)$'));
-                    NEW.style_tags := CASE WHEN cardinality(NEW.style_tags)=0 THEN ARRAY['daily'] ELSE NEW.style_tags END;
-                    NEW.finish_tags := CASE WHEN cardinality(NEW.finish_tags)=0 THEN ARRAY['natural'] ELSE NEW.finish_tags END;
-                    NEW.season_tags := CASE WHEN cardinality(NEW.season_tags)=0 THEN ARRAY['neutral'] ELSE NEW.season_tags END;
-                    NEW.occasion_tags := CASE WHEN cardinality(NEW.occasion_tags)=0 THEN ARRAY['daily'] ELSE NEW.occasion_tags END;
-                    NEW.lab := COALESCE(NEW.lab,product_hex_to_lab(NEW.hex_primary));
-                    NEW.last_crawled_at := COALESCE(NEW.last_crawled_at,CURRENT_TIMESTAMP);
-                    NEW.recommendation_ready := NEW.status='active' AND NEW.review_status='approved' AND NEW.in_stock
-                        AND COALESCE(NEW.image_webp_url,'')<>'' AND NEW.hex_primary ~ '^#[0-9A-Fa-f]{6}$' AND NEW.lab IS NOT NULL;
-                    NEW.data_quality_score := LEAST(1.0,(CASE WHEN NEW.name<>'' THEN 0.1 ELSE 0 END)+(CASE WHEN NEW.brand<>'' THEN 0.1 ELSE 0 END)+
-                        (CASE WHEN NEW.price>0 THEN 0.1 ELSE 0 END)+(CASE WHEN COALESCE(NEW.image_webp_url,'')<>'' THEN 0.15 ELSE 0 END)+
-                        (CASE WHEN COALESCE(NEW.source_url,'')<>'' THEN 0.1 ELSE 0 END)+(CASE WHEN NEW.hex_primary ~ '^#[0-9A-Fa-f]{6}$' THEN 0.15 ELSE 0 END)+
-                        (CASE WHEN NEW.lab IS NOT NULL THEN 0.15 ELSE 0 END)+(CASE WHEN cardinality(NEW.style_tags)>0 THEN 0.075 ELSE 0 END)+(CASE WHEN cardinality(NEW.finish_tags)>0 THEN 0.075 ELSE 0 END));
-                    NEW.updated_at := CURRENT_TIMESTAMP;
-                    RETURN NEW;
-                END $_$;
-1DROP FUNCTION public.enforce_product_contract();
-publicpostgresfalse5125519854*fn_member_checkin_count(character varying)FUNCTIONCREATE FUNCTION public.fn_member_checkin_count(p_member character varying) RETURNS integer
+BEGIN
+    NEW.category := CASE TG_TABLE_NAME
+        WHEN 'blushes' THEN '?桃?' WHEN 'eyebrows' THEN '??敶拙?'
+        WHEN 'eyeshadows' THEN '?澆蔣' WHEN 'eyeliner_mascara' THEN '?潛?/?急?'
+        WHEN 'contouring' THEN '靽桀捆' WHEN 'foundations' THEN '摨?'
+        WHEN 'highlighters' THEN '?漁' WHEN 'lipsticks' THEN '?蔗' END;
+    NEW.product_type := TG_TABLE_NAME;
+    NEW.status := COALESCE(NEW.status, 'active');
+    NEW.review_status := COALESCE(NEW.review_status, 'approved');
+    NEW.in_stock := COALESCE(NEW.in_stock, TRUE);
+    NEW.currency := COALESCE(NEW.currency, 'TWD');
+    NEW.sku := COALESCE(NULLIF(NEW.sku, ''), NEW.sale_page_id);
+    NEW.source_product_id := COALESCE(NEW.source_product_id, NEW.sale_page_id);
+    NEW.source_site := COALESCE(
+        NULLIF(NEW.source_site, ''),
+        substring(COALESCE(NEW.source_url, NEW.image_webp_url, '') from 'https?://([^/]+)')
+    );
+    NEW.image_urls := CASE
+        WHEN COALESCE(NEW.image_webp_url, '') <> '' THEN jsonb_build_array(NEW.image_webp_url)
+        ELSE '[]'::jsonb END;
+    NEW.palette_colors := COALESCE(NEW.palette_colors, '[]'::jsonb);
+    NEW.shade_name := COALESCE(NULLIF(NEW.shade_name, ''), substring(NEW.name from ' - (.+)$'));
+    NEW.style_tags := CASE WHEN cardinality(NEW.style_tags) = 0 THEN ARRAY['daily'] ELSE NEW.style_tags END;
+    NEW.finish_tags := CASE WHEN cardinality(NEW.finish_tags) = 0 THEN ARRAY['natural'] ELSE NEW.finish_tags END;
+    NEW.season_tags := CASE WHEN cardinality(NEW.season_tags) = 0 THEN ARRAY['neutral'] ELSE NEW.season_tags END;
+    NEW.occasion_tags := CASE WHEN cardinality(NEW.occasion_tags) = 0 THEN ARRAY['daily'] ELSE NEW.occasion_tags END;
+    NEW.lab := COALESCE(NEW.lab, product_hex_to_lab(NEW.hex_primary));
+    NEW.last_crawled_at := COALESCE(NEW.last_crawled_at, CURRENT_TIMESTAMP);
+    NEW.recommendation_ready := NEW.status = 'active' AND NEW.review_status = 'approved' AND NEW.in_stock
+        AND COALESCE(NEW.image_webp_url, '') <> ''
+        AND (TG_TABLE_NAME <> 'foundations'
+             OR (NEW.hex_primary ~ '^#[0-9A-Fa-f]{6}$' AND NEW.lab IS NOT NULL));
+    NEW.data_quality_score := LEAST(1.0,
+        (CASE WHEN NEW.name <> '' THEN 0.1 ELSE 0 END) +
+        (CASE WHEN NEW.brand <> '' THEN 0.1 ELSE 0 END) +
+        (CASE WHEN NEW.price > 0 THEN 0.1 ELSE 0 END) +
+        (CASE WHEN COALESCE(NEW.image_webp_url, '') <> '' THEN 0.15 ELSE 0 END) +
+        (CASE WHEN COALESCE(NEW.source_url, '') <> '' THEN 0.1 ELSE 0 END) +
+        (CASE WHEN NEW.hex_primary ~ '^#[0-9A-Fa-f]{6}$'
+                   OR jsonb_array_length(NEW.palette_colors) > 0 THEN 0.15 ELSE 0 END) +
+        (CASE WHEN NEW.lab IS NOT NULL OR jsonb_array_length(NEW.palette_colors) > 0 THEN 0.15 ELSE 0 END) +
+        (CASE WHEN cardinality(NEW.style_tags) > 0 THEN 0.075 ELSE 0 END) +
+        (CASE WHEN cardinality(NEW.finish_tags) > 0 THEN 0.075 ELSE 0 END));
+    NEW.updated_at := CURRENT_TIMESTAMP;
+    RETURN NEW;
+END
+$_$;
+ 1   DROP FUNCTION public.enforce_product_contract();
+       public               postgres    false            8           1255    19854 *   fn_member_checkin_count(character varying)    FUNCTION     ?   CREATE FUNCTION public.fn_member_checkin_count(p_member character varying) RETURNS integer
     LANGUAGE plpgsql
     AS $$
 DECLARE total INT;
@@ -78,8 +123,8 @@ BEGIN
     RETURN total;
 END;
 $$;
-JDROP FUNCTION public.fn_member_checkin_count(p_member character varying);
-publicpostgresfalseA125519860+fn_member_favorite_count(character varying)FUNCTIONCREATE FUNCTION public.fn_member_favorite_count(p_member character varying) RETURNS integer
+ J   DROP FUNCTION public.fn_member_checkin_count(p_member character varying);
+       public               postgres    false            D           1255    19860 +   fn_member_favorite_count(character varying)    FUNCTION     ?   CREATE FUNCTION public.fn_member_favorite_count(p_member character varying) RETURNS integer
     LANGUAGE plpgsql
     AS $$
 DECLARE total INT;
@@ -88,8 +133,8 @@ BEGIN
     RETURN total;
 END;
 $$;
-KDROP FUNCTION public.fn_member_favorite_count(p_member character varying);
-publicpostgresfalse2125519846func_auto_upgrade_level()FUNCTIONCREATE FUNCTION public.func_auto_upgrade_level() RETURNS trigger
+ K   DROP FUNCTION public.fn_member_favorite_count(p_member character varying);
+       public               postgres    false            5           1255    19846    func_auto_upgrade_level()    FUNCTION     ?  CREATE FUNCTION public.func_auto_upgrade_level() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 DECLARE total INT;
@@ -103,8 +148,8 @@ BEGIN
     RETURN NEW;
 END;
 $$;
-0DROP FUNCTION public.func_auto_upgrade_level();
-publicpostgresfalse1125519848func_before_favorite_insert()FUNCTIONYCREATE FUNCTION public.func_before_favorite_insert() RETURNS trigger
+ 0   DROP FUNCTION public.func_auto_upgrade_level();
+       public               postgres    false            4           1255    19848    func_before_favorite_insert()    FUNCTION     Y  CREATE FUNCTION public.func_before_favorite_insert() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 BEGIN
@@ -114,8 +159,8 @@ BEGIN
     RETURN NEW;
 END;
 $$;
-4DROP FUNCTION public.func_before_favorite_insert();
-publicpostgresfalse4125519852func_member_level_history()FUNCTIONFCREATE FUNCTION public.func_member_level_history() RETURNS trigger
+ 4   DROP FUNCTION public.func_before_favorite_insert();
+       public               postgres    false            7           1255    19852    func_member_level_history()    FUNCTION     F  CREATE FUNCTION public.func_member_level_history() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 BEGIN
@@ -126,8 +171,8 @@ BEGIN
     RETURN NEW;
 END;
 $$;
-2DROP FUNCTION public.func_member_level_history();
-publicpostgresfalse3125519850func_prevent_multiple_checkin()FUNCTIONNCREATE FUNCTION public.func_prevent_multiple_checkin() RETURNS trigger
+ 2   DROP FUNCTION public.func_member_level_history();
+       public               postgres    false            6           1255    19850    func_prevent_multiple_checkin()    FUNCTION     N  CREATE FUNCTION public.func_prevent_multiple_checkin() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 BEGIN
@@ -139,31 +184,30 @@ BEGIN
     RETURN NEW;
 END;
 $$;
-6DROP FUNCTION public.func_prevent_multiple_checkin();
-publicpostgresfalse[125523818product_hex_to_lab(text)FUNCTION8CREATE FUNCTION public.product_hex_to_lab(h text) RETURNS jsonb
+ 6   DROP FUNCTION public.func_prevent_multiple_checkin();
+       public               postgres    false            _           1255    23818    product_hex_to_lab(text)    FUNCTION     ?  CREATE FUNCTION public.product_hex_to_lab(h text) RETURNS jsonb
     LANGUAGE plpgsql IMMUTABLE
     AS $_$
-                DECLARE r DOUBLE PRECISION; g DOUBLE PRECISION; b DOUBLE PRECISION;
-                        x DOUBLE PRECISION; y DOUBLE PRECISION; z DOUBLE PRECISION;
-                        fx DOUBLE PRECISION; fy DOUBLE PRECISION; fz DOUBLE PRECISION;
-                BEGIN
-                    IF h IS NULL OR h !~ '^#[0-9A-Fa-f]{6}$' THEN RETURN NULL; END IF;
-                    r := (('x'||substr(h,2,2))::bit(8)::int) / 255.0;
-                    g := (('x'||substr(h,4,2))::bit(8)::int) / 255.0;
-                    b := (('x'||substr(h,6,2))::bit(8)::int) / 255.0;
-                    r := CASE WHEN r>0.04045 THEN power((r+0.055)/1.055,2.4) ELSE r/12.92 END;
-                    g := CASE WHEN g>0.04045 THEN power((g+0.055)/1.055,2.4) ELSE g/12.92 END;
-                    b := CASE WHEN b>0.04045 THEN power((b+0.055)/1.055,2.4) ELSE b/12.92 END;
-                    x := (r*0.4124+g*0.3576+b*0.1805)/0.95047;
-                    y := r*0.2126+g*0.7152+b*0.0722;
-                    z := (r*0.0193+g*0.1192+b*0.9505)/1.08883;
-                    fx := CASE WHEN x>0.008856 THEN power(x,1.0/3) ELSE 7.787*x+16.0/116 END;
-                    fy := CASE WHEN y>0.008856 THEN power(y,1.0/3) ELSE 7.787*y+16.0/116 END;
-                    fz := CASE WHEN z>0.008856 THEN power(z,1.0/3) ELSE 7.787*z+16.0/116 END;
-                    RETURN jsonb_build_array(round((116*fy-16)::numeric,2),round((500*(fx-fy))::numeric,2),round((200*(fy-fz))::numeric,2));
-                END $_$;
-1DROP FUNCTION public.product_hex_to_lab(h text);
-publicpostgresfalse%125524180register_product_catalog_item()FUNCTIONCREATE FUNCTION public.register_product_catalog_item() RETURNS trigger
+DECLARE r float8; g float8; b float8; x float8; y float8; z float8;
+fx float8; fy float8; fz float8; d float8 := 6.0/29;
+BEGIN
+ IF h IS NULL OR h !~ '^#[0-9a-fA-F]{6}$' THEN RETURN NULL; END IF;
+ r := (('x'||substr(h,2,2))::bit(8)::int)/255.0;
+ g := (('x'||substr(h,4,2))::bit(8)::int)/255.0;
+ b := (('x'||substr(h,6,2))::bit(8)::int)/255.0;
+ r := CASE WHEN r<=.04045 THEN r/12.92 ELSE power((r+.055)/1.055,2.4) END;
+ g := CASE WHEN g<=.04045 THEN g/12.92 ELSE power((g+.055)/1.055,2.4) END;
+ b := CASE WHEN b<=.04045 THEN b/12.92 ELSE power((b+.055)/1.055,2.4) END;
+ x := (r*.4124564+g*.3575761+b*.1804375)/.95047;
+ y := r*.2126729+g*.7151522+b*.0721750;
+ z := (r*.0193339+g*.1191920+b*.9503041)/1.08883;
+ fx := CASE WHEN x>power(d,3) THEN power(x,1.0/3) ELSE x/(3*d*d)+4.0/29 END;
+ fy := CASE WHEN y>power(d,3) THEN power(y,1.0/3) ELSE y/(3*d*d)+4.0/29 END;
+ fz := CASE WHEN z>power(d,3) THEN power(z,1.0/3) ELSE z/(3*d*d)+4.0/29 END;
+ RETURN jsonb_build_array(round((116*fy-16)::numeric,6),round((500*(fx-fy))::numeric,6),round((200*(fy-fz))::numeric,6));
+END $_$;
+ 1   DROP FUNCTION public.product_hex_to_lab(h text);
+       public               postgres    false            (           1255    24180    register_product_catalog_item()    FUNCTION       CREATE FUNCTION public.register_product_catalog_item() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
 BEGIN
@@ -173,16 +217,16 @@ BEGIN
     RETURN NEW;
 END;
 $$;
-6DROP FUNCTION public.register_product_catalog_item();
-publicpostgresfalse6125519855>sp_add_favorite(character varying, integer, character varying)   PROCEDURECREATE PROCEDURE public.sp_add_favorite(IN p_member character varying, IN p_item integer, IN p_type character varying)
+ 6   DROP FUNCTION public.register_product_catalog_item();
+       public               postgres    false            9           1255    19855 >   sp_add_favorite(character varying, integer, character varying)       PROCEDURE        CREATE PROCEDURE public.sp_add_favorite(IN p_member character varying, IN p_item integer, IN p_type character varying)
     LANGUAGE plpgsql
     AS $$
 BEGIN
     INSERT INTO favorites(member_id, item_id, item_type) VALUES(p_member, p_item, p_type);
 END;
 $$;
-vDROP PROCEDURE public.sp_add_favorite(IN p_member character varying, IN p_item integer, IN p_type character varying);
-publicpostgresfalse125920913productsTABLEnCREATE TABLE public.products (
+ v   DROP PROCEDURE public.sp_add_favorite(IN p_member character varying, IN p_item integer, IN p_type character varying);
+       public               postgres    false            ?            1259    20913    products    TABLE     n  CREATE TABLE public.products (
     id integer NOT NULL,
     name character varying(255) NOT NULL,
     price numeric(10,2) NOT NULL,
@@ -193,16 +237,16 @@ vDROP PROCEDURE public.sp_add_favorite(IN p_member character varying, IN p_item 
     category character varying(100),
     shades jsonb
 );
-DROP TABLE public.products;
-publicheaprpostgresfalse?125521115sp_get_top_products()FUNCTIONCREATE FUNCTION public.sp_get_top_products() RETURNS SETOF public.products
+    DROP TABLE public.products;
+       public         heap r       postgres    false            B           1255    21115    sp_get_top_products()    FUNCTION     ?   CREATE FUNCTION public.sp_get_top_products() RETURNS SETOF public.products
     LANGUAGE plpgsql
     AS $$
 BEGIN
     RETURN QUERY SELECT * FROM products ORDER BY favorite_count DESC LIMIT 10;
 END;
 $$;
-,DROP FUNCTION public.sp_get_top_products();
-publicpostgresfalse222Z125519858&sp_member_favorites(character varying)FUNCTIONCREATE FUNCTION public.sp_member_favorites(p_member character varying) RETURNS TABLE(id integer, category character varying, name character varying, price numeric, description text, image_url character varying)
+ ,   DROP FUNCTION public.sp_get_top_products();
+       public               postgres    false    222            ]           1255    19858 &   sp_member_favorites(character varying)    FUNCTION     ?  CREATE FUNCTION public.sp_member_favorites(p_member character varying) RETURNS TABLE(id integer, category character varying, name character varying, price numeric, description text, image_url character varying)
     LANGUAGE plpgsql
     AS $$
 BEGIN
@@ -227,17 +271,17 @@ BEGIN
     WHERE f.member_id = p_member;
 END;
 $$;
-FDROP FUNCTION public.sp_member_favorites(p_member character varying);
-publicpostgresfalse>125519856Asp_remove_favorite(character varying, integer, character varying)    PROCEDURE
-CREATE PROCEDURE public.sp_remove_favorite(IN p_member character varying, IN p_item integer, IN p_type character varying)
+ F   DROP FUNCTION public.sp_member_favorites(p_member character varying);
+       public               postgres    false            A           1255    19856 A   sp_remove_favorite(character varying, integer, character varying)        PROCEDURE 
+  CREATE PROCEDURE public.sp_remove_favorite(IN p_member character varying, IN p_item integer, IN p_type character varying)
     LANGUAGE plpgsql
     AS $$
 BEGIN
     DELETE FROM favorites WHERE member_id = p_member AND item_id = p_item AND item_type = p_type;
 END;
 $$;
-yDROP PROCEDURE public.sp_remove_favorite(IN p_member character varying, IN p_item integer, IN p_type character varying);
-publicpostgresfalse125923551admin_audit_logsTABLECREATE TABLE public.admin_audit_logs (
+ y   DROP PROCEDURE public.sp_remove_favorite(IN p_member character varying, IN p_item integer, IN p_type character varying);
+       public               postgres    false                       1259    23551    admin_audit_logs    TABLE     ?  CREATE TABLE public.admin_audit_logs (
     id character varying(36) NOT NULL,
     request_id character varying(64) NOT NULL,
     actor_email character varying(254) NOT NULL,
@@ -249,8 +293,8 @@ yDROP PROCEDURE public.sp_remove_favorite(IN p_member character varying, IN p_it
     metadata_json jsonb,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
-$DROP TABLE public.admin_audit_logs;
-publicheaprpostgresfalse125923176analysis_historyTABLECREATE TABLE public.analysis_history (
+ $   DROP TABLE public.admin_audit_logs;
+       public         heap r       postgres    false                       1259    23176    analysis_history    TABLE       CREATE TABLE public.analysis_history (
     id bigint NOT NULL,
     member_email character varying(191),
     mode character varying(10),
@@ -258,17 +302,17 @@ $DROP TABLE public.admin_audit_logs;
     analysis_package_id character varying(64),
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
 );
-$DROP TABLE public.analysis_history;
-publicheaprpostgresfalse125923175analysis_history_id_seqSEQUENCECREATE SEQUENCE public.analysis_history_id_seq
+ $   DROP TABLE public.analysis_history;
+       public         heap r       postgres    false                       1259    23175    analysis_history_id_seq    SEQUENCE        CREATE SEQUENCE public.analysis_history_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-.DROP SEQUENCE public.analysis_history_id_seq;
-publicpostgresfalse264500analysis_history_id_seqSEQUENCE OWNED BYSALTER SEQUENCE public.analysis_history_id_seq OWNED BY public.analysis_history.id;
-publicpostgresfalse263125923116
-audit_logsTABLE{CREATE TABLE public.audit_logs (
+ .   DROP SEQUENCE public.analysis_history_id_seq;
+       public               postgres    false    258            j           0    0    analysis_history_id_seq    SEQUENCE OWNED BY     S   ALTER SEQUENCE public.analysis_history_id_seq OWNED BY public.analysis_history.id;
+          public               postgres    false    257            ?            1259    23116
+   audit_logs    TABLE     {  CREATE TABLE public.audit_logs (
     id integer NOT NULL,
     actor_email character varying(100) NOT NULL,
     target_email character varying(100) NOT NULL,
@@ -278,41 +322,39 @@ audit_logsTABLE{CREATE TABLE public.audit_logs (
     after_value character varying(255),
     created_at timestamp without time zone DEFAULT now()
 );
-DROP TABLE public.audit_logs;
-publicheaprpostgresfalse125923115audit_logs_id_seqSEQUENCECREATE SEQUENCE public.audit_logs_id_seq
+    DROP TABLE public.audit_logs;
+       public         heap r       postgres    false            ?            1259    23115    audit_logs_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.audit_logs_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-(DROP SEQUENCE public.audit_logs_id_seq;
-publicpostgresfalse258600audit_logs_id_seqSEQUENCE OWNED BYGALTER SEQUENCE public.audit_logs_id_seq OWNED BY public.audit_logs.id;
-publicpostgresfalse257125921388blushesTABLECREATE TABLE public.blushes (
+ (   DROP SEQUENCE public.audit_logs_id_seq;
+       public               postgres    false    252            k           0    0    audit_logs_id_seq    SEQUENCE OWNED BY     G   ALTER SEQUENCE public.audit_logs_id_seq OWNED BY public.audit_logs.id;
+          public               postgres    false    251                       1259    24278     blushes    TABLE     >   CREATE TABLE public.blushes (
     id integer NOT NULL,
-    brand character varying(100),
-    sale_page_id character varying(50),
-    name text,
-    price integer,
+    brand character varying(100) DEFAULT 'other'::character varying NOT NULL,
+    sale_page_id character varying(50) NOT NULL,
+    name text NOT NULL,
+    price integer DEFAULT 0 NOT NULL,
     description text DEFAULT ''::text,
     image_data bytea,
-    image_webp_url character varying(500),
+    image_webp_url character varying(500) DEFAULT ''::character varying,
     lab jsonb,
     color_vector jsonb,
-    hex_primary character varying(10),
-    created_at timestamp without time zone DEFAULT now(),
-    qdrant_vector_12d double precision[],
-    shade_code character varying(150),
-    source_url text,
-    in_stock boolean DEFAULT true,
+    hex_primary character varying(10) DEFAULT ''::character varying,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     sku text,
     category character varying(30),
     product_type character varying(40),
     status character varying(20) DEFAULT 'active'::character varying,
     review_status character varying(20) DEFAULT 'approved'::character varying,
+    in_stock boolean DEFAULT true,
     currency character varying(3) DEFAULT 'TWD'::character varying,
     image_urls jsonb DEFAULT '[]'::jsonb,
+    source_url text,
     source_site text,
     source_product_id text,
     last_crawled_at timestamp with time zone,
@@ -331,19 +373,21 @@ audit_logsTABLE{CREATE TABLE public.audit_logs (
     data_quality_score numeric(4,3) DEFAULT 0,
     version integer DEFAULT 1 NOT NULL,
     deleted_at timestamp with time zone,
-    swatch_html text
+    palette_colors jsonb DEFAULT '[]'::jsonb NOT NULL,
+    palette_image_url text,
+    color_evidence jsonb DEFAULT '{}'::jsonb NOT NULL
 );
-DROP TABLE public.blushes;
-publicheaprpostgresfalse125921387blushes_id_seqSEQUENCECREATE SEQUENCE public.blushes_id_seq
+    DROP TABLE public.blushes;
+       public         heap r       postgres    false                       1259    24277    blushes_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.blushes_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-%DROP SEQUENCE public.blushes_id_seq;
-publicpostgresfalse236700blushes_id_seqSEQUENCE OWNED BYAALTER SEQUENCE public.blushes_id_seq OWNED BY public.blushes.id;
-publicpostgresfalse235125923268cartTABLECREATE TABLE public.cart (
+ %   DROP SEQUENCE public.blushes_id_seq;
+       public               postgres    false    282            l           0    0    blushes_id_seq    SEQUENCE OWNED BY     A   ALTER SEQUENCE public.blushes_id_seq OWNED BY public.blushes.id;
+          public               postgres    false    281                       1259    23268    cart    TABLE       CREATE TABLE public.cart (
     id bigint NOT NULL,
     member_id character varying(20),
     item_id bigint NOT NULL,
@@ -351,50 +395,54 @@ audit_logsTABLE{CREATE TABLE public.audit_logs (
     updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT cart_qty_check CHECK ((qty >= 1))
 );
-DROP TABLE public.cart;
-publicheaprpostgresfalse125923267cart_id_seqSEQUENCEtCREATE SEQUENCE public.cart_id_seq
+    DROP TABLE public.cart;
+       public         heap r       postgres    false   
+           1259    23267
+   cart_id_seq    SEQUENCE     t   CREATE SEQUENCE public.cart_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-"DROP SEQUENCE public.cart_id_seq;
-publicpostgresfalse274800cart_id_seqSEQUENCE OWNED BY;ALTER SEQUENCE public.cart_id_seq OWNED BY public.cart.id;
-publicpostgresfalse273125923289
-cart_itemsTABLECREATE TABLE public.cart_items (
+ "   DROP SEQUENCE public.cart_id_seq;
+       public               postgres    false    268            m           0    0
+   cart_id_seq    SEQUENCE OWNED BY     ;   ALTER SEQUENCE public.cart_id_seq OWNED BY public.cart.id;
+          public               postgres    false    267                       1259    23289
+   cart_items    TABLE     ?   CREATE TABLE public.cart_items (
     id integer NOT NULL,
     member_email character varying(100) NOT NULL,
     item_id integer NOT NULL,
     qty integer NOT NULL,
     updated_at timestamp without time zone DEFAULT now()
 );
-DROP TABLE public.cart_items;
-publicheaprpostgresfalse125923288cart_items_id_seqSEQUENCECREATE SEQUENCE public.cart_items_id_seq
+    DROP TABLE public.cart_items;
+       public         heap r       postgres    false   
+           1259    23288    cart_items_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.cart_items_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-(DROP SEQUENCE public.cart_items_id_seq;
-publicpostgresfalse276900cart_items_id_seqSEQUENCE OWNED BYGALTER SEQUENCE public.cart_items_id_seq OWNED BY public.cart_items.id;
-publicpostgresfalse275125921015checkinsTABLECREATE TABLE public.checkins (
+ (   DROP SEQUENCE public.cart_items_id_seq;
+       public               postgres    false    270            n           0    0    cart_items_id_seq    SEQUENCE OWNED BY     G   ALTER SEQUENCE public.cart_items_id_seq OWNED BY public.cart_items.id;
+          public               postgres    false    269            ?            1259    21015    checkins    TABLE     ?   CREATE TABLE public.checkins (
     id integer NOT NULL,
     member_id character varying(20) NOT NULL,
     checkin_time timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     note text
 );
-DROP TABLE public.checkins;
-publicheaprpostgresfalse125921014checkins_id_seqSEQUENCECREATE SEQUENCE public.checkins_id_seq
+    DROP TABLE public.checkins;
+       public         heap r       postgres    false            ?            1259    21014    checkins_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.checkins_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-&DROP SEQUENCE public.checkins_id_seq;
-publicpostgresfalse224:00checkins_id_seqSEQUENCE OWNED BYCALTER SEQUENCE public.checkins_id_seq OWNED BY public.checkins.id;
-publicpostgresfalse223125921051color_palettesTABLECREATE TABLE public.color_palettes (
+ &   DROP SEQUENCE public.checkins_id_seq;
+       public               postgres    false    224            o           0    0    checkins_id_seq    SEQUENCE OWNED BY     C   ALTER SEQUENCE public.checkins_id_seq OWNED BY public.checkins.id;
+          public               postgres    false    223            ?            1259    21051    color_palettes    TABLE       CREATE TABLE public.color_palettes (
     id integer NOT NULL,
     title character varying(100),
     hex_code character varying(7) NOT NULL,
@@ -402,18 +450,18 @@ cart_itemsTABLECREATE TABLE public.cart_items (
     tags character varying(100),
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
 );
-"DROP TABLE public.color_palettes;
-publicheaprpostgresfalse125921050color_palettes_id_seqSEQUENCECREATE SEQUENCE public.color_palettes_id_seq
+ "   DROP TABLE public.color_palettes;
+       public         heap r       postgres    false            ?            1259    21050    color_palettes_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.color_palettes_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-,DROP SEQUENCE public.color_palettes_id_seq;
-publicpostgresfalse228;00color_palettes_id_seqSEQUENCE OWNED BYOALTER SEQUENCE public.color_palettes_id_seq OWNED BY public.color_palettes.id;
-publicpostgresfalse227125922602
-contouringTABLEHCREATE TABLE public.contouring (
+ ,   DROP SEQUENCE public.color_palettes_id_seq;
+       public               postgres    false    228            p           0    0    color_palettes_id_seq    SEQUENCE OWNED BY     O   ALTER SEQUENCE public.color_palettes_id_seq OWNED BY public.color_palettes.id;
+          public               postgres    false    227            ?            1259    22602
+   contouring    TABLE     ?  CREATE TABLE public.contouring (
     id integer NOT NULL,
     brand character varying(100),
     sale_page_id character varying(50),
@@ -454,20 +502,22 @@ contouringTABLEHCREATE TABLE public.contouring (
     data_quality_score numeric(4,3) DEFAULT 0,
     version integer DEFAULT 1 NOT NULL,
     deleted_at timestamp with time zone,
-    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
+    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    palette_colors jsonb DEFAULT '[]'::jsonb NOT NULL,
+    palette_image_url text,
+    color_evidence jsonb DEFAULT '{}'::jsonb NOT NULL
 );
-DROP TABLE public.contouring;
-publicheaprpostgresfalse125922601contouring_id_seqSEQUENCECREATE SEQUENCE public.contouring_id_seq
+    DROP TABLE public.contouring;
+       public         heap r       postgres    false            ?            1259    22601    contouring_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.contouring_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-(DROP SEQUENCE public.contouring_id_seq;
-publicpostgresfalse246<00contouring_id_seqSEQUENCE OWNED BYGALTER SEQUENCE public.contouring_id_seq OWNED BY public.contouring.id;
-publicpostgresfalse245125924119crawler_staging_productsTABLE
-CREATE TABLE public.crawler_staging_products (
+ (   DROP SEQUENCE public.contouring_id_seq;
+       public               postgres    false    240            q           0    0    contouring_id_seq    SEQUENCE OWNED BY     G   ALTER SEQUENCE public.contouring_id_seq OWNED BY public.contouring.id;
+          public               postgres    false    239                       1259    24119    crawler_staging_products    TABLE     ?  CREATE TABLE public.crawler_staging_products (
     id integer NOT NULL,
     source_site character varying(100) NOT NULL,
     source_product_id character varying(255) NOT NULL,
@@ -523,10 +573,10 @@ CREATE TABLE public.crawler_staging_products (
     CONSTRAINT crawler_staging_source_https_ck CHECK (((source_url)::text ~ '^https://'::text)),
     CONSTRAINT crawler_staging_status_ck CHECK (((status)::text = ANY ((ARRAY['pending'::character varying, 'approved'::character varying, 'rejected'::character varying, 'imported'::character varying, 'failed'::character varying])::text[])))
 );
-,DROP TABLE public.crawler_staging_products;
-publicheaprpostgresfalse=00TABLE crawler_staging_productsCOMMENTCOMMENT ON TABLE public.crawler_staging_products IS 'Crawler-only staging area. Backend review/import is required before formal products are changed.';
-publicpostgresfalse284>00TABLE crawler_staging_productsACL\GRANT SELECT,INSERT,UPDATE ON TABLE public.crawler_staging_products TO decorate_me_crawler;
-publicpostgresfalse284125924118crawler_staging_products_id_seqSEQUENCEALTER TABLE public.crawler_staging_products ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+ ,   DROP TABLE public.crawler_staging_products;
+       public         heap r       postgres    false            r           0    0    TABLE crawler_staging_products     COMMENT     ?   COMMENT ON TABLE public.crawler_staging_products IS 'Crawler-only staging area. Backend review/import is required before formal products are changed.';
+          public               postgres    false    278            s           0    0    TABLE crawler_staging_products    ACL     \   GRANT SELECT,INSERT,UPDATE ON TABLE public.crawler_staging_products TO decorate_me_crawler;
+          public               postgres    false    278                       1259    24118    crawler_staging_products_id_seq    SEQUENCE     ?   ALTER TABLE public.crawler_staging_products ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
     SEQUENCE NAME public.crawler_staging_products_id_seq
     START WITH 1
     INCREMENT BY 1
@@ -534,9 +584,8 @@ CREATE TABLE public.crawler_staging_products (
     NO MAXVALUE
     CACHE 1
 );
-publicpostgresfalse284?00(SEQUENCE crawler_staging_products_id_seqACL^GRANT SELECT,USAGE ON SEQUENCE public.crawler_staging_products_id_seq TO decorate_me_crawler;
-publicpostgresfalse283
-125923192daily_checkinsTABLE7CREATE TABLE public.daily_checkins (
+            public               postgres    false    278            t           0    0 (   SEQUENCE crawler_staging_products_id_seq    ACL     ^   GRANT SELECT,USAGE ON SEQUENCE public.crawler_staging_products_id_seq TO decorate_me_crawler;
+          public               postgres    false    277                       1259    23192    daily_checkins    TABLE     7  CREATE TABLE public.daily_checkins (
     id bigint NOT NULL,
     member_email character varying(191),
     checkin_date date NOT NULL,
@@ -545,30 +594,29 @@ CREATE TABLE public.crawler_staging_products (
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     idempotency_key character varying(128)
 );
-"DROP TABLE public.daily_checkins;
-publicheaprpostgresfalse   125923191daily_checkins_id_seqSEQUENCE~CREATE SEQUENCE public.daily_checkins_id_seq
+ "   DROP TABLE public.daily_checkins;
+       public         heap r       postgres    false                       1259    23191    daily_checkins_id_seq    SEQUENCE     ~   CREATE SEQUENCE public.daily_checkins_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-,DROP SEQUENCE public.daily_checkins_id_seq;
-publicpostgresfalse266@00daily_checkins_id_seqSEQUENCE OWNED BYOALTER SEQUENCE public.daily_checkins_id_seq OWNED BY public.daily_checkins.id;
-publicpostgresfalse265125921403eyebrowsTABLEoCREATE TABLE public.eyebrows (
+ ,   DROP SEQUENCE public.daily_checkins_id_seq;
+       public               postgres    false    260            u           0    0    daily_checkins_id_seq    SEQUENCE OWNED BY     O   ALTER SEQUENCE public.daily_checkins_id_seq OWNED BY public.daily_checkins.id;
+          public               postgres    false    259                       1259    24303    eyebrows    TABLE     ?   CREATE TABLE public.eyebrows (
     id integer NOT NULL,
-    brand character varying(100),
-    sale_page_id character varying(50),
-    name text,
-    price integer,
+    brand character varying(100) DEFAULT 'other'::character varying NOT NULL,
+    sale_page_id character varying(50) NOT NULL,
+    name text NOT NULL,
+    price integer DEFAULT 0 NOT NULL,
     description text DEFAULT ''::text,
     image_data bytea,
-    image_webp_url character varying(500),
+    image_webp_url character varying(500) DEFAULT ''::character varying,
     lab jsonb,
     color_vector jsonb,
-    hex_primary character varying(10),
-    created_at timestamp without time zone DEFAULT now(),
-    category_name character varying(50),
-    qdrant_vector_12d double precision[],
+    hex_primary character varying(10) DEFAULT ''::character varying,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     sku text,
     category character varying(30),
     product_type character varying(40),
@@ -596,73 +644,21 @@ CREATE TABLE public.crawler_staging_products (
     data_quality_score numeric(4,3) DEFAULT 0,
     version integer DEFAULT 1 NOT NULL,
     deleted_at timestamp with time zone,
-    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
+    palette_colors jsonb DEFAULT '[]'::jsonb NOT NULL,
+    palette_image_url text,
+    color_evidence jsonb DEFAULT '{}'::jsonb NOT NULL
 );
-DROP TABLE public.eyebrows;
-publicheaprpostgresfalse125921402eyebrows_id_seqSEQUENCECREATE SEQUENCE public.eyebrows_id_seq
+    DROP TABLE public.eyebrows;
+       public         heap r       postgres    false                       1259    24302    eyebrows_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.eyebrows_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-&DROP SEQUENCE public.eyebrows_id_seq;
-publicpostgresfalse238A00eyebrows_id_seqSEQUENCE OWNED BYCALTER SEQUENCE public.eyebrows_id_seq OWNED BY public.eyebrows.id;
-publicpostgresfalse237125922465eyeliner_mascaraTABLENCREATE TABLE public.eyeliner_mascara (
-    id integer NOT NULL,
-    brand character varying(100),
-    sale_page_id character varying(50),
-    name text,
-    price integer,
-    description text DEFAULT ''::text,
-    image_data bytea,
-    image_webp_url character varying(500),
-    lab jsonb,
-    color_vector jsonb,
-    hex_primary character varying(10),
-    created_at timestamp without time zone DEFAULT now(),
-    qdrant_vector_12d double precision[],
-    sku text,
-    category character varying(30),
-    product_type character varying(40),
-    status character varying(20) DEFAULT 'active'::character varying,
-    review_status character varying(20) DEFAULT 'approved'::character varying,
-    in_stock boolean DEFAULT true,
-    currency character varying(3) DEFAULT 'TWD'::character varying,
-    image_urls jsonb DEFAULT '[]'::jsonb,
-    source_url text,
-    source_site text,
-    source_product_id text,
-    last_crawled_at timestamp with time zone,
-    crawl_fingerprint text,
-    style_tags text[] DEFAULT '{}'::text[],
-    finish_tags text[] DEFAULT '{}'::text[],
-    season_tags text[] DEFAULT '{}'::text[],
-    occasion_tags text[] DEFAULT '{}'::text[],
-    feature_tags text[] DEFAULT '{}'::text[],
-    avoid_tags text[] DEFAULT '{}'::text[],
-    shade_name text,
-    coverage character varying(20),
-    undertone character varying(20),
-    texture text,
-    recommendation_ready boolean DEFAULT false,
-    data_quality_score numeric(4,3) DEFAULT 0,
-    version integer DEFAULT 1 NOT NULL,
-    deleted_at timestamp with time zone,
-    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
-);
-$DROP TABLE public.eyeliner_mascara;
-publicheaprpostgresfalse125922464eyeliner_mascara_id_seqSEQUENCECREATE SEQUENCE public.eyeliner_mascara_id_seq
-    AS integer
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-.DROP SEQUENCE public.eyeliner_mascara_id_seq;
-publicpostgresfalse244B00eyeliner_mascara_id_seqSEQUENCE OWNED BYSALTER SEQUENCE public.eyeliner_mascara_id_seq OWNED BY public.eyeliner_mascara.id;
-publicpostgresfalse243125922389
-eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
+ &   DROP SEQUENCE public.eyebrows_id_seq;
+       public               postgres    false    284            v           0    0    eyebrows_id_seq    SEQUENCE OWNED BY     C   ALTER SEQUENCE public.eyebrows_id_seq OWNED BY public.eyebrows.id;
+          public               postgres    false    283            ?            1259    22465    eyeliner_mascara    TABLE     ?  CREATE TABLE public.eyeliner_mascara (
     id integer NOT NULL,
     brand character varying(100),
     sale_page_id character varying(50),
@@ -703,36 +699,97 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     data_quality_score numeric(4,3) DEFAULT 0,
     version integer DEFAULT 1 NOT NULL,
     deleted_at timestamp with time zone,
-    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
+    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    palette_colors jsonb DEFAULT '[]'::jsonb NOT NULL,
+    palette_image_url text,
+    color_evidence jsonb DEFAULT '{}'::jsonb NOT NULL
 );
-DROP TABLE public.eyeshadows;
-publicheaprpostgresfalse125922388eyeshadows_id_seqSEQUENCECREATE SEQUENCE public.eyeshadows_id_seq
+ $   DROP TABLE public.eyeliner_mascara;
+       public         heap r       postgres    false            ?            1259    22464    eyeliner_mascara_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.eyeliner_mascara_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-(DROP SEQUENCE public.eyeshadows_id_seq;
-publicpostgresfalse242C00eyeshadows_id_seqSEQUENCE OWNED BYGALTER SEQUENCE public.eyeshadows_id_seq OWNED BY public.eyeshadows.id;
-publicpostgresfalse241125921032 favoritesTABLECREATE TABLE public.favorites (
+ .   DROP SEQUENCE public.eyeliner_mascara_id_seq;
+       public               postgres    false    238            w           0    0    eyeliner_mascara_id_seq    SEQUENCE OWNED BY     S   ALTER SEQUENCE public.eyeliner_mascara_id_seq OWNED BY public.eyeliner_mascara.id;
+          public               postgres    false    237            ?            1259    22389
+   eyeshadows    TABLE     ?  CREATE TABLE public.eyeshadows (
+    id integer NOT NULL,
+    brand character varying(100),
+    sale_page_id character varying(50),
+    name text,
+    price integer,
+    description text DEFAULT ''::text,
+    image_data bytea,
+    image_webp_url character varying(500),
+    lab jsonb,
+    color_vector jsonb,
+    hex_primary character varying(10),
+    created_at timestamp without time zone DEFAULT now(),
+    qdrant_vector_12d double precision[],
+    sku text,
+    category character varying(30),
+    product_type character varying(40),
+    status character varying(20) DEFAULT 'active'::character varying,
+    review_status character varying(20) DEFAULT 'approved'::character varying,
+    in_stock boolean DEFAULT true,
+    currency character varying(3) DEFAULT 'TWD'::character varying,
+    image_urls jsonb DEFAULT '[]'::jsonb,
+    source_url text,
+    source_site text,
+    source_product_id text,
+    last_crawled_at timestamp with time zone,
+    crawl_fingerprint text,
+    style_tags text[] DEFAULT '{}'::text[],
+    finish_tags text[] DEFAULT '{}'::text[],
+    season_tags text[] DEFAULT '{}'::text[],
+    occasion_tags text[] DEFAULT '{}'::text[],
+    feature_tags text[] DEFAULT '{}'::text[],
+    avoid_tags text[] DEFAULT '{}'::text[],
+    shade_name text,
+    coverage character varying(20),
+    undertone character varying(20),
+    texture text,
+    recommendation_ready boolean DEFAULT false,
+    data_quality_score numeric(4,3) DEFAULT 0,
+    version integer DEFAULT 1 NOT NULL,
+    deleted_at timestamp with time zone,
+    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    palette_colors jsonb DEFAULT '[]'::jsonb NOT NULL,
+    palette_image_url text,
+    color_evidence jsonb DEFAULT '{}'::jsonb NOT NULL
+);
+    DROP TABLE public.eyeshadows;
+       public         heap r       postgres    false            ?            1259    22388    eyeshadows_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.eyeshadows_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+ (   DROP SEQUENCE public.eyeshadows_id_seq;
+       public               postgres    false    236            x           0    0    eyeshadows_id_seq    SEQUENCE OWNED BY     G   ALTER SEQUENCE public.eyeshadows_id_seq OWNED BY public.eyeshadows.id;
+          public               postgres    false    235            ?            1259    21032     favorites    TABLE     ?   CREATE TABLE public.favorites (
     id integer NOT NULL,
     member_id character varying(20) NOT NULL,
     item_id integer NOT NULL,
     item_type character varying(50) NOT NULL,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
 );
-DROP TABLE public.favorites;
-publicheaprpostgresfalse125921031favorites_id_seqSEQUENCECREATE SEQUENCE public.favorites_id_seq
+    DROP TABLE public.favorites;
+       public         heap r       postgres    false            ?            1259    21031    favorites_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.favorites_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-'DROP SEQUENCE public.favorites_id_seq;
-publicpostgresfalse226D00favorites_id_seqSEQUENCE OWNED BYEALTER SEQUENCE public.favorites_id_seq OWNED BY public.favorites.id;
-publicpostgresfalse225125922830foundationsTABLECREATE TABLE public.foundations (
+ '   DROP SEQUENCE public.favorites_id_seq;
+       public               postgres    false    226            y           0    0    favorites_id_seq    SEQUENCE OWNED BY     E   ALTER SEQUENCE public.favorites_id_seq OWNED BY public.favorites.id;
+          public               postgres    false    225            ?            1259    22830
+   foundations    TABLE     %  CREATE TABLE public.foundations (
     id integer NOT NULL,
     brand character varying(100),
     sale_page_id character varying(200),
@@ -780,34 +837,37 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     deleted_at timestamp with time zone,
     series_id character varying(120),
     depth_index integer,
+    palette_colors jsonb DEFAULT '[]'::jsonb NOT NULL,
+    palette_image_url text,
+    color_evidence jsonb DEFAULT '{}'::jsonb NOT NULL,
     CONSTRAINT foundations_depth_index_nonnegative CHECK (((depth_index IS NULL) OR (depth_index >= 0)))
 );
-DROP TABLE public.foundations;
-publicheaprpostgresfalseE00COLUMN foundations.series_idCOMMENTCOMMENT ON COLUMN public.foundations.series_id IS '同品牌同粉底系列的穩定識別碼；只有相同 series_id 才能稱為官方相鄰色階。';
-publicpostgresfalse250F00COLUMN foundations.depth_indexCOMMENTCOMMENT ON COLUMN public.foundations.depth_index IS '品牌系列內由淺至深遞增的正式色階順序；不得從色號文字猜測。';
-publicpostgresfalse250125922829foundations_id_seqSEQUENCECREATE SEQUENCE public.foundations_id_seq
+    DROP TABLE public.foundations;
+       public         heap r       postgres    false            z           0    0    COLUMN foundations.series_id     COMMENT     ?   COMMENT ON COLUMN public.foundations.series_id IS '????蝎?蝟餃??帘摰??亦Ⅳ嚗???series_id ?蝔梁摰?賊?脤???;
+          public               postgres    false    244            {           0    0    COLUMN foundations.depth_index     COMMENT     ?   COMMENT ON COLUMN public.foundations.depth_index IS '??蝟餃??抒瘛箄瘛梢?憓?甇???脤???嚗?敺??脰????葫??;
+          public               postgres    false    244            ?            1259    22829    foundations_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.foundations_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-)DROP SEQUENCE public.foundations_id_seq;
-publicpostgresfalse250G00foundations_id_seqSEQUENCE OWNED BYIALTER SEQUENCE public.foundations_id_seq OWNED BY public.foundations.id;
-publicpostgresfalse249125921418highlightersTABLEJCREATE TABLE public.highlighters (
+ )   DROP SEQUENCE public.foundations_id_seq;
+       public               postgres    false    244            |           0    0    foundations_id_seq    SEQUENCE OWNED BY     I   ALTER SEQUENCE public.foundations_id_seq OWNED BY public.foundations.id;
+          public               postgres    false    243                       1259    24328    highlighters    TABLE     C   CREATE TABLE public.highlighters (
     id integer NOT NULL,
-    brand character varying(100),
-    sale_page_id character varying(50),
-    name text,
-    price integer,
+    brand character varying(100) DEFAULT 'other'::character varying NOT NULL,
+    sale_page_id character varying(50) NOT NULL,
+    name text NOT NULL,
+    price integer DEFAULT 0 NOT NULL,
     description text DEFAULT ''::text,
     image_data bytea,
-    image_webp_url character varying(500),
+    image_webp_url character varying(500) DEFAULT ''::character varying,
     lab jsonb,
     color_vector jsonb,
-    hex_primary character varying(10),
-    created_at timestamp without time zone DEFAULT now(),
-    qdrant_vector_12d double precision[],
+    hex_primary character varying(10) DEFAULT ''::character varying,
+    created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
+    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     sku text,
     category character varying(30),
     product_type character varying(40),
@@ -835,19 +895,21 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     data_quality_score numeric(4,3) DEFAULT 0,
     version integer DEFAULT 1 NOT NULL,
     deleted_at timestamp with time zone,
-    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
+    palette_colors jsonb DEFAULT '[]'::jsonb NOT NULL,
+    palette_image_url text,
+    color_evidence jsonb DEFAULT '{}'::jsonb NOT NULL
 );
- DROP TABLE public.highlighters;
-publicheaprpostgresfalse125921417highlighters_id_seqSEQUENCECREATE SEQUENCE public.highlighters_id_seq
+     DROP TABLE public.highlighters;
+       public         heap r       postgres    false                       1259    24327    highlighters_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.highlighters_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-*DROP SEQUENCE public.highlighters_id_seq;
-publicpostgresfalse240H00highlighters_id_seqSEQUENCE OWNED BYKALTER SEQUENCE public.highlighters_id_seq OWNED BY public.highlighters.id;
-publicpostgresfalse239125922817 lipsticksTABLECREATE TABLE public.lipsticks (
+ *   DROP SEQUENCE public.highlighters_id_seq;
+       public               postgres    false    286            }           0    0    highlighters_id_seq    SEQUENCE OWNED BY     K   ALTER SEQUENCE public.highlighters_id_seq OWNED BY public.highlighters.id;
+          public               postgres    false    285            ?            1259    22817     lipsticks    TABLE     K   CREATE TABLE public.lipsticks (
     id integer NOT NULL,
     brand character varying(100),
     sale_page_id character varying(500),
@@ -892,19 +954,22 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     recommendation_ready boolean DEFAULT false,
     data_quality_score numeric(4,3) DEFAULT 0,
     version integer DEFAULT 1 NOT NULL,
-    deleted_at timestamp with time zone
+    deleted_at timestamp with time zone,
+    palette_colors jsonb DEFAULT '[]'::jsonb NOT NULL,
+    palette_image_url text,
+    color_evidence jsonb DEFAULT '{}'::jsonb NOT NULL
 );
-DROP TABLE public.lipsticks;
-publicheaprpostgresfalse125922816lipsticks_id_seqSEQUENCECREATE SEQUENCE public.lipsticks_id_seq
+    DROP TABLE public.lipsticks;
+       public         heap r       postgres    false            ?            1259    22816    lipsticks_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.lipsticks_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-'DROP SEQUENCE public.lipsticks_id_seq;
-publicpostgresfalse248I00lipsticks_id_seqSEQUENCE OWNED BYEALTER SEQUENCE public.lipsticks_id_seq OWNED BY public.lipsticks.id;
-publicpostgresfalse247125923082member_audit_logsTABLE:CREATE TABLE public.member_audit_logs (
+ '   DROP SEQUENCE public.lipsticks_id_seq;
+       public               postgres    false    242            ~           0    0    lipsticks_id_seq    SEQUENCE OWNED BY     E   ALTER SEQUENCE public.lipsticks_id_seq OWNED BY public.lipsticks.id;
+          public               postgres    false    241            ?            1259    23082    member_audit_logs    TABLE     :  CREATE TABLE public.member_audit_logs (
     id integer NOT NULL,
     actor_email character varying(100) NOT NULL,
     target_email character varying(100) NOT NULL,
@@ -913,17 +978,17 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     after_value jsonb,
     created_at timestamp without time zone DEFAULT now()
 );
-%DROP TABLE public.member_audit_logs;
-publicheaprpostgresfalse125923081member_audit_logs_id_seqSEQUENCECREATE SEQUENCE public.member_audit_logs_id_seq
+ %   DROP TABLE public.member_audit_logs;
+       public         heap r       postgres    false            ?            1259    23081    member_audit_logs_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.member_audit_logs_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-/DROP SEQUENCE public.member_audit_logs_id_seq;
-publicpostgresfalse254J00member_audit_logs_id_seqSEQUENCE OWNED BYUALTER SEQUENCE public.member_audit_logs_id_seq OWNED BY public.member_audit_logs.id;
-publicpostgresfalse253125924047member_deletion_jobsTABLECREATE TABLE public.member_deletion_jobs (
+ /   DROP SEQUENCE public.member_audit_logs_id_seq;
+       public               postgres    false    248                       0    0    member_audit_logs_id_seq    SEQUENCE OWNED BY     U   ALTER SEQUENCE public.member_audit_logs_id_seq OWNED BY public.member_audit_logs.id;
+          public               postgres    false    247                       1259    24047    member_deletion_jobs    TABLE     ?  CREATE TABLE public.member_deletion_jobs (
     id character varying(36) NOT NULL,
     request_id character varying(64) NOT NULL,
     member_email character varying(254) NOT NULL,
@@ -934,25 +999,25 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT chk_member_deletion_job_state CHECK (((state)::text = ANY ((ARRAY['pending'::character varying, 'deleting'::character varying, 'completed'::character varying, 'failed'::character varying])::text[])))
 );
-(DROP TABLE public.member_deletion_jobs;
-publicheaprpostgresfalse125921063member_level_historyTABLECREATE TABLE public.member_level_history (
+ (   DROP TABLE public.member_deletion_jobs;
+       public         heap r       postgres    false            ?            1259    21063    member_level_history    TABLE     ?   CREATE TABLE public.member_level_history (
     id integer NOT NULL,
     member_id character varying(20),
     old_level character varying(20),
     new_level character varying(20),
     changed_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
 );
-(DROP TABLE public.member_level_history;
-publicheaprpostgresfalse125921062member_level_history_id_seqSEQUENCECREATE SEQUENCE public.member_level_history_id_seq
+ (   DROP TABLE public.member_level_history;
+       public         heap r       postgres    false            ?            1259    21062    member_level_history_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.member_level_history_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-2DROP SEQUENCE public.member_level_history_id_seq;
-publicpostgresfalse230K00member_level_history_id_seqSEQUENCE OWNED BY[ALTER SEQUENCE public.member_level_history_id_seq OWNED BY public.member_level_history.id;
-publicpostgresfalse229125923954member_sessionsTABLECREATE TABLE public.member_sessions (
+ 2   DROP SEQUENCE public.member_level_history_id_seq;
+       public               postgres    false    230                       0    0    member_level_history_id_seq    SEQUENCE OWNED BY     [   ALTER SEQUENCE public.member_level_history_id_seq OWNED BY public.member_level_history.id;
+          public               postgres    false    229                       1259    23954    member_sessions    TABLE     ?  CREATE TABLE public.member_sessions (
     session_hash character varying(64) NOT NULL,
     member_id character varying(20) NOT NULL,
     created_at timestamp with time zone DEFAULT now(),
@@ -963,8 +1028,8 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     session_id character varying(64),
     source_identifier character varying(128)
 );
-#DROP TABLE public.member_sessions;
-publicheaprpostgresfalse125920899membersTABLECREATE TABLE public.members (
+ #   DROP TABLE public.member_sessions;
+       public         heap r       postgres    false            ?            1259    20899     members    TABLE     ?  CREATE TABLE public.members (
     phone_number character varying(20) NOT NULL,
     name character varying(50) DEFAULT NULL::character varying,
     email character varying(191) NOT NULL,
@@ -999,8 +1064,8 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     email_verified_at timestamp without time zone,
     CONSTRAINT members_status_check CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'suspended'::character varying, 'deleted'::character varying])::text[])))
 );
-DROP TABLE public.members;
-publicheaprpostgresfalse970970125923163  otp_codesTABLECREATE TABLE public.otp_codes (
+    DROP TABLE public.members;
+       public         heap r       postgres    false    974    974                        1259    23163      otp_codes    TABLE     ?  CREATE TABLE public.otp_codes (
     id bigint NOT NULL,
     email character varying(191) NOT NULL,
     expires_at timestamp without time zone NOT NULL,
@@ -1010,16 +1075,16 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     purpose character varying(40) DEFAULT 'email_verification'::character varying NOT NULL,
     verified_at timestamp without time zone
 );
-DROP TABLE public.otp_codes;
-publicheaprpostgresfalse125923162otp_codes_id_seqSEQUENCEyCREATE SEQUENCE public.otp_codes_id_seq
+    DROP TABLE public.otp_codes;
+       public         heap r       postgres    false                        1259    23162    otp_codes_id_seq    SEQUENCE     y   CREATE SEQUENCE public.otp_codes_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-'DROP SEQUENCE public.otp_codes_id_seq;
-publicpostgresfalse262L00otp_codes_id_seqSEQUENCE OWNED BYEALTER SEQUENCE public.otp_codes_id_seq OWNED BY public.otp_codes.id;
-publicpostgresfalse261125924102pending_registrationsTABLExCREATE TABLE public.pending_registrations (
+ '   DROP SEQUENCE public.otp_codes_id_seq;
+       public               postgres    false    256            ?           0    0    otp_codes_id_seq    SEQUENCE OWNED BY     E   ALTER SEQUENCE public.otp_codes_id_seq OWNED BY public.otp_codes.id;
+          public               postgres    false    255                       1259    24102    pending_registrations    TABLE     x  CREATE TABLE public.pending_registrations (
     email character varying(100) NOT NULL,
     phone_number character varying(20) NOT NULL,
     name character varying(50) NOT NULL,
@@ -1028,8 +1093,8 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     expires_at timestamp without time zone NOT NULL,
     created_at timestamp without time zone DEFAULT now() NOT NULL
 );
-)DROP TABLE public.pending_registrations;
-publicheaprpostgresfalse125923096points_transactionsTABLECREATE TABLE public.points_transactions (
+ )   DROP TABLE public.pending_registrations;
+       public         heap r       postgres    false            ?            1259    23096    points_transactions    TABLE     ?  CREATE TABLE public.points_transactions (
     id integer NOT NULL,
     member_email character varying(191) NOT NULL,
     delta integer NOT NULL,
@@ -1041,17 +1106,17 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     meta jsonb,
     idempotency_key character varying(128)
 );
-'DROP TABLE public.points_transactions;
-publicheaprpostgresfalse125923095points_transactions_id_seqSEQUENCECREATE SEQUENCE public.points_transactions_id_seq
+ '   DROP TABLE public.points_transactions;
+       public         heap r       postgres    false            ?            1259    23095    points_transactions_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.points_transactions_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-1DROP SEQUENCE public.points_transactions_id_seq;
-publicpostgresfalse256M00points_transactions_id_seqSEQUENCE OWNED BYYALTER SEQUENCE public.points_transactions_id_seq OWNED BY public.points_transactions.id;
-publicpostgresfalse255125923602product_audit_logsTABLE{CREATE TABLE public.product_audit_logs (
+ 1   DROP SEQUENCE public.points_transactions_id_seq;
+       public               postgres    false    250            ?           0    0    points_transactions_id_seq    SEQUENCE OWNED BY     Y   ALTER SEQUENCE public.points_transactions_id_seq OWNED BY public.points_transactions.id;
+          public               postgres    false    249                       1259    23602    product_audit_logs    TABLE     {  CREATE TABLE public.product_audit_logs (
     id bigint NOT NULL,
     product_id text NOT NULL,
     product_type character varying(40) NOT NULL,
@@ -1063,23 +1128,23 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     source_ip inet,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
-&DROP TABLE public.product_audit_logs;
-publicheaprpostgresfalse125923601product_audit_logs_id_seqSEQUENCECREATE SEQUENCE public.product_audit_logs_id_seq
+ &   DROP TABLE public.product_audit_logs;
+       public         heap r       postgres    false                       1259    23601    product_audit_logs_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.product_audit_logs_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-0DROP SEQUENCE public.product_audit_logs_id_seq;
-publicpostgresfalse279N00product_audit_logs_id_seqSEQUENCE OWNED BYWALTER SEQUENCE public.product_audit_logs_id_seq OWNED BY public.product_audit_logs.id;
-publicpostgresfalse278125924168product_catalogTABLECREATE TABLE public.product_catalog (
+ 0   DROP SEQUENCE public.product_audit_logs_id_seq;
+       public               postgres    false    273            ?           0    0    product_audit_logs_id_seq    SEQUENCE OWNED BY     W   ALTER SEQUENCE public.product_audit_logs_id_seq OWNED BY public.product_audit_logs.id;
+          public               postgres    false    272                       1259    24168    product_catalog    TABLE     ?   CREATE TABLE public.product_catalog (
     id bigint NOT NULL,
     product_type character varying(40) NOT NULL,
     source_id integer NOT NULL,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
-#DROP TABLE public.product_catalog;
-publicheaprpostgresfalse125924167product_catalog_id_seqSEQUENCEALTER TABLE public.product_catalog ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
+ #   DROP TABLE public.product_catalog;
+       public         heap r       postgres    false                       1259    24167    product_catalog_id_seq    SEQUENCE     ?   ALTER TABLE public.product_catalog ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY (
     SEQUENCE NAME public.product_catalog_id_seq
     START WITH 1
     INCREMENT BY 1
@@ -1087,32 +1152,59 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     NO MAXVALUE
     CACHE 1
 );
-publicpostgresfalse286125920912products_id_seqSEQUENCECREATE SEQUENCE public.products_id_seq
+            public               postgres    false    280                        1259    26929    product_color_repair_audit    TABLE     ,  CREATE TABLE public.product_color_repair_audit (
+    id bigint NOT NULL,
+    run_id text NOT NULL,
+    product_type text NOT NULL,
+    source_id integer NOT NULL,
+    action text NOT NULL,
+    before_data jsonb,
+    after_data jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+ .   DROP TABLE public.product_color_repair_audit;
+       public         heap r       postgres    false                       1259    26928 !   product_color_repair_audit_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.product_color_repair_audit_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+ 8   DROP SEQUENCE public.product_color_repair_audit_id_seq;
+       public               postgres    false    288            ?           0    0 !   product_color_repair_audit_id_seq    SEQUENCE OWNED BY     g   ALTER SEQUENCE public.product_color_repair_audit_id_seq OWNED BY public.product_color_repair_audit.id;
+          public               postgres    false    287            !           1259    26944    product_color_repair_runs    TABLE     ?   CREATE TABLE public.product_color_repair_runs (
+    run_id text NOT NULL,
+    summary jsonb NOT NULL,
+    completed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+ -   DROP TABLE public.product_color_repair_runs;
+       public         heap r       postgres    false            ?            1259    20912    products_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.products_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-&DROP SEQUENCE public.products_id_seq;
-publicpostgresfalse222O00products_id_seqSEQUENCE OWNED BYCALTER SEQUENCE public.products_id_seq OWNED BY public.products.id;
-publicpostgresfalse221125923246 referralsTABLECREATE TABLE public.referrals (
+ &   DROP SEQUENCE public.products_id_seq;
+       public               postgres    false    222            ?           0    0    products_id_seq    SEQUENCE OWNED BY     C   ALTER SEQUENCE public.products_id_seq OWNED BY public.products.id;
+          public               postgres    false    221   
+           1259    23246        referrals    TABLE     ?   CREATE TABLE public.referrals (
     id bigint NOT NULL,
     referrer_email character varying(191),
     referred_email character varying(191),
     points_awarded integer DEFAULT 20,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
 );
-DROP TABLE public.referrals;
-publicheaprpostgresfalse125923245referrals_id_seqSEQUENCEyCREATE SEQUENCE public.referrals_id_seq
+    DROP TABLE public.referrals;
+       public         heap r       postgres    false                          1259    23245    referrals_id_seq    SEQUENCE     y   CREATE SEQUENCE public.referrals_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-'DROP SEQUENCE public.referrals_id_seq;
-publicpostgresfalse272P00referrals_id_seqSEQUENCE OWNED BYEALTER SEQUENCE public.referrals_id_seq OWNED BY public.referrals.id;
-publicpostgresfalse271125923130saved_looksTABLE7CREATE TABLE public.saved_looks (
+ '   DROP SEQUENCE public.referrals_id_seq;
+       public               postgres    false    266            ?           0    0    referrals_id_seq    SEQUENCE OWNED BY     E   ALTER SEQUENCE public.referrals_id_seq OWNED BY public.referrals.id;
+          public               postgres    false    265            ?            1259    23130
+   saved_looks    TABLE     7  CREATE TABLE public.saved_looks (
     id integer NOT NULL,
     member_email character varying(100) NOT NULL,
     style character varying(120) NOT NULL,
@@ -1121,17 +1213,18 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     analysis_summary jsonb,
     created_at timestamp without time zone DEFAULT now()
 );
-DROP TABLE public.saved_looks;
-publicheaprpostgresfalse125923129saved_looks_id_seqSEQUENCECREATE SEQUENCE public.saved_looks_id_seq
+    DROP TABLE public.saved_looks;
+       public         heap r       postgres    false            ?            1259    23129    saved_looks_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.saved_looks_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-)DROP SEQUENCE public.saved_looks_id_seq;
-publicpostgresfalse260Q00saved_looks_id_seqSEQUENCE OWNED BYIALTER SEQUENCE public.saved_looks_id_seq OWNED BY public.saved_looks.id;
-publicpostgresfalse259125923211task_claimsTABLEMCREATE TABLE public.task_claims (
+ )   DROP SEQUENCE public.saved_looks_id_seq;
+       public               postgres    false    254            ?           0    0    saved_looks_id_seq    SEQUENCE OWNED BY     I   ALTER SEQUENCE public.saved_looks_id_seq OWNED BY public.saved_looks.id;
+          public               postgres    false    253                       1259    23211
+   task_claims    TABLE     M  CREATE TABLE public.task_claims (
     id bigint NOT NULL,
     member_email character varying(191),
     task_id character varying(40) NOT NULL,
@@ -1140,17 +1233,17 @@ eyeshadowsTABLEHCREATE TABLE public.eyeshadows (
     claim_date date NOT NULL,
     idempotency_key character varying(128)
 );
-DROP TABLE public.task_claims;
-publicheaprpostgresfalse125923210task_claims_id_seqSEQUENCE{CREATE SEQUENCE public.task_claims_id_seq
+    DROP TABLE public.task_claims;
+       public         heap r       postgres    false                       1259    23210    task_claims_id_seq    SEQUENCE     {   CREATE SEQUENCE public.task_claims_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-)DROP SEQUENCE public.task_claims_id_seq;
-publicpostgresfalse268R00task_claims_id_seqSEQUENCE OWNED BYIALTER SEQUENCE public.task_claims_id_seq OWNED BY public.task_claims.id;
-publicpostgresfalse267125921072
-tryon_recordsTABLECREATE TABLE public.tryon_records (
+ )   DROP SEQUENCE public.task_claims_id_seq;
+       public               postgres    false    262            ?           0    0    task_claims_id_seq    SEQUENCE OWNED BY     I   ALTER SEQUENCE public.task_claims_id_seq OWNED BY public.task_claims.id;
+          public               postgres    false    261            ?            1259    21072
+   tryon_records    TABLE     ?  CREATE TABLE public.tryon_records (
     id integer NOT NULL,
     member_id character varying(20) NOT NULL,
     item_id integer NOT NULL,
@@ -1160,34 +1253,33 @@ tryon_recordsTABLECREATE TABLE public.tryon_records (
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     makeup_advice text
 );
-!DROP TABLE public.tryon_records;
-publicheaprpostgresfalse125921071tryon_records_id_seqSEQUENCECREATE SEQUENCE public.tryon_records_id_seq
+ !   DROP TABLE public.tryon_records;
+       public         heap r       postgres    false            ?            1259    21071    tryon_records_id_seq    SEQUENCE     ?   CREATE SEQUENCE public.tryon_records_id_seq
     AS integer
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
-+DROP SEQUENCE public.tryon_records_id_seq;
-publicpostgresfalse232S00tryon_records_id_seqSEQUENCE OWNED BYMALTER SEQUENCE public.tryon_records_id_seq OWNED BY public.tryon_records.id;
-publicpostgresfalse231125923229unlocked_themesTABLE  CREATE TABLE public.unlocked_themes (
+ +   DROP SEQUENCE public.tryon_records_id_seq;
+       public               postgres    false    232            ?           0    0    tryon_records_id_seq    SEQUENCE OWNED BY     M   ALTER SEQUENCE public.tryon_records_id_seq OWNED BY public.tryon_records.id;
+          public               postgres    false    231                       1259    23229    unlocked_themes    TABLE         CREATE TABLE public.unlocked_themes (
     id bigint NOT NULL,
     member_email character varying(191),
     theme_id character varying(20) NOT NULL,
     unlocked_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP,
     idempotency_key character varying(128)
 );
-#DROP TABLE public.unlocked_themes;
-publicheaprpostgresfalse
-125923228unlocked_themes_id_seqSEQUENCECREATE SEQUENCE public.unlocked_themes_id_seq
+ #   DROP TABLE public.unlocked_themes;
+       public         heap r       postgres    false                        1259    23228    unlocked_themes_id_seq    SEQUENCE        CREATE SEQUENCE public.unlocked_themes_id_seq
     START WITH 1
     INCREMENT BY 1
     NO MINVALUE
     NO MAXVALUE
     CACHE 1;
--DROP SEQUENCE public.unlocked_themes_id_seq;
-publicpostgresfalse270T00unlocked_themes_id_seqSEQUENCE OWNED BYQALTER SEQUENCE public.unlocked_themes_id_seq OWNED BY public.unlocked_themes.id;
-publicpostgresfalse269125923071view_member_activityVIEWCREATE VIEW public.view_member_activity AS
+ -   DROP SEQUENCE public.unlocked_themes_id_seq;
+       public               postgres    false    264            ?           0    0    unlocked_themes_id_seq    SEQUENCE OWNED BY     Q   ALTER SEQUENCE public.unlocked_themes_id_seq OWNED BY public.unlocked_themes.id;
+          public               postgres    false    263            ?            1259    23071    view_member_activity    VIEW     ?  CREATE VIEW public.view_member_activity AS
 SELECT
     NULL::character varying(20) AS phone_number,
     NULL::character varying(50) AS name,
@@ -1198,8 +1290,8 @@ SELECT
     NULL::bigint AS total_favorites,
     NULL::timestamp without time zone AS last_checkin_at,
     NULL::numeric AS member_days;
-'DROP VIEW public.view_member_activity;
-publicvpostgresfalse970125923076view_member_dashboardVIEWCREATE VIEW public.view_member_dashboard AS
+ '   DROP VIEW public.view_member_activity;
+       public       v       postgres    false    974            ?            1259    23076    view_member_dashboard    VIEW     ?  CREATE VIEW public.view_member_dashboard AS
  SELECT m.phone_number,
     m.name,
     m.level,
@@ -1212,15 +1304,15 @@ SELECT
      LEFT JOIN public.checkins c ON (((m.phone_number)::text = (c.member_id)::text)))
      LEFT JOIN public.favorites f ON (((m.phone_number)::text = (f.member_id)::text)))
   GROUP BY m.phone_number, m.name, m.level, m.status, m.role;
-(DROP VIEW public.view_member_dashboard;
-publicvpostgresfalse220220220220220224224224226226970125921107view_product_listVIEWCREATE VIEW public.view_product_list AS
+ (   DROP VIEW public.view_member_dashboard;
+       public       v       postgres    false    220    226    226    224    224    224    220    220    220    220    974            ?            1259    21107    view_product_list    VIEW     ?   CREATE VIEW public.view_product_list AS
  SELECT id,
     name,
     ('NT$'::text || to_char(price, 'FM999,999,999'::text)) AS formatted_price,
     description
    FROM public.products;
-$DROP VIEW public.view_product_list;
-publicvpostgresfalse222222222222125921097view_product_popularityVIEWxCREATE VIEW public.view_product_popularity AS
+ $   DROP VIEW public.view_product_list;
+       public       v       postgres    false    222    222    222    222            ?            1259    21097    view_product_popularity    VIEW     x  CREATE VIEW public.view_product_popularity AS
  SELECT p.id,
     p.name,
     p.price,
@@ -1230,396 +1322,417 @@ $DROP VIEW public.view_product_list;
      LEFT JOIN public.favorites f ON (((p.id = f.item_id) AND ((f.item_type)::text = 'products'::text))))
   GROUP BY p.id, p.name, p.price
   ORDER BY (count(f.id)) DESC;
-*DROP VIEW public.view_product_popularity;
-publicvpostgresfalse226222222222226226260423179analysis_history idDEFAULTzALTER TABLE ONLY public.analysis_history ALTER COLUMN id SET DEFAULT nextval('public.analysis_history_id_seq'::regclass);
-BALTER TABLE public.analysis_history ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse263264264260423119
-audit_logs idDEFAULTnALTER TABLE ONLY public.audit_logs ALTER COLUMN id SET DEFAULT nextval('public.audit_logs_id_seq'::regclass);
-<ALTER TABLE public.audit_logs ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse257258258260421391
-blushes idDEFAULThALTER TABLE ONLY public.blushes ALTER COLUMN id SET DEFAULT nextval('public.blushes_id_seq'::regclass);
-9ALTER TABLE public.blushes ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse236235236260423271cart idDEFAULTbALTER TABLE ONLY public.cart ALTER COLUMN id SET DEFAULT nextval('public.cart_id_seq'::regclass);
-6ALTER TABLE public.cart ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse274273274260423292
-cart_items idDEFAULTnALTER TABLE ONLY public.cart_items ALTER COLUMN id SET DEFAULT nextval('public.cart_items_id_seq'::regclass);
-<ALTER TABLE public.cart_items ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse276275276260421018checkins idDEFAULTjALTER TABLE ONLY public.checkins ALTER COLUMN id SET DEFAULT nextval('public.checkins_id_seq'::regclass);
-:ALTER TABLE public.checkins ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse223224224260421054color_palettes idDEFAULTvALTER TABLE ONLY public.color_palettes ALTER COLUMN id SET DEFAULT nextval('public.color_palettes_id_seq'::regclass);
-@ALTER TABLE public.color_palettes ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse228227228[260422605
-contouring idDEFAULTnALTER TABLE ONLY public.contouring ALTER COLUMN id SET DEFAULT nextval('public.contouring_id_seq'::regclass);
-<ALTER TABLE public.contouring ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse246245246260423195daily_checkins idDEFAULTvALTER TABLE ONLY public.daily_checkins ALTER COLUMN id SET DEFAULT nextval('public.daily_checkins_id_seq'::regclass);
-@ALTER TABLE public.daily_checkins ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse265266266260421406eyebrows idDEFAULTjALTER TABLE ONLY public.eyebrows ALTER COLUMN id SET DEFAULT nextval('public.eyebrows_id_seq'::regclass);
-:ALTER TABLE public.eyebrows ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse237238238I260422468eyeliner_mascara idDEFAULTzALTER TABLE ONLY public.eyeliner_mascara ALTER COLUMN id SET DEFAULT nextval('public.eyeliner_mascara_id_seq'::regclass);
-BALTER TABLE public.eyeliner_mascara ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse2442432447260422392
-eyeshadows idDEFAULTnALTER TABLE ONLY public.eyeshadows ALTER COLUMN id SET DEFAULT nextval('public.eyeshadows_id_seq'::regclass);
-<ALTER TABLE public.eyeshadows ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse241242242260421035favorites idDEFAULTlALTER TABLE ONLY public.favorites ALTER COLUMN id SET DEFAULT nextval('public.favorites_id_seq'::regclass);
-;ALTER TABLE public.favorites ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse225226226~260422833foundations idDEFAULTpALTER TABLE ONLY public.foundations ALTER COLUMN id SET DEFAULT nextval('public.foundations_id_seq'::regclass);
-=ALTER TABLE public.foundations ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse250249250%260421421highlighters idDEFAULTrALTER TABLE ONLY public.highlighters ALTER COLUMN id SET DEFAULT nextval('public.highlighters_id_seq'::regclass);
->ALTER TABLE public.highlighters ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse239240240m260422820lipsticks idDEFAULTlALTER TABLE ONLY public.lipsticks ALTER COLUMN id SET DEFAULT nextval('public.lipsticks_id_seq'::regclass);
-;ALTER TABLE public.lipsticks ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse248247248260423085member_audit_logs idDEFAULT|ALTER TABLE ONLY public.member_audit_logs ALTER COLUMN id SET DEFAULT nextval('public.member_audit_logs_id_seq'::regclass);
-CALTER TABLE public.member_audit_logs ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse253254254260421066member_level_history idDEFAULTALTER TABLE ONLY public.member_level_history ALTER COLUMN id SET DEFAULT nextval('public.member_level_history_id_seq'::regclass);
-FALTER TABLE public.member_level_history ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse230229230260423166otp_codes idDEFAULTlALTER TABLE ONLY public.otp_codes ALTER COLUMN id SET DEFAULT nextval('public.otp_codes_id_seq'::regclass);
-;ALTER TABLE public.otp_codes ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse262261262260423099points_transactions idDEFAULTALTER TABLE ONLY public.points_transactions ALTER COLUMN id SET DEFAULT nextval('public.points_transactions_id_seq'::regclass);
-EALTER TABLE public.points_transactions ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse256255256260423605product_audit_logs idDEFAULT~ALTER TABLE ONLY public.product_audit_logs ALTER COLUMN id SET DEFAULT nextval('public.product_audit_logs_id_seq'::regclass);
-DALTER TABLE public.product_audit_logs ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse279278279260420916products idDEFAULTjALTER TABLE ONLY public.products ALTER COLUMN id SET DEFAULT nextval('public.products_id_seq'::regclass);
-:ALTER TABLE public.products ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse221222222260423249referrals idDEFAULTlALTER TABLE ONLY public.referrals ALTER COLUMN id SET DEFAULT nextval('public.referrals_id_seq'::regclass);
-;ALTER TABLE public.referrals ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse272271272260423133saved_looks idDEFAULTpALTER TABLE ONLY public.saved_looks ALTER COLUMN id SET DEFAULT nextval('public.saved_looks_id_seq'::regclass);
-=ALTER TABLE public.saved_looks ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse259260260260423214task_claims idDEFAULTpALTER TABLE ONLY public.task_claims ALTER COLUMN id SET DEFAULT nextval('public.task_claims_id_seq'::regclass);
-=ALTER TABLE public.task_claims ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse267268268260421075tryon_records idDEFAULTtALTER TABLE ONLY public.tryon_records ALTER COLUMN id SET DEFAULT nextval('public.tryon_records_id_seq'::regclass);
-?ALTER TABLE public.tryon_records ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse232231232260423232unlocked_themes idDEFAULTxALTER TABLE ONLY public.unlocked_themes ALTER COLUMN id SET DEFAULT nextval('public.unlocked_themes_id_seq'::regclass);
-AALTER TABLE public.unlocked_themes ALTER COLUMN id DROP DEFAULT;
-publicpostgresfalse270269270K260623564&admin_audit_logs admin_audit_logs_pkey
-CONSTRAINTdALTER TABLE ONLY public.admin_audit_logs
+ *   DROP VIEW public.view_product_popularity;
+       public       v       postgres    false    222    226    222    222    226    226            {           2604    23179    analysis_history id     DEFAULT     z   ALTER TABLE ONLY public.analysis_history ALTER COLUMN id SET DEFAULT nextval('public.analysis_history_id_seq'::regclass);
+ B   ALTER TABLE public.analysis_history ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    257    258    258            s           2604    23119
+   audit_logs id     DEFAULT     n   ALTER TABLE ONLY public.audit_logs ALTER COLUMN id SET DEFAULT nextval('public.audit_logs_id_seq'::regclass);
+ <   ALTER TABLE public.audit_logs ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    251    252    252            ?           2604    24281
+   blushes id     DEFAULT     h   ALTER TABLE ONLY public.blushes ALTER COLUMN id SET DEFAULT nextval('public.blushes_id_seq'::regclass);
+ 9   ALTER TABLE public.blushes ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    281    282    282            ?           2604    23271     cart id     DEFAULT     b   ALTER TABLE ONLY public.cart ALTER COLUMN id SET DEFAULT nextval('public.cart_id_seq'::regclass);
+ 6   ALTER TABLE public.cart ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    268    267    268            ?           2604    23292
+   cart_items id     DEFAULT     n   ALTER TABLE ONLY public.cart_items ALTER COLUMN id SET DEFAULT nextval('public.cart_items_id_seq'::regclass);
+ <   ALTER TABLE public.cart_items ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    269    270    270                       2604    21018
+   checkins id     DEFAULT     j   ALTER TABLE ONLY public.checkins ALTER COLUMN id SET DEFAULT nextval('public.checkins_id_seq'::regclass);
+ :   ALTER TABLE public.checkins ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    224    223    224                       2604    21054    color_palettes id     DEFAULT     v   ALTER TABLE ONLY public.color_palettes ALTER COLUMN id SET DEFAULT nextval('public.color_palettes_id_seq'::regclass);
+ @   ALTER TABLE public.color_palettes ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    227    228    228            3           2604    22605
+   contouring id     DEFAULT     n   ALTER TABLE ONLY public.contouring ALTER COLUMN id SET DEFAULT nextval('public.contouring_id_seq'::regclass);
+ <   ALTER TABLE public.contouring ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    240    239    240            }           2604    23195    daily_checkins id     DEFAULT     v   ALTER TABLE ONLY public.daily_checkins ALTER COLUMN id SET DEFAULT nextval('public.daily_checkins_id_seq'::regclass);
+ @   ALTER TABLE public.daily_checkins ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    260    259    260            ?           2604    24306
+   eyebrows id     DEFAULT     j   ALTER TABLE ONLY public.eyebrows ALTER COLUMN id SET DEFAULT nextval('public.eyebrows_id_seq'::regclass);
+ :   ALTER TABLE public.eyebrows ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    283    284    284                       2604    22468    eyeliner_mascara id     DEFAULT     z   ALTER TABLE ONLY public.eyeliner_mascara ALTER COLUMN id SET DEFAULT nextval('public.eyeliner_mascara_id_seq'::regclass);
+ B   ALTER TABLE public.eyeliner_mascara ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    238    237    238   
+           2604    22392
+   eyeshadows id     DEFAULT     n   ALTER TABLE ONLY public.eyeshadows ALTER COLUMN id SET DEFAULT nextval('public.eyeshadows_id_seq'::regclass);
+ <   ALTER TABLE public.eyeshadows ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    236    235    236                       2604    21035    favorites id     DEFAULT     l   ALTER TABLE ONLY public.favorites ALTER COLUMN id SET DEFAULT nextval('public.favorites_id_seq'::regclass);
+ ;   ALTER TABLE public.favorites ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    226    225    226            Z           2604    22833    foundations id     DEFAULT     p   ALTER TABLE ONLY public.foundations ALTER COLUMN id SET DEFAULT nextval('public.foundations_id_seq'::regclass);
+ =   ALTER TABLE public.foundations ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    243    244    244            ?           2604    24331    highlighters id     DEFAULT     r   ALTER TABLE ONLY public.highlighters ALTER COLUMN id SET DEFAULT nextval('public.highlighters_id_seq'::regclass);
+ >   ALTER TABLE public.highlighters ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    285    286    286            G           2604    22820    lipsticks id     DEFAULT     l   ALTER TABLE ONLY public.lipsticks ALTER COLUMN id SET DEFAULT nextval('public.lipsticks_id_seq'::regclass);
+ ;   ALTER TABLE public.lipsticks ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    242    241    242            o           2604    23085    member_audit_logs id     DEFAULT     |   ALTER TABLE ONLY public.member_audit_logs ALTER COLUMN id SET DEFAULT nextval('public.member_audit_logs_id_seq'::regclass);
+ C   ALTER TABLE public.member_audit_logs ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    248    247    248                        2604    21066    member_level_history id     DEFAULT     ?   ALTER TABLE ONLY public.member_level_history ALTER COLUMN id SET DEFAULT nextval('public.member_level_history_id_seq'::regclass);
+ F   ALTER TABLE public.member_level_history ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    230    229    230            w           2604    23166    otp_codes id     DEFAULT     l   ALTER TABLE ONLY public.otp_codes ALTER COLUMN id SET DEFAULT nextval('public.otp_codes_id_seq'::regclass);
+ ;   ALTER TABLE public.otp_codes ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    256    255    256            q           2604    23099    points_transactions id     DEFAULT        ALTER TABLE ONLY public.points_transactions ALTER COLUMN id SET DEFAULT nextval('public.points_transactions_id_seq'::regclass);
+ E   ALTER TABLE public.points_transactions ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    249    250    250            ?           2604    23605    product_audit_logs id     DEFAULT     ~   ALTER TABLE ONLY public.product_audit_logs ALTER COLUMN id SET DEFAULT nextval('public.product_audit_logs_id_seq'::regclass);
+ D   ALTER TABLE public.product_audit_logs ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    273    272    273            ?           2604    26932    product_color_repair_audit id     DEFAULT     ?   ALTER TABLE ONLY public.product_color_repair_audit ALTER COLUMN id SET DEFAULT nextval('public.product_color_repair_audit_id_seq'::regclass);
+ L   ALTER TABLE public.product_color_repair_audit ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    287    288    288            ?           2604    20916
+   products id     DEFAULT     j   ALTER TABLE ONLY public.products ALTER COLUMN id SET DEFAULT nextval('public.products_id_seq'::regclass);
+ :   ALTER TABLE public.products ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    221    222    222            ?           2604    23249    referrals id     DEFAULT     l   ALTER TABLE ONLY public.referrals ALTER COLUMN id SET DEFAULT nextval('public.referrals_id_seq'::regclass);
+ ;   ALTER TABLE public.referrals ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    265    266    266            u           2604    23133    saved_looks id     DEFAULT     p   ALTER TABLE ONLY public.saved_looks ALTER COLUMN id SET DEFAULT nextval('public.saved_looks_id_seq'::regclass);
+ =   ALTER TABLE public.saved_looks ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    254    253    254            ?           2604    23214    task_claims id     DEFAULT     p   ALTER TABLE ONLY public.task_claims ALTER COLUMN id SET DEFAULT nextval('public.task_claims_id_seq'::regclass);
+ =   ALTER TABLE public.task_claims ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    261    262    262                          2604    21075    tryon_records id     DEFAULT     t   ALTER TABLE ONLY public.tryon_records ALTER COLUMN id SET DEFAULT nextval('public.tryon_records_id_seq'::regclass);
+ ?   ALTER TABLE public.tryon_records ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    232    231    232            ?           2604    23232    unlocked_themes id     DEFAULT     x   ALTER TABLE ONLY public.unlocked_themes ALTER COLUMN id SET DEFAULT nextval('public.unlocked_themes_id_seq'::regclass);
+ A   ALTER TABLE public.unlocked_themes ALTER COLUMN id DROP DEFAULT;
+       public               postgres    false    264    263    264            b           2606    23564 &   admin_audit_logs admin_audit_logs_pkey
+   CONSTRAINT     d   ALTER TABLE ONLY public.admin_audit_logs
     ADD CONSTRAINT admin_audit_logs_pkey PRIMARY KEY (id);
-PALTER TABLE ONLY public.admin_audit_logs DROP CONSTRAINT admin_audit_logs_pkey;
-publicpostgresfalse277M2606235660admin_audit_logs admin_audit_logs_request_id_key
-CONSTRAINTqALTER TABLE ONLY public.admin_audit_logs
+ P   ALTER TABLE ONLY public.admin_audit_logs DROP CONSTRAINT admin_audit_logs_pkey;
+       public                 postgres    false    271            d           2606    23566 0   admin_audit_logs admin_audit_logs_request_id_key
+   CONSTRAINT     q   ALTER TABLE ONLY public.admin_audit_logs
     ADD CONSTRAINT admin_audit_logs_request_id_key UNIQUE (request_id);
-ZALTER TABLE ONLY public.admin_audit_logs DROP CONSTRAINT admin_audit_logs_request_id_key;
-publicpostgresfalse277(260623185&analysis_history analysis_history_pkey
-CONSTRAINTdALTER TABLE ONLY public.analysis_history
+ Z   ALTER TABLE ONLY public.admin_audit_logs DROP CONSTRAINT admin_audit_logs_request_id_key;
+       public                 postgres    false    271            ?           2606    23185 &   analysis_history analysis_history_pkey
+   CONSTRAINT     d   ALTER TABLE ONLY public.analysis_history
     ADD CONSTRAINT analysis_history_pkey PRIMARY KEY (id);
-PALTER TABLE ONLY public.analysis_history DROP CONSTRAINT analysis_history_pkey;
-publicpostgresfalse264260623128audit_logs audit_logs_pkey
-CONSTRAINTXALTER TABLE ONLY public.audit_logs
+ P   ALTER TABLE ONLY public.analysis_history DROP CONSTRAINT analysis_history_pkey;
+       public                 postgres    false    258            5           2606    23128    audit_logs audit_logs_pkey
+   CONSTRAINT     X   ALTER TABLE ONLY public.audit_logs
     ADD CONSTRAINT audit_logs_pkey PRIMARY KEY (id);
-DALTER TABLE ONLY public.audit_logs DROP CONSTRAINT audit_logs_pkey;
-publicpostgresfalse258260621398blushes blushes_pkey
-CONSTRAINTRALTER TABLE ONLY public.blushes
+ D   ALTER TABLE ONLY public.audit_logs DROP CONSTRAINT audit_logs_pkey;
+       public                 postgres    false    252            ?           2606    24297    blushes blushes_pkey
+   CONSTRAINT     R   ALTER TABLE ONLY public.blushes
     ADD CONSTRAINT blushes_pkey PRIMARY KEY (id);
->ALTER TABLE ONLY public.blushes DROP CONSTRAINT blushes_pkey;
-publicpostgresfalse236260621400 blushes blushes_sale_page_id_key
-CONSTRAINTcALTER TABLE ONLY public.blushes
+ >   ALTER TABLE ONLY public.blushes DROP CONSTRAINT blushes_pkey;
+       public                 postgres    false    282            ?           2606    24299     blushes blushes_sale_page_id_key
+   CONSTRAINT     c   ALTER TABLE ONLY public.blushes
     ADD CONSTRAINT blushes_sale_page_id_key UNIQUE (sale_page_id);
-JALTER TABLE ONLY public.blushes DROP CONSTRAINT blushes_sale_page_id_key;
-publicpostgresfalse236G260623299cart_items cart_items_pkey
-CONSTRAINTXALTER TABLE ONLY public.cart_items
+ J   ALTER TABLE ONLY public.blushes DROP CONSTRAINT blushes_sale_page_id_key;
+       public                 postgres    false    282            ^           2606    23299    cart_items cart_items_pkey
+   CONSTRAINT     X   ALTER TABLE ONLY public.cart_items
     ADD CONSTRAINT cart_items_pkey PRIMARY KEY (id);
-DALTER TABLE ONLY public.cart_items DROP CONSTRAINT cart_items_pkey;
-publicpostgresfalse276C260623279cart cart_pkey
-CONSTRAINTLALTER TABLE ONLY public.cart
+ D   ALTER TABLE ONLY public.cart_items DROP CONSTRAINT cart_items_pkey;
+       public                 postgres    false    270            Z           2606    23279    cart cart_pkey
+   CONSTRAINT     L   ALTER TABLE ONLY public.cart
     ADD CONSTRAINT cart_pkey PRIMARY KEY (id);
-8ALTER TABLE ONLY public.cart DROP CONSTRAINT cart_pkey;
-publicpostgresfalse274260621025checkins checkins_pkey
-CONSTRAINTTALTER TABLE ONLY public.checkins
+ 8   ALTER TABLE ONLY public.cart DROP CONSTRAINT cart_pkey;
+       public                 postgres    false    268                        2606    21025    checkins checkins_pkey
+   CONSTRAINT     T   ALTER TABLE ONLY public.checkins
     ADD CONSTRAINT checkins_pkey PRIMARY KEY (id);
-@ALTER TABLE ONLY public.checkins DROP CONSTRAINT checkins_pkey;
-publicpostgresfalse224260621061*color_palettes color_palettes_hex_code_key
-CONSTRAINTiALTER TABLE ONLY public.color_palettes
+ @   ALTER TABLE ONLY public.checkins DROP CONSTRAINT checkins_pkey;
+       public                 postgres    false    224                       2606    21061 *   color_palettes color_palettes_hex_code_key
+   CONSTRAINT     i   ALTER TABLE ONLY public.color_palettes
     ADD CONSTRAINT color_palettes_hex_code_key UNIQUE (hex_code);
-TALTER TABLE ONLY public.color_palettes DROP CONSTRAINT color_palettes_hex_code_key;
-publicpostgresfalse228260621059"color_palettes color_palettes_pkey
-CONSTRAINT`ALTER TABLE ONLY public.color_palettes
+ T   ALTER TABLE ONLY public.color_palettes DROP CONSTRAINT color_palettes_hex_code_key;
+       public                 postgres    false    228                       2606    21059 "   color_palettes color_palettes_pkey
+   CONSTRAINT     `   ALTER TABLE ONLY public.color_palettes
     ADD CONSTRAINT color_palettes_pkey PRIMARY KEY (id);
-LALTER TABLE ONLY public.color_palettes DROP CONSTRAINT color_palettes_pkey;
-publicpostgresfalse228260622612contouring contouring_pkey
-CONSTRAINTXALTER TABLE ONLY public.contouring
+ L   ALTER TABLE ONLY public.color_palettes DROP CONSTRAINT color_palettes_pkey;
+       public                 postgres    false    228                       2606    22612    contouring contouring_pkey
+   CONSTRAINT     X   ALTER TABLE ONLY public.contouring
     ADD CONSTRAINT contouring_pkey PRIMARY KEY (id);
-DALTER TABLE ONLY public.contouring DROP CONSTRAINT contouring_pkey;
-publicpostgresfalse246260622614&contouring contouring_sale_page_id_key
-CONSTRAINTiALTER TABLE ONLY public.contouring
+ D   ALTER TABLE ONLY public.contouring DROP CONSTRAINT contouring_pkey;
+       public                 postgres    false    240                       2606    22614 &   contouring contouring_sale_page_id_key
+   CONSTRAINT     i   ALTER TABLE ONLY public.contouring
     ADD CONSTRAINT contouring_sale_page_id_key UNIQUE (sale_page_id);
-PALTER TABLE ONLY public.contouring DROP CONSTRAINT contouring_sale_page_id_key;
-publicpostgresfalse246g2606241376crawler_staging_products crawler_staging_products_pkey
-CONSTRAINTtALTER TABLE ONLY public.crawler_staging_products
+ P   ALTER TABLE ONLY public.contouring DROP CONSTRAINT contouring_sale_page_id_key;
+       public                 postgres    false    240            ~           2606    24137 6   crawler_staging_products crawler_staging_products_pkey
+   CONSTRAINT     t   ALTER TABLE ONLY public.crawler_staging_products
     ADD CONSTRAINT crawler_staging_products_pkey PRIMARY KEY (id);
-`ALTER TABLE ONLY public.crawler_staging_products DROP CONSTRAINT crawler_staging_products_pkey;
-publicpostgresfalse284*2606240751daily_checkins daily_checkins_idempotency_key_key
-CONSTRAINTwALTER TABLE ONLY public.daily_checkins
+ `   ALTER TABLE ONLY public.crawler_staging_products DROP CONSTRAINT crawler_staging_products_pkey;
+       public                 postgres    false    278            A           2606    24075 1   daily_checkins daily_checkins_idempotency_key_key
+   CONSTRAINT     w   ALTER TABLE ONLY public.daily_checkins
     ADD CONSTRAINT daily_checkins_idempotency_key_key UNIQUE (idempotency_key);
-[ALTER TABLE ONLY public.daily_checkins DROP CONSTRAINT daily_checkins_idempotency_key_key;
-publicpostgresfalse266,260623202"daily_checkins daily_checkins_pkey
-CONSTRAINT`ALTER TABLE ONLY public.daily_checkins
+ [   ALTER TABLE ONLY public.daily_checkins DROP CONSTRAINT daily_checkins_idempotency_key_key;
+       public                 postgres    false    260            C           2606    23202 "   daily_checkins daily_checkins_pkey
+   CONSTRAINT     `   ALTER TABLE ONLY public.daily_checkins
     ADD CONSTRAINT daily_checkins_pkey PRIMARY KEY (id);
-LALTER TABLE ONLY public.daily_checkins DROP CONSTRAINT daily_checkins_pkey;
-publicpostgresfalse266260621413eyebrows eyebrows_pkey
-CONSTRAINTTALTER TABLE ONLY public.eyebrows
+ L   ALTER TABLE ONLY public.daily_checkins DROP CONSTRAINT daily_checkins_pkey;
+       public                 postgres    false    260            ?           2606    24322    eyebrows eyebrows_pkey
+   CONSTRAINT     T   ALTER TABLE ONLY public.eyebrows
     ADD CONSTRAINT eyebrows_pkey PRIMARY KEY (id);
-@ALTER TABLE ONLY public.eyebrows DROP CONSTRAINT eyebrows_pkey;
-publicpostgresfalse238260621415"eyebrows eyebrows_sale_page_id_key
-CONSTRAINTeALTER TABLE ONLY public.eyebrows
+ @   ALTER TABLE ONLY public.eyebrows DROP CONSTRAINT eyebrows_pkey;
+       public                 postgres    false    284            ?           2606    24324 "   eyebrows eyebrows_sale_page_id_key
+   CONSTRAINT     e   ALTER TABLE ONLY public.eyebrows
     ADD CONSTRAINT eyebrows_sale_page_id_key UNIQUE (sale_page_id);
-LALTER TABLE ONLY public.eyebrows DROP CONSTRAINT eyebrows_sale_page_id_key;
-publicpostgresfalse238260622475&eyeliner_mascara eyeliner_mascara_pkey
-CONSTRAINTdALTER TABLE ONLY public.eyeliner_mascara
+ L   ALTER TABLE ONLY public.eyebrows DROP CONSTRAINT eyebrows_sale_page_id_key;
+       public                 postgres    false    284                       2606    22475 &   eyeliner_mascara eyeliner_mascara_pkey
+   CONSTRAINT     d   ALTER TABLE ONLY public.eyeliner_mascara
     ADD CONSTRAINT eyeliner_mascara_pkey PRIMARY KEY (id);
-PALTER TABLE ONLY public.eyeliner_mascara DROP CONSTRAINT eyeliner_mascara_pkey;
-publicpostgresfalse2442606224772eyeliner_mascara eyeliner_mascara_sale_page_id_key
-CONSTRAINTuALTER TABLE ONLY public.eyeliner_mascara
+ P   ALTER TABLE ONLY public.eyeliner_mascara DROP CONSTRAINT eyeliner_mascara_pkey;
+       public                 postgres    false    238                       2606    22477 2   eyeliner_mascara eyeliner_mascara_sale_page_id_key
+   CONSTRAINT     u   ALTER TABLE ONLY public.eyeliner_mascara
     ADD CONSTRAINT eyeliner_mascara_sale_page_id_key UNIQUE (sale_page_id);
-\ALTER TABLE ONLY public.eyeliner_mascara DROP CONSTRAINT eyeliner_mascara_sale_page_id_key;
-publicpostgresfalse244260622399eyeshadows eyeshadows_pkey
-CONSTRAINTXALTER TABLE ONLY public.eyeshadows
+ \   ALTER TABLE ONLY public.eyeliner_mascara DROP CONSTRAINT eyeliner_mascara_sale_page_id_key;
+       public                 postgres    false    238                       2606    22399    eyeshadows eyeshadows_pkey
+   CONSTRAINT     X   ALTER TABLE ONLY public.eyeshadows
     ADD CONSTRAINT eyeshadows_pkey PRIMARY KEY (id);
-DALTER TABLE ONLY public.eyeshadows DROP CONSTRAINT eyeshadows_pkey;
-publicpostgresfalse242260622401&eyeshadows eyeshadows_sale_page_id_key
-CONSTRAINTiALTER TABLE ONLY public.eyeshadows
+ D   ALTER TABLE ONLY public.eyeshadows DROP CONSTRAINT eyeshadows_pkey;
+       public                 postgres    false    236                       2606    22401 &   eyeshadows eyeshadows_sale_page_id_key
+   CONSTRAINT     i   ALTER TABLE ONLY public.eyeshadows
     ADD CONSTRAINT eyeshadows_sale_page_id_key UNIQUE (sale_page_id);
-PALTER TABLE ONLY public.eyeshadows DROP CONSTRAINT eyeshadows_sale_page_id_key;
-publicpostgresfalse242260621042favorites favorites_pkey
-CONSTRAINTVALTER TABLE ONLY public.favorites
+ P   ALTER TABLE ONLY public.eyeshadows DROP CONSTRAINT eyeshadows_sale_page_id_key;
+       public                 postgres    false    236                       2606    21042    favorites favorites_pkey
+   CONSTRAINT     V   ALTER TABLE ONLY public.favorites
     ADD CONSTRAINT favorites_pkey PRIMARY KEY (id);
-BALTER TABLE ONLY public.favorites DROP CONSTRAINT favorites_pkey;
-publicpostgresfalse226260622841foundations foundations_pkey
-CONSTRAINTZALTER TABLE ONLY public.foundations
+ B   ALTER TABLE ONLY public.favorites DROP CONSTRAINT favorites_pkey;
+       public                 postgres    false    226            %           2606    22841    foundations foundations_pkey
+   CONSTRAINT     Z   ALTER TABLE ONLY public.foundations
     ADD CONSTRAINT foundations_pkey PRIMARY KEY (id);
-FALTER TABLE ONLY public.foundations DROP CONSTRAINT foundations_pkey;
-publicpostgresfalse250260622843(foundations foundations_sale_page_id_key
-CONSTRAINTkALTER TABLE ONLY public.foundations
+ F   ALTER TABLE ONLY public.foundations DROP CONSTRAINT foundations_pkey;
+       public                 postgres    false    244            '           2606    22843 (   foundations foundations_sale_page_id_key
+   CONSTRAINT     k   ALTER TABLE ONLY public.foundations
     ADD CONSTRAINT foundations_sale_page_id_key UNIQUE (sale_page_id);
-RALTER TABLE ONLY public.foundations DROP CONSTRAINT foundations_sale_page_id_key;
-publicpostgresfalse250260621428highlighters highlighters_pkey
-CONSTRAINT\ALTER TABLE ONLY public.highlighters
+ R   ALTER TABLE ONLY public.foundations DROP CONSTRAINT foundations_sale_page_id_key;
+       public                 postgres    false    244            ?           2606    24347    highlighters highlighters_pkey
+   CONSTRAINT     \   ALTER TABLE ONLY public.highlighters
     ADD CONSTRAINT highlighters_pkey PRIMARY KEY (id);
-HALTER TABLE ONLY public.highlighters DROP CONSTRAINT highlighters_pkey;
-publicpostgresfalse240260621430*highlighters highlighters_sale_page_id_key
-CONSTRAINTmALTER TABLE ONLY public.highlighters
+ H   ALTER TABLE ONLY public.highlighters DROP CONSTRAINT highlighters_pkey;
+       public                 postgres    false    286            ?           2606    24349 *   highlighters highlighters_sale_page_id_key
+   CONSTRAINT     m   ALTER TABLE ONLY public.highlighters
     ADD CONSTRAINT highlighters_sale_page_id_key UNIQUE (sale_page_id);
-TALTER TABLE ONLY public.highlighters DROP CONSTRAINT highlighters_sale_page_id_key;
-publicpostgresfalse240
-260622826lipsticks lipsticks_pkey
-CONSTRAINTVALTER TABLE ONLY public.lipsticks
+ T   ALTER TABLE ONLY public.highlighters DROP CONSTRAINT highlighters_sale_page_id_key;
+       public                 postgres    false    286            !           2606    22826    lipsticks lipsticks_pkey
+   CONSTRAINT     V   ALTER TABLE ONLY public.lipsticks
     ADD CONSTRAINT lipsticks_pkey PRIMARY KEY (id);
-BALTER TABLE ONLY public.lipsticks DROP CONSTRAINT lipsticks_pkey;
-publicpostgresfalse248260622828$lipsticks lipsticks_sale_page_id_key
-CONSTRAINTgALTER TABLE ONLY public.lipsticks
+ B   ALTER TABLE ONLY public.lipsticks DROP CONSTRAINT lipsticks_pkey;
+       public                 postgres    false    242            #           2606    22828 $   lipsticks lipsticks_sale_page_id_key
+   CONSTRAINT     g   ALTER TABLE ONLY public.lipsticks
     ADD CONSTRAINT lipsticks_sale_page_id_key UNIQUE (sale_page_id);
-NALTER TABLE ONLY public.lipsticks DROP CONSTRAINT lipsticks_sale_page_id_key;
-publicpostgresfalse248260623094(member_audit_logs member_audit_logs_pkey
-CONSTRAINTfALTER TABLE ONLY public.member_audit_logs
+ N   ALTER TABLE ONLY public.lipsticks DROP CONSTRAINT lipsticks_sale_page_id_key;
+       public                 postgres    false    242            -           2606    23094 (   member_audit_logs member_audit_logs_pkey
+   CONSTRAINT     f   ALTER TABLE ONLY public.member_audit_logs
     ADD CONSTRAINT member_audit_logs_pkey PRIMARY KEY (id);
-RALTER TABLE ONLY public.member_audit_logs DROP CONSTRAINT member_audit_logs_pkey;
-publicpostgresfalse254[260624067:member_deletion_jobs member_deletion_jobs_member_email_key
-CONSTRAINT}ALTER TABLE ONLY public.member_deletion_jobs
+ R   ALTER TABLE ONLY public.member_audit_logs DROP CONSTRAINT member_audit_logs_pkey;
+       public                 postgres    false    248            r           2606    24067 :   member_deletion_jobs member_deletion_jobs_member_email_key
+   CONSTRAINT     }   ALTER TABLE ONLY public.member_deletion_jobs
     ADD CONSTRAINT member_deletion_jobs_member_email_key UNIQUE (member_email);
-dALTER TABLE ONLY public.member_deletion_jobs DROP CONSTRAINT member_deletion_jobs_member_email_key;
-publicpostgresfalse281]260624063.member_deletion_jobs member_deletion_jobs_pkey
-CONSTRAINTlALTER TABLE ONLY public.member_deletion_jobs
+ d   ALTER TABLE ONLY public.member_deletion_jobs DROP CONSTRAINT member_deletion_jobs_member_email_key;
+       public                 postgres    false    275            t           2606    24063 .   member_deletion_jobs member_deletion_jobs_pkey
+   CONSTRAINT     l   ALTER TABLE ONLY public.member_deletion_jobs
     ADD CONSTRAINT member_deletion_jobs_pkey PRIMARY KEY (id);
-XALTER TABLE ONLY public.member_deletion_jobs DROP CONSTRAINT member_deletion_jobs_pkey;
-publicpostgresfalse281_2606240658member_deletion_jobs member_deletion_jobs_request_id_key
-CONSTRAINTyALTER TABLE ONLY public.member_deletion_jobs
+ X   ALTER TABLE ONLY public.member_deletion_jobs DROP CONSTRAINT member_deletion_jobs_pkey;
+       public                 postgres    false    275            v           2606    24065 8   member_deletion_jobs member_deletion_jobs_request_id_key
+   CONSTRAINT     y   ALTER TABLE ONLY public.member_deletion_jobs
     ADD CONSTRAINT member_deletion_jobs_request_id_key UNIQUE (request_id);
-bALTER TABLE ONLY public.member_deletion_jobs DROP CONSTRAINT member_deletion_jobs_request_id_key;
-publicpostgresfalse281260621070.member_level_history member_level_history_pkey
-CONSTRAINTlALTER TABLE ONLY public.member_level_history
+ b   ALTER TABLE ONLY public.member_deletion_jobs DROP CONSTRAINT member_deletion_jobs_request_id_key;
+       public                 postgres    false    275   
+           2606    21070 .   member_level_history member_level_history_pkey
+   CONSTRAINT     l   ALTER TABLE ONLY public.member_level_history
     ADD CONSTRAINT member_level_history_pkey PRIMARY KEY (id);
-XALTER TABLE ONLY public.member_level_history DROP CONSTRAINT member_level_history_pkey;
-publicpostgresfalse230W260623962$member_sessions member_sessions_pkey
-CONSTRAINTlALTER TABLE ONLY public.member_sessions
+ X   ALTER TABLE ONLY public.member_level_history DROP CONSTRAINT member_level_history_pkey;
+       public                 postgres    false    230            n           2606    23962 $   member_sessions member_sessions_pkey
+   CONSTRAINT     l   ALTER TABLE ONLY public.member_sessions
     ADD CONSTRAINT member_sessions_pkey PRIMARY KEY (session_hash);
-NALTER TABLE ONLY public.member_sessions DROP CONSTRAINT member_sessions_pkey;
-publicpostgresfalse280Y260624070.member_sessions member_sessions_session_id_key
-CONSTRAINToALTER TABLE ONLY public.member_sessions
+ N   ALTER TABLE ONLY public.member_sessions DROP CONSTRAINT member_sessions_pkey;
+       public                 postgres    false    274            p           2606    24070 .   member_sessions member_sessions_session_id_key
+   CONSTRAINT     o   ALTER TABLE ONLY public.member_sessions
     ADD CONSTRAINT member_sessions_session_id_key UNIQUE (session_id);
-XALTER TABLE ONLY public.member_sessions DROP CONSTRAINT member_sessions_session_id_key;
-publicpostgresfalse280260623417members members_email_key
-CONSTRAINTUALTER TABLE ONLY public.members
+ X   ALTER TABLE ONLY public.member_sessions DROP CONSTRAINT member_sessions_session_id_key;
+       public                 postgres    false    274            ?           2606    23417    members members_email_key
+   CONSTRAINT     U   ALTER TABLE ONLY public.members
     ADD CONSTRAINT members_email_key UNIQUE (email);
-CALTER TABLE ONLY public.members DROP CONSTRAINT members_email_key;
-publicpostgresfalse220260620909members members_pkey
-CONSTRAINT\ALTER TABLE ONLY public.members
+ C   ALTER TABLE ONLY public.members DROP CONSTRAINT members_email_key;
+       public                 postgres    false    220            ?           2606    20909    members members_pkey
+   CONSTRAINT     \   ALTER TABLE ONLY public.members
     ADD CONSTRAINT members_pkey PRIMARY KEY (phone_number);
->ALTER TABLE ONLY public.members DROP CONSTRAINT members_pkey;
-publicpostgresfalse220&260623174otp_codes otp_codes_pkey
-CONSTRAINTVALTER TABLE ONLY public.otp_codes
+ >   ALTER TABLE ONLY public.members DROP CONSTRAINT members_pkey;
+       public                 postgres    false    220            =           2606    23174    otp_codes otp_codes_pkey
+   CONSTRAINT     V   ALTER TABLE ONLY public.otp_codes
     ADD CONSTRAINT otp_codes_pkey PRIMARY KEY (id);
-BALTER TABLE ONLY public.otp_codes DROP CONSTRAINT otp_codes_pkey;
-publicpostgresfalse262b260624116<pending_registrations pending_registrations_phone_number_key
-CONSTRAINTALTER TABLE ONLY public.pending_registrations
+ B   ALTER TABLE ONLY public.otp_codes DROP CONSTRAINT otp_codes_pkey;
+       public                 postgres    false    256            y           2606    24116 <   pending_registrations pending_registrations_phone_number_key
+   CONSTRAINT        ALTER TABLE ONLY public.pending_registrations
     ADD CONSTRAINT pending_registrations_phone_number_key UNIQUE (phone_number);
-fALTER TABLE ONLY public.pending_registrations DROP CONSTRAINT pending_registrations_phone_number_key;
-publicpostgresfalse282d2606241140pending_registrations pending_registrations_pkey
-CONSTRAINTqALTER TABLE ONLY public.pending_registrations
+ f   ALTER TABLE ONLY public.pending_registrations DROP CONSTRAINT pending_registrations_phone_number_key;
+       public                 postgres    false    276            {           2606    24114 0   pending_registrations pending_registrations_pkey
+   CONSTRAINT     q   ALTER TABLE ONLY public.pending_registrations
     ADD CONSTRAINT pending_registrations_pkey PRIMARY KEY (email);
-ZALTER TABLE ONLY public.pending_registrations DROP CONSTRAINT pending_registrations_pkey;
-publicpostgresfalse282260624073;points_transactions points_transactions_idempotency_key_key
-CONSTRAINTALTER TABLE ONLY public.points_transactions
+ Z   ALTER TABLE ONLY public.pending_registrations DROP CONSTRAINT pending_registrations_pkey;
+       public                 postgres    false    276            1           2606    24073 ;   points_transactions points_transactions_idempotency_key_key
+   CONSTRAINT     ?   ALTER TABLE ONLY public.points_transactions
     ADD CONSTRAINT points_transactions_idempotency_key_key UNIQUE (idempotency_key);
-eALTER TABLE ONLY public.points_transactions DROP CONSTRAINT points_transactions_idempotency_key_key;
-publicpostgresfalse256260623109,points_transactions points_transactions_pkey
-CONSTRAINTjALTER TABLE ONLY public.points_transactions
+ e   ALTER TABLE ONLY public.points_transactions DROP CONSTRAINT points_transactions_idempotency_key_key;
+       public                 postgres    false    250            3           2606    23109 ,   points_transactions points_transactions_pkey
+   CONSTRAINT     j   ALTER TABLE ONLY public.points_transactions
     ADD CONSTRAINT points_transactions_pkey PRIMARY KEY (id);
-VALTER TABLE ONLY public.points_transactions DROP CONSTRAINT points_transactions_pkey;
-publicpostgresfalse256R260623616*product_audit_logs product_audit_logs_pkey
-CONSTRAINThALTER TABLE ONLY public.product_audit_logs
+ V   ALTER TABLE ONLY public.points_transactions DROP CONSTRAINT points_transactions_pkey;
+       public                 postgres    false    250            i           2606    23616 *   product_audit_logs product_audit_logs_pkey
+   CONSTRAINT     h   ALTER TABLE ONLY public.product_audit_logs
     ADD CONSTRAINT product_audit_logs_pkey PRIMARY KEY (id);
-TALTER TABLE ONLY public.product_audit_logs DROP CONSTRAINT product_audit_logs_pkey;
-publicpostgresfalse279n260624177$product_catalog product_catalog_pkey
-CONSTRAINTbALTER TABLE ONLY public.product_catalog
+ T   ALTER TABLE ONLY public.product_audit_logs DROP CONSTRAINT product_audit_logs_pkey;
+       public                 postgres    false    273            ?           2606    24177 $   product_catalog product_catalog_pkey
+   CONSTRAINT     b   ALTER TABLE ONLY public.product_catalog
     ADD CONSTRAINT product_catalog_pkey PRIMARY KEY (id);
-NALTER TABLE ONLY public.product_catalog DROP CONSTRAINT product_catalog_pkey;
-publicpostgresfalse286260620926products products_pkey
-CONSTRAINTTALTER TABLE ONLY public.products
+ N   ALTER TABLE ONLY public.product_catalog DROP CONSTRAINT product_catalog_pkey;
+       public                 postgres    false    280            ?           2606    26943 :   product_color_repair_audit product_color_repair_audit_pkey
+   CONSTRAINT     x   ALTER TABLE ONLY public.product_color_repair_audit
+    ADD CONSTRAINT product_color_repair_audit_pkey PRIMARY KEY (id);
+ d   ALTER TABLE ONLY public.product_color_repair_audit DROP CONSTRAINT product_color_repair_audit_pkey;
+       public                 postgres    false    288            ?           2606    26954 8   product_color_repair_runs product_color_repair_runs_pkey
+   CONSTRAINT     z   ALTER TABLE ONLY public.product_color_repair_runs
+    ADD CONSTRAINT product_color_repair_runs_pkey PRIMARY KEY (run_id);
+ b   ALTER TABLE ONLY public.product_color_repair_runs DROP CONSTRAINT product_color_repair_runs_pkey;
+       public                 postgres    false    289            ?           2606    20926    products products_pkey
+   CONSTRAINT     T   ALTER TABLE ONLY public.products
     ADD CONSTRAINT products_pkey PRIMARY KEY (id);
-@ALTER TABLE ONLY public.products DROP CONSTRAINT products_pkey;
-publicpostgresfalse222?260623254referrals referrals_pkey
-CONSTRAINTVALTER TABLE ONLY public.referrals
+ @   ALTER TABLE ONLY public.products DROP CONSTRAINT products_pkey;
+       public                 postgres    false    222            V           2606    23254    referrals referrals_pkey
+   CONSTRAINT     V   ALTER TABLE ONLY public.referrals
     ADD CONSTRAINT referrals_pkey PRIMARY KEY (id);
-BALTER TABLE ONLY public.referrals DROP CONSTRAINT referrals_pkey;
-publicpostgresfalse272A260623381#referrals referrals_referred_id_key
-CONSTRAINThALTER TABLE ONLY public.referrals
+ B   ALTER TABLE ONLY public.referrals DROP CONSTRAINT referrals_pkey;
+       public                 postgres    false    266            X           2606    23381 #   referrals referrals_referred_id_key
+   CONSTRAINT     h   ALTER TABLE ONLY public.referrals
     ADD CONSTRAINT referrals_referred_id_key UNIQUE (referred_email);
-MALTER TABLE ONLY public.referrals DROP CONSTRAINT referrals_referred_id_key;
-publicpostgresfalse272"260623143saved_looks saved_looks_pkey
-CONSTRAINTZALTER TABLE ONLY public.saved_looks
+ M   ALTER TABLE ONLY public.referrals DROP CONSTRAINT referrals_referred_id_key;
+       public                 postgres    false    266            9           2606    23143    saved_looks saved_looks_pkey
+   CONSTRAINT     Z   ALTER TABLE ONLY public.saved_looks
     ADD CONSTRAINT saved_looks_pkey PRIMARY KEY (id);
-FALTER TABLE ONLY public.saved_looks DROP CONSTRAINT saved_looks_pkey;
-publicpostgresfalse2601260624077+task_claims task_claims_idempotency_key_key
-CONSTRAINTqALTER TABLE ONLY public.task_claims
+ F   ALTER TABLE ONLY public.saved_looks DROP CONSTRAINT saved_looks_pkey;
+       public                 postgres    false    254            H           2606    24077 +   task_claims task_claims_idempotency_key_key
+   CONSTRAINT     q   ALTER TABLE ONLY public.task_claims
     ADD CONSTRAINT task_claims_idempotency_key_key UNIQUE (idempotency_key);
-UALTER TABLE ONLY public.task_claims DROP CONSTRAINT task_claims_idempotency_key_key;
-publicpostgresfalse2683260623220task_claims task_claims_pkey
-CONSTRAINTZALTER TABLE ONLY public.task_claims
+ U   ALTER TABLE ONLY public.task_claims DROP CONSTRAINT task_claims_idempotency_key_key;
+       public                 postgres    false    262            J           2606    23220    task_claims task_claims_pkey
+   CONSTRAINT     Z   ALTER TABLE ONLY public.task_claims
     ADD CONSTRAINT task_claims_pkey PRIMARY KEY (id);
-FALTER TABLE ONLY public.task_claims DROP CONSTRAINT task_claims_pkey;
-publicpostgresfalse268260621086 tryon_records tryon_records_pkey
-CONSTRAINT^ALTER TABLE ONLY public.tryon_records
+ F   ALTER TABLE ONLY public.task_claims DROP CONSTRAINT task_claims_pkey;
+       public                 postgres    false    262                       2606    21086     tryon_records tryon_records_pkey
+   CONSTRAINT     ^   ALTER TABLE ONLY public.tryon_records
     ADD CONSTRAINT tryon_records_pkey PRIMARY KEY (id);
-JALTER TABLE ONLY public.tryon_records DROP CONSTRAINT tryon_records_pkey;
-publicpostgresfalse23292606240793unlocked_themes unlocked_themes_idempotency_key_key
-CONSTRAINTyALTER TABLE ONLY public.unlocked_themes
+ J   ALTER TABLE ONLY public.tryon_records DROP CONSTRAINT tryon_records_pkey;
+       public                 postgres    false    232            P           2606    24079 3   unlocked_themes unlocked_themes_idempotency_key_key
+   CONSTRAINT     y   ALTER TABLE ONLY public.unlocked_themes
     ADD CONSTRAINT unlocked_themes_idempotency_key_key UNIQUE (idempotency_key);
-]ALTER TABLE ONLY public.unlocked_themes DROP CONSTRAINT unlocked_themes_idempotency_key_key;
-publicpostgresfalse270;260623237$unlocked_themes unlocked_themes_pkey
-CONSTRAINTbALTER TABLE ONLY public.unlocked_themes
+ ]   ALTER TABLE ONLY public.unlocked_themes DROP CONSTRAINT unlocked_themes_idempotency_key_key;
+       public                 postgres    false    264            R           2606    23237 $   unlocked_themes unlocked_themes_pkey
+   CONSTRAINT     b   ALTER TABLE ONLY public.unlocked_themes
     ADD CONSTRAINT unlocked_themes_pkey PRIMARY KEY (id);
-NALTER TABLE ONLY public.unlocked_themes DROP CONSTRAINT unlocked_themes_pkey;
-publicpostgresfalse270I260623301cart_items uq_cart_item
-CONSTRAINTcALTER TABLE ONLY public.cart_items
+ N   ALTER TABLE ONLY public.unlocked_themes DROP CONSTRAINT unlocked_themes_pkey;
+       public                 postgres    false    264            `           2606    23301    cart_items uq_cart_item
+   CONSTRAINT     c   ALTER TABLE ONLY public.cart_items
     ADD CONSTRAINT uq_cart_item UNIQUE (member_email, item_id);
-AALTER TABLE ONLY public.cart_items DROP CONSTRAINT uq_cart_item;
-publicpostgresfalse276276l260624139:crawler_staging_products uq_crawler_staging_source_product
-CONSTRAINTALTER TABLE ONLY public.crawler_staging_products
+ A   ALTER TABLE ONLY public.cart_items DROP CONSTRAINT uq_cart_item;
+       public                 postgres    false    270    270            ?           2606    24139 :   crawler_staging_products uq_crawler_staging_source_product
+   CONSTRAINT     ?   ALTER TABLE ONLY public.crawler_staging_products
     ADD CONSTRAINT uq_crawler_staging_source_product UNIQUE (source_site, source_product_id);
-dALTER TABLE ONLY public.crawler_staging_products DROP CONSTRAINT uq_crawler_staging_source_product;
-publicpostgresfalse284284E260623281cart uq_member_cart_item
-CONSTRAINTaALTER TABLE ONLY public.cart
+ d   ALTER TABLE ONLY public.crawler_staging_products DROP CONSTRAINT uq_crawler_staging_source_product;
+       public                 postgres    false    278    278            \           2606    23281    cart uq_member_cart_item
+   CONSTRAINT     a   ALTER TABLE ONLY public.cart
     ADD CONSTRAINT uq_member_cart_item UNIQUE (member_id, item_id);
-BALTER TABLE ONLY public.cart DROP CONSTRAINT uq_member_cart_item;
-publicpostgresfalse274274.260623388%daily_checkins uq_member_checkin_date
-CONSTRAINTvALTER TABLE ONLY public.daily_checkins
+ B   ALTER TABLE ONLY public.cart DROP CONSTRAINT uq_member_cart_item;
+       public                 postgres    false    268    268            E           2606    23388 %   daily_checkins uq_member_checkin_date
+   CONSTRAINT     v   ALTER TABLE ONLY public.daily_checkins
     ADD CONSTRAINT uq_member_checkin_date UNIQUE (member_email, checkin_date);
-OALTER TABLE ONLY public.daily_checkins DROP CONSTRAINT uq_member_checkin_date;
-publicpostgresfalse266266260621044favorites uq_member_item
-CONSTRAINTlALTER TABLE ONLY public.favorites
+ O   ALTER TABLE ONLY public.daily_checkins DROP CONSTRAINT uq_member_checkin_date;
+       public                 postgres    false    260    260                       2606    21044    favorites uq_member_item
+   CONSTRAINT     l   ALTER TABLE ONLY public.favorites
     ADD CONSTRAINT uq_member_item UNIQUE (member_id, item_id, item_type);
-BALTER TABLE ONLY public.favorites DROP CONSTRAINT uq_member_item;
-publicpostgresfalse2262262265260623395task_claims uq_member_task_date
-CONSTRAINTyALTER TABLE ONLY public.task_claims
+ B   ALTER TABLE ONLY public.favorites DROP CONSTRAINT uq_member_item;
+       public                 postgres    false    226    226    226            L           2606    23395    task_claims uq_member_task_date
+   CONSTRAINT     y   ALTER TABLE ONLY public.task_claims
     ADD CONSTRAINT uq_member_task_date UNIQUE (member_email, task_id, claimed_date);
-IALTER TABLE ONLY public.task_claims DROP CONSTRAINT uq_member_task_date;
-publicpostgresfalse268268268=260623410unlocked_themes uq_member_theme
-CONSTRAINTlALTER TABLE ONLY public.unlocked_themes
+ I   ALTER TABLE ONLY public.task_claims DROP CONSTRAINT uq_member_task_date;
+       public                 postgres    false    262    262    262            T           2606    23410    unlocked_themes uq_member_theme
+   CONSTRAINT     l   ALTER TABLE ONLY public.unlocked_themes
     ADD CONSTRAINT uq_member_theme UNIQUE (member_email, theme_id);
-IALTER TABLE ONLY public.unlocked_themes DROP CONSTRAINT uq_member_theme;
-publicpostgresfalse270270p260624179)product_catalog uq_product_catalog_source
-CONSTRAINTwALTER TABLE ONLY public.product_catalog
+ I   ALTER TABLE ONLY public.unlocked_themes DROP CONSTRAINT uq_member_theme;
+       public                 postgres    false    264    264            ?           2606    24179 )   product_catalog uq_product_catalog_source
+   CONSTRAINT     w   ALTER TABLE ONLY public.product_catalog
     ADD CONSTRAINT uq_product_catalog_source UNIQUE (product_type, source_id);
-SALTER TABLE ONLY public.product_catalog DROP CONSTRAINT uq_product_catalog_source;
-publicpostgresfalse2862867260623983task_claims uq_task_claim_date
-CONSTRAINTvALTER TABLE ONLY public.task_claims
+ S   ALTER TABLE ONLY public.product_catalog DROP CONSTRAINT uq_product_catalog_source;
+       public                 postgres    false    280    280            N           2606    23983    task_claims uq_task_claim_date
+   CONSTRAINT     v   ALTER TABLE ONLY public.task_claims
     ADD CONSTRAINT uq_task_claim_date UNIQUE (member_email, task_id, claim_date);
-HALTER TABLE ONLY public.task_claims DROP CONSTRAINT uq_task_claim_date;
-publicpostgresfalse268268268e125924158crawler_staging_dedupe_uidxINDEXmCREATE UNIQUE INDEX crawler_staging_dedupe_uidx ON public.crawler_staging_products USING btree (dedupe_key);
-/DROP INDEX public.crawler_staging_dedupe_uidx;
-publicpostgresfalse284h125924160crawler_staging_source_idxINDEXyCREATE INDEX crawler_staging_source_idx ON public.crawler_staging_products USING btree (source_site, source_product_id);
-.DROP INDEX public.crawler_staging_source_idx;
-publicpostgresfalse284284i125924159crawler_staging_status_idxINDEXrCREATE INDEX crawler_staging_status_idx ON public.crawler_staging_products USING btree (status, updated_at DESC);
-.DROP INDEX public.crawler_staging_status_idx;
-publicpostgresfalse284284N125923572idx_admin_audit_target_createdINDEXtCREATE INDEX idx_admin_audit_target_created ON public.admin_audit_logs USING btree (target_email, created_at DESC);
-2DROP INDEX public.idx_admin_audit_target_created;
-publicpostgresfalse277277125923631idx_blushes_recommendableINDEX~CREATE INDEX idx_blushes_recommendable ON public.blushes USING btree (status, review_status, in_stock, recommendation_ready);
--DROP INDEX public.idx_blushes_recommendable;
-publicpostgresfalse236236236236125921401idx_blushes_spidINDEXLCREATE INDEX idx_blushes_spid ON public.blushes USING btree (sale_page_id);
-$DROP INDEX public.idx_blushes_spid;
-publicpostgresfalse236125923699idx_contouring_recommendableINDEXCREATE INDEX idx_contouring_recommendable ON public.contouring USING btree (status, review_status, in_stock, recommendation_ready);
-0DROP INDEX public.idx_contouring_recommendable;
-publicpostgresfalse246246246246125922615idx_contouring_spidINDEXRCREATE INDEX idx_contouring_spid ON public.contouring USING btree (sale_page_id);
-'DROP INDEX public.idx_contouring_spid;
-publicpostgresfalse246j125924145.idx_crawler_staging_products_status_crawled_atINDEXCREATE INDEX idx_crawler_staging_products_status_crawled_at ON public.crawler_staging_products USING btree (status, crawled_at DESC);
-BDROP INDEX public.idx_crawler_staging_products_status_crawled_at;
-publicpostgresfalse284284125922478idx_em_spidINDEXPCREATE INDEX idx_em_spid ON public.eyeliner_mascara USING btree (sale_page_id);
-DROP INDEX public.idx_em_spid;
-publicpostgresfalse244125923648idx_eyebrows_recommendableINDEXCREATE INDEX idx_eyebrows_recommendable ON public.eyebrows USING btree (status, review_status, in_stock, recommendation_ready);
-.DROP INDEX public.idx_eyebrows_recommendable;
-publicpostgresfalse238238238238125921416idx_eyebrows_spidINDEXNCREATE INDEX idx_eyebrows_spid ON public.eyebrows USING btree (sale_page_id);
-%DROP INDEX public.idx_eyebrows_spid;
-publicpostgresfalse238125923682"idx_eyeliner_mascara_recommendableINDEXCREATE INDEX idx_eyeliner_mascara_recommendable ON public.eyeliner_mascara USING btree (status, review_status, in_stock, recommendation_ready);
-6DROP INDEX public.idx_eyeliner_mascara_recommendable;
-publicpostgresfalse244244244244125923665idx_eyeshadows_recommendableINDEXCREATE INDEX idx_eyeshadows_recommendable ON public.eyeshadows USING btree (status, review_status, in_stock, recommendation_ready);
-0DROP INDEX public.idx_eyeshadows_recommendable;
-publicpostgresfalse242242242242125922402idx_eyeshadows_spidINDEXRCREATE INDEX idx_eyeshadows_spid ON public.eyeshadows USING btree (sale_page_id);
-'DROP INDEX public.idx_eyeshadows_spid;
-publicpostgresfalse242125923714idx_foundations_recommendableINDEXCREATE INDEX idx_foundations_recommendable ON public.foundations USING btree (status, review_status, in_stock, recommendation_ready);
-1DROP INDEX public.idx_foundations_recommendable;
-publicpostgresfalse250250250250125924221idx_foundations_series_depthINDEXCREATE INDEX idx_foundations_series_depth ON public.foundations USING btree (series_id, depth_index) WHERE ((series_id IS NOT NULL) AND (depth_index IS NOT NULL));
-0DROP INDEX public.idx_foundations_series_depth;
-publicpostgresfalse250250250250125922844idx_foundations_spidINDEXTCREATE INDEX idx_foundations_spid ON public.foundations USING btree (sale_page_id);
-(DROP INDEX public.idx_foundations_spid;
-publicpostgresfalse250125923745idx_highlighters_recommendableINDEXCREATE INDEX idx_highlighters_recommendable ON public.highlighters USING btree (status, review_status, in_stock, recommendation_ready);
-2DROP INDEX public.idx_highlighters_recommendable;
-publicpostgresfalse240240240240125921431idx_highlighters_spidINDEXVCREATE INDEX idx_highlighters_spid ON public.highlighters USING btree (sale_page_id);
-)DROP INDEX public.idx_highlighters_spid;
-publicpostgresfalse240125923760idx_lipsticks_recommendableINDEXCREATE INDEX idx_lipsticks_recommendable ON public.lipsticks USING btree (status, review_status, in_stock, recommendation_ready);
-/DROP INDEX public.idx_lipsticks_recommendable;
-publicpostgresfalse248248248248125923113"idx_member_audit_logs_target_emailINDEXhCREATE INDEX idx_member_audit_logs_target_email ON public.member_audit_logs USING btree (target_email);
-6DROP INDEX public.idx_member_audit_logs_target_email;
-publicpostgresfalse254S125924071idx_member_sessions_session_idINDEX`CREATE INDEX idx_member_sessions_session_id ON public.member_sessions USING btree (session_id);
-2DROP INDEX public.idx_member_sessions_session_id;
-publicpostgresfalse280T125924080idx_member_sessions_sourceINDEXcCREATE INDEX idx_member_sessions_source ON public.member_sessions USING btree (source_identifier);
-.DROP INDEX public.idx_member_sessions_source;
-publicpostgresfalse280125924090idx_members_email_verified_atINDEX^CREATE INDEX idx_members_email_verified_at ON public.members USING btree (email_verified_at);
-1DROP INDEX public.idx_members_email_verified_at;
-publicpostgresfalse220125923456idx_members_referral_codeINDEXCREATE UNIQUE INDEX idx_members_referral_code ON public.members USING btree (referral_code) WHERE (referral_code IS NOT NULL);
--DROP INDEX public.idx_members_referral_code;
-publicpostgresfalse220220125923570idx_members_status_deleted_atINDEX_CREATE INDEX idx_members_status_deleted_at ON public.members USING btree (status, deleted_at);
-1DROP INDEX public.idx_members_status_deleted_at;
-publicpostgresfalse220220#125923458idx_otp_codes_emailINDEXJCREATE INDEX idx_otp_codes_email ON public.otp_codes USING btree (email);
-'DROP INDEX public.idx_otp_codes_email;
-publicpostgresfalse262125923401$idx_points_transactions_member_emailINDEXlCREATE INDEX idx_points_transactions_member_email ON public.points_transactions USING btree (member_email);
-8DROP INDEX public.idx_points_transactions_member_email;
-publicpostgresfalse256P125923791idx_product_audit_logs_productINDEXCREATE INDEX idx_product_audit_logs_product ON public.product_audit_logs USING btree (product_type, product_id, created_at DESC);
-2DROP INDEX public.idx_product_audit_logs_product;
-publicpostgresfalse279279279125923571idx_saved_looks_member_createdINDEXoCREATE INDEX idx_saved_looks_member_created ON public.saved_looks USING btree (member_email, created_at DESC);
-2DROP INDEX public.idx_saved_looks_member_created;
-publicpostgresfalse260260 125923459idx_saved_looks_member_emailINDEX\CREATE INDEX idx_saved_looks_member_email ON public.saved_looks USING btree (member_email);
-0DROP INDEX public.idx_saved_looks_member_email;
-publicpostgresfalse260/125923984 idx_task_claims_member_task_dateINDEXzCREATE INDEX idx_task_claims_member_task_date ON public.task_claims USING btree (member_email, task_id, claim_date DESC);
-4DROP INDEX public.idx_task_claims_member_task_date;
-publicpostgresfalse268268268O125923567 ix_admin_audit_logs_target_emailINDEXeCREATE INDEX ix_admin_audit_logs_target_email ON public.admin_audit_logs USING btree (target_email);
-4DROP INDEX public.ix_admin_audit_logs_target_email;
-publicpostgresfalse277U125924044!ix_member_sessions_member_versionINDEXCREATE INDEX ix_member_sessions_member_version ON public.member_sessions USING btree (member_id, session_version, revoked_at);
-5DROP INDEX public.ix_member_sessions_member_version;
-publicpostgresfalse280280280$125924043!ix_otp_codes_email_purpose_expiryINDEXrCREATE INDEX ix_otp_codes_email_purpose_expiry ON public.otp_codes USING btree (email, purpose, expires_at DESC);
-5DROP INDEX public.ix_otp_codes_email_purpose_expiry;
-publicpostgresfalse262262262`125924117#ix_pending_registrations_expires_atINDEXkCREATE INDEX ix_pending_registrations_expires_at ON public.pending_registrations USING btree (expires_at);
-7DROP INDEX public.ix_pending_registrations_expires_at;
-publicpostgresfalse282125923402#ix_points_transactions_member_emailINDEXkCREATE INDEX ix_points_transactions_member_email ON public.points_transactions USING btree (member_email);
-7DROP INDEX public.ix_points_transactions_member_email;
-publicpostgresfalse256*261823074view_member_activity _RETURNRULEdCREATE OR REPLACE VIEW public.view_member_activity AS
+ H   ALTER TABLE ONLY public.task_claims DROP CONSTRAINT uq_task_claim_date;
+       public                 postgres    false    262    262    262            |           1259    24158    crawler_staging_dedupe_uidx    INDEX     m   CREATE UNIQUE INDEX crawler_staging_dedupe_uidx ON public.crawler_staging_products USING btree (dedupe_key);
+ /   DROP INDEX public.crawler_staging_dedupe_uidx;
+       public                 postgres    false    278                       1259    24160    crawler_staging_source_idx    INDEX     y   CREATE INDEX crawler_staging_source_idx ON public.crawler_staging_products USING btree (source_site, source_product_id);
+ .   DROP INDEX public.crawler_staging_source_idx;
+       public                 postgres    false    278    278                       1259    24159    crawler_staging_status_idx    INDEX     r   CREATE INDEX crawler_staging_status_idx ON public.crawler_staging_products USING btree (status, updated_at DESC);
+ .   DROP INDEX public.crawler_staging_status_idx;
+       public                 postgres    false    278    278            e           1259    23572    idx_admin_audit_target_created    INDEX     t   CREATE INDEX idx_admin_audit_target_created ON public.admin_audit_logs USING btree (target_email, created_at DESC);
+ 2   DROP INDEX public.idx_admin_audit_target_created;
+       public                 postgres    false    271    271            ?           1259    24300    idx_blushes_brand    INDEX     F   CREATE INDEX idx_blushes_brand ON public.blushes USING btree (brand);
+ %   DROP INDEX public.idx_blushes_brand;
+       public                 postgres    false    282            ?           1259    24429    idx_blushes_recommendable    INDEX     ~   CREATE INDEX idx_blushes_recommendable ON public.blushes USING btree (status, review_status, in_stock, recommendation_ready);
+ -   DROP INDEX public.idx_blushes_recommendable;
+       public                 postgres    false    282    282    282    282            ?           1259    24301    idx_blushes_spid    INDEX     L   CREATE INDEX idx_blushes_spid ON public.blushes USING btree (sale_page_id);
+ $   DROP INDEX public.idx_blushes_spid;
+       public                 postgres    false    282                       1259    23699    idx_contouring_recommendable    INDEX     ?   CREATE INDEX idx_contouring_recommendable ON public.contouring USING btree (status, review_status, in_stock, recommendation_ready);
+ 0   DROP INDEX public.idx_contouring_recommendable;
+       public                 postgres    false    240    240    240    240                       1259    22615    idx_contouring_spid    INDEX     R   CREATE INDEX idx_contouring_spid ON public.contouring USING btree (sale_page_id);
+ '   DROP INDEX public.idx_contouring_spid;
+       public                 postgres    false    240            ?           1259    24145 .   idx_crawler_staging_products_status_crawled_at    INDEX     ?   CREATE INDEX idx_crawler_staging_products_status_crawled_at ON public.crawler_staging_products USING btree (status, crawled_at DESC);
+ B   DROP INDEX public.idx_crawler_staging_products_status_crawled_at;
+       public                 postgres    false    278    278                       1259    22478
+   idx_em_spid    INDEX     P   CREATE INDEX idx_em_spid ON public.eyeliner_mascara USING btree (sale_page_id);
+    DROP INDEX public.idx_em_spid;
+       public                 postgres    false    238            ?           1259    24325    idx_eyebrows_brand    INDEX     H   CREATE INDEX idx_eyebrows_brand ON public.eyebrows USING btree (brand);
+ &   DROP INDEX public.idx_eyebrows_brand;
+       public                 postgres    false    284            ?           1259    24445    idx_eyebrows_recommendable    INDEX        CREATE INDEX idx_eyebrows_recommendable ON public.eyebrows USING btree (status, review_status, in_stock, recommendation_ready);
+ .   DROP INDEX public.idx_eyebrows_recommendable;
+       public                 postgres    false    284    284    284    284            ?           1259    24326    idx_eyebrows_spid    INDEX     N   CREATE INDEX idx_eyebrows_spid ON public.eyebrows USING btree (sale_page_id);
+ %   DROP INDEX public.idx_eyebrows_spid;
+       public                 postgres    false    284                       1259    23682 "   idx_eyeliner_mascara_recommendable    INDEX     ?   CREATE INDEX idx_eyeliner_mascara_recommendable ON public.eyeliner_mascara USING btree (status, review_status, in_stock, recommendation_ready);
+ 6   DROP INDEX public.idx_eyeliner_mascara_recommendable;
+       public                 postgres    false    238    238    238    238                       1259    23665    idx_eyeshadows_recommendable    INDEX     ?   CREATE INDEX idx_eyeshadows_recommendable ON public.eyeshadows USING btree (status, review_status, in_stock, recommendation_ready);
+ 0   DROP INDEX public.idx_eyeshadows_recommendable;
+       public                 postgres    false    236    236    236    236                       1259    22402    idx_eyeshadows_spid    INDEX     R   CREATE INDEX idx_eyeshadows_spid ON public.eyeshadows USING btree (sale_page_id);
+ '   DROP INDEX public.idx_eyeshadows_spid;
+       public                 postgres    false    236            (           1259    23714    idx_foundations_recommendable    INDEX     ?   CREATE INDEX idx_foundations_recommendable ON public.foundations USING btree (status, review_status, in_stock, recommendation_ready);
+ 1   DROP INDEX public.idx_foundations_recommendable;
+       public                 postgres    false    244    244    244    244            )           1259    24221    idx_foundations_series_depth    INDEX     ?   CREATE INDEX idx_foundations_series_depth ON public.foundations USING btree (series_id, depth_index) WHERE ((series_id IS NOT NULL) AND (depth_index IS NOT NULL));
+ 0   DROP INDEX public.idx_foundations_series_depth;
+       public                 postgres    false    244    244    244    244            *           1259    22844    idx_foundations_spid    INDEX     T   CREATE INDEX idx_foundations_spid ON public.foundations USING btree (sale_page_id);
+ (   DROP INDEX public.idx_foundations_spid;
+       public                 postgres    false    244            ?           1259    24350    idx_highlighters_brand    INDEX     P   CREATE INDEX idx_highlighters_brand ON public.highlighters USING btree (brand);
+ *   DROP INDEX public.idx_highlighters_brand;
+       public                 postgres    false    286            ?           1259    24476    idx_highlighters_recommendable    INDEX     ?   CREATE INDEX idx_highlighters_recommendable ON public.highlighters USING btree (status, review_status, in_stock, recommendation_ready);
+ 2   DROP INDEX public.idx_highlighters_recommendable;
+       public                 postgres    false    286    286    286    286            ?           1259    24351    idx_highlighters_spid    INDEX     V   CREATE INDEX idx_highlighters_spid ON public.highlighters USING btree (sale_page_id);
+ )   DROP INDEX public.idx_highlighters_spid;
+       public                 postgres    false    286                       1259    23760    idx_lipsticks_recommendable    INDEX     ?   CREATE INDEX idx_lipsticks_recommendable ON public.lipsticks USING btree (status, review_status, in_stock, recommendation_ready);
+ /   DROP INDEX public.idx_lipsticks_recommendable;
+       public                 postgres    false    242    242    242    242            +           1259    23113 "   idx_member_audit_logs_target_email    INDEX     h   CREATE INDEX idx_member_audit_logs_target_email ON public.member_audit_logs USING btree (target_email);
+ 6   DROP INDEX public.idx_member_audit_logs_target_email;
+       public                 postgres    false    248            j           1259    24071    idx_member_sessions_session_id    INDEX     `   CREATE INDEX idx_member_sessions_session_id ON public.member_sessions USING btree (session_id);
+ 2   DROP INDEX public.idx_member_sessions_session_id;
+       public                 postgres    false    274            k           1259    24080    idx_member_sessions_source    INDEX     c   CREATE INDEX idx_member_sessions_source ON public.member_sessions USING btree (source_identifier);
+ .   DROP INDEX public.idx_member_sessions_source;
+       public                 postgres    false    274            ?           1259    24090    idx_members_email_verified_at    INDEX     ^   CREATE INDEX idx_members_email_verified_at ON public.members USING btree (email_verified_at);
+ 1   DROP INDEX public.idx_members_email_verified_at;
+       public                 postgres    false    220            ?           1259    23456    idx_members_referral_code    INDEX        CREATE UNIQUE INDEX idx_members_referral_code ON public.members USING btree (referral_code) WHERE (referral_code IS NOT NULL);
+ -   DROP INDEX public.idx_members_referral_code;
+       public                 postgres    false    220    220            ?           1259    23570    idx_members_status_deleted_at    INDEX     _   CREATE INDEX idx_members_status_deleted_at ON public.members USING btree (status, deleted_at);
+ 1   DROP INDEX public.idx_members_status_deleted_at;
+       public                 postgres    false    220    220            :           1259    23458    idx_otp_codes_email    INDEX     J   CREATE INDEX idx_otp_codes_email ON public.otp_codes USING btree (email);
+ '   DROP INDEX public.idx_otp_codes_email;
+       public                 postgres    false    256            .           1259    23401 $   idx_points_transactions_member_email    INDEX     l   CREATE INDEX idx_points_transactions_member_email ON public.points_transactions USING btree (member_email);
+ 8   DROP INDEX public.idx_points_transactions_member_email;
+       public                 postgres    false    250            g           1259    23791    idx_product_audit_logs_product    INDEX     ?   CREATE INDEX idx_product_audit_logs_product ON public.product_audit_logs USING btree (product_type, product_id, created_at DESC);
+ 2   DROP INDEX public.idx_product_audit_logs_product;
+       public                 postgres    false    273    273    273            6           1259    23571    idx_saved_looks_member_created    INDEX     o   CREATE INDEX idx_saved_looks_member_created ON public.saved_looks USING btree (member_email, created_at DESC);
+ 2   DROP INDEX public.idx_saved_looks_member_created;
+       public                 postgres    false    254    254            7           1259    23459    idx_saved_looks_member_email    INDEX     \   CREATE INDEX idx_saved_looks_member_email ON public.saved_looks USING btree (member_email);
+ 0   DROP INDEX public.idx_saved_looks_member_email;
+       public                 postgres    false    254            F           1259    23984     idx_task_claims_member_task_date    INDEX     z   CREATE INDEX idx_task_claims_member_task_date ON public.task_claims USING btree (member_email, task_id, claim_date DESC);
+ 4   DROP INDEX public.idx_task_claims_member_task_date;
+       public                 postgres    false    262    262    262            f           1259    23567     ix_admin_audit_logs_target_email    INDEX     e   CREATE INDEX ix_admin_audit_logs_target_email ON public.admin_audit_logs USING btree (target_email);
+ 4   DROP INDEX public.ix_admin_audit_logs_target_email;
+       public                 postgres    false    271            l           1259    24044 !   ix_member_sessions_member_version    INDEX        CREATE INDEX ix_member_sessions_member_version ON public.member_sessions USING btree (member_id, session_version, revoked_at);
+ 5   DROP INDEX public.ix_member_sessions_member_version;
+       public                 postgres    false    274    274    274            ;           1259    24043 !   ix_otp_codes_email_purpose_expiry    INDEX     r   CREATE INDEX ix_otp_codes_email_purpose_expiry ON public.otp_codes USING btree (email, purpose, expires_at DESC);
+ 5   DROP INDEX public.ix_otp_codes_email_purpose_expiry;
+       public                 postgres    false    256    256    256            w           1259    24117 #   ix_pending_registrations_expires_at    INDEX     k   CREATE INDEX ix_pending_registrations_expires_at ON public.pending_registrations USING btree (expires_at);
+ 7   DROP INDEX public.ix_pending_registrations_expires_at;
+       public                 postgres    false    276            /           1259    23402 #   ix_points_transactions_member_email    INDEX     k   CREATE INDEX ix_points_transactions_member_email ON public.points_transactions USING btree (member_email);
+ 7   DROP INDEX public.ix_points_transactions_member_email;
+       public                 postgres    false    250            _           2618    23074    view_member_activity _RETURN    RULE     d  CREATE OR REPLACE VIEW public.view_member_activity AS
  SELECT m.phone_number,
     m.name,
     m.level,
@@ -1633,7 +1746,7 @@ BDROP INDEX public.idx_crawler_staging_products_status_crawled_at;
      LEFT JOIN public.checkins c ON (((m.phone_number)::text = (c.member_id)::text)))
      LEFT JOIN public.favorites f ON (((m.phone_number)::text = (f.member_id)::text)))
   GROUP BY m.phone_number, m.name, m.level, m.status, m.role;
-CREATE OR REPLACE VIEW public.view_member_activity AS
+ ?  CREATE OR REPLACE VIEW public.view_member_activity AS
 SELECT
     NULL::character varying(20) AS phone_number,
     NULL::character varying(50) AS name,
@@ -1644,106 +1757,116 @@ SELECT
     NULL::bigint AS total_favorites,
     NULL::timestamp without time zone AS last_checkin_at,
     NULL::numeric AS member_days;
-publicpostgresfalse2202202202202262242242245331226220220251262021111checkins trg_auto_upgrade_levelTRIGGERCREATE TRIGGER trg_auto_upgrade_level AFTER INSERT ON public.checkins FOR EACH ROW EXECUTE FUNCTION public.func_auto_upgrade_level();
-8DROP TRIGGER trg_auto_upgrade_level ON public.checkins;
-publicpostgresfalse306224262021112$favorites trg_before_favorite_insertTRIGGERCREATE TRIGGER trg_before_favorite_insert BEFORE INSERT ON public.favorites FOR EACH ROW EXECUTE FUNCTION public.func_before_favorite_insert();
-=DROP TRIGGER trg_before_favorite_insert ON public.favorites;
-publicpostgresfalse226305262023820$blushes trg_blushes_product_contractTRIGGERCREATE TRIGGER trg_blushes_product_contract BEFORE INSERT OR UPDATE ON public.blushes FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
-=DROP TRIGGER trg_blushes_product_contract ON public.blushes;
-publicpostgresfalse348236262023824*contouring trg_contouring_product_contractTRIGGERCREATE TRIGGER trg_contouring_product_contract BEFORE INSERT OR UPDATE ON public.contouring FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
-CDROP TRIGGER trg_contouring_product_contract ON public.contouring;
-publicpostgresfalse246348262023821&eyebrows trg_eyebrows_product_contractTRIGGERCREATE TRIGGER trg_eyebrows_product_contract BEFORE INSERT OR UPDATE ON public.eyebrows FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
-?DROP TRIGGER trg_eyebrows_product_contract ON public.eyebrows;
-publicpostgresfalse3482382620238236eyeliner_mascara trg_eyeliner_mascara_product_contractTRIGGERCREATE TRIGGER trg_eyeliner_mascara_product_contract BEFORE INSERT OR UPDATE ON public.eyeliner_mascara FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
-ODROP TRIGGER trg_eyeliner_mascara_product_contract ON public.eyeliner_mascara;
-publicpostgresfalse244348262023822*eyeshadows trg_eyeshadows_product_contractTRIGGERCREATE TRIGGER trg_eyeshadows_product_contract BEFORE INSERT OR UPDATE ON public.eyeshadows FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
-CDROP TRIGGER trg_eyeshadows_product_contract ON public.eyeshadows;
-publicpostgresfalse348242262023825,foundations trg_foundations_product_contractTRIGGERCREATE TRIGGER trg_foundations_product_contract BEFORE INSERT OR UPDATE ON public.foundations FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
-EDROP TRIGGER trg_foundations_product_contract ON public.foundations;
-publicpostgresfalse348250262023826.highlighters trg_highlighters_product_contractTRIGGERCREATE TRIGGER trg_highlighters_product_contract BEFORE INSERT OR UPDATE ON public.highlighters FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
-GDROP TRIGGER trg_highlighters_product_contract ON public.highlighters;
-publicpostgresfalse348240262023827(lipsticks trg_lipsticks_product_contractTRIGGERCREATE TRIGGER trg_lipsticks_product_contract BEFORE INSERT OR UPDATE ON public.lipsticks FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
-ADROP TRIGGER trg_lipsticks_product_contract ON public.lipsticks;
-publicpostgresfalse348248262021114 members trg_member_level_historyTRIGGERCREATE TRIGGER trg_member_level_history AFTER UPDATE ON public.members FOR EACH ROW EXECUTE FUNCTION public.func_member_level_history();
-9DROP TRIGGER trg_member_level_history ON public.members;
-publicpostgresfalse308220262021113%checkins trg_prevent_multiple_checkinTRIGGERCREATE TRIGGER trg_prevent_multiple_checkin BEFORE INSERT ON public.checkins FOR EACH ROW EXECUTE FUNCTION public.func_prevent_multiple_checkin();
->DROP TRIGGER trg_prevent_multiple_checkin ON public.checkins;
-publicpostgresfalse224307262024182#blushes trg_product_catalog_blushesTRIGGERCREATE TRIGGER trg_product_catalog_blushes AFTER INSERT ON public.blushes FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
-<DROP TRIGGER trg_product_catalog_blushes ON public.blushes;
-publicpostgresfalse236293262024188)contouring trg_product_catalog_contouringTRIGGERCREATE TRIGGER trg_product_catalog_contouring AFTER INSERT ON public.contouring FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
-BDROP TRIGGER trg_product_catalog_contouring ON public.contouring;
-publicpostgresfalse293246262024184%eyebrows trg_product_catalog_eyebrowsTRIGGERCREATE TRIGGER trg_product_catalog_eyebrows AFTER INSERT ON public.eyebrows FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
->DROP TRIGGER trg_product_catalog_eyebrows ON public.eyebrows;
-publicpostgresfalse2382932620241835eyeliner_mascara trg_product_catalog_eyeliner_mascaraTRIGGERCREATE TRIGGER trg_product_catalog_eyeliner_mascara AFTER INSERT ON public.eyeliner_mascara FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
-NDROP TRIGGER trg_product_catalog_eyeliner_mascara ON public.eyeliner_mascara;
-publicpostgresfalse293244262024185)eyeshadows trg_product_catalog_eyeshadowsTRIGGERCREATE TRIGGER trg_product_catalog_eyeshadows AFTER INSERT ON public.eyeshadows FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
-BDROP TRIGGER trg_product_catalog_eyeshadows ON public.eyeshadows;
-publicpostgresfalse242293262024186+foundations trg_product_catalog_foundationsTRIGGERCREATE TRIGGER trg_product_catalog_foundations AFTER INSERT ON public.foundations FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
-DDROP TRIGGER trg_product_catalog_foundations ON public.foundations;
-publicpostgresfalse293250262024187-highlighters trg_product_catalog_highlightersTRIGGERCREATE TRIGGER trg_product_catalog_highlighters AFTER INSERT ON public.highlighters FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
-FDROP TRIGGER trg_product_catalog_highlighters ON public.highlighters;
-publicpostgresfalse293240262024181'lipsticks trg_product_catalog_lipsticksTRIGGERCREATE TRIGGER trg_product_catalog_lipsticks AFTER INSERT ON public.lipsticks FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
-@DROP TRIGGER trg_product_catalog_lipsticks ON public.lipsticks;
-publicpostgresfalse293248262024189%products trg_product_catalog_productsTRIGGERCREATE TRIGGER trg_product_catalog_products AFTER INSERT ON public.products FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
->DROP TRIGGER trg_product_catalog_products ON public.products;
-publicpostgresfalse293222}260623424'cart_items cart_items_member_email_fkey
-FK CONSTRAINTALTER TABLE ONLY public.cart_items
+       public               postgres    false    226    226    224    224    224    5372    220    220    220    220    220    220    245            ?           2620    21111    checkins trg_auto_upgrade_level     TRIGGER     ?   CREATE TRIGGER trg_auto_upgrade_level AFTER INSERT ON public.checkins FOR EACH ROW EXECUTE FUNCTION public.func_auto_upgrade_level();
+ 8   DROP TRIGGER trg_auto_upgrade_level ON public.checkins;
+       public               postgres    false    224    309            ?           2620    21112 $   favorites trg_before_favorite_insert     TRIGGER     ?   CREATE TRIGGER trg_before_favorite_insert BEFORE INSERT ON public.favorites FOR EACH ROW EXECUTE FUNCTION public.func_before_favorite_insert();
+ =   DROP TRIGGER trg_before_favorite_insert ON public.favorites;
+       public               postgres    false    308    226            ?           2620    24545 $   blushes trg_blushes_product_contract     TRIGGER     ?   CREATE TRIGGER trg_blushes_product_contract BEFORE INSERT OR UPDATE ON public.blushes FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
+ =   DROP TRIGGER trg_blushes_product_contract ON public.blushes;
+       public               postgres    false    282    350            ?           2620    24549 *   contouring trg_contouring_product_contract     TRIGGER     ?   CREATE TRIGGER trg_contouring_product_contract BEFORE INSERT OR UPDATE ON public.contouring FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
+ C   DROP TRIGGER trg_contouring_product_contract ON public.contouring;
+       public               postgres    false    350    240            ?           2620    24546 &   eyebrows trg_eyebrows_product_contract     TRIGGER     ?   CREATE TRIGGER trg_eyebrows_product_contract BEFORE INSERT OR UPDATE ON public.eyebrows FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
+ ?   DROP TRIGGER trg_eyebrows_product_contract ON public.eyebrows;
+       public               postgres    false    284    350            ?           2620    24548 6   eyeliner_mascara trg_eyeliner_mascara_product_contract     TRIGGER     ?   CREATE TRIGGER trg_eyeliner_mascara_product_contract BEFORE INSERT OR UPDATE ON public.eyeliner_mascara FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
+ O   DROP TRIGGER trg_eyeliner_mascara_product_contract ON public.eyeliner_mascara;
+       public               postgres    false    238    350            ?           2620    24547 *   eyeshadows trg_eyeshadows_product_contract     TRIGGER     ?   CREATE TRIGGER trg_eyeshadows_product_contract BEFORE INSERT OR UPDATE ON public.eyeshadows FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
+ C   DROP TRIGGER trg_eyeshadows_product_contract ON public.eyeshadows;
+       public               postgres    false    350    236            ?           2620    24550 ,   foundations trg_foundations_product_contract     TRIGGER     ?   CREATE TRIGGER trg_foundations_product_contract BEFORE INSERT OR UPDATE ON public.foundations FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
+ E   DROP TRIGGER trg_foundations_product_contract ON public.foundations;
+       public               postgres    false    244    350            ?           2620    24551 .   highlighters trg_highlighters_product_contract     TRIGGER     ?   CREATE TRIGGER trg_highlighters_product_contract BEFORE INSERT OR UPDATE ON public.highlighters FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
+ G   DROP TRIGGER trg_highlighters_product_contract ON public.highlighters;
+       public               postgres    false    350    286            ?           2620    24552 (   lipsticks trg_lipsticks_product_contract     TRIGGER     ?   CREATE TRIGGER trg_lipsticks_product_contract BEFORE INSERT OR UPDATE ON public.lipsticks FOR EACH ROW EXECUTE FUNCTION public.enforce_product_contract();
+ A   DROP TRIGGER trg_lipsticks_product_contract ON public.lipsticks;
+       public               postgres    false    350    242            ?           2620    21114     members trg_member_level_history     TRIGGER     ?   CREATE TRIGGER trg_member_level_history AFTER UPDATE ON public.members FOR EACH ROW EXECUTE FUNCTION public.func_member_level_history();
+ 9   DROP TRIGGER trg_member_level_history ON public.members;
+       public               postgres    false    311    220            ?           2620    21113 %   checkins trg_prevent_multiple_checkin     TRIGGER     ?   CREATE TRIGGER trg_prevent_multiple_checkin BEFORE INSERT ON public.checkins FOR EACH ROW EXECUTE FUNCTION public.func_prevent_multiple_checkin();
+ >   DROP TRIGGER trg_prevent_multiple_checkin ON public.checkins;
+       public               postgres    false    310    224            ?           2620    24188 )   contouring trg_product_catalog_contouring     TRIGGER     ?   CREATE TRIGGER trg_product_catalog_contouring AFTER INSERT ON public.contouring FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
+ B   DROP TRIGGER trg_product_catalog_contouring ON public.contouring;
+       public               postgres    false    296    240            ?           2620    24183 5   eyeliner_mascara trg_product_catalog_eyeliner_mascara     TRIGGER     ?   CREATE TRIGGER trg_product_catalog_eyeliner_mascara AFTER INSERT ON public.eyeliner_mascara FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
+ N   DROP TRIGGER trg_product_catalog_eyeliner_mascara ON public.eyeliner_mascara;
+       public               postgres    false    238    296            ?           2620    24185 )   eyeshadows trg_product_catalog_eyeshadows     TRIGGER     ?   CREATE TRIGGER trg_product_catalog_eyeshadows AFTER INSERT ON public.eyeshadows FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
+ B   DROP TRIGGER trg_product_catalog_eyeshadows ON public.eyeshadows;
+       public               postgres    false    296    236            ?           2620    24186 +   foundations trg_product_catalog_foundations     TRIGGER     ?   CREATE TRIGGER trg_product_catalog_foundations AFTER INSERT ON public.foundations FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
+ D   DROP TRIGGER trg_product_catalog_foundations ON public.foundations;
+       public               postgres    false    296    244            ?           2620    24181 '   lipsticks trg_product_catalog_lipsticks     TRIGGER     ?   CREATE TRIGGER trg_product_catalog_lipsticks AFTER INSERT ON public.lipsticks FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
+ @   DROP TRIGGER trg_product_catalog_lipsticks ON public.lipsticks;
+       public               postgres    false    242    296            ?           2620    24189 %   products trg_product_catalog_products     TRIGGER     ?   CREATE TRIGGER trg_product_catalog_products AFTER INSERT ON public.products FOR EACH ROW EXECUTE FUNCTION public.register_product_catalog_item();
+ >   DROP TRIGGER trg_product_catalog_products ON public.products;
+       public               postgres    false    296    222            ?           2620    26958    blushes zz_color_evidence     TRIGGER     ?   CREATE TRIGGER zz_color_evidence BEFORE INSERT OR UPDATE ON public.blushes FOR EACH ROW EXECUTE FUNCTION public.enforce_product_color_evidence();
+ 2   DROP TRIGGER zz_color_evidence ON public.blushes;
+       public               postgres    false    282    352            ?           2620    26970    contouring zz_color_evidence     TRIGGER     ?   CREATE TRIGGER zz_color_evidence BEFORE INSERT OR UPDATE ON public.contouring FOR EACH ROW EXECUTE FUNCTION public.enforce_product_color_evidence();
+ 5   DROP TRIGGER zz_color_evidence ON public.contouring;
+       public               postgres    false    240    352            ?           2620    26961    eyebrows zz_color_evidence     TRIGGER     ?   CREATE TRIGGER zz_color_evidence BEFORE INSERT OR UPDATE ON public.eyebrows FOR EACH ROW EXECUTE FUNCTION public.enforce_product_color_evidence();
+ 3   DROP TRIGGER zz_color_evidence ON public.eyebrows;
+       public               postgres    false    284    352            ?           2620    26967 "   eyeliner_mascara zz_color_evidence     TRIGGER     ?   CREATE TRIGGER zz_color_evidence BEFORE INSERT OR UPDATE ON public.eyeliner_mascara FOR EACH ROW EXECUTE FUNCTION public.enforce_product_color_evidence();
+ ;   DROP TRIGGER zz_color_evidence ON public.eyeliner_mascara;
+       public               postgres    false    238    352            ?           2620    26964    eyeshadows zz_color_evidence     TRIGGER     ?   CREATE TRIGGER zz_color_evidence BEFORE INSERT OR UPDATE ON public.eyeshadows FOR EACH ROW EXECUTE FUNCTION public.enforce_product_color_evidence();
+ 5   DROP TRIGGER zz_color_evidence ON public.eyeshadows;
+       public               postgres    false    352    236            ?           2620    26973    foundations zz_color_evidence     TRIGGER     ?   CREATE TRIGGER zz_color_evidence BEFORE INSERT OR UPDATE ON public.foundations FOR EACH ROW EXECUTE FUNCTION public.enforce_product_color_evidence();
+ 6   DROP TRIGGER zz_color_evidence ON public.foundations;
+       public               postgres    false    352    244            ?           2620    26976    highlighters zz_color_evidence     TRIGGER     ?   CREATE TRIGGER zz_color_evidence BEFORE INSERT OR UPDATE ON public.highlighters FOR EACH ROW EXECUTE FUNCTION public.enforce_product_color_evidence();
+ 7   DROP TRIGGER zz_color_evidence ON public.highlighters;
+       public               postgres    false    286    352            ?           2620    26979    lipsticks zz_color_evidence     TRIGGER     ?   CREATE TRIGGER zz_color_evidence BEFORE INSERT OR UPDATE ON public.lipsticks FOR EACH ROW EXECUTE FUNCTION public.enforce_product_color_evidence();
+ 4   DROP TRIGGER zz_color_evidence ON public.lipsticks;
+       public               postgres    false    352    242            ?           2606    23424 '   cart_items cart_items_member_email_fkey
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.cart_items
     ADD CONSTRAINT cart_items_member_email_fkey FOREIGN KEY (member_email) REFERENCES public.members(email);
-QALTER TABLE ONLY public.cart_items DROP CONSTRAINT cart_items_member_email_fkey;
-publicpostgresfalse5329276220|260623282cart cart_member_id_fkey
-FK CONSTRAINTALTER TABLE ONLY public.cart
+ Q   ALTER TABLE ONLY public.cart_items DROP CONSTRAINT cart_items_member_email_fkey;
+       public               postgres    false    270    220    5370            ?           2606    23282    cart cart_member_id_fkey
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.cart
     ADD CONSTRAINT cart_member_id_fkey FOREIGN KEY (member_id) REFERENCES public.members(phone_number) ON DELETE CASCADE;
-BALTER TABLE ONLY public.cart DROP CONSTRAINT cart_member_id_fkey;
-publicpostgresfalse2205331274q260621026 checkins checkins_member_id_fkey
-FK CONSTRAINTALTER TABLE ONLY public.checkins
+ B   ALTER TABLE ONLY public.cart DROP CONSTRAINT cart_member_id_fkey;
+       public               postgres    false    268    220    5372            ?           2606    21026     checkins checkins_member_id_fkey
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.checkins
     ADD CONSTRAINT checkins_member_id_fkey FOREIGN KEY (member_id) REFERENCES public.members(phone_number) ON UPDATE CASCADE ON DELETE RESTRICT;
-JALTER TABLE ONLY public.checkins DROP CONSTRAINT checkins_member_id_fkey;
-publicpostgresfalse2245331220260624140Jcrawler_staging_products crawler_staging_products_imported_product_id_fkey
-FK CONSTRAINTALTER TABLE ONLY public.crawler_staging_products
+ J   ALTER TABLE ONLY public.checkins DROP CONSTRAINT checkins_member_id_fkey;
+       public               postgres    false    224    220    5372            ?           2606    24140 J   crawler_staging_products crawler_staging_products_imported_product_id_fkey
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.crawler_staging_products
     ADD CONSTRAINT crawler_staging_products_imported_product_id_fkey FOREIGN KEY (imported_product_id) REFERENCES public.products(id);
-tALTER TABLE ONLY public.crawler_staging_products DROP CONSTRAINT crawler_staging_products_imported_product_id_fkey;
-publicpostgresfalse5333284222r260621045"favorites favorites_member_id_fkey
-FK CONSTRAINTALTER TABLE ONLY public.favorites
+ t   ALTER TABLE ONLY public.crawler_staging_products DROP CONSTRAINT crawler_staging_products_imported_product_id_fkey;
+       public               postgres    false    5374    222    278            ?           2606    21045 "   favorites favorites_member_id_fkey
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.favorites
     ADD CONSTRAINT favorites_member_id_fkey FOREIGN KEY (member_id) REFERENCES public.members(phone_number) ON UPDATE CASCADE ON DELETE CASCADE;
-LALTER TABLE ONLY public.favorites DROP CONSTRAINT favorites_member_id_fkey;
-publicpostgresfalse2205331226v260623444*analysis_history fk_analysis_history_email
-FK CONSTRAINTALTER TABLE ONLY public.analysis_history
+ L   ALTER TABLE ONLY public.favorites DROP CONSTRAINT favorites_member_id_fkey;
+       public               postgres    false    226    5372    220            ?           2606    23444 *   analysis_history fk_analysis_history_email
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.analysis_history
     ADD CONSTRAINT fk_analysis_history_email FOREIGN KEY (member_email) REFERENCES public.members(email) ON DELETE CASCADE;
-TALTER TABLE ONLY public.analysis_history DROP CONSTRAINT fk_analysis_history_email;
-publicpostgresfalse2202645329w260623429&daily_checkins fk_daily_checkins_email
-FK CONSTRAINTALTER TABLE ONLY public.daily_checkins
+ T   ALTER TABLE ONLY public.analysis_history DROP CONSTRAINT fk_analysis_history_email;
+       public               postgres    false    5370    220    258            ?           2606    23429 &   daily_checkins fk_daily_checkins_email
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.daily_checkins
     ADD CONSTRAINT fk_daily_checkins_email FOREIGN KEY (member_email) REFERENCES public.members(email) ON DELETE CASCADE;
-PALTER TABLE ONLY public.daily_checkins DROP CONSTRAINT fk_daily_checkins_email;
-publicpostgresfalse2202665329t2606234390points_transactions fk_points_transactions_email
-FK CONSTRAINTALTER TABLE ONLY public.points_transactions
+ P   ALTER TABLE ONLY public.daily_checkins DROP CONSTRAINT fk_daily_checkins_email;
+       public               postgres    false    220    260    5370            ?           2606    23439 0   points_transactions fk_points_transactions_email
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.points_transactions
     ADD CONSTRAINT fk_points_transactions_email FOREIGN KEY (member_email) REFERENCES public.members(email) ON DELETE CASCADE;
-ZALTER TABLE ONLY public.points_transactions DROP CONSTRAINT fk_points_transactions_email;
-publicpostgresfalse2562205329x260623434 task_claims fk_task_claims_email
-FK CONSTRAINTALTER TABLE ONLY public.task_claims
+ Z   ALTER TABLE ONLY public.points_transactions DROP CONSTRAINT fk_points_transactions_email;
+       public               postgres    false    250    220    5370            ?           2606    23434     task_claims fk_task_claims_email
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.task_claims
     ADD CONSTRAINT fk_task_claims_email FOREIGN KEY (member_email) REFERENCES public.members(email) ON DELETE CASCADE;
-JALTER TABLE ONLY public.task_claims DROP CONSTRAINT fk_task_claims_email;
-publicpostgresfalse2685329220y260623449(unlocked_themes fk_unlocked_themes_email
-FK CONSTRAINTALTER TABLE ONLY public.unlocked_themes
+ J   ALTER TABLE ONLY public.task_claims DROP CONSTRAINT fk_task_claims_email;
+       public               postgres    false    5370    220    262            ?           2606    23449 (   unlocked_themes fk_unlocked_themes_email
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.unlocked_themes
     ADD CONSTRAINT fk_unlocked_themes_email FOREIGN KEY (member_email) REFERENCES public.members(email) ON DELETE CASCADE;
-RALTER TABLE ONLY public.unlocked_themes DROP CONSTRAINT fk_unlocked_themes_email;
-publicpostgresfalse5329220270~260623963.member_sessions member_sessions_member_id_fkey
-FK CONSTRAINTALTER TABLE ONLY public.member_sessions
+ R   ALTER TABLE ONLY public.unlocked_themes DROP CONSTRAINT fk_unlocked_themes_email;
+       public               postgres    false    5370    264    220            ?           2606    23963 .   member_sessions member_sessions_member_id_fkey
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.member_sessions
     ADD CONSTRAINT member_sessions_member_id_fkey FOREIGN KEY (member_id) REFERENCES public.members(phone_number);
-XALTER TABLE ONLY public.member_sessions DROP CONSTRAINT member_sessions_member_id_fkey;
-publicpostgresfalse5331280220z260623382$referrals referrals_referred_id_fkey
-FK CONSTRAINTALTER TABLE ONLY public.referrals
+ X   ALTER TABLE ONLY public.member_sessions DROP CONSTRAINT member_sessions_member_id_fkey;
+       public               postgres    false    5372    220    274            ?           2606    23382 $   referrals referrals_referred_id_fkey
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.referrals
     ADD CONSTRAINT referrals_referred_id_fkey FOREIGN KEY (referred_email) REFERENCES public.members(phone_number) ON DELETE CASCADE;
-NALTER TABLE ONLY public.referrals DROP CONSTRAINT referrals_referred_id_fkey;
-publicpostgresfalse2205331272{260623375$referrals referrals_referrer_id_fkey
-FK CONSTRAINTALTER TABLE ONLY public.referrals
+ N   ALTER TABLE ONLY public.referrals DROP CONSTRAINT referrals_referred_id_fkey;
+       public               postgres    false    220    266    5372            ?           2606    23375 $   referrals referrals_referrer_id_fkey
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.referrals
     ADD CONSTRAINT referrals_referrer_id_fkey FOREIGN KEY (referrer_email) REFERENCES public.members(phone_number) ON DELETE CASCADE;
-NALTER TABLE ONLY public.referrals DROP CONSTRAINT referrals_referrer_id_fkey;
-publicpostgresfalse2722205331u260623419)saved_looks saved_looks_member_email_fkey
-FK CONSTRAINTALTER TABLE ONLY public.saved_looks
+ N   ALTER TABLE ONLY public.referrals DROP CONSTRAINT referrals_referrer_id_fkey;
+       public               postgres    false    5372    266    220            ?           2606    23419 )   saved_looks saved_looks_member_email_fkey
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.saved_looks
     ADD CONSTRAINT saved_looks_member_email_fkey FOREIGN KEY (member_email) REFERENCES public.members(email);
-SALTER TABLE ONLY public.saved_looks DROP CONSTRAINT saved_looks_member_email_fkey;
-publicpostgresfalse2605329220s260621087*tryon_records tryon_records_member_id_fkey
-FK CONSTRAINTALTER TABLE ONLY public.tryon_records
+ S   ALTER TABLE ONLY public.saved_looks DROP CONSTRAINT saved_looks_member_email_fkey;
+       public               postgres    false    5370    254    220            ?           2606    21087 *   tryon_records tryon_records_member_id_fkey
+   FK CONSTRAINT     ?   ALTER TABLE ONLY public.tryon_records
     ADD CONSTRAINT tryon_records_member_id_fkey FOREIGN KEY (member_id) REFERENCES public.members(phone_number) ON UPDATE CASCADE ON DELETE CASCADE;
-TALTER TABLE ONLY public.tryon_records DROP CONSTRAINT tryon_records_member_id_fkey;
-publicpostgresfalse2205331232
+ T   ALTER TABLE ONLY public.tryon_records DROP CONSTRAINT tryon_records_member_id_fkey;
+       public               postgres    false    220    232    5372   

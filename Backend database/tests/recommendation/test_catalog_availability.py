@@ -48,11 +48,11 @@ class CatalogAvailabilityTests(unittest.TestCase):
             {"id": 12, "sourceId": 102, "type": "foundations", "seriesId": "MAC::studio",
              "shadeCode": "NC20", "shadeName": "NC20", "depthIndex": 1,
              "lab": [76.0, 7.0, 16.0], "hex_primary": "#d6b69a", "imageUrl": "two.png", "inStock": True,
-             "colorRepresentation": "single"},
+             "colorRepresentation": "single", "colorMatchReady": True, "status": "active", "reviewStatus": "approved"},
             {"id": 11, "sourceId": 101, "type": "foundations", "seriesId": "MAC::studio",
              "shadeCode": "NC15", "shadeName": "NC15", "depthIndex": 0,
              "lab": [81.0, 6.0, 14.0], "hex_primary": "#e4c6aa", "imageUrl": "one.png", "inStock": True,
-             "colorRepresentation": "single"},
+             "colorRepresentation": "single", "colorMatchReady": True, "status": "active", "reviewStatus": "approved"},
             {"id": 13, "sourceId": 103, "type": "lipsticks", "seriesId": None},
         ]
 
@@ -105,7 +105,8 @@ class CatalogAvailabilityTests(unittest.TestCase):
         }
         self.assertTrue(_catalog_item_is_publishable(foundation))
         self.assertFalse(_catalog_item_is_publishable({**foundation, "shadeCode": ""}))
-        self.assertFalse(_catalog_item_is_publishable({**foundation, "colorRepresentation": "official_name_only"}))
+        # Display eligibility is separate from numeric color-match eligibility.
+        self.assertTrue(_catalog_item_is_publishable({**foundation, "colorRepresentation": "official_name_only", "colorMatchReady": False}))
         self.assertFalse(_catalog_item_is_publishable({**foundation, "sourceUrl": ""}))
 
     @patch.object(app_module, "_catalog_rows")

@@ -52,6 +52,14 @@ from crawler_preview import (
     public_product_url, sanitized_url,
 )
 from price_conversion import display_price, price_for_frontend
+from product_image_mirror import mirrored_image_url
+from shade_neighbors import (
+    comparable_lab as _shade_comparable_lab,
+    is_concealer as _is_concealer_product,
+    is_eligible_candidate as _is_shade_match_candidate,
+    shade_neighbor_index,
+    shade_sort_key as _shade_sort_key,
+)
 from password_policy import password_policy_error
 
 load_dotenv()
@@ -71,8 +79,10 @@ def _configured_origins():
 ALLOWED_ORIGINS = _configured_origins()
 CORS(app, supports_credentials=True, origins=list(ALLOWED_ORIGINS))
 
-# 收藏本身只保存短網址與 JSON 摘要，主要儲存成本在 GCS 圖片。前後端統一為 100。
-SAVED_LOOK_LIMIT = max(1, int(os.getenv("SAVED_LOOK_LIMIT", "100")))
+# 收藏本身只保存短網址與 JSON 摘要，主要儲存成本在 GCS 圖片。
+# 會員既有收藏已接近 100 筆；即使舊環境變數仍為 50，也不得再把使用者擋回
+# localStorage 而產生不同步的幽靈收藏。200 筆是目前正式的帳號上限。
+SAVED_LOOK_LIMIT = max(200, int(os.getenv("SAVED_LOOK_LIMIT", "200")))
 
 
 def _runtime_secret(env_name, gcp_secret_name):
@@ -1590,7 +1600,8 @@ def favorites_page():
                     "priceConverted": frontend_price["converted"],
                     "priceNote": frontend_price["note"],
                     "priceConversion": frontend_price["conversion"],
-                    "image_url": getattr(item, 'image_webp_url', '') or getattr(item, 'image_url', ''),
+                    "image_url": mirrored_image_url(
+                        getattr(item, 'image_webp_url', '') or getattr(item, 'image_url', '')),
                     "desc": getattr(item, "description", None) or "憓溶憟賣除?莎?靽桅ˇ?頛芸?",
                     "hex": getattr(item, "hex_primary", None) or "#E8A0B4",
                     "lab": getattr(item, 'lab', None) or {},
@@ -1635,7 +1646,8 @@ def get_user_favorites(phone):
                     "priceConverted": frontend_price["converted"],
                     "priceNote": frontend_price["note"],
                     "priceConversion": frontend_price["conversion"],
-                    "image_url": getattr(item, 'image_webp_url', '') or getattr(item, 'image_url', ''),
+                    "image_url": mirrored_image_url(
+                        getattr(item, 'image_webp_url', '') or getattr(item, 'image_url', '')),
                     "description": getattr(item, 'description', '?怎?膩'),
                     "desc": getattr(item, "description", None) or "憓溶憟賣除?莎?靽桅ˇ?頛芸?",
                     "hex": getattr(item, "hex_primary", None) or "#E8A0B4",
@@ -2234,9 +2246,113 @@ def get_product_api(product_id):
     item = _catalog_item_by_id(product_id)
     if item is None:
         return error_response("NOT_FOUND", "找不到商品", 404)
+    if item.get("type") == "foundations":
+        neighbors = _product_shade_neighbors(item)
+        item["shadeNeighbors"] = neighbors
+        # The storefront already knows how to render ``foundationCrossBrand``
+        # on a product detail page.  ``shadeNeighbors`` is intentionally a
+        # compact, precomputed index; adapt it here to that public storefront
+        # contract with the complete candidate payloads.  Do not make the
+        # browser infer colour matches or scan the catalogue itself.
+        item["foundationCrossBrand"] = _foundation_cross_brand_detail(item, neighbors)
     response = jsonify(item)
-    response.headers["ETag"] = str(item.get("version", 1))
+    # The detail representation gained colour-comparison fields independent of
+    # the product-row version.  A schema revision in the validator prevents a
+    # browser that cached the old detail JSON from silently retaining a page
+    # with no cross-brand section.
+    response.headers["ETag"] = f'"product-detail-v2-{item.get("version", 1)}"'
+    response.headers["Cache-Control"] = "private, no-cache, must-revalidate"
     return response, 200
+
+
+def _product_shade_neighbors(item):
+    """Read precomputed neighbours; never compare against the catalogue here."""
+    payload = shade_neighbor_index.neighbors_payload(item)
+    if payload and payload.get("status") == "pending":
+        # The index has not seen this snapshot (e.g. first request after a
+        # restart).  Small updates finish inline, large ones in the background.
+        if _refresh_shade_neighbor_index(_catalog_rows()) == "ready":
+            payload = shade_neighbor_index.neighbors_payload(item)
+    return payload
+
+
+def _foundation_cross_brand_detail(item, neighbors):
+    """Expose indexed cross-brand matches in the existing product-page shape.
+
+    ``shadeNeighbors`` remains the machine-readable index response.  The SPA
+    expects each cross-brand entry to carry a complete ``product`` object so a
+    visitor can open that candidate without a second client-side catalogue
+    search.  Candidate IDs come exclusively from the trusted precomputed
+    index; loading their display payloads does not recompute any colour score.
+    """
+    candidate_rows = _catalog_rows()
+    by_id = {candidate.get("id"): candidate for candidate in candidate_rows}
+    source_brand = str(item.get("brand") or "").strip().casefold()
+    source_is_concealer = _is_concealer_product(item)
+    eligible_candidates = [
+        candidate for candidate in candidate_rows
+        if (_is_shade_match_candidate(candidate)
+            and str(candidate.get("brand") or "").strip()
+            and str(candidate.get("brand") or "").strip().casefold() != source_brand
+            and _is_concealer_product(candidate) == source_is_concealer)
+    ]
+    available_target_brands = sorted({
+                                         str(candidate.get("brand") or "").strip()
+                                         for candidate in eligible_candidates
+                                     } | ({str(item.get("brand") or "").strip()} if _is_shade_match_candidate(
+        item) else set()),
+                                     key=str.casefold)
+    cross_brand = neighbors.get("crossBrand") if isinstance(neighbors, dict) else None
+    if isinstance(cross_brand, dict) and isinstance(cross_brand.get("closest"), list):
+        compact_candidates = cross_brand["closest"]
+        precomputed = True
+    else:
+        # The first request after a service restart can arrive before the
+        # all-products index is ready.  Do one bounded server-side source-to-N
+        # comparison so the first visitor still sees a useful result.  This is
+        # deliberately not an N×N rebuild and never moves colour work into the
+        # browser; later requests use the precomputed index above.
+        source_lab = _comparable_foundation_lab(item)
+        if source_lab is None:
+            return None
+        ranked = [
+            (float(delta_e(source_lab, _comparable_foundation_lab(candidate))), candidate)
+            for candidate in eligible_candidates
+        ]
+        ranked.sort(key=lambda pair: _shade_sort_key(*pair))
+        compact_candidates = [
+            {"id": candidate.get("id"), "brand": candidate.get("brand"),
+             "shadeCode": candidate.get("shadeCode"), "deltaE": distance}
+            for distance, candidate in ranked[:5]
+        ]
+        precomputed = False
+    entries = []
+    for candidate in compact_candidates:
+        if not isinstance(candidate, dict):
+            continue
+        product = by_id.get(candidate.get("id"))
+        if product is None:
+            # A stale candidate must never be rendered after it was unpublished
+            # or became out of stock between index refreshes.
+            continue
+        entries.append({
+            "brand": candidate.get("brand") or product.get("brand"),
+            "shadeCode": candidate.get("shadeCode") or product.get("shadeCode"),
+            "anchorDeltaE": candidate.get("deltaE"),
+            "reason": "依可信色彩資料以 CIEDE2000 計算的跨品牌相近色號。",
+            "product": product,
+        })
+    return {
+        "status": "ready",
+        "anchorCandidateKey": item.get("candidateKey"),
+        # The compact neighbour payload deliberately stores just the nearest
+        # matches.  The selector must still list every currently eligible
+        # target brand so selecting one can call the existing filtered API.
+        "availableTargetBrands": available_target_brands,
+        "items": entries,
+        "noResultReason": "" if entries else "目前沒有可比較的其他品牌粉底色號。",
+        "precomputed": precomputed,
+    }
 
 
 def _product_relation_exists(table):
@@ -2663,7 +2779,8 @@ def import_crawler_staging_product_api(staging_id):
         errors.append("paletteColors")
     if not palette_colors and hex_primary and not re.fullmatch(r"#[0-9a-f]{6}", hex_primary):
         errors.append("hex")
-    if category in {"foundations", "blushes", "lipsticks"} and not palette_colors and not hex_primary:
+    if (category in {"foundations", "blushes", "lipsticks"} and not palette_colors and not hex_primary
+            and specs.get("colorRepresentation") not in {"official_name_only", "not_applicable", "transparent"}):
         errors.append("officialColour")
     if errors:
         return error_response(
@@ -3042,8 +3159,8 @@ def product_card_payload(item, category_type):
         "priceNote": frontend_price["note"],
         "priceConversion": frontend_price["conversion"],
         "description": getattr(item, "description", "") or "暫無描述",
-        "image_src": getattr(item, "image_url",
-                             getattr(item, "image_webp_url", "https://via.placeholder.com/300x300.png")),
+        "image_src": mirrored_image_url(
+            getattr(item, "image_url", getattr(item, "image_webp_url", "https://via.placeholder.com/300x300.png"))),
         "shade_name": getattr(item, "shade_name", "") or "",
         "sale_page_id": getattr(item, "sale_page_id", "") or "",
         "hex_primary": getattr(item, "hex_primary", None),
@@ -3089,8 +3206,8 @@ def generic_product_candidate(item):
         "name": item.name,
         "price": display_price(item.price),
         "description": item.description or "暫無描述",
-        "image_src": item.image_url,
-        "imageUrl": item.image_url,
+        "image_src": mirrored_image_url(item.image_url),
+        "imageUrl": mirrored_image_url(item.image_url),
         "hex_primary": hex_color,
         "lab": lab or {},
         "tags": [category, category_to_frontend_type(category), *shade_tags],
@@ -3138,7 +3255,7 @@ def _catalog_rows(include_incomplete=False):
                        NULL::text AS undertone, NULL::text AS shade_code, NULL::text AS shade_name,
                        NULL::text AS series_id, NULL::integer AS depth_index,
                        1 AS version, NULL::text AS hex_primary, NULL::jsonb AS lab,
-                        '[]'::jsonb AS palette_colors, NULL::text AS palette_image_url, 'TWD'::text AS currency,
+                        '[]'::jsonb AS palette_colors, NULL::text AS palette_image_url, '{}'::jsonb AS color_evidence, 'TWD'::text AS currency,
                        NULL::text AS sku, NULL::text AS source_site, NULL::text AS source_product_id,
                        TRUE AS in_stock, 'active'::text AS status, 'approved'::text AS review_status, TRUE AS recommendation_ready
                 FROM public.product_catalog c JOIN public.products p ON c.product_type='products' AND c.source_id=p.id
@@ -3157,7 +3274,7 @@ def _catalog_rows(include_incomplete=False):
                        {shade_code} AS shade_code, p.shade_name,
                        {series_id} AS series_id, {depth_index} AS depth_index,
                        COALESCE(p.version, 1) AS version, p.hex_primary, p.lab,
-                        p.palette_colors, p.palette_image_url, COALESCE(p.currency,'TWD') AS currency,
+                        p.palette_colors, p.palette_image_url, p.color_evidence, COALESCE(p.currency,'TWD') AS currency,
                        p.sku, p.source_site, p.source_product_id,
                        COALESCE(p.in_stock,FALSE) AS in_stock, COALESCE(p.status,'inactive') AS status,
                        COALESCE(p.review_status,'pending') AS review_status, COALESCE(p.recommendation_ready,FALSE) AS recommendation_ready
@@ -3169,8 +3286,22 @@ def _catalog_rows(include_incomplete=False):
     with _catalog_cache_lock:
         _catalog_cache_items = [dict(item) for item in items]
         _catalog_cache_expires_at = time.monotonic() + _CATALOG_CACHE_TTL_SECONDS
+    _refresh_shade_neighbor_index([item for item in items if _catalog_item_is_publishable(item)])
     result = [dict(item) for item in items]
     return result if include_incomplete else [item for item in result if _catalog_item_is_publishable(item)]
+
+
+def _refresh_shade_neighbor_index(publishable_items):
+    """Recompute only shade neighbours affected by a catalogue change.
+
+    Large rebuilds run in the background; a failure here must never take the
+    storefront down, product pages then report the comparison as pending.
+    """
+    try:
+        return shade_neighbor_index.refresh(publishable_items)
+    except Exception:
+        app.logger.exception("shade neighbour index refresh failed")
+        return "pending"
 
 
 def _catalog_availability_sets(catalog_items):
@@ -3184,12 +3315,14 @@ def _catalog_availability_sets(catalog_items):
 
 
 def _catalog_payload(row):
+    from color_contract import color_payload
+    quality = color_payload(row)
     source_url = str(row["source_url"] or "").strip()
     frontend_price = _price_for_frontend(row["price"], row["currency"])
     palette_colors = row["palette_colors"] if isinstance(row["palette_colors"], list) else []
     if palette_colors:
         color_representation = "palette"
-    elif row["hex_primary"] and isinstance(row["lab"], list) and len(row["lab"]) == 3:
+    elif row["hex_primary"]:
         color_representation = "single"
     elif str(row["shade_name"] or "").strip() == "官方單一規格":
         color_representation = "not_applicable"
@@ -3205,7 +3338,12 @@ def _catalog_payload(row):
         "priceNote": frontend_price["note"],
         "priceConversion": frontend_price["conversion"],
         "description": row["description"] or "暫無描述",
-        "imageUrl": row["image_url"] or "", "image_url": row["image_url"] or "", "image_src": row["image_url"] or "",
+        # Brand CDNs block hotlinked images; serve the verified same-origin
+        # copy when one is published and keep the original for admins/tools.
+        "imageUrl": mirrored_image_url(row["image_url"] or ""),
+        "image_url": mirrored_image_url(row["image_url"] or ""),
+        "image_src": mirrored_image_url(row["image_url"] or ""),
+        "sourceImageUrl": row["image_url"] or "",
         "sourceUrl": source_url if source_url.startswith(("https://", "http://")) else None,
         "sourceSite": row["source_site"] or None, "sourceProductId": row["source_product_id"] or None,
         "sku": row["sku"] or None,
@@ -3229,7 +3367,13 @@ def _catalog_payload(row):
         # Complete single-colour rows with a real Lab triple are eligible for
         # colour matching.  A stale legacy default must not silently remove a
         # valid foundation shade from CIEDE2000 comparison.
-        "recommendationReady": bool(color_representation == "single"),
+        **quality,
+        "displayReady": bool(row["status"] == "active" and row["review_status"] == "approved"),
+        "styleRecommendationReady": bool(
+            row["status"] == "active" and row["review_status"] == "approved" and row["in_stock"]),
+        "recommendationReady": bool(
+            quality["colorMatchReady"] if row["product_type"] == "foundations" else row["status"] == "active" and row[
+                "review_status"] == "approved" and row["in_stock"]),
     }
 
 
@@ -3244,7 +3388,8 @@ def _attach_foundation_shades(items):
     by_series = {}
     for item in items:
         if (item.get("type") == "foundations"
-                and item.get("colorRepresentation") == "single"
+                and (item.get("colorMatchReady") or item.get("colorReferenceReady"))
+                and item.get("status") == "active" and item.get("reviewStatus") == "approved" and item.get("inStock")
                 and item.get("seriesId")
                 and item.get("hex_primary")
                 and isinstance(item.get("lab"), list)
@@ -3287,12 +3432,15 @@ def _catalog_item_is_publishable(item):
     )
     has_verified_colour = (
             item.get("type") not in {"foundations", "blushes", "lipsticks"}
-            or item.get("colorRepresentation") in {"single", "palette", "not_applicable"}
+            or item.get("colorRepresentation") in {"single", "palette", "not_applicable", "transparent",
+                                                   "official_name_only"}
     )
     return (
             item.get("status") == "active"
             and item.get("reviewStatus") == "approved"
-            and all(str(item.get(field) or "").strip() for field in required_text)
+            and all(
+        str(item.get(field) or "").strip() or (field == "imageUrl" and item.get("imageIdentityStatus") == "mismatch")
+        for field in required_text)
             and float(item.get("priceValue") or 0) > 0
             and has_required_shade_identity
             and has_verified_colour
@@ -3482,16 +3630,7 @@ def _catalog_similarity(anchor, candidate):
 
 
 def _comparable_foundation_lab(item):
-    values = item.get("lab") if isinstance(item, dict) else None
-    if not isinstance(values, (list, tuple)) or len(values) != 3:
-        return None
-    if any(isinstance(value, bool) or not isinstance(value, (int, float))
-           or not math.isfinite(float(value)) for value in values):
-        return None
-    lab = tuple(float(value) for value in values)
-    if not (0 <= lab[0] <= 100 and abs(lab[1]) <= 128 and abs(lab[2]) <= 128):
-        return None
-    return lab
+    return _shade_comparable_lab(item)
 
 
 def _is_https_url(value):
@@ -3518,6 +3657,101 @@ def _cross_brand_shade_presentation(distance):
     }
 
 
+def _foundation_shade_ladder(source, candidates):
+    """Return the three customer-facing colour steps for one target brand.
+
+    A brand / series name is never used as a colour rule.  ``closest`` is the
+    best CIEDE2000 match; lighter and darker candidates additionally have to
+    keep their a*/b* colour direction close to the source.  This lets a
+    visitor compare MAC, NARS or any other available brand by the same
+    contract, while avoiding a pink/cool shade being presented as a lighter
+    version of a yellow/warm shade merely because its L* is higher.
+    """
+    source_lab = _comparable_foundation_lab(source)
+    if source_lab is None:
+        return [], ["lighter", "closest", "darker"]
+
+    ranked = []
+    for candidate in candidates:
+        candidate_lab = _comparable_foundation_lab(candidate)
+        if candidate_lab is None:
+            continue
+        distance = float(delta_e(source_lab, candidate_lab))
+        lightness = float(candidate_lab[0] - source_lab[0])
+        # Compare colour direction at the same lightness.  This is the same
+        # guard used by the neighbour index, kept here because target-brand
+        # requests intentionally compare one source only.
+        tone_distance = delta_e(source_lab, (source_lab[0], candidate_lab[1], candidate_lab[2]))
+        ranked.append((distance, lightness, float(tone_distance), candidate))
+    ranked.sort(key=lambda row: _shade_sort_key(row[0], row[3]))
+    if not ranked:
+        return [], ["lighter", "closest", "darker"]
+
+    selected, used_shades = [], set()
+    rules = (
+        ("lighter", "較淺相近色", lambda lightness, tone, distance: (
+                lightness >= 1.0 and tone <= 3.0 and distance <= 10.0)),
+        ("closest", "最相近色", lambda lightness, tone, distance: True),
+        ("darker", "較深相近色", lambda lightness, tone, distance: (
+                lightness <= -1.0 and tone <= 3.0 and distance <= 10.0)),
+    )
+    missing = []
+    for relation, label, eligible in rules:
+        match = next((row for row in ranked
+                      if (str(row[3].get("brand") or "").casefold(),
+                          str(row[3].get("shadeCode") or row[3].get("shadeName") or row[3].get("id")).casefold())
+                      not in used_shades
+                      and eligible(row[1], row[2], row[0])), None)
+        used_fallback = False
+        if match is None and relation != "closest":
+            # The visitor explicitly chose HEX reference comparison.  A
+            # catalogue sometimes has no colour-direction-safe shade in one
+            # direction even though it has a full shade range.  Keep the
+            # strict result first; then fill that direction from the same
+            # brand's converted swatch, visibly marked as a reference rather
+            # than pretending it passed the undertone guard.
+            direction = 1 if relation == "lighter" else -1
+            match = next((row for row in ranked
+                          if (str(row[3].get("brand") or "").casefold(),
+                              str(row[3].get("shadeCode") or row[3].get("shadeName") or row[3].get("id")).casefold())
+                          not in used_shades
+                          and row[1] * direction >= 1.0), None)
+            used_fallback = match is not None
+        if match is None and relation != "closest":
+            # A catalogue can legitimately contain no swatch on one side of
+            # the source depth (for example the imported range starts lighter
+            # than NC35).  The selector still promises three usable choices,
+            # so use the next closest *different* shade as a clearly labelled
+            # reference instead of leaving the brand with an empty third card.
+            match = next((row for row in ranked
+                          if (str(row[3].get("brand") or "").casefold(),
+                              str(row[3].get("shadeCode") or row[3].get("shadeName") or row[3].get("id")).casefold())
+                          not in used_shades), None)
+            used_fallback = match is not None
+        if match is None:
+            missing.append(relation)
+            continue
+        distance, lightness, tone_distance, candidate = match
+        shade_identity = (str(candidate.get("brand") or "").casefold(),
+                          str(candidate.get("shadeCode") or candidate.get("shadeName") or candidate.get(
+                              "id")).casefold())
+        used_shades.add(shade_identity)
+        output_label = (f"{label}（色卡參考）" if used_fallback else label)
+        selected.append({
+            **candidate,
+            "shadeMatch": {
+                **_cross_brand_shade_presentation(distance),
+                "relation": relation,
+                "label": output_label,
+                "lightnessDifference": round(lightness, 2),
+                "toneDeltaE": round(tone_distance, 2),
+                "toneGuardPassed": not used_fallback,
+                "referenceOnly": used_fallback or not candidate.get("colorMatchReady"),
+            },
+        })
+    return selected, missing
+
+
 @app.route('/api/products/<int:product_id>/shade-matches', methods=['GET'])
 def get_cross_brand_foundation_shade_matches_api(product_id):
     """Return the closest foundation shades from brands other than the source."""
@@ -3541,34 +3775,61 @@ def get_cross_brand_foundation_shade_matches_api(product_id):
 
     target_brand = (request.args.get("targetBrand") or "").strip()
     source_brand = str(source.get("brand") or "").strip()
-    ranked = []
-    available_target_brands = set()
-    for item in _catalog_rows():
-        item_brand = str(item.get("brand") or "").strip()
-        if (item.get("id") == product_id or item.get("type") != "foundations"
-                or not item_brand or item_brand.casefold() == source_brand.casefold()
-                or not item.get("inStock") or item.get("status") != "active"
-                or item.get("reviewStatus") != "approved"
-                or not item.get("recommendationReady")):
-            continue
-        item_lab = _comparable_foundation_lab(item)
-        if item_lab is None:
-            continue
-        available_target_brands.add(item_brand)
-        if target_brand and item_brand.casefold() != target_brand.casefold():
-            continue
-        distance = delta_e(source_lab, item_lab)
-        ranked.append((float(distance), item))
-
-    ranked.sort(key=lambda pair: (
-        pair[0], str(pair[1].get("brand") or "").casefold(),
-        str(pair[1].get("shadeCode") or pair[1].get("shadeName") or "").casefold(),
-        int(pair[1].get("id") or 0),
-    ))
+    catalog = _catalog_rows()
+    precomputed = None
+    if not target_brand:
+        precomputed = shade_neighbor_index.cross_brand_ranking(source, limit)
+        if precomputed is None and _refresh_shade_neighbor_index(catalog) == "ready":
+            precomputed = shade_neighbor_index.cross_brand_ranking(source, limit)
+    all_ranked_for_ladder = None
+    if precomputed is not None:
+        by_id = {item.get("id"): item for item in catalog}
+        ranked = [(distance, by_id[candidate_id]) for distance, candidate_id in precomputed["ranking"]
+                  if candidate_id in by_id]
+        available_target_brands = precomputed["availableTargetBrands"]
+        total_candidates = precomputed["totalCandidates"]
+    else:
+        # Brand-filtered queries (or a stale index) compare one source only.
+        # Unlike the compact cross-brand index, explicitly selecting the
+        # source brand is valid: it is how the product page shows its own
+        # lighter / closest / darker colour ladder after a visitor returns
+        # from another brand.
+        source_is_concealer = _is_concealer_product(source)
+        ranked = []
+        brands = set()
+        for item in catalog:
+            item_brand = str(item.get("brand") or "").strip()
+            if (not _is_shade_match_candidate(item)
+                    or _is_concealer_product(item) != source_is_concealer):
+                continue
+            # The legacy no-filter endpoint is genuinely cross-brand, so keep
+            # its response stable.  Same-brand entries are allowed only for
+            # an explicit brand selection, where they form that brand's own
+            # three-step ladder.
+            if not target_brand and (item.get("id") == product_id
+                                     or item_brand.casefold() == source_brand.casefold()):
+                continue
+            brands.add(item_brand)
+            if target_brand and item_brand.casefold() != target_brand.casefold():
+                continue
+            ranked.append((float(delta_e(source_lab, _comparable_foundation_lab(item))), item))
+        ranked.sort(key=lambda pair: _shade_sort_key(*pair))
+        available_target_brands = sorted(brands, key=str.casefold)
+        total_candidates = len(ranked)
+        all_ranked_for_ladder = list(ranked)
+        ranked = ranked[:limit]
     items = [
         {**item, "shadeMatch": _cross_brand_shade_presentation(distance)}
-        for distance, item in ranked[:limit]
+        for distance, item in ranked
     ]
+    # The selector has an explicit target brand: return a stable three-step
+    # ladder as well as the legacy ranked ``items`` list.  Existing clients
+    # keep working, while the storefront can render the promised three colour
+    # choices for every brand without doing colour work in JavaScript.
+    shade_ladder, missing_shade_steps = ([], [])
+    if target_brand:
+        ladder_candidates = [item for _, item in (all_ranked_for_ladder or ranked)]
+        shade_ladder, missing_shade_steps = _foundation_shade_ladder(source, ladder_candidates)
     return jsonify({
         "ok": True,
         "comparisonMethod": "CIEDE2000",
@@ -3578,9 +3839,12 @@ def get_cross_brand_foundation_shade_matches_api(product_id):
             "seriesId": source.get("seriesId"), "lab": list(source_lab),
         },
         "targetBrand": target_brand or None,
-        "availableTargetBrands": sorted(available_target_brands, key=str.casefold),
+        "availableTargetBrands": available_target_brands,
         "items": items,
-        "totalCandidates": len(ranked),
+        "shadeLadder": shade_ladder,
+        "missingShadeSteps": missing_shade_steps,
+        "totalCandidates": total_candidates,
+        "precomputed": precomputed is not None,
     }), 200
 
 
@@ -3635,6 +3899,11 @@ def _catalog_update_response(product_id, data):
             "undertone": "undertone",
         })
     updates = {column_map[key]: value for key, value in data.items() if key in column_map}
+    if (column_map.get("image_url") in updates
+            and updates[column_map["image_url"]] == item.get("imageUrl") != item.get("sourceImageUrl")):
+        # An admin form echoing the displayed mirror must not replace the
+        # original brand image URL stored in the database.
+        updates.pop(column_map["image_url"])
     if not updates:
         return error_response("NO_UPDATABLE_FIELDS", "沒有可更新欄位", 400)
     if "depth_index" in updates:
@@ -3682,10 +3951,15 @@ def recommendation_candidates(categories=None):
         )
         if allowed and category not in allowed:
             continue
+        # 可否推薦、與色彩是否通過數值驗證，是兩件事。
+        # `recommendationReady` 由資料庫觸發器計算，條件包含
+        # `color_evidence.status = 'verified_official_numeric'`，
+        # 拿它當候選集門檻會讓 3,981 筆上架商品只剩 381 筆（9.6%）進得了推薦，
+        # 打亮整個品類是 0 筆。缺色值的商品仍有名稱、品牌、妝效與風格標籤，
+        # 足以做風格推薦；色彩比對另由 `lab` 是否存在把關（見 _cross_brand_*）。
         if (not catalog_item.get("inStock")
                 or catalog_item.get("status") != "active"
-                or catalog_item.get("reviewStatus") != "approved"
-                or not catalog_item.get("recommendationReady")):
+                or catalog_item.get("reviewStatus") != "approved"):
             continue
         product_type = str(catalog_item.get("type") or "products")
         candidates.append({
@@ -3812,6 +4086,7 @@ def recommend_products_api():
                 "foundationMatchStatus": result["foundationMatchStatus"],
                 "foundationCrossBrandAlternatives": result["foundationCrossBrandAlternatives"],
                 "primary": [], "alternates": [], "threshold": result["threshold"],
+                "personalizationInputs": result["personalizationInputs"],
                 "personalization": result["personalization"], "shadeRecommendation": None,
             },
         }, "products": [], "code": "RECOMMENDATION_EMPTY",
@@ -3834,6 +4109,7 @@ def recommend_products_api():
             "colorDifferencePolicy": result["colorDifferencePolicy"],
             "foundationMatchStatus": result["foundationMatchStatus"],
             "primary": result["primary"], "alternates": result["alternates"], "threshold": result["threshold"],
+            "personalizationInputs": result["personalizationInputs"],
             "personalization": result["personalization"],
             "shadeRecommendation": result["shadeRecommendation"],
             "foundationCrossBrandAlternatives": result["foundationCrossBrandAlternatives"],
@@ -3849,6 +4125,7 @@ def recommend_products_api():
         "colorDifferencePolicy": result["colorDifferencePolicy"],
         "foundationMatchStatus": result["foundationMatchStatus"],
         "foundationCrossBrandAlternatives": result["foundationCrossBrandAlternatives"],
+        "personalizationInputs": result["personalizationInputs"],
         "personalization": result["personalization"],
     }), 200
 
@@ -3901,7 +4178,7 @@ def _legacy_category_item_payload(item, category):
         "priceNote": frontend_price["note"],
         "priceConversion": frontend_price["conversion"],
         "description": getattr(item, 'description', ''),
-        "image_url": getattr(item, 'image_webp_url', '') or getattr(item, 'image_url', ''),
+        "image_url": mirrored_image_url(getattr(item, 'image_webp_url', '') or getattr(item, 'image_url', '')),
         "lab_json": decode_text(getattr(item, 'lab', '')),
         "qdrant_vector_12d": get_product_vector(item),
         "sale_page_id": getattr(item, 'sale_page_id', ''),

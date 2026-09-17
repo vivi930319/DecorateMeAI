@@ -1,0 +1,268 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="fe2806cc-92ca-4fe1-bbf2-937ebc76e291" name="Changes" comment="資料庫">
+      <change afterPath="$PROJECT_DIR$/Backend database/OTP.env" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Backend database/postgre.sql" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Backend database/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/.dockerignore" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/.dockerignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/.env" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/.env" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/.env.example" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/Dockerfile" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/Dockerfile" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/OTP.py" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/OTP.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/Procfile" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/Procfile" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/app.py" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/app.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/extensions.py" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/extensions.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/forms.py" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/forms.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/otp_utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/otp_utils.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/postgres.sql" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/recommendation.py" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/recommendation.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/seed_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/seed_data.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/sql.py" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/sql.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/static/uploads/cat1.webp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/static/uploads/cat2.webp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/static/uploads/dog1.webp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/static/uploads/dog2.webp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/templates/base.html" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/templates/base.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/templates/change_password.html" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/templates/change_password.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/templates/favorites.html" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/templates/favorites.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/templates/forgot_password.html" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/templates/forgot_password.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/templates/history.html" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/templates/history.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/templates/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/templates/index.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/templates/login.html" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/templates/login.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/templates/products.html" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/templates/products.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/templates/profile.html" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/templates/profile.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/templates/register.html" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/templates/register.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/templates/reset_password.html" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/templates/reset_password.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/templates/test_upload.html" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/templates/test_upload.html" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Backend database/wait_for_services.py" beforeDir="false" afterPath="$PROJECT_DIR$/Backend database/wait_for_services.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="EmbeddingIndexingInfo">
+    <option name="cachedIndexableFilesCount" value="91" />
+  </component>
+  <component name="FileTemplateManagerImpl">
+    <option name="RECENT_TEMPLATES">
+      <list>
+        <option value="HTML File" />
+        <option value="Python Script" />
+      </list>
+    </option>
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="ROOT_SYNC" value="DONT_SYNC" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;history&quot;: [
+    {
+      &quot;state&quot;: &quot;OPEN&quot;,
+      &quot;assignee&quot;: &quot;lavien12345&quot;,
+      &quot;author&quot;: &quot;lavien12345&quot;
+    }
+  ],
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;lavien12345&quot;,
+    &quot;author&quot;: &quot;lavien12345&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/vivi930319/new_poject.git&quot;,
+    &quot;accountId&quot;: &quot;3ebebe30-4906-46b5-8f56-497d2b104040&quot;
+  }
+}</component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 5,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3ETtYP65VnaWFZOOegr8iR9QA8Y" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "DefaultHtmlFileTemplate": "HTML File",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "Python.app.executor": "Run",
+    "RunOnceActivity.MCP Project settings loaded": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "git-widget-placeholder": "lavien",
+    "last_opened_file_path": "/Users/a666666/Downloads/PythonProject",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "settings.editor.selected.configurable": "preferences.pluginManager",
+    "vue.rearranger.settings.migration": "true"
+  },
+  "keyToStringList": {
+    "com.intellij.ide.scratch.ScratchImplUtil$2/New Scratch File": [
+      "JSON"
+    ]
+  }
+}]]></component>
+  <component name="RecentsManager">
+    <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/Backend database" />
+      <recent name="C:\Users\TKU\PycharmProjects\PythonProject\Backend database" />
+    </key>
+  </component>
+  <component name="RunManager">
+    <configuration name="app" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
+      <module name="PythonProject" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/Backend database" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <option name="DEBUG_JUST_MY_CODE" value="false" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="RUN_TOOL" value="" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/Backend database/app.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-python-sdk-024ed6589d45-c2ffad84badb-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-261.23567.174" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="fe2806cc-92ca-4fe1-bbf2-937ebc76e291" name="Changes" comment="" />
+      <created>1780214433386</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1780214433386</updated>
+      <workItem from="1780214434343" duration="2478000" />
+      <workItem from="1780218446806" duration="3477000" />
+      <workItem from="1780222212702" duration="298000" />
+      <workItem from="1780230138370" duration="8155000" />
+      <workItem from="1780386631265" duration="7658000" />
+      <workItem from="1781936544519" duration="11000" />
+    </task>
+    <task id="LOCAL-00001" summary="資料庫">
+      <option name="closed" value="true" />
+      <created>1781979090560</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1781979090560</updated>
+    </task>
+    <task id="LOCAL-00002" summary="資料庫">
+      <option name="closed" value="true" />
+      <created>1781979498109</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1781979498109</updated>
+    </task>
+    <task id="LOCAL-00003">
+      <option name="closed" value="true" />
+      <created>1782814429498</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1782814429498</updated>
+    </task>
+    <task id="LOCAL-00004" summary="資料庫">
+      <option name="closed" value="true" />
+      <created>1782830884483</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1782830884483</updated>
+    </task>
+    <task id="LOCAL-00005" summary="資料庫">
+      <option name="closed" value="true" />
+      <created>1782832502996</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1782832502996</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="OPEN_GENERIC_TABS">
+      <map>
+        <entry key="f7b296c6-b3ff-4de4-aaf7-acff1cf2ccc5" value="TOOL_WINDOW" />
+      </map>
+    </option>
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State>
+              <option name="FILTERS">
+                <map>
+                  <entry key="branch">
+                    <value>
+                      <list>
+                        <option value="origin/lavien" />
+                      </list>
+                    </value>
+                  </entry>
+                </map>
+              </option>
+            </State>
+          </value>
+        </entry>
+        <entry key="f7b296c6-b3ff-4de4-aaf7-acff1cf2ccc5">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="資料庫" />
+    <option name="LAST_COMMIT_MESSAGE" value="資料庫" />
+  </component>
+  <component name="com.intellij.coverage.CoverageDataManagerImpl">
+    <SUITE FILE_PATH="coverage/PythonProject$app.coverage" NAME="app Coverage Results" MODIFIED="1780396677996" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/Backend database" />
+  </component>
+</project>

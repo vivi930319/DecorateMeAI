@@ -2,7 +2,7 @@
 .env
 
 # 2. 忽略虛擬環境資料夾
-.venv/
+../.venv/
 venv/
 env/
 
@@ -21,3 +21,11 @@ __pycache__/
 # 6. 忽略資料庫檔案 (如果你之後有用到 SQLite 的話)
 *.sqlite3
 instance/
+
+# 資料庫備份 dump（含會員個資，不可進版控）
+backups/
+*.dump
+
+# 商品圖片鏡像的本機轉檔快取（已發布到 Firebase Hosting）
+Backend database/product_image_mirror/
+Backend database/run_local_5000.*.log
