@@ -1,8 +1,9 @@
-# 1. 隱藏機密環境變數
+# 1. 隱藏機密環境變數 (超級重要！)
+.env
 Backend database/.env
 
 # 2. 忽略虛擬環境資料夾
-../.venv/
+.venv/
 venv/
 env/
 
