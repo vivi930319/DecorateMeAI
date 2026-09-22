@@ -77,16 +77,31 @@ foreach ($pair in @(@('MEMBER_DATABASE_URL',$memberUrl), @('PRODUCT_DATABASE_URL
     if ($row.Count -ne 1 -or $row[0].value -ne $pair[1]) { throw "實際 revision 的 $($pair[0]) 不符。" }
 }
 Write-Host "兩個網址已同步至 100% 流量 revision：$ready" -ForegroundColor Green
+# 只探商品那一條。`health` 是 2026-08-28（commit 958eed5）**單獨為商品上游開的**驗收入口，
+# member-database 的 allowed_paths 從來沒有過 health——它只放行 api/members*、api/favorites/toggle
+# 那幾條，而那些全部要會員 session。所以 /member-database/health 一定回 Gateway 自己的
+# 404 NOT_FOUND，不是權限攔截，也不是這次更新改壞的。
+#
+# 原本這裡把那個 404 當成「驗證未完成」而 throw，於是每一次成功的更新都以紅字結束。
+# 而同一句話又叫人不要重複部署——兩者衝突的結果，就是下一個人會再推一輪沒有必要的 revision。
 $incomplete = $false
-foreach ($probe in @(@('/product-api/health',[string]$productHealth.service), @('/member-database/health',[string]$memberHealth.service))) {
-    try {
-        $body = Read-JsonEndpoint ("https://decorate-me.web.app" + $probe[0])
-        if ($body.service -ne $probe[1]) { throw 'service 與上游預檢不符。' }
-        Write-Host "$($probe[0])：200 JSON，service=$($body.service)" -ForegroundColor Green
-    } catch {
-        $incomplete = $true
-        Write-Warning "$($probe[0])：未通過。401/403 只是權限攔截，不算會員連通；其他錯誤請查 Gateway 日誌。"
-    }
+try {
+    $body = Read-JsonEndpoint 'https://decorate-me.web.app/product-api/health'
+    if ($body.service -ne [string]$productHealth.service) { throw 'service 與上游預檢不符。' }
+    Write-Host "/product-api/health：200 JSON，service=$($body.service)" -ForegroundColor Green
+} catch {
+    $incomplete = $true
+    Write-Warning '/product-api/health：未通過。請查 Gateway 日誌，不要直接重推。'
 }
-if ($incomplete) { throw "網址已更新（$ready），端到端驗證未完成。不要盲目重複部署；會員 health 若受保護，需登入後另驗。" }
-Write-Host '網址與健康路線已驗證；前端不用部署。登入／權限讀寫仍須測試帳號驗收。'
+if ($incomplete) { throw "網址已更新（$ready），商品路線驗證未通過。先查日誌，不要盲目重複部署。" }
+
+if ($memberUrl -eq $productBaseUrl) {
+    # 同一台主機，商品那一條已經證明 Gateway 連得到它。
+    Write-Host '會員與商品同一個上游，連通性已由上面那條證明。' -ForegroundColor Green
+} else {
+    # 不同主機時，Gateway 沒有任何一條不需要登入就能打到 member-database 的路徑（設計如此）。
+    # 腳本開頭的 Read-JsonEndpoint "$memberUrl/health" 已經直接驗過那台主機活著，
+    # 剩下「Gateway 打不打得到它」只能靠帶憑證的請求，交給測試帳號。
+    Write-Host '會員上游是另一台：主機本身已在更新前驗過；Gateway 到它那一段要用測試帳號登入才驗得到。' -ForegroundColor Yellow
+}
+Write-Host '網址已更新，商品路線已驗證；前端不用部署。登入／權限讀寫仍須測試帳號驗收。'
