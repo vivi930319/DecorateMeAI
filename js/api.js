@@ -3308,6 +3308,27 @@ const ImagePipeline = {
     }
 };
 
+// 建議服務 /suggest 的請求契約（2026-09-16）：faceAnalysis 要固定帶一個**頂層**
+// season，而且值只能是這四個字串之一。
+//
+// 為什麼要頂層而不是只留 skinTone.season：實測那支服務兩種形狀都讀得到，但缺的時候
+// 它回的是 missingFields 裡那條巢狀路徑——也就是說它自己也把這件事當成一個獨立欄位
+// 在管。固定送頂層的那一份，雙方看的就是同一個位置，不必靠「它剛好也吃巢狀」。
+//
+// 為什麼只送標籤、不送特徵與推薦色：那份對照表由建議服務統一維護。前端再存一份，
+// 就會有兩份定義，而兩份定義遲早會分岔——分岔的時候畫面與建議會各說各話，
+// 而且不會有任何錯誤訊息。
+//
+// 白名單而不是原樣轉送：臉部分析端只產得出這四個（季型分類器的回傳就這四種），
+// 但 sessionStorage 裡可能躺著舊版格式的資料包。認不得的值送 null，讓建議服務照
+// 「沒有季型」處理，勝過送一個它不認得的字串進去讓它自己猜。
+const SUGGEST_SEASONS = Object.freeze(['春季', '夏季', '秋季', '冬季']);
+
+function normalizeSeasonLabel(value) {
+    const label = String(value ?? '').trim();
+    return SUGGEST_SEASONS.includes(label) ? label : null;
+}
+
 // ═══ 分析資料包：預留 BASIC / PRO / 渲染 / 推薦 / 非同步狀態欄位 ═══
 const AnalysisPackage = {
     create({ mode, images = {}, status = 'draft' }) {
@@ -3339,6 +3360,9 @@ const AnalysisPackage = {
                 noseFront: null,
                 noseSide: null,
                 lipShape: null,
+                // /suggest 契約要求這個欄位「固定」存在。建立時還沒有分析結果，
+                // 所以是 null——但鍵要在，否則從 create() 看這包資料會以為沒有這個欄位。
+                season: null,
                 skinTone: null,
                 lipLab: null,
                 symmetry: null,
@@ -3423,8 +3447,12 @@ const AnalysisPackage = {
             noseFront: raw?.['鼻型'] || null,
             noseSide: (sideNose && typeof sideNose === 'object') ? (sideNose.label || null) : sideNose,
             lipShape: raw?.['嘴型'] || null,
+            // 頂層 season 是 /suggest 的請求契約欄位（見 SUGGEST_SEASONS）。
+            // 它跟 skinTone.season 是同一個值，刻意重複：巢狀那份是既有的顯示與推薦
+            // 路徑在讀的，頂層這份是送給建議服務的。兩份都走同一個白名單，不會分岔。
+            season: normalizeSeasonLabel(skin['四季型']),
             skinTone: {
-                season: skin['四季型'] || null,
+                season: normalizeSeasonLabel(skin['四季型']),
                 level: skin['膚色分級'] || null,
                 lab: skin['LAB'] || null,
                 // PRO 自 2026-08-05 起不再做正面+側面平均，所以後端不會再送 LAB來源。

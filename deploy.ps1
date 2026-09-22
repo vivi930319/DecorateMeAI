@@ -54,6 +54,9 @@ Invoke-DeployCheck "每頁都畫得出東西"         @('tests/page_dispatch_tdz
 Invoke-DeployCheck "商品清空後的狀態"         @('tests/product_catalog_empty_check.js', '.')
 # 選擇器清單被切斷：大括號依然平衡，CSS 也不報錯，只有畫面知道。
 Invoke-DeployCheck "CSS 結構"                @('tests/css_structure_check.js', '.')
+# 送去建議服務的季型欄位。缺了或送成它不認得的值，那支服務照樣回 200、照樣生建議，
+# 只是底妝那段跟使用者的膚色無關——畫面完全正常，沒有任何錯誤訊息。
+Invoke-DeployCheck "季型契約"                @('tests/suggest_season_contract_check.js', '.')
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {
