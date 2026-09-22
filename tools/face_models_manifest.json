@@ -1,6 +1,6 @@
 {
-  "version": "20260909_face",
-  "gcsPrefix": "gs://decorate-me-models/20260909_face",
+  "version": "20260918_nose",
+  "gcsPrefix": "gs://decorate-me-models/20260918_nose",
   "files": [
     {
       "path": "models/basic_features_roi/face_shape.onnx",
