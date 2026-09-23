@@ -67,6 +67,41 @@ if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {
     throw "部署中止：firebase.json 必須排除只供本機使用的 config.local.js。"
 }
 
+# 內容完整性：本機有沒有「線上該有的東西」。
+#
+# firebase.json 的 public 是 "."，所以 `firebase deploy` 是**整份取代**不是增量更新——
+# 本機少了哪個目錄，線上那個目錄就被刪掉。
+#
+# 2026-09-23：從一台沒有 product-images/ 的機器部署了兩次，線上 2592 張商品圖
+# 被整批刪除（4208 檔 → 1645 檔），全站商品圖 404，只能靠 Hosting 回滾救回。
+# 那些圖不在 git、不在任何 GCS bucket，只存在於 Hosting 的部署內容裡——
+# 回滾晚一步碰上版本清理，就是真的沒了。
+#
+# 上面那些檢查看的都是「檔案內容對不對」（語法、TDZ、秘密、CSS 結構），
+# 沒有任何一道在意「檔案在不在」。這一道補的就是那個洞。
+$requiredPathsFile = Join-Path $PSScriptRoot "deploy_required_paths.json"
+if (-not (Test-Path $requiredPathsFile)) {
+    throw "部署中止：找不到 deploy_required_paths.json，無法驗證本機內容是否完整。"
+}
+$requiredPaths = Get-Content $requiredPathsFile -Raw -Encoding UTF8 | ConvertFrom-Json
+$contentGaps = @()
+foreach ($entry in $requiredPaths.PSObject.Properties) {
+    if ($entry.Name.StartsWith("_")) { continue }   # _why 之類的說明欄位
+    $dir = Join-Path $PSScriptRoot $entry.Name
+    $min = [int]$entry.Value.minFiles
+    if (-not (Test-Path $dir)) {
+        $contentGaps += "  $($entry.Name)/ 不存在（應有至少 $min 個檔案）。$($entry.Value.note)"
+        continue
+    }
+    $count = @(Get-ChildItem -Path $dir -Recurse -File -ErrorAction SilentlyContinue).Count
+    if ($count -lt $min) {
+        $contentGaps += "  $($entry.Name)/ 只有 $count 個檔案，應有至少 $min 個。$($entry.Value.note)"
+    }
+}
+if ($contentGaps) {
+    throw "部署中止：本機內容不完整，這次部署會刪掉線上既有的檔案。`n$($contentGaps -join "`n")`n`n先把缺少的內容補齊再部署。不要用 -AllowDirty 或手動 firebase deploy 繞過這一關。"
+}
+
 # 秘密掃描。rg 比較快，但它不一定在 PATH 上——2026-08-28 就因為這樣讓整個
 # deploy.ps1 在第一步中止，於是改用 `firebase deploy` 直接部署，跳過了底下的
 # 版本號 bump：`?v=` 從 8/25 卡到 8/28，瀏覽器一直拿舊的 JS 與 CSS，

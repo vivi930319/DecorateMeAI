@@ -1,0 +1,27 @@
+{
+  "_why": "firebase.json 的 public 是 \".\"，firebase deploy 會用本機目錄整份取代 Hosting 內容。本機少了哪個目錄，線上就跟著被刪掉。這份清單讓 deploy.ps1 在部署前擋下不完整的工作目錄。數字是下限不是精確值，新增檔案不必跟著改；少於下限才中止。",
+  "product-images": {
+    "minFiles": 2500,
+    "note": "商品圖。不在 git、不在任何 GCS bucket，只存在 Hosting。缺了會導致全站商品圖 404。取得方式見 docs/product-images-recovery.md。"
+  },
+  "js": {
+    "minFiles": 10,
+    "note": "前端主程式。"
+  },
+  "css": {
+    "minFiles": 2,
+    "note": "樣式表。"
+  },
+  "pages": {
+    "minFiles": 10,
+    "note": "各分頁 HTML。"
+  },
+  "assets": {
+    "minFiles": 20,
+    "note": "圖示與主視覺素材。"
+  },
+  "recommendation": {
+    "minFiles": 10,
+    "note": "推薦頁資源。"
+  }
+}
