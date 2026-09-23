@@ -45,7 +45,8 @@ function tick() {
       shopBrandCatalog: null,
       shopBrandLoading: '',
       shopBrandError: false,
-      productFacets: null,
+      // 品牌下拉選單就是靠這份清單畫出來的。
+      productFacets: { brands: ['MAC', 'CHANEL', 'NARS'] },
     },
     Api: {
       listProducts(params) {
@@ -56,6 +57,8 @@ function tick() {
             products: [{ id: 'mac-1', rawId: 1 }],
             total: 743,
             nextCursor: 'cursor-2',
+            // 篩選過的回應，facets 只描述被篩出來的那一小撮。
+            facets: { brands: ['MAC'] },
           });
         }
         return secondPage;
@@ -93,6 +96,13 @@ function tick() {
     throw new Error('第一頁完成後應先提供目前的品牌清單');
   }
   if (sandbox.Router.shopBrandLoading !== 'MAC') throw new Error('背景補齊期間仍應標示載入中');
+  // 品牌查詢的 facets 不能蓋掉全域品牌清單：蓋掉的話下拉選單只會剩「全部品牌」
+  // 和剛選的那一個，使用者得先切回「全部品牌」才能挑別的。
+  if (sandbox.Router.productFacets?.brands?.length !== 3) {
+    throw new Error(
+      `品牌查詢不能覆蓋全域品牌清單，實際剩 ${JSON.stringify(sandbox.Router.productFacets?.brands)}`,
+    );
+  }
 
   // 第二頁刻意把第一頁那筆再回一次，確認以 rawId 去重。
   releaseSecond({

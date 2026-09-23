@@ -442,7 +442,12 @@ function loadBrandProductCatalog(brand, onDone) {
             if (Router.shopBrand !== key) return;
             if (!rec || !rec.ok) { anyPageFailed = true; break; }
             anyPageOk = true;
-            if (rec.facets) Router.productFacets = rec.facets;
+            // 這裡**刻意不寫** Router.productFacets。品牌篩選過的回應，它的 facets
+            // 描述的是「篩選後的那一小撮」——brand=MAC 回的 facets.brands 就只有 ["MAC"]。
+            // 而 productFacets 唯一的用途是餵品牌下拉選單（見 productFacetBrands），
+            // 一旦被這份覆蓋，選單就只剩「全部品牌」和剛剛選的那一個，使用者得先回到
+            // 「全部品牌」重載未篩選的 facets 才能挑別的品牌。
+            // 選單的資料來源只該是未篩選的查詢：loadProductFacets 與 loadGeneralProductCatalog。
             if (rec.total != null) total = rec.total;
             for (const p of rec.products || []) {
                 // rawId 才是資料庫端的主鍵；id 在缺 rawId 時是隨機生成的，拿來去重會漏掉。
