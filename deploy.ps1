@@ -57,6 +57,10 @@ Invoke-DeployCheck "CSS 結構"                @('tests/css_structure_check.js',
 # 送去建議服務的季型欄位。缺了或送成它不認得的值，那支服務照樣回 200、照樣生建議，
 # 只是底妝那段跟使用者的膚色無關——畫面完全正常，沒有任何錯誤訊息。
 Invoke-DeployCheck "季型契約"                @('tests/suggest_season_contract_check.js', '.')
+# 選了品牌之後要翻完所有游標頁，而且每頁都要重送 brand（游標只帶位移不帶篩選條件）。
+# 少了分頁就只顯示第一頁、其餘安靜消失；翻頁掉了 brand 則會從第二頁混進別的品牌。
+# 兩種都不會報錯，看起來就像資料庫裡只有這些商品。2026-09-23 使用者回報 MAC 只出現 50 筆。
+Invoke-DeployCheck "品牌清單分頁"            @('tests/brand_catalog_pagination_check.js', '.')
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {

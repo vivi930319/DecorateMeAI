@@ -417,24 +417,70 @@ function loadBrandProductCatalog(brand, onDone) {
     if (Router.shopBrandLoading === key) return;
     Router.shopBrandLoading = key;
     Router.shopBrandError = false;
-    Api.listProducts({ brand: key, limit: 50 }).then(rec => {
-        if (Router.shopBrand !== key) return;
-        Router.shopBrandCatalog = {
-            brand: key,
-            products: rec?.ok && Array.isArray(rec.products) ? rec.products : [],
-            total: rec?.total ?? null,
-        };
-        Router.shopBrandError = !rec?.ok;
-        if (rec?.facets) Router.productFacets = rec.facets;
-    }).catch(() => {
-        if (Router.shopBrand === key) {
-            Router.shopBrandCatalog = { brand: key, products: [], total: 0 };
-            Router.shopBrandError = true;
+    // 品牌清單和一般目錄一樣要翻完所有游標頁，否則選了某個品牌只會看到 API 回的第一頁。
+    //
+    // 但這裡**不能**照抄 loadGeneralProductCatalog 帶游標時的參數。那邊翻頁只送
+    // { cursor, limit }，因為它本來就要整份目錄；品牌查詢送同樣的參數會翻成整份目錄——
+    // 游標只帶位移，不帶篩選條件。實測 brand=MAC 第一頁回 total 743，拿它的 nextCursor
+    // 只帶 cursor 再請求，回的是 total 3897、appliedFilters.brands 是空陣列。
+    // 所以每一頁都要重送 brand。
+    let firstPageNotified = false;
+    let hasMorePages = false;
+    (async () => {
+        const all = [];
+        const seen = new Set();
+        const usedCursors = new Set();
+        let cursor = null;
+        let total = null;
+        let anyPageOk = false;
+        let anyPageFailed = false;
+        for (let page = 0; page < PRODUCT_MAX_PAGES; page++) {
+            const rec = await Api.listProducts(cursor
+                ? { brand: key, cursor, limit: PRODUCT_API_PAGE_SIZE }
+                : { brand: key, limit: PRODUCT_API_PAGE_SIZE });
+            // 使用者在翻頁途中換了品牌：這份結果已經沒人要，也不該蓋掉新選的那份。
+            if (Router.shopBrand !== key) return;
+            if (!rec || !rec.ok) { anyPageFailed = true; break; }
+            anyPageOk = true;
+            if (rec.facets) Router.productFacets = rec.facets;
+            if (rec.total != null) total = rec.total;
+            for (const p of rec.products || []) {
+                // rawId 才是資料庫端的主鍵；id 在缺 rawId 時是隨機生成的，拿來去重會漏掉。
+                const id = p.rawId != null ? `raw:${p.rawId}` : `id:${p.id}`;
+                if (seen.has(id)) continue;
+                seen.add(id);
+                all.push(p);
+            }
+            // 先讓畫面畫出目前這幾頁，不必等整個品牌翻完。
+            Router.shopBrandCatalog = { brand: key, products: all, total };
+            if (page === 0 && !firstPageNotified) {
+                firstPageNotified = true;
+                Router.shopBrandError = false;
+                if (typeof onDone === 'function') onDone();
+            }
+            const next = rec.nextCursor || null;
+            // 沒有下一頁、這頁空的、或後端把同一個游標回第二次（等於原地打轉）就停。
+            if (!next || !(rec.products || []).length || usedCursors.has(next)) break;
+            if (page === 0) hasMorePages = true;
+            usedCursors.add(next);
+            cursor = next;
         }
-    }).finally(() => {
-        if (Router.shopBrandLoading === key) Router.shopBrandLoading = '';
-        if (typeof onDone === 'function') onDone();
-    });
+        Router.shopBrandCatalog = { brand: key, products: all, total };
+        // 一頁都沒成功才算失敗；中途斷掉是拿到部分清單，不該顯示成「載不到這個品牌」。
+        Router.shopBrandError = !anyPageOk || (anyPageFailed && !all.length);
+    })()
+        .catch(() => {
+            if (Router.shopBrand === key) {
+                Router.shopBrandCatalog = { brand: key, products: [], total: 0 };
+                Router.shopBrandError = true;
+            }
+        })
+        .finally(() => {
+            if (Router.shopBrandLoading === key) Router.shopBrandLoading = '';
+            // 第一頁成功且還有後續頁時，這次回呼讓畫面換成完整的品牌清單；
+            // 第一頁就是完整結果的話前面已經畫過，不必重畫一次。
+            if (typeof onDone === 'function' && (!firstPageNotified || hasMorePages)) onDone();
+        });
 }
 
 // 首頁商品資料在背景補齊時，只更新商品推薦區，不重新執行整個 dashboard 初始化。
