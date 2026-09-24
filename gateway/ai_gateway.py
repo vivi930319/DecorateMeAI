@@ -192,15 +192,24 @@ UPSTREAMS = {
             r"api/members/[^/]+/theme-shop/[^/]+/redeem",
             r"api/members/[^/]+/saved-looks",
             r"api/members/[^/]+/saved-looks/[^/]+",
-            # 我的化妝包（2026-09-25 定版）。跟收藏、購物車同一個形狀，
-            # 所以 _authorize_member_path 的跨會員檢查自動適用——路徑帶 email，
-            # 想讀別人的包會被擋在 403，不必依賴上游自律。
+            # 我的化妝包。上游的路徑形狀在 2026-09-25 一天內改了三次
+            # （api/makeup-bags → api/members/{email}/makeup-bag → 又改回來），
+            # 所以兩種都放行：猜錯就是整條功能 404，而多放行一條的代價遠小於那個。
+            # 上游只實作其中一種時，另一種會由上游自己回 404，不會有副作用。
             #
-            # 中途曾經是不帶 email 的 api/makeup-bags，定版改回來了，那組已移除：
-            # 留著等於多開一條沒人用、又拿不到跨會員保護的路徑。
+            # 兩者的安全性質不同，之後收斂時要知道差在哪：
+            #   api/members/{email}/... 帶 email → _authorize_member_path 會擋跨會員存取
+            #   api/makeup-bags         不帶     → 那道檢查用不上；身分完全靠轉發的會員
+            #                                      cookie。因為路徑上指名不了別人，目前
+            #                                      仍是安全的，但**上游若加了 ?email= 或
+            #                                      ?memberId= 就會破功**，Gateway 擋不住。
             #
-            # 刪除那條的最後一段是 candidateKey（例 lipsticks:3800），冒號可能被編碼成
-            # %3A，所以用 [^/]+ 而不是更緊的樣式；跨會員保護由上面那道檢查負責。
+            # id 收緊成 [0-9]+；items 那層的最後一段在帶 email 的版本裡是 candidateKey
+            # （例 lipsticks:3800），冒號可能編碼成 %3A，所以那條用 [^/]+。
+            r"api/makeup-bags",
+            r"api/makeup-bags/[0-9]+",
+            r"api/makeup-bags/[0-9]+/items",
+            r"api/makeup-bags/[0-9]+/items/[0-9]+",
             r"api/members/[^/]+/makeup-bag",
             r"api/members/[^/]+/makeup-bag/[^/]+",
         ),
