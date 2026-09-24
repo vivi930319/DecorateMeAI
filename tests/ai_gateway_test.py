@@ -2088,7 +2088,16 @@ class PublicProductPathTest(unittest.TestCase):
         預設開放寫入**——而這整條路徑不需要登入。補 api/products/{id} 時就差點
         讓 `POST /product-api/api/products/902` 被轉發到商品服務。
         """
-        self.assertEqual(gateway.PUBLIC_PRODUCT_POST_PATHS, frozenset({"recommend-products"}))
+        # 這個清單要逐一審過才准動。每一條都是**不需要登入**就能對上游寫入的路徑，
+        # 所以新增一條之前要先回答：它為什麼非得收 POST？
+        #   recommend-products    推薦要送整包臉部分析，長度超過 query string 能帶的量
+        #   recommend-styles      化妝包反推，要送 candidateKeys 陣列（上限 200 筆），同理
+        #   api/recommend-styles  上游對同一支端點的別名
+        # 這三支都只做查詢、不改上游資料；真正會寫入資料的路徑一律不得進這個集合。
+        self.assertEqual(
+            gateway.PUBLIC_PRODUCT_POST_PATHS,
+            frozenset({"recommend-products", "recommend-styles", "api/recommend-styles"}),
+        )
         for path in ("api/products", "api/products/902", "api/products/902/shade-matches", "health"):
             self.assertNotIn(path, gateway.PUBLIC_PRODUCT_POST_PATHS, path)
 
