@@ -351,6 +351,11 @@ PUBLIC_PRODUCT_PATHS = _patterns(r"api/products", r"recommend-products",
                                  # 漏的只是這條白名單。
                                  rf"api/products/{PRODUCT_ID_SEG}",
                                  rf"api/products/{PRODUCT_ID_SEG}/shade-matches",
+                                 # 化妝包反推妝容（2026-09-25）。跟上面 shade-matches 同一類：
+                                 # 上游兩個別名都有，漏的只是這條白名單，症狀一樣是 Gateway
+                                 # 自己的 404——看起來像上游沒做，實際上是這裡沒放行。
+                                 r"recommend-styles",
+                                 r"api/recommend-styles",
                                  r"health")
 # 公開商品路徑裡，只有這些收 POST；其餘一律只收 GET。
 #
@@ -359,7 +364,8 @@ PUBLIC_PRODUCT_PATHS = _patterns(r"api/products", r"recommend-products",
 # 2026-09-11 補 api/products/{id} 時就差點踩到。
 #
 # 改成「預設 GET，要寫入的明確列出來」之後，漏掉的後果是 405 被擋下，不是放行。
-PUBLIC_PRODUCT_POST_PATHS = frozenset({"recommend-products"})
+PUBLIC_PRODUCT_POST_PATHS = frozenset({"recommend-products",
+                                       "recommend-styles", "api/recommend-styles"})
 SAVED_LOOK_PATH_RE = re.compile(r"^api/members/([^/]+)/saved-looks(?:/([^/]+))?$")
 MEMBER_PATH_RE = re.compile(r"^api/members/([^/]+)$")
 MEMBER_SCOPE_RE = re.compile(r"^api/members/([^/]+)(?:/|$)")
