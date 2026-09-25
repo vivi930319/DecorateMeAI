@@ -4362,6 +4362,14 @@ const MakeupBag = {
         try { localStorage.setItem(this._key, JSON.stringify([...new Set(keys)])); } catch (_) {}
     },
 
+    // 伺服器回的件數跟本機對不上，代表本機那份已經過時（換裝置、同步失敗、
+    // 或別的分頁動過）。不猜、不硬補，直接重拉一次讓伺服器覆蓋。
+    _syncTotal(total) {
+        if (typeof total !== 'number') return;
+        if (total === this.count()) return;
+        Promise.resolve(this.list()).catch(() => {});
+    },
+
     has(candidateKey) { return this.localList().includes(candidateKey); },
     count() { return this.localList().length; },
     isFull() { return this.count() >= MakeupBagApi.limit; },
@@ -4419,8 +4427,18 @@ const MakeupBag = {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ candidateKey: key }),
             });
-            if (res.ok) return { ok: true };
             const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+                // 後端 2026-09-25 起回 created 旗標：true = 這次才加進去，
+                // false = 本來就在包裡。以前只能拿本機狀態猜，而本機在換裝置、
+                // 清快取或同步失敗之後就不準——伺服器說了算。
+                //
+                // 沒有這個欄位時（舊版後端）退回本機判斷，行為與先前相同。
+                const created = data?.created;
+                if (created === false) return { ok: true, already: true };
+                if (typeof data?.total === 'number') this._syncTotal(data.total);
+                return { ok: true };
+            }
             const code = data?.error?.code || '';
             // 兩份規格對這個錯誤碼的寫法不同（MAKEUP_BAG_FULL／MAKEUP_BAG_LIMIT），
             // 兩個都認，免得上線的是另一版就整個壞掉。

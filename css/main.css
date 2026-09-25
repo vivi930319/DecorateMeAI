@@ -4885,3 +4885,8 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 .pc-own.is-own { background:rgba(201,169,110,0.16); color:var(--gold-deep); border-color:var(--gold); }
 .pc-own:disabled { opacity:.5; cursor:default; }
 .pc-foot { gap:8px; }
+
+/* 延伸推薦的商品格。視窗裡的格子要比商品頁小一階，不然一頁放不下幾張。 */
+.mp-more-grid { grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:14px; margin-top:6px; }
+.mp-more-grid .pc-name { font-size:13px; }
+.mp-more-grid .pc-own { font-size:11px; padding:4px 8px; }

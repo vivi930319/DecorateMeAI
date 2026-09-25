@@ -110,6 +110,14 @@
             modal.querySelector('[data-modal-cancel]').onclick = () => closeModal('makeupPlanModal');
             const gotoBag = modal.querySelector('[data-goto-bag]');
             if (gotoBag) gotoBag.onclick = () => { closeModal('makeupPlanModal'); Router.go('makeupBag'); };
+            const moreBtn = modal.querySelector('[data-more-style]');
+            // 按鈕上**不放數字**：這條走 /recommend-products，結果是依臉部分析個人化過的，
+            // 跟「資料庫裡有幾件這個風格」不是同一個數。把後者放在按鈕上，
+            // 使用者點進去看到比較少的筆數會以為壞了。數量在結果頁講。
+            if (moreBtn) moreBtn.onclick = () => {
+                closeModal('bagStyleModal');
+                openStyleMoreModal(picked, () => openBagStyleModal(picked));
+            };
             modal.querySelector('[data-modal-confirm]').onclick = () => {
                 if (!picked) return;
                 MakeupPlan.set(picked);
@@ -189,6 +197,7 @@
                 ${body}
                 <div class="makeup-style-actions">
                     <button class="btn-outline" type="button" data-replan>換一種規劃方式</button>
+                    ${picked ? `<button class="btn-outline" type="button" data-more-style>看看其他${escapeHtml(styleById(picked)?.name || '')}商品 →</button>` : ''}
                     <button class="btn-gold" type="button" data-modal-confirm ${picked ? '' : 'disabled'}>產生妝容建議 →</button>
                 </div>
             </div>`;
@@ -246,6 +255,91 @@
         });
     }
 
+    // ── 同風格商品延伸推薦 ────────────────────────────────────────
+    //
+    // 「看看其他千金妝商品」**就是路徑 B**，只是風格已經由化妝包決定好了。
+    // 所以直接用既有的 recommendProducts，不自己用標籤篩——本機篩得出來，
+    // 但那樣會丟掉臉部分析，而臉部分析正是這個系統的賣點。
+    //
+    // 這裡不呼叫 Ollama、不呼叫 /recommend-styles：延伸推薦是「資料庫裡還有什麼可以買」，
+    // 跟「你包裡的怎麼搭」是兩件事，混在一起只會增加失敗面。
+    function openStyleMoreModal(styleId, onBack) {
+        const modal = shell('styleMoreModal', 'styleMoreModalTitle');
+        const style = STYLES.find(s => s.id === styleId) || null;
+        let items = null;
+        let failed = false;
+
+        const draw = () => {
+            let body;
+            if (items === null && !failed) {
+                body = '<div class="mp-hint">正在為你挑選…</div>';
+            } else if (failed) {
+                body = '<div class="mp-hint is-error">商品推薦暫時無法使用，請稍後再試。</div>';
+            } else if (!items.length) {
+                // 0 件是會發生的，不是例外：男士白開水全庫只有約 113 件，
+                // 千金妝的打亮只有 6 件。空白畫面會讓人以為壞了。
+                body = `<div class="mp-hint">目前沒有適合你的${escapeHtml(style?.name || '')}商品。</div>`;
+            } else {
+                body = `<div class="mp-section-title">依你的臉部分析，從${escapeHtml(style?.name || '')}商品中為你挑了 ${items.length} 件</div>
+                    <div class="prod-grid mp-more-grid">${items.map(p => `
+                        <div class="prod-card" data-pid="${escapeHtml(p.id)}">
+                            <div class="pc-imgwrap">${phBox('', p.name, p.img)}</div>
+                            <div class="pc-cat">${escapeHtml(p.brand || '')}</div>
+                            <div class="pc-name">${escapeHtml(p.name)}</div>
+                            <div class="pc-foot">
+                                <span class="pc-price">${escapeHtml(p.price || '')}</span>
+                                ${p.candidateKey ? `<button type="button" class="pc-own${MakeupBag.has(p.candidateKey) ? ' is-own' : ''}"
+                                    data-own="${escapeHtml(p.candidateKey)}">${MakeupBag.has(p.candidateKey) ? '已有' : '加入化妝包'}</button>` : ''}
+                            </div>
+                        </div>`).join('')}</div>`;
+            }
+
+            modal.innerHTML = `<div class="makeup-style-dialog">
+                <div class="makeup-style-head">
+                    <div>
+                        <span class="eyebrow">More</span>
+                        <h2 id="styleMoreModalTitle">其他${escapeHtml(style?.name || '')}商品</h2>
+                        <p>這些是資料庫裡的商品，不在你的化妝包內。</p>
+                    </div>
+                    <button class="makeup-style-close" type="button" aria-label="關閉">×</button>
+                </div>
+                ${body}
+                <div class="makeup-style-actions">
+                    <button class="btn-outline" type="button" data-back>← 回到我的化妝包結果</button>
+                </div>
+            </div>`;
+
+            modal.querySelector('.makeup-style-close').onclick = () => closeModal('styleMoreModal');
+            // 單向道會讓使用者出不去，只能重做一次分析。
+            modal.querySelector('[data-back]').onclick = () => {
+                closeModal('styleMoreModal');
+                if (typeof onBack === 'function') onBack();
+            };
+            modal.querySelectorAll('.pc-own').forEach(btn => {
+                btn.onclick = async (e) => {
+                    e.stopPropagation();
+                    if (btn.classList.contains('is-own')) return;
+                    btn.disabled = true;
+                    const result = await MakeupBag.add(btn.dataset.own);
+                    btn.disabled = false;
+                    if (!result.ok) { showToast(result.error); return; }
+                    btn.classList.add('is-own');
+                    btn.textContent = '已有';
+                    showToast(result.already ? '已經在化妝包裡了' : '已加入化妝包');
+                };
+            });
+        };
+
+        draw();
+        Promise.resolve(Api.recommendProducts(Router.analysisPackage, styleId)).then(rec => {
+            if (!document.getElementById('styleMoreModal')) return;
+            if (!rec || !rec.ok) { failed = true; draw(); return; }
+            // 已經在化妝包裡的不再列出來——這一頁的用途是「還可以買什麼」。
+            items = (rec.products || []).filter(p => !p.candidateKey || !MakeupBag.has(p.candidateKey));
+            draw();
+        }).catch(() => { failed = true; draw(); });
+    }
+
     // ── 包在既有視窗外面 ──────────────────────────────────────────
     //
     // 等 makeup-flow.js 把 openMakeupStyleModal 覆寫完之後才包。用 setTimeout(0)
@@ -271,4 +365,5 @@
     window.MakeupPlan = MakeupPlan;
     window.openMakeupPlanModal = openMakeupPlanModal;
     window.openBagStyleModal = openBagStyleModal;
+    window.openStyleMoreModal = openStyleMoreModal;
 })(window, document);
