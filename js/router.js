@@ -5945,20 +5945,25 @@ const PageInit = {
             if (!q && !brand) { resultsEl.innerHTML = ''; return; }
             const token = ++searchToken;
             resultsEl.innerHTML = '<div class="mb-note">搜尋中…</div>';
-            // 只找得進化妝包的商品：非「可推薦」的加進去也不會參與反推，
-            // 讓使用者加了才發現沒用是更差的體驗。
+            // 搜尋交給伺服器的 q，不要抓一批回來自己篩。
+            //
+            // 初版是 listProducts({ limit: 40 }) 再本機比對關鍵字——那只搜尋了目錄
+            // 最前面 40 筆（全站 3897 筆的 1%），所以除非要找的東西剛好排在最前面，
+            // 否則永遠「沒有符合的商品」。而且它不會報錯，看起來就像資料庫裡沒有。
+            //
+            // q 沒有出現在回應的 appliedFilters 裡（所以一開始沒發現它存在），
+            // 但實測會生效：q=唇膏 讓 total 從 3897 降到 930，而且可以跟
+            // recommendationState 疊加。
             const rec = await Api.listProducts({
+                ...(q ? { q } : {}),
                 ...(brand ? { brand } : {}),
-                limit: 40,
+                limit: 12,
+                // 只找得進化妝包的商品：非「可推薦」的加進去也不會參與反推，
+                // 讓使用者加了才發現沒用是更差的體驗。
                 recommendationState: '可推薦',
             });
             if (token !== searchToken || Router.currentPage !== 'makeupBag') return;
-            const needle = q.toLowerCase();
-            const hits = (rec?.products || []).filter(p => {
-                if (!p.candidateKey) return false;
-                if (!needle) return true;
-                return [p.name, p.brand, p.shadeName].some(v => String(v || '').toLowerCase().includes(needle));
-            }).slice(0, 12);
+            const hits = (rec?.products || []).filter(p => p.candidateKey).slice(0, 12);
 
             if (!hits.length) {
                 resultsEl.innerHTML = '<div class="mb-note">沒有符合的商品。</div>';

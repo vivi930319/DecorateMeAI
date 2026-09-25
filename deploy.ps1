@@ -81,6 +81,9 @@ Invoke-DeployCheck "新頁面權限登記"          @('tests/page_access_registr
 # 頁面檔名要跟代號一字不差。對不上時 fetch 回 404，程式安靜掉到備援模板——
 # 不報錯、不當機，只是畫面少一半。2026-09-25 化妝包取名 makeup-bag.html 就是這樣。
 Invoke-DeployCheck "頁面模板檔名"            @('tests/page_template_naming_check.js', '.')
+# 化妝包搜尋要把關鍵字送給伺服器。抓一批回來自己篩等於只搜尋了目錄最前面那幾筆，
+# 找不到時畫面會說「沒有符合的商品」，看起來像資料庫裡沒有——但其實只是沒搜到。
+Invoke-DeployCheck "化妝包搜尋"              @('tests/makeup_bag_search_check.js', '.')
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {
