@@ -91,6 +91,9 @@ Invoke-DeployCheck "商品的 candidateKey"     @('tests/candidate_key_check.js'
 # 反推永遠看不到使用者是誰，每次都回「尚未建立化妝包」——而那句話會讓人
 # 以為是資料問題，一直回去重加商品。2026-09-25 就是這樣卡了一輪。
 Invoke-DeployCheck "反推妝容的路徑"          @('tests/recommend_styles_path_check.js', '.')
+# 反推結果的畫面不可以出現跟排序矛盾的數字。件數不是排序依據（分數才是），
+# 用因果語氣講件數、而件數又不遞減時，使用者只會覺得排壞了。
+Invoke-DeployCheck "反推排序的呈現"          @('tests/style_ranking_display_check.js', '.')
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {

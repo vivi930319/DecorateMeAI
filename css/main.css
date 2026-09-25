@@ -4899,3 +4899,9 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 .mb-owned-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; }
 .mb-sync { font-family:var(--cjk); font-size:11.5px; color:var(--mid); }
 .mb-sync.is-local { color:var(--gold-deep); }
+/* 反推風格的相對強度條。它在本次結果內重新縮放，必然隨名次遞減——
+   所以絕不會跟排序矛盾。刻意不標數字：它表達相對強弱，不是契合度。 */
+.mp-strength { display:block; width:100%; height:3px; margin:7px 0 5px; border-radius:999px;
+    background:var(--gold-dim); overflow:hidden; }
+.mp-strength i { display:block; height:100%; border-radius:inherit; background:var(--gold-grad); }
+.mp-used { display:block; font-family:var(--cjk); font-size:10.5px; font-style:normal; color:var(--mid); }

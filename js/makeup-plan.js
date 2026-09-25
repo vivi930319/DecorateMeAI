@@ -145,6 +145,29 @@
 
         const styleById = (id) => STYLES.find(s => s.id === id) || null;
 
+        // 相對強度條。**在本次回傳的集合內重新縮放**，不是拿原始 score 直接畫。
+        //
+        // 原始 score 是拿全資料集最大值正規化的，實測會擠在 0.21~0.28——
+        // 直接畫成長條的話七個看起來一樣長，等於沒說話。
+        //
+        // 重新縮放之後它必然隨名次遞減，所以**永遠不會跟排序矛盾**。
+        // 這正是先前那個問題的根源：卡片上用因果語氣描述件數，
+        // 而件數不是排序依據（3、9、6、9…），看起來就像排壞了。
+        //
+        // 它表達的是「在這幾個之中相對強一點」，不是契合度或準確率——
+        // 所以不標百分比數字，只給長度。
+        const strengthPct = (row) => {
+            const scores = (result?.styles || []).map(r => Number(r.score) || 0);
+            if (!scores.length) return 100;
+            const max = Math.max(...scores);
+            const min = Math.min(...scores);
+            const v = Number(row.score) || 0;
+            // 全部同分時一律給滿，不要畫出 0 長度讓人以為是最差的。
+            if (max === min) return 100;
+            // 下限 22%：最後一名也要看得見，否則會像「沒有資料」。
+            return Math.round(22 + ((v - min) / (max - min)) * 78);
+        };
+
         const draw = () => {
             const ranked = (result?.styles || [])
                 .map(row => ({ row, style: styleById(row.id) }))
@@ -168,7 +191,9 @@
                             <img src="${escapeHtml(style.img)}" alt="${escapeHtml(style.name)}">
                             <span class="makeup-style-option-copy">
                                 <b>${escapeHtml(style.name)}</b>
-                                <small>第 ${i + 1} 推薦 · 由 ${(row.contributingProducts || []).length} 件現有商品支持</small>
+                                <small>第 ${i + 1} 推薦</small>
+                                <span class="mp-strength" aria-hidden="true"><i style="width:${strengthPct(row)}%"></i></span>
+                                <em class="mp-used">用到你的 ${(row.contributingProducts || []).length} 件商品</em>
                             </span>
                         </button>`).join('')}
                     </div>` : '<div class="mp-hint">你的化妝包還不足以推論適合的妝容，可以直接從下面挑一款。</div>'}
