@@ -204,6 +204,16 @@ UPSTREAMS = {
             # %3A，所以用 [^/]+；跨會員保護由上面那道檢查負責。
             r"api/members/[^/]+/makeup-bag",
             r"api/members/[^/]+/makeup-bag/[^/]+",
+            # 化妝包反推妝容（2026-09-25 定案方案 B）。
+            #
+            # 它原本掛在 /product-api/recommend-styles，但那條走的是公開商品代理
+            # （proxy_public_product_request），刻意只帶 Accept 與 Content-Type——
+            # 商品瀏覽不需要登入，所以不轉發任何憑證。結果是反推永遠看不到使用者是誰，
+            # 每一次都回「尚未建立化妝包」，跟化妝包裡有幾件東西無關。
+            #
+            # 搬到這裡之後身分自然就通了，而且路徑帶 email，
+            # _authorize_member_path 的跨會員檢查自動適用。
+            r"api/members/[^/]+/recommend-styles",
         ),
         requires_upstream_api_key=False,
         requires_cloud_run_iam=False,
