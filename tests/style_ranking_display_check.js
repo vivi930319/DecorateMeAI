@@ -79,5 +79,53 @@ for (const c of cases) {
   );
 }
 
+// ④ 選好風格之後要直接進建議流程，不可以再開一次風格選擇視窗。
+//
+// 2026-09-25：反推頁的確認鈕呼叫 __openStyleModalDirect(picked)，那會重新開啟
+// 七選一的視窗——使用者已經選好了，卻看到第二個「產生妝容建議 →」，
+// 還得再按一次才真的開始。
+console.log('');
+check(
+  '確認鈕呼叫 confirmStyle 而不是重開風格視窗',
+  /Router\.makeupBagCoveredStyle[\s\S]{0,200}confirmStyle\(picked\)/.test(src),
+  '使用者在反推頁已經選好風格了。重開風格選擇視窗等於叫他再選一次。',
+);
+check(
+  'confirmStyle 會進建議流程',
+  /function confirmStyle[\s\S]{0,1200}openSuggestionJourneyModal/.test(src),
+  '要接到既有的建議流程（makeup-flow 的 openSuggestionJourneyModal），' +
+  '那才是真正開始產生建議的地方。',
+);
+check(
+  'confirmStyle 有把風格寫進分析包',
+  /function confirmStyle[\s\S]{0,1200}AnalysisPackage\.update/.test(src),
+  '少了這步，建議頁拿到的 recommendations.style 會是上一次的風格。',
+);
+
+// ⑤ 延伸推薦的按鈕要綁在反推視窗，不是分岔視窗。
+//
+// 2026-09-25：綁定被放進 openMakeupPlanModal（分岔視窗），而按鈕在
+// openBagStyleModal（反推視窗）。兩個視窗都有 data-modal-confirm，
+// 取代字串時比對到第一個。結果那顆按鈕**完全沒有事件處理器**，
+// 點了沒反應、也不報錯。
+{
+  const planStart = src.indexOf('function openMakeupPlanModal');
+  const bagStart = src.indexOf('function openBagStyleModal');
+  const confirmStart = src.indexOf('function confirmStyle');
+  if (planStart < 0 || bagStart < 0 || confirmStart < 0) throw new Error('解析不到三個函式的位置');
+  const planBody = src.slice(planStart, bagStart);
+  const bagBody = src.slice(bagStart, confirmStart);
+  check(
+    '延伸推薦的按鈕綁在反推視窗',
+    /data-more-style/.test(bagBody) && /moreBtn/.test(bagBody),
+    '按鈕在反推視窗裡，綁定也必須在那裡。',
+  );
+  check(
+    '分岔視窗沒有誤植的綁定',
+    !/data-more-style/.test(planBody),
+    '分岔視窗沒有這顆按鈕，綁在那裡等於沒綁——點了不會有任何反應，也不會報錯。',
+  );
+}
+
 console.log(failed ? `\n${failed} 項未通過` : '\n排序呈現測試通過');
 process.exitCode = failed ? 1 : 0;

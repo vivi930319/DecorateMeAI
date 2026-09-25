@@ -110,14 +110,6 @@
             modal.querySelector('[data-modal-cancel]').onclick = () => closeModal('makeupPlanModal');
             const gotoBag = modal.querySelector('[data-goto-bag]');
             if (gotoBag) gotoBag.onclick = () => { closeModal('makeupPlanModal'); Router.go('makeupBag'); };
-            const moreBtn = modal.querySelector('[data-more-style]');
-            // 按鈕上**不放數字**：這條走 /recommend-products，結果是依臉部分析個人化過的，
-            // 跟「資料庫裡有幾件這個風格」不是同一個數。把後者放在按鈕上，
-            // 使用者點進去看到比較少的筆數會以為壞了。數量在結果頁講。
-            if (moreBtn) moreBtn.onclick = () => {
-                closeModal('bagStyleModal');
-                openStyleMoreModal(picked, () => openBagStyleModal(picked));
-            };
             modal.querySelector('[data-modal-confirm]').onclick = () => {
                 if (!picked) return;
                 MakeupPlan.set(picked);
@@ -247,14 +239,20 @@
                 closeModal('bagStyleModal');
                 window.__openStyleModalDirect(picked);
             };
+            // 按鈕上**不放數字**：這條走 /recommend-products，結果是依臉部分析個人化過的，
+            // 跟「資料庫裡有幾件這個風格」不是同一個數。數量在結果頁講。
+            const moreBtn = modal.querySelector('[data-more-style]');
+            if (moreBtn) moreBtn.onclick = () => {
+                closeModal('bagStyleModal');
+                openStyleMoreModal(picked, () => openBagStyleModal(picked));
+            };
             modal.querySelector('[data-modal-confirm]').onclick = () => {
                 if (!picked) return;
                 // 選到化妝包涵蓋不到的風格時，改走系統推薦——這是定案的分流規則。
                 // 路徑 A 的承諾是「用你現有的」，涵蓋不到就沒有東西可推。
-                const covered = rankedIds.has(picked);
-                Router.makeupBagCoveredStyle = covered;
+                Router.makeupBagCoveredStyle = rankedIds.has(picked);
                 closeModal('bagStyleModal');
-                window.__openStyleModalDirect(picked);
+                confirmStyle(picked);
             };
         };
 
@@ -298,6 +296,31 @@
             result = { ok: false, error: '化妝包推薦暫時無法使用。' };
             if (document.getElementById('bagStyleModal')) draw();
         });
+    }
+
+    // 使用者在反推頁已經選好風格了，直接進建議流程——**不要再開一次風格選擇視窗**。
+    //
+    // 先前這裡呼叫 __openStyleModalDirect(picked)，那會重新開啟七選一的視窗，
+    // 使用者會看到第二個「產生妝容建議 →」，還得再按一次才真的開始。
+    //
+    // 這裡複製既有視窗確認時做的三件事（見 makeup-flow.js 的 data-modal-confirm）：
+    // 記下風格、把風格名寫進分析包、開建議流程。第二項不能省——
+    // 少了它，建議頁拿到的 recommendations.style 會是上一次的風格。
+    function confirmStyle(styleId) {
+        const style = STYLES.find(s => s.id === styleId) || null;
+        Router.selectedStyleId = styleId;
+        if (typeof AnalysisPackage !== 'undefined' && style) {
+            Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
+                recommendations: { ...(Router.analysisPackage?.recommendations || {}), style: style.name },
+            });
+        }
+        const ui = window.MakeupFlowUI;
+        if (ui && typeof ui.openSuggestionJourneyModal === 'function') {
+            ui.openSuggestionJourneyModal();
+            return;
+        }
+        // 建議流程還沒載入時才退回舊視窗，至少不會卡住。
+        window.__openStyleModalDirect(styleId);
     }
 
     // ── 同風格商品延伸推薦 ────────────────────────────────────────
