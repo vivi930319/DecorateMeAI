@@ -1638,13 +1638,22 @@ const Api = {
     // 請求只能是 {} 或 { candidateKeys }。
     // **不要送 bagId**——2026-09-25 的版本收斂明訂它不是第一期輸入，送了會回 400。
     // 不帶 candidateKeys 時後端直接用該會員的預設化妝包。
+    //
+    // ⚠️ 走**會員**路徑，不是 /product-api（2026-09-25 定案方案 B）。
+    // 先前掛在 /product-api/recommend-styles，但那條走公開商品代理，Gateway 刻意
+    // 不轉發會員 cookie——商品瀏覽不需要登入。結果反推永遠看不到使用者是誰，
+    // 每次都回「尚未建立化妝包」，跟包裡有幾件東西無關。
+    // 會員路徑帶 email，身分與跨帳號檢查都是現成的。
     async recommendStyles({ candidateKeys = null } = {}) {
-        const base = this.config.services.product.baseUrl;
+        const base = this.config.services.memberDatabase.baseUrl;
+        const email = String(Auth.getProfile()?.email || '').trim();
         if (!base) return { ok: false, styles: [] };
+        if (!email) return { ok: false, error: '請先登入才能使用化妝包推薦。', styles: [] };
         const body = {};
         if (Array.isArray(candidateKeys) && candidateKeys.length) body.candidateKeys = candidateKeys;
         try {
-            const res = await this._fetchWithRelogin(`${base}/recommend-styles`, {
+            const res = await this._fetchWithRelogin(
+                `${base}/api/members/${encodeURIComponent(email)}/recommend-styles`, {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
@@ -1655,7 +1664,9 @@ const Api = {
                 const byStatus = {
                     401: '請先登入才能使用化妝包推薦。',
                     400: '化妝包推薦的請求格式不正確，請重新整理後再試。',
+                    // 403 在會員路徑上還多一種可能：email 與登入者不一致。
                     403: '這些商品不屬於你的化妝包，請重新整理後再試。',
+                    404: '你還沒有化妝包，先加入幾件已有的化妝品再試。',
                     409: '化妝包是空的，請先加入你已有的化妝品。',
                 };
                 return {

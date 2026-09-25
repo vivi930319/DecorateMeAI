@@ -87,6 +87,10 @@ Invoke-DeployCheck "化妝包搜尋"              @('tests/makeup_bag_search_che
 # 正規化後的商品要帶 candidateKey。化妝包的加入、移除、反推、商品卡的「我有」
 # 全靠它，少了會**安靜失效**：按鈕不畫出來、搜尋結果被濾光，而且不報錯。
 Invoke-DeployCheck "商品的 candidateKey"     @('tests/candidate_key_check.js', '.')
+# 反推妝容要走會員路徑。走 /product-api 的話 Gateway 不轉發會員 cookie，
+# 反推永遠看不到使用者是誰，每次都回「尚未建立化妝包」——而那句話會讓人
+# 以為是資料問題，一直回去重加商品。2026-09-25 就是這樣卡了一輪。
+Invoke-DeployCheck "反推妝容的路徑"          @('tests/recommend_styles_path_check.js', '.')
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {
