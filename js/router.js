@@ -2893,7 +2893,19 @@ style: `
 <div style="text-align:center;margin-top:20px;"><button class="btn-gold" id="confirmStyleBtn">確認風格 →</button></div>
 <div id="styleResultArea"></div>`,
 products: `<div id="productsArea"></div>`,
-makeupBag: `<div class="page-header"><span class="eyebrow">Makeup Bag</span><h1>我的化妝包</h1><div class="divider"></div><p>登記你已經有的化妝品，選妝容時就不必每次重填。</p></div><div id="mbArea"></div>`,
+makeupBag: `<div class="page-header"><span class="eyebrow">Makeup Bag</span><h1>我的化妝包</h1><div class="divider"></div><p>登記你已經有的化妝品，選妝容時就不必每次重填。</p></div>
+<!-- 備援模板要跟 pages/makeupBag.html 同構。少了加入區的話，fetch 失敗時
+     使用者會看到一個「化妝包是空的，請用上面的搜尋加入」但上面根本沒有搜尋的頁面。 -->
+<section class="mb-add">
+    <div class="mb-add-head"><h2>加入商品</h2><span class="mb-count" id="mbCount"></span></div>
+    <div class="mb-add-controls">
+        <label class="mb-field"><span>搜尋</span><input type="search" id="mbSearch" placeholder="商品、品牌或色號" autocomplete="off"></label>
+        <label class="mb-field"><span>品牌</span><select id="mbBrand"><option value="">全部品牌</option></select></label>
+        <button type="button" class="btn-outline" id="mbImport">從收藏／購物車匯入</button>
+    </div>
+    <div id="mbResults" class="mb-results"></div>
+</section>
+<section class="mb-owned"><h2>化妝包內容</h2><div id="mbArea"></div></section>`,
   favorites: `<div class="page-header"><span class="eyebrow">Wishlist</span><h1>我的收藏</h1><div class="divider"></div></div><div id="favArea"></div>`,
 history: `<div class="page-header"><span class="eyebrow">Archive</span><h1>分析紀錄</h1><div class="divider"></div></div>
 <p class="page-note">每一次臉部分析的判斷結果都會留在這裡，只存文字，<strong>不會保留你的照片</strong>。紀錄依帳號分開，最多保留 50 筆。</p>

@@ -1,4 +1,4 @@
-﻿# Decorate Me 前端部署腳本
+# Decorate Me 前端部署腳本
 # 用途：部署前自動把 index.html 裡本地 JS 的 ?v=... 版本號戳成當下時間戳，
 #       再跑 firebase deploy。避免忘記手動 bump 版本、瀏覽器讀到舊 JS。
 # 用法：在 web_frontend 目錄執行  ->  .\deploy.ps1
@@ -71,6 +71,9 @@ Invoke-DeployCheck "妝容規劃分岔"            @('tests/makeup_plan_fork_che
 # 看到「此帳號目前沒有使用此功能的權限，請聯繫管理員」，像被停權一樣。
 # 2026-08-29（關於我們）與 2026-09-25（我的化妝包）各踩過一次。
 Invoke-DeployCheck "新頁面權限登記"          @('tests/page_access_registration_check.js', '.')
+# 頁面檔名要跟代號一字不差。對不上時 fetch 回 404，程式安靜掉到備援模板——
+# 不報錯、不當機，只是畫面少一半。2026-09-25 化妝包取名 makeup-bag.html 就是這樣。
+Invoke-DeployCheck "頁面模板檔名"            @('tests/page_template_naming_check.js', '.')
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {
