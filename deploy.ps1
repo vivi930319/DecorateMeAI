@@ -7,7 +7,14 @@ param(
     [switch]$AllowDirty,
     # 跳過「線上有、本機沒有」的比對。只在確實無法取得 gcloud 權杖、
     # 而且已經用別的方式確認過內容完整時才用——這一關擋的是靜默刪檔。
-    [switch]$SkipLiveCheck
+    [switch]$SkipLiveCheck,
+    # 這次**刻意**要從線上移除的路徑，例如檔案改名或功能下架。
+    #
+    # 為什麼不是直接用 -SkipLiveCheck：那個會把整道檢查關掉，連不該刪的也一起放行。
+    # 這個要逐一寫出路徑，所以「我知道這幾個會消失」跟「我沒在看」是兩件事——
+    # 前者是決定，後者是疏忽，不該用同一個開關表達。
+    #   .\deploy.ps1 -AllowDelete '/pages/makeup-bag.html'
+    [string[]]$AllowDelete = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -154,6 +161,10 @@ if (-not $SkipLiveCheck) {
         if (Test-Path $localPath) { continue }
         $leaf = Split-Path $p -Leaf
         if ($ignoreLeaf -contains $leaf) { continue }
+        if ($AllowDelete -contains $p) {
+            Write-Host "  將移除（已宣告）：$p" -ForegroundColor DarkYellow
+            continue
+        }
         $wouldDelete += $p
     }
 
@@ -164,7 +175,10 @@ if (-not $SkipLiveCheck) {
         $sample = ($wouldDelete | Select-Object -First 5) -join "`n    "
         throw ("部署中止：線上有 $($wouldDelete.Count) 個檔案在本機不存在，這次部署會把它們刪掉。`n" +
                ($byDir -join "`n") + "`n`n  例如：`n    $sample`n`n" +
-               "線上版本 $liveVersion。補齊後再部署；product-images 的取得方式見 docs/product-images-recovery.md。")
+               "線上版本 $liveVersion。`n`n" +
+               "補齊後再部署。product-images 的取得方式見 docs/product-images-recovery.md。`n" +
+               "若某些檔案是**刻意**要移除的（改名、功能下架），逐一宣告：`n" +
+               "  .\deploy.ps1 -AllowDelete '/pages/old-name.html'")
     }
     Write-Host "  線上 $($livePaths.Count) 個檔案，本機都有" -ForegroundColor DarkGray
 }
