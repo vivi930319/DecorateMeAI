@@ -49,3 +49,16 @@ style-yandere.png
 # 跨品牌部署的暫存副本（css/js 各一份），由手動部署流程產生，不是原始碼。
 # 沒寫進來的話，任何一次 git add -A 都會把整份前端的副本撿進版控。
 .deploy_cross_brand/
+
+# 商品圖：2592 張、41MB，刻意不進 git。
+#
+# 它**必須存在於本機**才能部署（firebase.json 的 public 是 "."，部署是整份取代，
+# 本機沒有就等於把線上那份刪掉——2026-09-23 已經發生過一次）。
+# 但 41MB 的二進位檔進版控太重，所以改放 GCS：
+#   gcloud storage rsync -r gs://decorate-me-datasets/site_assets/product-images product-images
+#
+# 不 ignore 的話它會永遠讓 git status 顯示未追蹤，而 deploy.ps1 要求乾淨工作目錄，
+# 結果是每次部署都得加 -AllowDirty——那個開關是留給緊急狀況的，不該變成日常。
+# deploy.ps1 另有一道檢查會比對線上清單，確保它真的在本機，所以 ignore 掉不會漏。
+# 取得方式與事故經過見 docs/product-images-recovery.md。
+product-images/
