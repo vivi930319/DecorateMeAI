@@ -4801,3 +4801,87 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 .pd-img-warn { margin:8px 0 0; padding:6px 10px; border:1px dashed var(--line-gold);
     border-radius:8px; background:var(--glass);
     font-size:11.5px; line-height:1.7; color:var(--mid); }
+
+/* ═══ 我的化妝包 ═══
+   沿用商品卡（.prod-card / .prod-grid）的既有樣式，這裡只加化妝包特有的部分：
+   加入區的控制列、依部位分組的標題、搜尋結果列。
+   不重新定義商品卡——兩邊要看起來是同一套東西。 */
+.mb-add { margin-bottom:34px; padding:22px 24px; background:var(--paper); border:1px solid var(--line-gold); }
+.mb-add-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:16px; }
+.mb-add-head h2 { font-family:var(--cjk); font-size:17px; font-weight:500; letter-spacing:.06em; color:var(--gold-deep); }
+.mb-count { font-family:var(--sans); font-size:12px; letter-spacing:.1em; color:var(--mid); }
+.mb-add-controls { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; }
+.mb-field { display:flex; flex-direction:column; gap:6px; flex:1 1 180px; min-width:0; }
+.mb-field > span { font-family:var(--sans); font-size:10px; letter-spacing:.2em; text-transform:uppercase; color:var(--gold-deep); }
+.mb-field input, .mb-field select { width:100%; padding:9px 11px; font-family:var(--cjk); font-size:14px;
+    color:var(--ink-soft); background:#fff; border:1px solid var(--edge); }
+.mb-results { margin-top:16px; display:flex; flex-direction:column; gap:8px; }
+.mb-note { font-family:var(--cjk); font-size:13px; color:var(--mid); padding:10px 2px; }
+
+/* 搜尋結果用橫列不用卡片：這裡是「找到並加入」，不是瀏覽商品。
+   橫列一次看得到更多筆，也不會跟下面的化妝包內容搶視覺。 */
+.mb-hit { display:flex; align-items:center; gap:12px; width:100%; padding:8px 10px; text-align:left;
+    background:#fff; border:1px solid var(--edge); cursor:pointer; transition:border-color .25s var(--ease); }
+.mb-hit:hover:not(:disabled) { border-color:var(--gold); }
+.mb-hit:disabled { opacity:.55; cursor:default; }
+.mb-hit-img { position:relative; width:46px; height:46px; flex-shrink:0; overflow:hidden; }
+.mb-hit-img .ph { position:absolute; inset:0; }
+.mb-hit-copy { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; }
+.mb-hit-copy b { font-family:var(--cjk); font-size:13.5px; font-weight:500; color:var(--ink-soft);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mb-hit-copy small { font-family:var(--cjk); font-size:11px; color:var(--mid); }
+.mb-hit-act { font-family:var(--sans); font-size:11px; letter-spacing:.12em; color:var(--gold-deep); flex-shrink:0; }
+
+/* 依部位分組的標題。使用者要一眼看出自己缺哪個部位，所以件數要跟部位名一起出現。 */
+.mb-group { margin-bottom:30px; }
+.mb-group-head { display:flex; align-items:baseline; gap:10px; margin-bottom:14px;
+    padding-bottom:9px; border-bottom:1px solid var(--line-gold); }
+.mb-group-en { font-family:var(--sans); font-size:9.5px; letter-spacing:.24em; text-transform:uppercase; color:var(--gold-deep); }
+.mb-group-head b { font-family:var(--cjk); font-size:16px; font-weight:500; color:var(--ink-soft); }
+.mb-group-n { margin-left:auto; font-family:var(--sans); font-size:12px; color:var(--mid); }
+
+.mb-remove { position:absolute; right:8px; top:8px; z-index:4; padding:5px 10px;
+    font-family:var(--cjk); font-size:11px; color:var(--gold-deep); cursor:pointer;
+    background:var(--btn-glass); border:1px solid var(--edge); }
+.mb-remove:hover { background:#fff; }
+.mb-remove:disabled { opacity:.5; cursor:default; }
+.mb-gone { font-family:var(--cjk); font-size:11.5px; color:var(--mid); margin-top:4px; }
+
+@media (max-width:640px) {
+    .mb-add { padding:18px 16px; }
+    .mb-add-controls { flex-direction:column; align-items:stretch; }
+    .mb-field { flex:1 1 auto; }
+}
+
+/* ═══ 妝容規劃方式分岔 ═══ 沿用 makeup-style-modal，只補這裡特有的幾塊 */
+.mp-grid { grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
+.mp-option { min-height:0; padding:20px 18px; }
+.mp-option:disabled { opacity:.45; cursor:default; }
+.mp-note { display:block; margin-top:8px; font-family:var(--sans); font-size:10.5px;
+    letter-spacing:.1em; color:var(--gold-deep); font-style:normal; }
+.mp-hint { margin:14px 0 4px; padding:12px 14px; font-family:var(--cjk); font-size:13px;
+    color:var(--mid); background:var(--ivory-2); }
+.mp-hint.is-error { color:var(--ink-soft); }
+.mp-link { margin-left:8px; font-family:var(--cjk); font-size:13px; color:var(--gold-deep);
+    background:none; border:none; padding:0; cursor:pointer; text-decoration:underline; }
+.mp-section-title { margin:18px 0 10px; font-family:var(--sans); font-size:10px;
+    letter-spacing:.22em; text-transform:uppercase; color:var(--gold-deep); }
+.mp-grid-small { grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); }
+/* 覆蓋狀況：中性說明，不是錯誤。粉底那行跟「沒有風格資料」要分開講。 */
+.mp-notice { margin-top:16px; padding:12px 14px; background:var(--ivory-2);
+    font-family:var(--cjk); font-size:12.5px; line-height:1.7; color:var(--mid); }
+
+/* 會員中心的化妝包入口。只給件數與入口，管理在化妝包頁做。 */
+.mb-entry-desc { font-family:var(--cjk); font-size:13px; line-height:1.8; color:var(--mid); margin-bottom:14px; }
+.mb-entry-row { display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; }
+.mb-entry-count { font-family:var(--cjk); font-size:15px; color:var(--ink-soft); }
+
+/* 商品卡的「我有這個」。跟加購物車並排，但視覺份量要低一階——
+   加購是主要動作，登記擁有是順手做的事。 */
+.pc-own { padding:4px 10px; font-family:var(--cjk); font-size:11.5px; letter-spacing:.04em;
+    color:var(--gold-deep); background:transparent; border:1px solid var(--edge); cursor:pointer;
+    transition:background .25s var(--ease), color .25s var(--ease); }
+.pc-own:hover:not(:disabled) { background:var(--ivory-2); }
+.pc-own.is-own { background:rgba(201,169,110,0.16); color:var(--gold-deep); border-color:var(--gold); }
+.pc-own:disabled { opacity:.5; cursor:default; }
+.pc-foot { gap:8px; }

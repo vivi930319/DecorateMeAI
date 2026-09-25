@@ -108,6 +108,20 @@
      沒有這個節點就自然不執行。要復原只需把這個 section 補回來。 -->
 </div>
 <div class="member-panel" id="mpanel-saved" data-mpanel="saved" role="tabpanel" aria-labelledby="mtab-saved" hidden>
+<!-- 我的化妝包放在「收藏」這一組，因為它跟收藏一樣是「我存下來的東西」。
+     這裡只給入口與件數，管理在化妝包頁做——同一份資料兩個地方各畫一次，
+     遲早會有一邊忘了更新。 -->
+<section class="member-suggestions mb-entry-card">
+    <div class="member-section-head">
+        <span>Makeup Bag</span>
+        <h2>我的化妝包</h2>
+    </div>
+    <p class="mb-entry-desc">登記你已經有的化妝品，選妝容時系統就能推薦你現在畫得出來的妝。</p>
+    <div class="mb-entry-row">
+        <span class="mb-entry-count" id="profileBagCount">—</span>
+        <button type="button" class="btn-outline" id="profileBagGo">管理化妝包</button>
+    </div>
+</section>
 <section class="member-suggestions">
     <div class="member-section-head">
         <span>Saved Looks</span>

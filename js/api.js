@@ -1619,6 +1619,54 @@ const Api = {
         }
     },
 
+    // 化妝包反推妝容。只在「我的化妝包」那條支線呼叫，舊流程不碰。
+    //
+    // 請求只能是 {} 或 { candidateKeys }。
+    // **不要送 bagId**——2026-09-25 的版本收斂明訂它不是第一期輸入，送了會回 400。
+    // 不帶 candidateKeys 時後端直接用該會員的預設化妝包。
+    async recommendStyles({ candidateKeys = null } = {}) {
+        const base = this.config.services.product.baseUrl;
+        if (!base) return { ok: false, styles: [] };
+        const body = {};
+        if (Array.isArray(candidateKeys) && candidateKeys.length) body.candidateKeys = candidateKeys;
+        try {
+            const res = await this._fetchWithRelogin(`${base}/recommend-styles`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                const byStatus = {
+                    401: '請先登入才能使用化妝包推薦。',
+                    400: '化妝包推薦的請求格式不正確，請重新整理後再試。',
+                    403: '這些商品不屬於你的化妝包，請重新整理後再試。',
+                    409: '化妝包是空的，請先加入你已有的化妝品。',
+                };
+                return {
+                    ok: false,
+                    status: res.status,
+                    code: data?.error?.code || '',
+                    error: byStatus[res.status] || data?.error?.message || '化妝包推薦暫時無法使用。',
+                    styles: [],
+                };
+            }
+            return {
+                ok: true,
+                styles: Array.isArray(data.styles) ? data.styles : [],
+                covered: Number(data.covered ?? 0),
+                uncovered: Number(data.uncovered ?? 0),
+                uncoveredKeys: Array.isArray(data.uncoveredKeys) ? data.uncoveredKeys : [],
+                // 粉底走膚色色差，不參與風格反推。它是 uncoveredKeys 的子集合，
+                // 但畫面上要用不同文案——講成「沒有風格資料」會讓人以為是缺漏。
+                baseExcludedKeys: Array.isArray(data.baseExcludedKeys) ? data.baseExcludedKeys : [],
+            };
+        } catch (_) {
+            return { ok: false, error: '連線失敗，請稍後再試。', styles: [] };
+        }
+    },
+
     async listProducts(params = {}) {
         const url = this.config.url('product', 'listPath');
         if (!url) return { ok: false, products: [] };
@@ -3662,7 +3710,7 @@ const Auth = {
 const AdminStore = {
     _productsKey: 'beautyAdminProducts',
     _overridesKey: 'beautyAdminProductOverrides',
-    _defaultPages: ['dashboard', 'analysisBasic', 'style', 'products', 'favorites', 'history', 'compare', 'suggestion', 'profile'],
+    _defaultPages: ['dashboard', 'analysisBasic', 'style', 'products', 'makeupBag', 'favorites', 'history', 'compare', 'suggestion', 'profile'],
     _email(email) { return String(email || '').trim().toLowerCase(); },
     _syncCurrentProfile(email, patch) {
         const key = this._email(email);
@@ -4245,6 +4293,157 @@ const UsageQuota = {
         const kept = { [key]: bucket };
         Object.keys(all).forEach(k => { if (k.endsWith(`|${today}`) && k !== key) kept[k] = all[k]; });
         try { localStorage.setItem(this._key, JSON.stringify(kept)); } catch (_) {}
+    },
+};
+
+// ═══ 我的化妝包 ═══
+//
+// 收藏是「想要」、購物車是「要買」、化妝包是「已經有」。三者語意不同不能共用：
+// 混用會直接污染推薦品質——把想要的當成已有的，就算不出使用者缺什麼。
+//
+// ⚠️ 上游的路徑形狀在 2026-09-25 一天之內改了三次
+// （api/makeup-bags → api/members/{email}/makeup-bag → 又改回來），
+// 上限也在 100 與 200 之間換過，而我們到現在還沒有測試帳號可以實際驗證行為。
+// 所以會變的東西全部集中在這個物件：定案時只改這裡，底下一行都不用動。
+const MakeupBagApi = {
+    // 'member' → /api/members/{email}/makeup-bag（2026-09-25 版本收斂定案）
+    // 'bags'   → /api/makeup-bags/{bagId}/items（中途版本，已作廢，保留只為了萬一要回退）
+    shape: 'member',
+    limit: 200,
+    defaultBagName: '我的化妝包',
+    // 第一期只用一個包：沒有包就自動建一個，不給使用者建立與切換多包的介面。
+    // 後端保留多包能力，前端先不暴露那一層。
+    bagId: null,
+
+    base() { return Api.config.services.memberDatabase.baseUrl || ''; },
+
+    paths() {
+        const email = encodeURIComponent(String(Auth.getProfile()?.email || '').trim());
+        if (this.shape === 'member') {
+            const root = `/api/members/${email}/makeup-bag`;
+            return { list: root, create: null, add: () => root, remove: (key) => `${root}/${encodeURIComponent(key)}` };
+        }
+        return {
+            list: '/api/makeup-bags',
+            create: '/api/makeup-bags',
+            add: () => `/api/makeup-bags/${this.bagId}/items`,
+            remove: (key, itemId) => `/api/makeup-bags/${this.bagId}/items/${itemId}`,
+        };
+    },
+
+    // 兩種形狀的回應長得不一樣，在這裡收斂成同一種 [{ candidateKey, itemId, unavailable }]，
+    // 上面那層就不必知道現在跑的是哪一版。
+    normalize(data) {
+        if (this.shape === 'member') {
+            return (data?.items || []).map(row => ({
+                candidateKey: String(row?.candidateKey || '').trim(), itemId: null, unavailable: false,
+            })).filter(row => row.candidateKey);
+        }
+        const bag = (data?.bags || [])[0] || null;
+        if (bag) this.bagId = bag.id ?? null;
+        return (bag?.items || []).map(row => ({
+            candidateKey: String(row?.candidateKey || '').trim(),
+            itemId: row?.id ?? null,
+            unavailable: !!row?.unavailable,
+        })).filter(row => row.candidateKey);
+    },
+};
+
+const MakeupBag = {
+    _key: 'beautyMakeupBag',
+
+    // 本機是暫存不是真相：未登入或離線時先寫這裡，登入後同步上去。
+    // 這點跟收藏相反——收藏的本機版本是可信來源，化妝包的真相必須在資料庫，
+    // 因為後端要拿它做檢索，存在前端伺服器看不到。
+    localList() {
+        try { return JSON.parse(localStorage.getItem(this._key) || '[]'); } catch (_) { return []; }
+    },
+    _saveLocal(keys) {
+        try { localStorage.setItem(this._key, JSON.stringify([...new Set(keys)])); } catch (_) {}
+    },
+
+    has(candidateKey) { return this.localList().includes(candidateKey); },
+    count() { return this.localList().length; },
+    isFull() { return this.count() >= MakeupBagApi.limit; },
+    _asItems(keys) { return keys.map(k => ({ candidateKey: k, itemId: null, unavailable: false })); },
+
+    async list() {
+        if (!Auth.isLoggedIn?.()) return { ok: true, offline: true, items: this._asItems(this.localList()) };
+        const base = MakeupBagApi.base();
+        if (!base) return { ok: false, items: this._asItems(this.localList()) };
+        try {
+            const res = await Api._fetchWithRelogin(`${base}${MakeupBagApi.paths().list}`, {
+                method: 'GET', credentials: 'include', cache: 'no-store',
+            });
+            if (!res.ok) return { ok: false, status: res.status, items: this._asItems(this.localList()) };
+            const items = MakeupBagApi.normalize(await res.json().catch(() => ({})));
+            this._saveLocal(items.map(i => i.candidateKey));
+            return { ok: true, items };
+        } catch (_) {
+            return { ok: false, items: this._asItems(this.localList()) };
+        }
+    },
+
+    // 第一期固定一個包。沒有包就先建一個，使用者不必先做「建立化妝包」這一步。
+    async _ensureBag() {
+        if (MakeupBagApi.shape !== 'bags') return true;
+        if (MakeupBagApi.bagId != null) return true;
+        await this.list();
+        if (MakeupBagApi.bagId != null) return true;
+        try {
+            const res = await Api._fetchWithRelogin(`${MakeupBagApi.base()}${MakeupBagApi.paths().create}`, {
+                method: 'POST', credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: MakeupBagApi.defaultBagName }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return false;
+            MakeupBagApi.bagId = data?.bag?.id ?? data?.id ?? null;
+            return MakeupBagApi.bagId != null;
+        } catch (_) { return false; }
+    },
+
+    async add(candidateKey) {
+        const key = String(candidateKey || '').trim();
+        if (!/^[a-z_]+:[1-9][0-9]*$/.test(key)) return { ok: false, error: '商品識別格式不正確。' };
+        if (this.has(key)) return { ok: true, already: true };
+        if (this.isFull()) return { ok: false, error: `化妝包最多 ${MakeupBagApi.limit} 件，請先移除一些再加入。` };
+
+        this._saveLocal([...this.localList(), key]);
+        if (!Auth.isLoggedIn?.()) return { ok: true, offline: true };
+        if (!(await this._ensureBag())) return { ok: false, error: '化妝包暫時無法建立，請稍後再試。' };
+
+        try {
+            const res = await Api._fetchWithRelogin(`${MakeupBagApi.base()}${MakeupBagApi.paths().add()}`, {
+                method: 'POST', credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ candidateKey: key }),
+            });
+            if (res.ok) return { ok: true };
+            const data = await res.json().catch(() => ({}));
+            const code = data?.error?.code || '';
+            // 兩份規格對這個錯誤碼的寫法不同（MAKEUP_BAG_FULL／MAKEUP_BAG_LIMIT），
+            // 兩個都認，免得上線的是另一版就整個壞掉。
+            if (/MAKEUP_BAG_(FULL|LIMIT)/.test(code)) {
+                this._saveLocal(this.localList().filter(k => k !== key));
+                return { ok: false, error: `化妝包最多 ${MakeupBagApi.limit} 件，請先移除一些再加入。` };
+            }
+            return { ok: false, error: data?.error?.message || '加入化妝包失敗，請稍後再試。' };
+        } catch (_) {
+            return { ok: false, error: '連線失敗，已先存在這台裝置上。' };
+        }
+    },
+
+    async remove(candidateKey, itemId) {
+        const key = String(candidateKey || '').trim();
+        this._saveLocal(this.localList().filter(k => k !== key));
+        if (!Auth.isLoggedIn?.()) return { ok: true, offline: true };
+        try {
+            const res = await Api._fetchWithRelogin(
+                `${MakeupBagApi.base()}${MakeupBagApi.paths().remove(key, itemId)}`,
+                { method: 'DELETE', credentials: 'include' });
+            return { ok: res.ok };
+        } catch (_) { return { ok: false }; }
     },
 };
 

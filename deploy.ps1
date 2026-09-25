@@ -4,7 +4,10 @@
 # 用法：在 web_frontend 目錄執行  ->  .\deploy.ps1
 
 param(
-    [switch]$AllowDirty
+    [switch]$AllowDirty,
+    # 跳過「線上有、本機沒有」的比對。只在確實無法取得 gcloud 權杖、
+    # 而且已經用別的方式確認過內容完整時才用——這一關擋的是靜默刪檔。
+    [switch]$SkipLiveCheck
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,6 +64,9 @@ Invoke-DeployCheck "季型契約"                @('tests/suggest_season_contrac
 # 少了分頁就只顯示第一頁、其餘安靜消失；翻頁掉了 brand 則會從第二頁混進別的品牌。
 # 兩種都不會報錯，看起來就像資料庫裡只有這些商品。2026-09-23 使用者回報 MAC 只出現 50 筆。
 Invoke-DeployCheck "品牌清單分頁"            @('tests/brand_catalog_pagination_check.js', '.')
+# 規劃方式分岔把既有的選風格視窗包了一層。包壞了不會報錯，只會讓使用者走到錯的地方：
+# 該問的時候沒問、選了系統推薦卻跑去反推、或化妝包空了卻卡在反推視窗出不來。
+Invoke-DeployCheck "妝容規劃分岔"            @('tests/makeup_plan_fork_check.js', '.')
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {
@@ -100,6 +106,60 @@ foreach ($entry in $requiredPaths.PSObject.Properties) {
 }
 if ($contentGaps) {
     throw "部署中止：本機內容不完整，這次部署會刪掉線上既有的檔案。`n$($contentGaps -join "`n")`n`n先把缺少的內容補齊再部署。不要用 -AllowDirty 或手動 firebase deploy 繞過這一關。"
+}
+
+# 上面那份 minFiles 是寫死的下限，只能擋「整個目錄不見」這種大洞。
+# 2026-09-24 實證它不夠：本機 2592 張圖、線上 3095 張，門檻 2500 照樣放行，
+# 部署下去就是安靜刪掉 503 張。寫死的數字永遠追不上線上實際狀態。
+#
+# 所以真正的比較對象是**線上目前服務的那份清單**，不是任何寫在檔案裡的數字。
+$liveToken = $null
+try { $liveToken = (& gcloud auth print-access-token 2>$null) } catch { $liveToken = $null }
+if (-not $liveToken) {
+    throw "部署中止：拿不到 gcloud 存取權杖，無法比對線上檔案清單。`n先執行 gcloud auth login，或在確認過內容後加上 -SkipLiveCheck。"
+}
+if (-not $SkipLiveCheck) {
+    Write-Host "比對線上檔案清單..." -ForegroundColor DarkGray
+    $headers = @{ Authorization = "Bearer $liveToken"; "x-goog-user-project" = "decorate-me" }
+    $rel = Invoke-RestMethod -Headers $headers -Method Get `
+        -Uri "https://firebasehosting.googleapis.com/v1beta1/sites/decorate-me/releases?pageSize=1"
+    $liveVersion = ($rel.releases[0].version.name -split "/")[-1]
+
+    $livePaths = New-Object System.Collections.Generic.HashSet[string]
+    $pageToken = $null
+    do {
+        $uri = "https://firebasehosting.googleapis.com/v1beta1/sites/decorate-me/versions/$liveVersion/files?pageSize=1000"
+        if ($pageToken) { $uri += "&pageToken=$pageToken" }
+        $page = Invoke-RestMethod -Headers $headers -Method Get -Uri $uri
+        foreach ($f in $page.files) { [void]$livePaths.Add($f.path) }
+        $pageToken = $page.nextPageToken
+    } while ($pageToken)
+
+    # 線上有、本機沒有 = 這次部署會刪掉它。firebase.json 的 ignore 名單本來就不會上傳，
+    # 不算缺少，所以先排除掉。
+    $ignoreLeaf = @($firebaseConfig.hosting.ignore | ForEach-Object { $_ -replace '\*\*/', '' -replace '/\*\*', '' })
+    $wouldDelete = @()
+    foreach ($p in $livePaths) {
+        # /__/ 底下是 Firebase 自己注入的保留路徑（firebase/init.js 等），
+        # 不是從本機上傳的，本機永遠不會有——不排除的話每次部署都誤報。
+        if ($p.StartsWith("/__/")) { continue }
+        $localPath = Join-Path $PSScriptRoot ($p.TrimStart('/'))
+        if (Test-Path $localPath) { continue }
+        $leaf = Split-Path $p -Leaf
+        if ($ignoreLeaf -contains $leaf) { continue }
+        $wouldDelete += $p
+    }
+
+    if ($wouldDelete.Count -gt 0) {
+        $byDir = $wouldDelete | Group-Object { ($_ -split '/')[1] } |
+            Sort-Object Count -Descending |
+            ForEach-Object { "  $($_.Name)/  缺 $($_.Count) 個檔案" }
+        $sample = ($wouldDelete | Select-Object -First 5) -join "`n    "
+        throw ("部署中止：線上有 $($wouldDelete.Count) 個檔案在本機不存在，這次部署會把它們刪掉。`n" +
+               ($byDir -join "`n") + "`n`n  例如：`n    $sample`n`n" +
+               "線上版本 $liveVersion。補齊後再部署；product-images 的取得方式見 docs/product-images-recovery.md。")
+    }
+    Write-Host "  線上 $($livePaths.Count) 個檔案，本機都有" -ForegroundColor DarkGray
 }
 
 # 秘密掃描。rg 比較快，但它不一定在 PATH 上——2026-08-28 就因為這樣讓整個

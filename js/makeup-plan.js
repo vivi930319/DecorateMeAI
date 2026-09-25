@@ -1,0 +1,274 @@
+// 妝容規劃方式的分岔：臉部分析完成後、選風格之前，先問一次要用哪種推薦。
+//
+// 這支刻意獨立成一個檔案，而且是**包在既有 openMakeupStyleModal 外面**，
+// 沒有改它一行。理由：系統推薦是已經上線、使用者每天在用的流程，
+// 新功能壞掉可以修，舊功能壞掉是事故。這樣包起來，最壞情況也只是多一層視窗。
+//
+// 載入順序必須在 makeup-flow.js 之後——那支會覆寫 openMakeupStyleModal，
+// 先載就會被它蓋掉。
+(function (window, document) {
+    'use strict';
+
+    // ── 規劃方式的記憶 ────────────────────────────────────────────
+    //
+    // 只在首次或設定變更時問，選過就記住。每次都問等於多一個沒必要的步驟，
+    // 而這個選擇對同一個人通常不會變。
+    const MakeupPlan = {
+        _key: 'beautyMakeupPlan',
+        get() {
+            try { return localStorage.getItem(this._key) || ''; } catch (_) { return ''; }
+        },
+        set(value) {
+            try { localStorage.setItem(this._key, value); } catch (_) {}
+        },
+        clear() {
+            try { localStorage.removeItem(this._key); } catch (_) {}
+        },
+        shouldAsk() { return !['system', 'makeupBag'].includes(this.get()); },
+    };
+
+    const PLAN_OPTIONS = [
+        {
+            id: 'makeupBag',
+            title: '用我的化妝包',
+            desc: '從你已經有的化妝品裡，推薦你能畫的妝容。',
+        },
+        {
+            id: 'system',
+            title: '依想嘗試的風格',
+            desc: '從七種妝容選一款，系統依你的臉部分析推薦商品。',
+        },
+    ];
+
+    function closeModal(id) {
+        document.getElementById(id)?.remove();
+    }
+
+    // 沿用 makeup-style-modal 那組 class。它本來就是共用的
+    // （productRecommendationModal 也用同一組），不另做一套視覺。
+    function shell(id, labelId) {
+        let modal = document.getElementById(id);
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = id;
+            modal.className = 'makeup-style-modal open';
+            modal.setAttribute('role', 'dialog');
+            modal.setAttribute('aria-modal', 'true');
+            modal.setAttribute('aria-labelledby', labelId);
+            document.body.appendChild(modal);
+        }
+        return modal;
+    }
+
+    // ── 第一步：選規劃方式 ────────────────────────────────────────
+    function openMakeupPlanModal(preselectedStyleId) {
+        const modal = shell('makeupPlanModal', 'makeupPlanModalTitle');
+        const bagCount = (typeof MakeupBag !== 'undefined') ? MakeupBag.count() : 0;
+        let picked = MakeupPlan.get() || null;
+
+        const draw = () => {
+            modal.innerHTML = `<div class="makeup-style-dialog">
+                <div class="makeup-style-head">
+                    <div>
+                        <span class="eyebrow">Plan</span>
+                        <h2 id="makeupPlanModalTitle">這次想怎麼規劃妝容？</h2>
+                        <p>兩種方式都可以，之後在會員中心隨時能改。</p>
+                    </div>
+                    <button class="makeup-style-close" type="button" aria-label="關閉">×</button>
+                </div>
+                <div class="makeup-style-grid mp-grid">
+                    ${PLAN_OPTIONS.map(opt => {
+                        // 化妝包是空的時候路徑 A 不可選，但**路徑 B 永遠可用**——
+                        // 不讓使用者卡在這裡。灰掉並說明為什麼，比靜默把他轉去別條路好：
+                        // 靜默轉走的話，他不會知道結果為什麼跟預期不同。
+                        const disabled = opt.id === 'makeupBag' && !bagCount;
+                        const note = opt.id === 'makeupBag'
+                            ? (bagCount ? `目前 ${bagCount} 件商品` : '你的化妝包目前是空的')
+                            : '';
+                        return `<button class="makeup-style-option mp-option ${picked === opt.id ? 'selected' : ''}"
+                            type="button" data-plan="${opt.id}" ${disabled ? 'disabled' : ''}>
+                            <span class="makeup-style-option-copy">
+                                <b>${opt.title}</b>
+                                <small>${opt.desc}</small>
+                                ${note ? `<em class="mp-note">${note}</em>` : ''}
+                            </span>
+                        </button>`;
+                    }).join('')}
+                </div>
+                ${bagCount ? '' : '<div class="mp-hint">要用化妝包推薦，請先把你已經有的化妝品加進去。</div>'}
+                <div class="makeup-style-actions">
+                    ${bagCount ? '' : '<button class="btn-outline" type="button" data-goto-bag>前往建立化妝包</button>'}
+                    <button class="btn-outline" type="button" data-modal-cancel>稍後再選</button>
+                    <button class="btn-gold" type="button" data-modal-confirm ${picked ? '' : 'disabled'}>下一步 →</button>
+                </div>
+            </div>`;
+
+            modal.querySelectorAll('[data-plan]').forEach(btn => {
+                btn.onclick = () => { picked = btn.dataset.plan; draw(); };
+            });
+            modal.querySelector('.makeup-style-close').onclick = () => closeModal('makeupPlanModal');
+            modal.querySelector('[data-modal-cancel]').onclick = () => closeModal('makeupPlanModal');
+            const gotoBag = modal.querySelector('[data-goto-bag]');
+            if (gotoBag) gotoBag.onclick = () => { closeModal('makeupPlanModal'); Router.go('makeupBag'); };
+            modal.querySelector('[data-modal-confirm]').onclick = () => {
+                if (!picked) return;
+                MakeupPlan.set(picked);
+                closeModal('makeupPlanModal');
+                if (picked === 'makeupBag') openBagStyleModal(preselectedStyleId);
+                else window.__openStyleModalDirect(preselectedStyleId);
+            };
+        };
+        draw();
+    }
+
+    // ── 第二步（路徑 A）：依化妝包反推妝容 ──────────────────────────
+    //
+    // 顯示規則跟一般排序不同，刻意的：
+    //   · 不顯示 score。實測它會擠在 0.21~0.28，使用者看到「最推薦的 0.28」
+    //     會以為系統沒把握；而那個數字是拿全資料集最大值正規化出來的，
+    //     本來就不是信心度。改顯示名次與支持它的商品件數。
+    //   · 七種妝容一律可選。反推是建議不是判決——化妝包只涵蓋部分商品，
+    //     而且使用者今天可能就是想化不一樣的。
+    function openBagStyleModal(preselectedStyleId) {
+        const modal = shell('bagStyleModal', 'bagStyleModalTitle');
+        let picked = preselectedStyleId || Router.selectedStyleId || null;
+        let result = null;
+        let loading = true;
+
+        const styleById = (id) => STYLES.find(s => s.id === id) || null;
+
+        const draw = () => {
+            const ranked = (result?.styles || [])
+                .map(row => ({ row, style: styleById(row.id) }))
+                .filter(x => x.style);
+            const rankedIds = new Set(ranked.map(x => x.style.id));
+            const others = STYLES.filter(s => !rankedIds.has(s.id));
+
+            const body = loading
+                ? '<div class="mp-hint">正在依你的化妝包計算…</div>'
+                : (!result?.ok
+                    ? `<div class="mp-hint is-error">${escapeHtml(result?.error || '化妝包推薦暫時無法使用。')}
+                       <button type="button" class="mp-link" data-fallback>改用系統推薦</button></div>`
+                    : `
+                    ${ranked.length ? `
+                    <div class="mp-section-title">依你的化妝包推薦</div>
+                    <div class="makeup-style-grid">
+                        ${ranked.map(({ row, style }, i) => `
+                        <button class="makeup-style-option ${picked === style.id ? 'selected' : ''}"
+                            type="button" data-style-id="${escapeHtml(style.id)}">
+                            <img src="${escapeHtml(style.img)}" alt="${escapeHtml(style.name)}">
+                            <span class="makeup-style-option-copy">
+                                <b>${escapeHtml(style.name)}</b>
+                                <small>第 ${i + 1} 推薦 · 由 ${(row.contributingProducts || []).length} 件現有商品支持</small>
+                            </span>
+                        </button>`).join('')}
+                    </div>` : '<div class="mp-hint">你的化妝包還不足以推論適合的妝容，可以直接從下面挑一款。</div>'}
+
+                    ${others.length ? `
+                    <div class="mp-section-title">其他妝容（仍可選）</div>
+                    <div class="makeup-style-grid mp-grid-small">
+                        ${others.map(style => `
+                        <button class="makeup-style-option ${picked === style.id ? 'selected' : ''}"
+                            type="button" data-style-id="${escapeHtml(style.id)}">
+                            <img src="${escapeHtml(style.img)}" alt="${escapeHtml(style.name)}">
+                            <span class="makeup-style-option-copy"><b>${escapeHtml(style.name)}</b></span>
+                        </button>`).join('')}
+                    </div>` : ''}
+
+                    ${noticeHtml()}`);
+
+            modal.innerHTML = `<div class="makeup-style-dialog">
+                <div class="makeup-style-head">
+                    <div>
+                        <span class="eyebrow">Makeup Bag</span>
+                        <h2 id="bagStyleModalTitle">依你的化妝包推薦</h2>
+                        <p>這是依你已有的化妝品排出來的建議，你仍然可以選其他妝容。</p>
+                    </div>
+                    <button class="makeup-style-close" type="button" aria-label="關閉">×</button>
+                </div>
+                ${body}
+                <div class="makeup-style-actions">
+                    <button class="btn-outline" type="button" data-replan>換一種規劃方式</button>
+                    <button class="btn-gold" type="button" data-modal-confirm ${picked ? '' : 'disabled'}>產生妝容建議 →</button>
+                </div>
+            </div>`;
+
+            modal.querySelectorAll('[data-style-id]').forEach(btn => {
+                btn.onclick = () => { picked = btn.dataset.styleId; draw(); };
+            });
+            modal.querySelector('.makeup-style-close').onclick = () => closeModal('bagStyleModal');
+            modal.querySelector('[data-replan]').onclick = () => {
+                closeModal('bagStyleModal');
+                MakeupPlan.clear();
+                openMakeupPlanModal(picked);
+            };
+            const fallback = modal.querySelector('[data-fallback]');
+            if (fallback) fallback.onclick = () => {
+                closeModal('bagStyleModal');
+                window.__openStyleModalDirect(picked);
+            };
+            modal.querySelector('[data-modal-confirm]').onclick = () => {
+                if (!picked) return;
+                // 選到化妝包涵蓋不到的風格時，改走系統推薦——這是定案的分流規則。
+                // 路徑 A 的承諾是「用你現有的」，涵蓋不到就沒有東西可推。
+                const covered = rankedIds.has(picked);
+                Router.makeupBagCoveredStyle = covered;
+                closeModal('bagStyleModal');
+                window.__openStyleModalDirect(picked);
+            };
+        };
+
+        // 覆蓋狀況要說出來，不能只給結論：
+        //   · uncovered 是「還沒有風格資料」的商品
+        //   · baseExcludedKeys 是粉底，它走膚色色差，不是缺漏——文案必須分開
+        const noticeHtml = () => {
+            if (!result?.ok) return '';
+            const base = (result.baseExcludedKeys || []).length;
+            const other = Math.max(0, (result.uncovered || 0) - base);
+            const lines = [];
+            if (other) lines.push(`有 ${other} 件商品尚未具備妝容資料，不影響其他商品的建議。`);
+            if (base) lines.push(`粉底液會依膚色與色差另行比對，因此不納入妝容風格判斷。`);
+            return lines.length ? `<div class="mp-notice">${lines.map(t => `<div>${t}</div>`).join('')}</div>` : '';
+        };
+
+        draw();
+
+        const keys = (typeof MakeupBag !== 'undefined') ? MakeupBag.localList() : [];
+        // 只送 candidateKeys。bagId 不是第一期的輸入，送了會被回 400。
+        Promise.resolve(Api.recommendStyles({ candidateKeys: keys })).then(res => {
+            loading = false;
+            result = res;
+            if (document.getElementById('bagStyleModal')) draw();
+        }).catch(() => {
+            loading = false;
+            result = { ok: false, error: '化妝包推薦暫時無法使用。' };
+            if (document.getElementById('bagStyleModal')) draw();
+        });
+    }
+
+    // ── 包在既有視窗外面 ──────────────────────────────────────────
+    //
+    // 等 makeup-flow.js 把 openMakeupStyleModal 覆寫完之後才包。用 setTimeout(0)
+    // 排到目前呼叫堆疊結束，避免依賴 script 標籤的相對順序——那種依賴很脆弱，
+    // 有人調整載入順序就會靜默失效。
+    function install() {
+        if (typeof window.openMakeupStyleModal !== 'function') return false;
+        if (window.__openStyleModalDirect) return true;
+        window.__openStyleModalDirect = window.openMakeupStyleModal;
+        window.openMakeupStyleModal = function (preselectedStyleId) {
+            if (MakeupPlan.shouldAsk()) { openMakeupPlanModal(preselectedStyleId); return; }
+            if (MakeupPlan.get() === 'makeupBag' && typeof MakeupBag !== 'undefined' && MakeupBag.count()) {
+                openBagStyleModal(preselectedStyleId);
+                return;
+            }
+            // 記著要用化妝包、但包被清空了：不要卡住，直接走系統推薦。
+            window.__openStyleModalDirect(preselectedStyleId);
+        };
+        return true;
+    }
+    if (!install()) setTimeout(install, 0);
+
+    window.MakeupPlan = MakeupPlan;
+    window.openMakeupPlanModal = openMakeupPlanModal;
+    window.openBagStyleModal = openBagStyleModal;
+})(window, document);

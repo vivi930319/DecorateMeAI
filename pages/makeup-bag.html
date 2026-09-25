@@ -1,0 +1,33 @@
+<div class="page-header">
+    <span class="eyebrow">Makeup Bag</span>
+    <h1>我的化妝包</h1>
+    <div class="divider"></div>
+    <p>登記你已經有的化妝品。之後選妝容時，系統可以直接用這份清單推薦你能畫的妝，不必每次重填。</p>
+</div>
+
+<!-- 加入商品。三個入口並列：搜尋、品牌、從收藏／購物車匯入。
+     不要求使用者從三千多筆商品裡逐一勾選——那不是任何人做得完的事。 -->
+<section class="mb-add">
+    <div class="mb-add-head">
+        <h2>加入商品</h2>
+        <span class="mb-count" id="mbCount"></span>
+    </div>
+    <div class="mb-add-controls">
+        <label class="mb-field">
+            <span>搜尋</span>
+            <input type="search" id="mbSearch" placeholder="商品、品牌或色號" autocomplete="off">
+        </label>
+        <label class="mb-field">
+            <span>品牌</span>
+            <select id="mbBrand"><option value="">全部品牌</option></select>
+        </label>
+        <button type="button" class="btn-outline" id="mbImport">從收藏／購物車匯入</button>
+    </div>
+    <div id="mbResults" class="mb-results"></div>
+</section>
+
+<!-- 已在化妝包裡的商品，依部位分組。分組是刻意的：使用者要一眼看出自己缺哪個部位。 -->
+<section class="mb-owned">
+    <h2>化妝包內容</h2>
+    <div id="mbArea"></div>
+</section>

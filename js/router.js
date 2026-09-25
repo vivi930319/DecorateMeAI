@@ -1839,7 +1839,7 @@ const SVC_ICONS = {
 const STYLE_ROLE = { softBaddie:'Soft Glam', richGirl:'Quiet Luxury', hongKong:'Retro HK', koreanClean:'Clean Girl', yandere:'Doll Core', japaneseClear:'J-Sheer', mensPlain:'Mens Bare' };
 
 // 頁面順序（判斷轉場方向）
-const NAV_ORDER = ['dashboard','analysis','style','products','favorites','history','compare','suggestion','profile','about','admin'];
+const NAV_ORDER = ['dashboard','analysis','style','products','makeupBag','favorites','history','compare','suggestion','profile','about','admin'];
 const ROUTE_PAGES = new Set(NAV_ORDER);
 
 // 玻璃提示彈窗（取代瀏覽器原生 alert）
@@ -2893,7 +2893,8 @@ style: `
 <div style="text-align:center;margin-top:20px;"><button class="btn-gold" id="confirmStyleBtn">確認風格 →</button></div>
 <div id="styleResultArea"></div>`,
 products: `<div id="productsArea"></div>`,
-favorites: `<div class="page-header"><span class="eyebrow">Wishlist</span><h1>我的收藏</h1><div class="divider"></div></div><div id="favArea"></div>`,
+makeupBag: `<div class="page-header"><span class="eyebrow">Makeup Bag</span><h1>我的化妝包</h1><div class="divider"></div><p>登記你已經有的化妝品，選妝容時就不必每次重填。</p></div><div id="mbArea"></div>`,
+  favorites: `<div class="page-header"><span class="eyebrow">Wishlist</span><h1>我的收藏</h1><div class="divider"></div></div><div id="favArea"></div>`,
 history: `<div class="page-header"><span class="eyebrow">Archive</span><h1>分析紀錄</h1><div class="divider"></div></div>
 <p class="page-note">每一次臉部分析的判斷結果都會留在這裡，只存文字，<strong>不會保留你的照片</strong>。紀錄依帳號分開，最多保留 50 筆。</p>
 <div id="historyArea"></div>`,
@@ -5424,6 +5425,9 @@ const PageInit = {
                         ${p.brand ? `<div class="pc-cat">${escapeHtml(p.brand)}</div>` : ''}
                         <div class="pc-foot">
                             <span class="pc-price">${escapeHtml(p.price)}</span>
+                            ${p.candidateKey ? `<button type="button" class="pc-own${MakeupBag.has(p.candidateKey) ? ' is-own' : ''}"
+                                data-own="${escapeHtml(p.candidateKey)}"
+                                aria-label="把「${escapeHtml(p.name)}」登記為我已經有的">${MakeupBag.has(p.candidateKey) ? '已有' : '我有'}</button>` : ''}
                             <button type="button" class="pc-add" data-add="${escapeHtml(p.id)}"
                                 aria-label="把「${escapeHtml(p.name)}」加入購物車">＋</button>
                         </div>
@@ -5436,7 +5440,7 @@ const PageInit = {
                     card.onclick = (e) => {
                         // 卡片本身是「看詳情」，愛心與加購是卡片上的獨立動作，
                         // 少擋一個就會變成「想加入購物車、結果跳去詳情頁」。
-                        if (e.target.closest('.heart-btn') || e.target.closest('.pc-add')) return;
+                        if (e.target.closest('.heart-btn') || e.target.closest('.pc-add') || e.target.closest('.pc-own')) return;
                         renderProductDetail(card.dataset.pid || card.dataset.recPid);
                     };
                     const addBtn = card.querySelector('.pc-add');
@@ -5445,6 +5449,21 @@ const PageInit = {
                         Cart.add(addBtn.dataset.add);
                         if (typeof updateCartBadge === 'function') updateCartBadge();
                         showToast('已加入購物車');
+                    };
+                    // 「我有這個」＝登記為已擁有，跟收藏（想要）、購物車（要買）是三件事。
+                    // 只加不刪：要移除請去化妝包頁，那裡看得到全部內容。
+                    // 在商品頁做「取消擁有」太容易誤觸，而誤刪的代價是推薦品質悄悄變差。
+                    const ownBtn = card.querySelector('.pc-own');
+                    if (ownBtn) ownBtn.onclick = async (e) => {
+                        e.stopPropagation();
+                        if (ownBtn.classList.contains('is-own')) { showToast('已經在化妝包裡了'); return; }
+                        ownBtn.disabled = true;
+                        const result = await MakeupBag.add(ownBtn.dataset.own);
+                        ownBtn.disabled = false;
+                        if (!result.ok) { showToast(result.error); return; }
+                        ownBtn.classList.add('is-own');
+                        ownBtn.textContent = '已有';
+                        showToast(result.already ? '已經在化妝包裡了' : '已加入化妝包');
                     };
                     const heart = card.querySelector('.pc-heart');
                     if (!heart) return;
@@ -5802,6 +5821,179 @@ const PageInit = {
         } else {
             renderShop((opts && opts.category) || Router.shopFilter || 'all');
         }
+    },
+
+    // ═══ 我的化妝包 ═══
+    //
+    // 化妝包只存 candidateKey，商品的名稱、品牌、圖片一律去商品目錄查。
+    // 不在化妝包裡複製一份商品資料——那份會過期，而且跟商品頁對不起來。
+    makeupBag() {
+        const area = document.getElementById('mbArea');
+        if (!area) return;
+
+        // 商品目錄是解析 candidateKey 的依據，沒有它畫不出任何一張卡。
+        if (!productCatalogLoaded() && !Router.generalProductLoading) {
+            loadGeneralProductCatalog(() => { if (Router.currentPage === 'makeupBag') PageInit.makeupBag(); });
+        }
+        const catalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
+        const byKey = new Map(catalog.filter(p => p.candidateKey).map(p => [p.candidateKey, p]));
+
+        const renderOwned = (items) => {
+            const countEl = document.getElementById('mbCount');
+            if (countEl) countEl.textContent = `${items.length} / ${MakeupBagApi.limit} 件`;
+
+            if (!items.length) {
+                area.innerHTML = '<div class="empty-state">化妝包還是空的。用上面的搜尋或品牌篩選，把你已經有的化妝品加進來。</div>';
+                return;
+            }
+
+            // 依部位分組。這是刻意的：使用者要一眼看出自己缺哪個部位，
+            // 混在一起排就只是一堆卡片，看不出「我沒有腮紅」這件事。
+            const groups = new Map();
+            let unresolved = 0;
+            for (const item of items) {
+                const product = byKey.get(item.candidateKey);
+                if (!product) { unresolved += 1; continue; }
+                const cat = product.cat || '其他';
+                if (!groups.has(cat)) groups.set(cat, []);
+                groups.get(cat).push({ ...item, product });
+            }
+
+            // 查不到商品資料的那幾筆：目錄還在背景載入時會暫時出現，
+            // 載完還查不到就是商品下架了。兩種都不刪資料，只是先不畫。
+            const pending = Router.generalProductLoading
+                ? '<div class="mb-note">商品資料載入中…</div>'
+                : (unresolved ? `<div class="mb-note">另有 ${unresolved} 件商品目前查不到資料，可能已下架；紀錄仍保留。</div>` : '');
+
+            area.innerHTML = pending + [...groups.entries()].map(([cat, rows]) => `
+                <div class="mb-group">
+                    <div class="mb-group-head">
+                        <span class="mb-group-en">${escapeHtml(CAT_EN[cat] || '')}</span>
+                        <b>${escapeHtml(cat)}</b>
+                        <span class="mb-group-n">${rows.length}</span>
+                    </div>
+                    <div class="prod-grid">${rows.map(row => `
+                        <div class="prod-card${row.unavailable ? ' is-gone' : ''}" data-pid="${escapeHtml(row.product.id)}">
+                            <div class="pc-imgwrap">
+                                ${phBox('', row.product.name, row.product.img)}
+                                <button type="button" class="mb-remove"
+                                    data-key="${escapeHtml(row.candidateKey)}"
+                                    data-item="${row.itemId == null ? '' : escapeHtml(String(row.itemId))}"
+                                    aria-label="從化妝包移除「${escapeHtml(row.product.name)}」">移除</button>
+                            </div>
+                            <div class="pc-cat">${escapeHtml(row.product.brand || '')}</div>
+                            <div class="pc-name">${escapeHtml(row.product.name)}</div>
+                            ${row.unavailable ? '<div class="mb-gone">此商品已下架</div>' : ''}
+                        </div>`).join('')}</div>
+                </div>`).join('');
+
+            area.querySelectorAll('.mb-remove').forEach(btn => {
+                btn.onclick = async (e) => {
+                    e.stopPropagation();
+                    btn.disabled = true;
+                    const itemId = btn.dataset.item === '' ? null : Number(btn.dataset.item);
+                    const result = await MakeupBag.remove(btn.dataset.key, itemId);
+                    if (!result.ok) showToast('伺服器沒有同步到，已從這台裝置移除');
+                    PageInit.makeupBag();
+                };
+            });
+        };
+
+        // 先用本機那份同步畫一次，再等伺服器回來覆蓋。
+        // 不這樣做的話，進頁面到 API 回應之間是一片空白——而本機通常已經有正確答案。
+        renderOwned(MakeupBag._asItems(MakeupBag.localList()));
+        Promise.resolve(MakeupBag.list()).then(res => {
+            if (Router.currentPage !== 'makeupBag') return;
+            if (res && !res.ok) showToast('雲端化妝包暫時讀不到，先顯示這台裝置上的資料');
+            renderOwned((res && res.items) || []);
+        }).catch(() => {});
+
+        // ── 加入商品：搜尋與品牌 ──
+        const searchEl = document.getElementById('mbSearch');
+        const brandEl = document.getElementById('mbBrand');
+        const resultsEl = document.getElementById('mbResults');
+        if (!searchEl || !brandEl || !resultsEl || searchEl.dataset.bound) return;
+        searchEl.dataset.bound = '1';
+
+        // 品牌選單只信 Product API 的 facets，跟商品頁同一個來源。
+        loadProductFacets(() => {
+            if (Router.currentPage !== 'makeupBag') return;
+            brandEl.innerHTML = '<option value="">全部品牌</option>' +
+                productFacetBrands().map(b => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('');
+        });
+
+        let searchToken = 0;
+        const runSearch = async () => {
+            const q = String(searchEl.value || '').trim();
+            const brand = String(brandEl.value || '').trim();
+            if (!q && !brand) { resultsEl.innerHTML = ''; return; }
+            const token = ++searchToken;
+            resultsEl.innerHTML = '<div class="mb-note">搜尋中…</div>';
+            // 只找得進化妝包的商品：非「可推薦」的加進去也不會參與反推，
+            // 讓使用者加了才發現沒用是更差的體驗。
+            const rec = await Api.listProducts({
+                ...(brand ? { brand } : {}),
+                limit: 40,
+                recommendationState: '可推薦',
+            });
+            if (token !== searchToken || Router.currentPage !== 'makeupBag') return;
+            const needle = q.toLowerCase();
+            const hits = (rec?.products || []).filter(p => {
+                if (!p.candidateKey) return false;
+                if (!needle) return true;
+                return [p.name, p.brand, p.shadeName].some(v => String(v || '').toLowerCase().includes(needle));
+            }).slice(0, 12);
+
+            if (!hits.length) {
+                resultsEl.innerHTML = '<div class="mb-note">沒有符合的商品。</div>';
+                return;
+            }
+            resultsEl.innerHTML = hits.map(p => `
+                <button type="button" class="mb-hit" data-key="${escapeHtml(p.candidateKey)}"
+                    ${MakeupBag.has(p.candidateKey) ? 'disabled' : ''}>
+                    <span class="mb-hit-img">${phBox('', p.name, p.img)}</span>
+                    <span class="mb-hit-copy">
+                        <b>${escapeHtml(p.name)}</b>
+                        <small>${escapeHtml(p.brand || '')} · ${escapeHtml(p.cat || '')}</small>
+                    </span>
+                    <span class="mb-hit-act">${MakeupBag.has(p.candidateKey) ? '已加入' : '＋ 加入'}</span>
+                </button>`).join('');
+
+            resultsEl.querySelectorAll('.mb-hit').forEach(btn => {
+                btn.onclick = async () => {
+                    btn.disabled = true;
+                    const result = await MakeupBag.add(btn.dataset.key);
+                    if (!result.ok) { showToast(result.error); btn.disabled = false; return; }
+                    showToast(result.already ? '已經在化妝包裡了' : '已加入化妝包');
+                    const act = btn.querySelector('.mb-hit-act');
+                    if (act) act.textContent = '已加入';
+                    PageInit.makeupBag();
+                };
+            });
+        };
+        let debounce = null;
+        searchEl.oninput = () => { clearTimeout(debounce); debounce = setTimeout(runSearch, 250); };
+        brandEl.onchange = runSearch;
+
+        // 從收藏／購物車匯入。刻意要二次確認：收藏是「想要」不是「已經有」，
+        // 直接倒進化妝包會讓推薦以為使用者手上有一堆其實沒買的東西。
+        const importBtn = document.getElementById('mbImport');
+        if (importBtn) importBtn.onclick = async () => {
+            const keys = [...new Set([...Fav.list(), ...Cart.list().map(x => x.id)])]
+                .map(id => catalog.find(p => String(p.id) === String(id))?.candidateKey)
+                .filter(Boolean)
+                .filter(k => !MakeupBag.has(k));
+            if (!keys.length) { showToast('收藏與購物車裡沒有可以匯入的商品'); return; }
+            if (!window.confirm(`要把 ${keys.length} 件商品加入化妝包嗎？\n\n收藏與購物車代表「想要」，化妝包代表「已經有」。只加入你真的已經擁有的商品，推薦才會準。`)) return;
+            let added = 0;
+            for (const key of keys) {
+                const result = await MakeupBag.add(key);
+                if (result.ok && !result.already) added += 1;
+                else if (!result.ok) { showToast(result.error); break; }
+            }
+            showToast(`已加入 ${added} 件`);
+            PageInit.makeupBag();
+        };
     },
 
     favorites() {
@@ -6703,6 +6895,20 @@ const PageInit = {
             }
         }
         const paintSavedLooks = (list) => {
+            // 化妝包入口：只顯示件數與連結，管理在化妝包頁做。
+            const bagCountEl = document.getElementById('profileBagCount');
+            if (bagCountEl) {
+                const paint = (n) => { bagCountEl.textContent = n ? `目前 ${n} 件商品` : '還沒有登記任何商品'; };
+                paint(MakeupBag.count());
+                // 本機先畫，伺服器回來再更新——換裝置登入時本機是空的，
+                // 不等伺服器就會顯示成「還沒有登記」而讓人以為資料不見了。
+                Promise.resolve(MakeupBag.list()).then(res => {
+                    if (Router.currentPage === 'profile' && res && res.ok) paint(res.items.length);
+                }).catch(() => {});
+            }
+            const bagGo = document.getElementById('profileBagGo');
+            if (bagGo) bagGo.onclick = () => Router.go('makeupBag');
+
             const area = document.getElementById('profileSuggestionArea');
             const countEl = document.getElementById('profileSuggestionCount');
             if (countEl) countEl.textContent = list.length;
