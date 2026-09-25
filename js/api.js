@@ -2155,9 +2155,16 @@ const Api = {
         const baseUrl = this.config.services.memberDatabase.baseUrl;
         const email = this._writeActorEmail();
         if (!baseUrl || !email) return null;
-        // 上游還沒實作這個寫入端點（回 405/501）。第一次撞到就記下來，之後整個
+        // 上游回 405/501 代表這個寫入端點沒實作。第一次撞到就記下來，之後整個
         // 分頁生命週期都不再送——否則每次加減數量、每次登入都會再打一次，
         // console 一整排紅字，看起來像壞掉，其實本機購物車一直是好的。
+        //
+        // 2026-09-26 覆測：**路由現在存在了。** PUT / POST / PATCH 三個都回
+        // 401 MEMBER_AUTH_REQUIRED（要登入），不再是 2026-08-13 那時的 POST 405。
+        // 所以這條防線目前不會觸發，購物車同步走的是正常路徑。
+        //
+        // 但**還沒用已登入的帳號驗過真的寫得進去**（測試帳號仍未到手），所以旗標
+        // 留著——它只在真的收到 405/501 時生效，留著沒有代價。
         if (this._cartPushUnsupported) return null;
         const payload = (Array.isArray(items) ? items : [])
             .map(it => ({ id: String(it.id), qty: Math.max(1, parseInt(it.qty, 10) || 1) }))
