@@ -3882,9 +3882,13 @@ const Router = {
             Api.warmFaceServices();
         }
 
-        // 訪客攔截：收藏 / 分析紀錄 需登入
-        if ((page === "favorites" || page === "history") && isGuest()) {
-            promptGuestAuth(page === "favorites" ? "收藏" : "分析紀錄");
+        // 訪客攔截：收藏 / 分析紀錄 / 化妝包 需登入
+        //
+        // 化妝包要寫進會員資料庫，沒有身分就沒有包。讓訪客進去只會得到一個
+        // 加了東西卻存不住的頁面——他會以為功能壞了，而不是知道要先登入。
+        const guestBlocked = { favorites: "收藏", history: "分析紀錄", makeupBag: "我的化妝包" };
+        if (guestBlocked[page] && isGuest()) {
+            promptGuestAuth(guestBlocked[page]);
             return;
         }
         if (this.currentPage === 'analysis' && page !== 'analysis') this.stopAnalysisCameras();

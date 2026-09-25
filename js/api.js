@@ -3828,7 +3828,14 @@ const AdminStore = {
         // 2026-08-29 新增這頁時漏了這裡，於是點下去跳「此帳號目前沒有使用此功能的權限，
         // 請聯繫管理員」——一個只是在講品牌故事的頁面，說得像是被停權了。
         // allowedPages 由後台勾選，新頁面預設不在裡面，所以**每新增一個公開頁都要回來加**。
-        if (page === 'products' || page === 'about') return true;
+        //
+        // 化妝包同理：它是會員自己登記「我有哪些化妝品」的地方，跟收藏、購物車一樣，
+        // 不是需要後台核可的特權功能。2026-09-25 新增時又漏了這裡——
+        // 上面那段註解已經寫明「每新增一個公開頁都要回來加」，還是踩了同一個坑。
+        //
+        // ⚠️ 未登入時不該讓他進去：化妝包要寫進會員資料庫，沒有身分就沒有包。
+        // 但那是由 Router 的訪客守衛處理（跟收藏、分析紀錄同一條），不在這裡擋。
+        if (page === 'products' || page === 'about' || page === 'makeupBag') return true;
         if (page === 'analysis') return allowed.includes('analysisBasic') || allowed.includes('analysisPro') || this.isVip(p);
         return allowed.includes(page);
     },

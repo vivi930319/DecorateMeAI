@@ -67,6 +67,10 @@ Invoke-DeployCheck "品牌清單分頁"            @('tests/brand_catalog_pagina
 # 規劃方式分岔把既有的選風格視窗包了一層。包壞了不會報錯，只會讓使用者走到錯的地方：
 # 該問的時候沒問、選了系統推薦卻跑去反推、或化妝包空了卻卡在反推視窗出不來。
 Invoke-DeployCheck "妝容規劃分岔"            @('tests/makeup_plan_fork_check.js', '.')
+# 新頁面的權限登記。allowedPages 由後台勾選，新頁面預設不在裡面——漏了就會讓一般會員
+# 看到「此帳號目前沒有使用此功能的權限，請聯繫管理員」，像被停權一樣。
+# 2026-08-29（關於我們）與 2026-09-25（我的化妝包）各踩過一次。
+Invoke-DeployCheck "新頁面權限登記"          @('tests/page_access_registration_check.js', '.')
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {
