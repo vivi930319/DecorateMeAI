@@ -1267,6 +1267,20 @@ const Api = {
             // 本機商品 id 固定使用 api-{item_type}-{item_id}，才能和遠端收藏互相對應。
             id: normalizedId || `api-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             rawId,
+            // 跨服務的穩定商品鍵 {type}:{sourceId}，例 lipsticks:3800。
+            //
+            // 化妝包與反推風格都只認這個——上面那個 id 在缺 rawId 時是前端隨機生成的，
+            // 跨裝置對不上，送到後端也查不到。
+            //
+            // 優先用後端給的；後端沒給時才自己組（apiType 與 rawId 兩個零件都在）。
+            // 兩個零件缺一就給 null，不要組出 "null:123" 這種騙得過格式檢查、
+            // 但資料庫查不到的假鍵——那會變成「加得進化妝包、卻永遠反推不出東西」。
+            candidateKey: String(product.candidateKey || '').trim()
+                || (apiType && rawId != null ? `${apiType}:${rawId}` : null),
+            // 商品的推薦池狀態。化妝包搜尋會用它標示「可以登記，但不參與妝容推薦」——
+            // 使用者擁有的東西不一定都校對完了，但那不該擋住他登記。
+            recommendationState: product.recommendationState
+                || product.curatedRecommendationState || null,
             // 這件粉底跟使用者膚色的色差與判定（契約 2026-08-27 §3）。
             // 主推薦一定是 accepted:true；替代色可能是 false，那是正常的——
             // 它走的是「與主推薦色號 ΔE ≤ 5」那條規則。

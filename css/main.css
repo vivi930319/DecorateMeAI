@@ -4890,3 +4890,7 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 .mp-more-grid { grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:14px; margin-top:6px; }
 .mp-more-grid .pc-name { font-size:13px; }
 .mp-more-grid .pc-own { font-size:11px; padding:4px 8px; }
+/* 搜尋結果裡「可以登記但不參與推薦」的標示。用提示色不用警示色——
+   那不是錯誤，只是資料還沒校對完。 */
+.mb-hit-note { display:block; margin-top:3px; font-family:var(--cjk); font-size:10.5px;
+    font-style:normal; color:var(--gold-deep); }

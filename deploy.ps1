@@ -84,6 +84,9 @@ Invoke-DeployCheck "頁面模板檔名"            @('tests/page_template_naming
 # 化妝包搜尋要把關鍵字送給伺服器。抓一批回來自己篩等於只搜尋了目錄最前面那幾筆，
 # 找不到時畫面會說「沒有符合的商品」，看起來像資料庫裡沒有——但其實只是沒搜到。
 Invoke-DeployCheck "化妝包搜尋"              @('tests/makeup_bag_search_check.js', '.')
+# 正規化後的商品要帶 candidateKey。化妝包的加入、移除、反推、商品卡的「我有」
+# 全靠它，少了會**安靜失效**：按鈕不畫出來、搜尋結果被濾光，而且不報錯。
+Invoke-DeployCheck "商品的 candidateKey"     @('tests/candidate_key_check.js', '.')
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {

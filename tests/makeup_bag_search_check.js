@@ -99,10 +99,22 @@ const tick = () => new Promise(r => setTimeout(r, 0));
   }
   console.log('  PASS 關鍵字送給伺服器  q=' + JSON.stringify(search.q));
 
-  if (search.recommendationState !== '可推薦') {
-    throw new Error(`搜尋要限定可推薦商品，實際 ${JSON.stringify(search.recommendationState)}`);
+  // 搜尋**不可以**限定可推薦。
+  //
+  // 初版加了 recommendationState: '可推薦'，理由是「加了不能參與反推的東西是浪費」。
+  // 那個理由錯了：化妝包記的是「我有什麼」，不是「系統推薦什麼」。使用者手上那支
+  // 粉底剛好還沒校對完，不該因此查不到——他只會覺得這系統連他天天用的東西都沒有。
+  // 實測 q=nc15 共 15 筆，其中 5 筆是「資料未達推薦條件」，而那 5 筆正是熱賣色號。
+  if (search.recommendationState !== undefined) {
+    throw new Error(
+      [
+        `搜尋不該限定 recommendationState，實際 ${JSON.stringify(search.recommendationState)}。`,
+        '       化妝包是「我有什麼」，不是「系統推薦什麼」。未校對完的商品照樣要查得到，',
+        '       只是在結果列標示「可以登記，但目前不參與妝容推薦」。',
+      ].join('\n'),
+    );
   }
-  console.log('  PASS 只搜尋可推薦商品');
+  console.log('  PASS 搜尋涵蓋全部商品，不限可推薦');
 
   // 品牌篩選要跟關鍵字一起送，不是二選一
   nodes.mbBrand.value = 'MAC';

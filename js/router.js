@@ -5954,13 +5954,22 @@ const PageInit = {
             // q 沒有出現在回應的 appliedFilters 裡（所以一開始沒發現它存在），
             // 但實測會生效：q=唇膏 讓 total 從 3897 降到 930，而且可以跟
             // recommendationState 疊加。
+            // **搜全部商品，不限「可推薦」。**
+            //
+            // 初版加了 recommendationState: '可推薦'，理由是「加了不能參與反推的東西
+            // 是浪費」。那個理由錯了：化妝包記的是「我有什麼」，不是「系統推薦什麼」。
+            // 使用者手上那支粉底剛好還沒被校對完，不該因此就查不到、登記不了——
+            // 他只會覺得這個系統連他天天在用的東西都沒有。
+            //
+            // 實測 q=nc15 共 15 筆，其中 5 筆是「資料未達推薦條件」。那 5 筆正是
+            // 容易被使用者擁有的熱賣色號。
+            //
+            // 代價是這些商品不會參與風格反推，所以在結果列上標出來，
+            // 讓他加之前就知道，而不是加完才發現沒作用。
             const rec = await Api.listProducts({
                 ...(q ? { q } : {}),
                 ...(brand ? { brand } : {}),
                 limit: 12,
-                // 只找得進化妝包的商品：非「可推薦」的加進去也不會參與反推，
-                // 讓使用者加了才發現沒用是更差的體驗。
-                recommendationState: '可推薦',
             });
             if (token !== searchToken || Router.currentPage !== 'makeupBag') return;
             const hits = (rec?.products || []).filter(p => p.candidateKey).slice(0, 12);
@@ -5976,6 +5985,8 @@ const PageInit = {
                     <span class="mb-hit-copy">
                         <b>${escapeHtml(p.name)}</b>
                         <small>${escapeHtml(p.brand || '')} · ${escapeHtml(p.cat || '')}</small>
+                        ${p.recommendationState && p.recommendationState !== '可推薦'
+                            ? '<em class="mb-hit-note">可以登記，但目前不參與妝容推薦</em>' : ''}
                     </span>
                     <span class="mb-hit-act">${MakeupBag.has(p.candidateKey) ? '已加入' : '＋ 加入'}</span>
                 </button>`).join('');
