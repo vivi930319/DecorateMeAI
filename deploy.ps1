@@ -98,6 +98,10 @@ Invoke-DeployCheck "反推排序的呈現"          @('tests/style_ranking_displ
 # （抽 200 筆 100% 有值），而前端一個都沒接，於是看起來像後端沒做。
 # 另外「不適用」不是風格，沒濾掉畫面會寫「適合 不適用」。
 Invoke-DeployCheck "妝容校對欄位"            @('tests/curated_style_fields_check.js', '.')
+# 資料包離開瀏覽器時只准送白名單裡的欄位，尤其不准送照片。本機那包有使用者的
+# 臉部照片 base64；渲染端超過 64 KB 會回 413，而推薦端沒有大小上限——那邊漏出去
+# 會**成功送出**，不會有任何錯誤訊息。三處白名單散在兩個檔案，漏改不會報錯。
+Invoke-DeployCheck "資料包傳輸白名單"        @('tests/analysis_package_transport_check.js', '.')
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {
