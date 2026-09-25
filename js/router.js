@@ -1838,6 +1838,25 @@ const SVC_ICONS = {
 };
 const STYLE_ROLE = { softBaddie:'Soft Glam', richGirl:'Quiet Luxury', hongKong:'Retro HK', koreanClean:'Clean Girl', yandere:'Doll Core', japaneseClear:'J-Sheer', mensPlain:'Mens Bare' };
 
+// 商品適合哪幾個妝容——3,721 筆人工校對的結果，商品端 2026-09-25 全數開放。
+//
+// 名次由 Api._normalizeCuratedStyles 依分數排好，這裡照著顯示，**不要重排**：
+// 前端自己排一次遲早會跟反推頁不一致，而不一致的樣子是「同一支口紅在搜尋結果
+// 排港風第一、在反推頁卻排病嬌第一」。
+//
+// 刻意不顯示分數。它是原始值（實測 0.0 ~ 11.9，未正規化），印出來使用者會
+// 當成百分比看；而「5.7」放在畫面上除了讓人誤會之外沒有任何用處。
+function styleChips(product, max = 3) {
+    const ids = Array.isArray(product?.curatedStyleIds) ? product.curatedStyleIds : [];
+    if (!ids.length) return '';
+    const names = ids.slice(0, max)
+        .map(id => STYLES.find(s => s.id === id)?.name)
+        .filter(Boolean);
+    if (!names.length) return '';
+    const more = ids.length > max ? ` +${ids.length - max}` : '';
+    return `<em class="mb-hit-styles">適合 ${escapeHtml(names.join(' · '))}${escapeHtml(more)}</em>`;
+}
+
 // 頁面順序（判斷轉場方向）
 const NAV_ORDER = ['dashboard','analysis','style','products','makeupBag','favorites','history','compare','suggestion','profile','about','admin'];
 const ROUTE_PAGES = new Set(NAV_ORDER);
@@ -6009,6 +6028,7 @@ const PageInit = {
                     <span class="mb-hit-copy">
                         <b>${escapeHtml(p.name)}</b>
                         <small>${escapeHtml(p.brand || '')} · ${escapeHtml(p.cat || '')}</small>
+                        ${styleChips(p)}
                         ${p.recommendationState && p.recommendationState !== '可推薦'
                             ? '<em class="mb-hit-note">可以登記，但目前不參與妝容推薦</em>' : ''}
                     </span>
@@ -8361,9 +8381,16 @@ const PageInit = {
                 reviewStatus: document.getElementById('adminProductReviewStatus')?.value || 'approved',
                 inStock: document.getElementById('adminProductInStock')?.checked !== false,
                 currency: 'TWD',
-                // 只送 API 真的有的標籤欄位。styleTags / finishTags / occasionTags
-                // 在商品 API 的 25 個欄位裡都不存在，送過去只會被丟掉——
-                // 而「送了但沒存」比「沒送」更難查，因為前端看起來一切正常。
+                // 只送這個表單真的有輸入框的標籤欄位。
+                //
+                // 2026-09-25 更正：原本這裡寫「styleTags / finishTags / occasionTags
+                // 在商品 API 的 25 個欄位裡都不存在」。那句話已經過期——商品 API
+                // 現在有 85 個欄位，那三個全都在。
+                //
+                // 現在不送它們的理由變成另一個：這個後台表單**沒有那三個輸入框**。
+                // 要開放編輯就得先補 UI，不是把欄位塞進來就好。
+                // 妝容標籤（curatedStyleScores 那一包）另有 3,721 筆人工校對表當來源，
+                // 不該從這個表單手改，改了會跟校對表打架。
                 seasonTags: splitTags(document.getElementById('adminProductSeasonTags')?.value)
             };
             const actionBtn = editingProductId ? editBtn : createBtn;

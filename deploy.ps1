@@ -94,6 +94,10 @@ Invoke-DeployCheck "反推妝容的路徑"          @('tests/recommend_styles_pa
 # 反推結果的畫面不可以出現跟排序矛盾的數字。件數不是排序依據（分數才是），
 # 用因果語氣講件數、而件數又不遞減時，使用者只會覺得排壞了。
 Invoke-DeployCheck "反推排序的呈現"          @('tests/style_ranking_display_check.js', '.')
+# 商品的七妝容校對欄位必須被正規化帶下來。商品端 2026-09-25 就全部開放了
+# （抽 200 筆 100% 有值），而前端一個都沒接，於是看起來像後端沒做。
+# 另外「不適用」不是風格，沒濾掉畫面會寫「適合 不適用」。
+Invoke-DeployCheck "妝容校對欄位"            @('tests/curated_style_fields_check.js', '.')
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {

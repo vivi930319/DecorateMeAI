@@ -1404,7 +1404,37 @@ const Api = {
                 : Number(product.dataQualityScore ?? product.data_quality_score),
             version: Number(product.version || 1),
             currency: product.currency || 'TWD',
+            // ⚠️ `styleTags` **不是**七妝容標籤。商品 API 回的是寫死的 ["daily"]
+            // （2026-09-25 抽 200 筆，每一筆都一樣），跟港風／病嬌那七個無關。
+            // 要判斷「這件適合什麼妝容」請用下面那一包 curatedStyles.*。
+            // 這個欄位留著只為了不改既有行為，目前前端沒有任何畫面在讀它。
             styleTags: product.styleTags || product.style_tags || [],
+
+            // ── 七妝容人工校對結果（3,721 筆校對表，商品端 2026-09-25 已全數開放）──
+            //
+            // 這一整包後端**一直都有回、而且 100% 有值**，但先前在這裡就被丟掉了：
+            // 於是化妝包、反推妝容、延伸推薦全都拿不到「這件適合哪個妝容」，
+            // 而畫面不會報錯，只會顯示不出來——看起來像後端沒做。
+            //
+            // 攤平成獨立欄位而不是留一個巢狀物件，是因為商品物件會被存進
+            // localStorage 再讀回來，巢狀的東西比較容易在某條路徑上被整包弄掉。
+            ...(() => {
+                const s = this._normalizeCuratedStyles(product);
+                return {
+                    curatedStyleScores: s.styleScores,
+                    curatedStyleRankings: s.styleRankings,
+                    curatedStyleIds: s.styleIds,
+                    curatedStyleEligible: s.styleEligible,
+                    curatedStyleExcluded: s.styleExcluded,
+                    curatedStyleUnknown: s.styleUnknown,
+                    curatedStyleReason: s.styleReason,
+                    curatedStyleConfidence: s.styleConfidence,
+                };
+            })(),
+            // 校對出來的色系（「橘紅/陶土」這種）。跟 hex 是兩回事：hex 多半是爬來的
+            // 估計值，這個是人工校對的分類，說明推薦理由時用得上。
+            finalColorFamily: String(product.finalColorFamily || product.curatedColorFamily || '').trim() || null,
+
             finishTags: product.finishTags || product.finish_tags || [],
             seasonTags: product.seasonTags || product.season_tags || [],
             occasionTags: product.occasionTags || product.occasion_tags || [],
@@ -2858,6 +2888,128 @@ const Api = {
         'softBaddie', 'richGirl', 'hongKong', 'koreanClean',
         'yandere', 'japaneseClear', 'mensPlain'
     ]),
+
+    // 商品 API 的風格中文名 → 前端 styleId。**這是唯一的映射表，不要在別處再寫一份。**
+    //
+    // 為什麼需要查表：三個端各用一套名字，而且規則不一致。
+    //   前端 styleId      hongKong        japaneseClear   softBaddie     mensPlain
+    //   商品 API 中文名    港風妝           日雜清透妝       Soft Baddie    男士白開水
+    //   data.js 顯示名     港風             日雜清透         Soft Baddie    男士白開水
+    //
+    // 五個帶「妝」字，Soft Baddie 與 男士白開水 沒有。所以「把妝字去掉再比對」這種
+    // 規則會漏掉兩個——漏掉的後果不是報錯，是那兩個風格的商品靜靜地對不上。
+    STYLE_NAME_TO_ID: Object.freeze({
+        'Soft Baddie': 'softBaddie', 'softbaddie': 'softBaddie',
+        '千金妝': 'richGirl', '千金': 'richGirl',
+        '港風妝': 'hongKong', '港風': 'hongKong',
+        '韓系亞裔妝': 'koreanClean', '韓系亞裔': 'koreanClean',
+        '病嬌妝': 'yandere', '病嬌': 'yandere',
+        '日雜清透妝': 'japaneseClear', '日雜清透': 'japaneseClear',
+        '男士白開水妝': 'mensPlain', '男士白開水': 'mensPlain',
+    }),
+
+    // 「不適用」會混在 curatedStyleScores 的 key 裡（2026-09-25 抽 200 筆實測仍有）。
+    //
+    // 它不是風格，是「這件商品不進七妝容推薦池」的意思。沒濾掉的話畫面會出現
+    // 「適合：不適用」，而使用者只會以為系統壞了。已回報商品端另立欄位，
+    // 在那之前前端自己擋——而且就算後端改好了，這層留著也不虧。
+    NOT_A_STYLE: Object.freeze(['不適用', '不適用妝', 'N/A']),
+
+    styleIdFromName(name) {
+        const key = String(name ?? '').trim();
+        if (!key || this.NOT_A_STYLE.includes(key)) return null;
+        return this.STYLE_NAME_TO_ID[key] || null;
+    },
+
+    // 這個名字對不上，是「後端說不適用」還是「冒出一個我們不認識的風格」？
+    //
+    // 兩者都會讓 styleIdFromName 回 null，但意思完全相反，處置也相反：
+    //   不適用   → 正常，這件商品就是不進推薦池，安靜丟掉就對了
+    //   不認識   → 有人在後端加了第八個風格而沒通知前端，要讓它浮出來
+    //
+    // 不分開的話，新風格上線的那天前端會**靜靜地**把它全部丟掉，
+    // 症狀是「那個風格的商品一件都推不出來」，而沒有任何地方會報錯。
+    // 這個專案已經有過三個長得很像的「第八種風格」（日常自然妝／自然裸妝／不適用），
+    // 正是會踩到的地方。
+    isKnownStyleName(name) {
+        const key = String(name ?? '').trim();
+        return !!key && (this.NOT_A_STYLE.includes(key) || !!this.STYLE_NAME_TO_ID[key]);
+    },
+
+    // 每個沒見過的風格名只喊一次。商品清單一頁 200 筆，不去重的話 console 會被洗掉，
+    // 而真正該被看到的那一行就淹在裡面了。
+    _seenUnknownStyles: null,
+    _warnUnknownStyles(names) {
+        if (!this._seenUnknownStyles) this._seenUnknownStyles = new Set();
+        const fresh = names.filter(n => !this._seenUnknownStyles.has(n));
+        if (!fresh.length) return;
+        fresh.forEach(n => this._seenUnknownStyles.add(n));
+        console.warn(
+            '[妝容標籤] 商品 API 回了前端不認識的風格名：' + fresh.join('、')
+            + '。這些商品的妝容標籤會被丟掉（那個風格一件商品都推不出來）。'
+            + '要修請加進 Api.STYLE_NAME_TO_ID，或確認它其實是「不進推薦池」的標記。'
+        );
+    },
+
+    // 把商品上那一包妝容校對欄位整理成前端能直接用的形狀。
+    //
+    // 商品 API 同時回兩套平行欄位（curatedStyleScores/Tags/… 與 finalStyleTags、
+    // finalStyle1~3 + finalScore1~3），實測值**完全一致**。這裡以 curated* 為主、
+    // final* 為備援，只認一套，避免畫面上兩個地方各讀一套然後說法不同。
+    //
+    // 分數是原始值（實測 0.0 ~ 11.9，未正規化），所以**不要當百分比顯示**。
+    // 它只能用來排序與比大小，已要求商品端改成同類商品內的百分位。
+    _normalizeCuratedStyles(product) {
+        const raw = (product.curatedStyleScores && typeof product.curatedStyleScores === 'object')
+            ? product.curatedStyleScores : null;
+        const scores = {};
+        let excluded = false;
+        const unknown = [];
+        if (raw) {
+            for (const [name, value] of Object.entries(raw)) {
+                const score = Number(value);
+                if (!Number.isFinite(score)) continue;
+                const id = this.styleIdFromName(name);
+                if (!id) {
+                    // 「不適用」是預期的；認不出來的名字不是，要留下痕跡。
+                    if (this.isKnownStyleName(name)) excluded = true;
+                    else unknown.push(String(name).trim());
+                    continue;
+                }
+                // 同一個 styleId 被兩種寫法命中時取高分，不要後者覆蓋前者。
+                scores[id] = Math.max(scores[id] ?? -Infinity, score);
+            }
+        }
+        if (unknown.length) this._warnUnknownStyles(unknown);
+        // 排名一律在這裡重算，不讀後端的 curatedStyleRankings：那份還含「不適用」，
+        // 濾掉之後名次會跳號（第 1、第 3、第 4），看起來像漏了一筆。
+        const rankings = Object.entries(scores)
+            .sort((a, b) => b[1] - a[1])
+            .map(([styleId, score]) => ({ styleId, score }));
+        // finalStyleTags / curatedStyleTags 是 "港風妝 | 病嬌妝" 這種字串，不是陣列。
+        const tagSource = String(product.curatedStyleTags || product.finalStyleTags || '').trim();
+        const tagIds = tagSource
+            ? tagSource.split('|').map(s => this.styleIdFromName(s)).filter(Boolean)
+            : [];
+        return {
+            styleScores: rankings.length ? scores : null,
+            styleRankings: rankings,
+            // 有排名時用排名（帶分數順序），否則退回標籤字串解出來的順序。
+            styleIds: rankings.length ? rankings.map(r => r.styleId) : tagIds,
+            // 後端明說這件不進推薦池。缺欄位時不要預設 false——那會把所有舊資料
+            // 都標成「不參與推薦」，比不標更誤導。
+            styleEligible: product.curatedStyleEligible === true ? true
+                : (product.curatedStyleEligible === false ? false : null),
+            styleExcluded: excluded,
+            // 商品端回了我們沒見過的風格名。空陣列是正常狀態。
+            styleUnknown: unknown,
+            // 人話的校對理由（「港風妝：色系=橘紅/陶土」）。Ollama 生成推薦理由的
+            // 直接依據，也是畫面上唯一能說明「為什麼算這個風格」的東西。
+            styleReason: String(product.curatedReviewReason || product.reviewReason || '').trim() || null,
+            styleConfidence: Number.isFinite(Number(product.curatedStyleConfidence ?? product.styleConfidence))
+                ? Number(product.curatedStyleConfidence ?? product.styleConfidence) : null,
+        };
+    },
 
     // 把使用者的偏好整理成契約允許的形狀。
     //

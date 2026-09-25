@@ -41,6 +41,12 @@ vm.runInContext(
      _isStorableImageUrl: () => true,
      _safeMatchReason: () => '',
      _pickPrice: (p) => p && p.price,
+     // 妝容校對欄位那一包交給 tests/curated_style_fields_check.js 驗（它整檔載入
+     // js/api.js，驗的是真值）。這裡只給一個空結果，因為這支測的是 candidateKey 的組法。
+     _normalizeCuratedStyles: () => ({
+       styleScores: null, styleRankings: [], styleIds: [], styleEligible: null,
+       styleExcluded: false, styleUnknown: [], styleReason: null, styleConfidence: null,
+     }),
      productServerFiltering: false,
      ${body}
    };
