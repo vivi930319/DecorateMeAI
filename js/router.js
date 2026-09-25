@@ -2900,12 +2900,13 @@ makeupBag: `<div class="page-header"><span class="eyebrow">Makeup Bag</span><h1>
     <div class="mb-add-head"><h2>加入商品</h2><span class="mb-count" id="mbCount"></span></div>
     <div class="mb-add-controls">
         <label class="mb-field"><span>搜尋</span><input type="search" id="mbSearch" placeholder="商品、品牌或色號" autocomplete="off"></label>
+        <label class="mb-field"><span>類別</span><select id="mbCat"><option value="">全部類別</option></select></label>
         <label class="mb-field"><span>品牌</span><select id="mbBrand"><option value="">全部品牌</option></select></label>
         <button type="button" class="btn-outline" id="mbImport">從收藏／購物車匯入</button>
     </div>
     <div id="mbResults" class="mb-results"></div>
 </section>
-<section class="mb-owned"><h2>化妝包內容</h2><div id="mbArea"></div></section>`,
+<section class="mb-owned"><div class="mb-owned-head"><h2>化妝包內容</h2><span class="mb-sync" id="mbSync"></span></div><div id="mbArea"></div></section>`,
   favorites: `<div class="page-header"><span class="eyebrow">Wishlist</span><h1>我的收藏</h1><div class="divider"></div></div><div id="favArea"></div>`,
 history: `<div class="page-header"><span class="eyebrow">Archive</span><h1>分析紀錄</h1><div class="divider"></div></div>
 <p class="page-note">每一次臉部分析的判斷結果都會留在這裡，只存文字，<strong>不會保留你的照片</strong>。紀錄依帳號分開，最多保留 50 筆。</p>
@@ -5858,6 +5859,18 @@ const PageInit = {
             const countEl = document.getElementById('mbCount');
             if (countEl) countEl.textContent = `${items.length} / ${MakeupBagApi.limit} 件`;
 
+            // 妝容推薦是在後端用這份清單算的，所以「只存在這台裝置」等於功能不會生效。
+            // 講清楚比安靜失敗好。
+            const syncEl = document.getElementById('mbSync');
+            if (syncEl) {
+                const state = MakeupBag.syncState;
+                syncEl.className = 'mb-sync' + (state === 'local' ? ' is-local' : '');
+                syncEl.textContent = state === 'synced' ? '已同步到雲端'
+                    : (state === 'local'
+                        ? `僅存在這台裝置${MakeupBag.syncError ? `（${MakeupBag.syncError}）` : ''}，妝容推薦不會用到`
+                        : '');
+            }
+
             if (!items.length) {
                 area.innerHTML = '<div class="empty-state">化妝包還是空的。用上面的搜尋或品牌篩選，把你已經有的化妝品加進來。</div>';
                 return;
@@ -5927,9 +5940,16 @@ const PageInit = {
         // ── 加入商品：搜尋與品牌 ──
         const searchEl = document.getElementById('mbSearch');
         const brandEl = document.getElementById('mbBrand');
+        const catEl = document.getElementById('mbCat');
         const resultsEl = document.getElementById('mbResults');
         if (!searchEl || !brandEl || !resultsEl || searchEl.dataset.bound) return;
         searchEl.dataset.bound = '1';
+
+        // 類別選項用既有的 CAT_EN，跟商品頁同一份來源，不另外維護一張表。
+        if (catEl) {
+            catEl.innerHTML = '<option value="">全部類別</option>' +
+                Object.keys(CAT_EN).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+        }
 
         // 品牌選單只信 Product API 的 facets，跟商品頁同一個來源。
         loadProductFacets(() => {
@@ -5942,7 +5962,10 @@ const PageInit = {
         const runSearch = async () => {
             const q = String(searchEl.value || '').trim();
             const brand = String(brandEl.value || '').trim();
-            if (!q && !brand) { resultsEl.innerHTML = ''; return; }
+            const cat = String(catEl?.value || '').trim();
+            // 三個條件任一有值就查。只選類別不打字也要出得來——
+            // 使用者常常記不得商品名，但知道自己要找的是腮紅。
+            if (!q && !brand && !cat) { resultsEl.innerHTML = ''; return; }
             const token = ++searchToken;
             resultsEl.innerHTML = '<div class="mb-note">搜尋中…</div>';
             // 搜尋交給伺服器的 q，不要抓一批回來自己篩。
@@ -5969,6 +5992,7 @@ const PageInit = {
             const rec = await Api.listProducts({
                 ...(q ? { q } : {}),
                 ...(brand ? { brand } : {}),
+                ...(cat ? { category: cat } : {}),
                 limit: 12,
             });
             if (token !== searchToken || Router.currentPage !== 'makeupBag') return;
@@ -6006,16 +6030,35 @@ const PageInit = {
         let debounce = null;
         searchEl.oninput = () => { clearTimeout(debounce); debounce = setTimeout(runSearch, 250); };
         brandEl.onchange = runSearch;
+        if (catEl) catEl.onchange = runSearch;
 
         // 從收藏／購物車匯入。刻意要二次確認：收藏是「想要」不是「已經有」，
         // 直接倒進化妝包會讓推薦以為使用者手上有一堆其實沒買的東西。
         const importBtn = document.getElementById('mbImport');
         if (importBtn) importBtn.onclick = async () => {
-            const keys = [...new Set([...Fav.list(), ...Cart.list().map(x => x.id)])]
-                .map(id => catalog.find(p => String(p.id) === String(id))?.candidateKey)
+            // **在點擊當下才讀目錄**，不要用綁定時的那份。
+            //
+            // 事件只綁一次（上面的 dataset.bound），而商品目錄是背景載入的——
+            // 綁定時它通常還是空陣列。閉包抓著那個空陣列的話，按幾次都會說
+            // 「收藏與購物車裡沒有可以匯入的商品」，而收藏明明有東西。
+            const live = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
+            if (!live.length) {
+                showToast(Router.generalProductLoading ? '商品資料還在載入，請稍候再試' : '商品資料暫時讀不到，請重新整理');
+                return;
+            }
+            const sources = [...new Set([...Fav.list(), ...Cart.list().map(x => x.id)])];
+            const keys = sources
+                .map(id => live.find(p => String(p.id) === String(id))?.candidateKey)
                 .filter(Boolean)
                 .filter(k => !MakeupBag.has(k));
-            if (!keys.length) { showToast('收藏與購物車裡沒有可以匯入的商品'); return; }
+            if (!keys.length) {
+                // 分開講：「本來就沒東西」跟「有東西但都加過了」是兩種情況，
+                // 用同一句話會讓使用者以為匯入壞掉。
+                showToast(sources.length
+                    ? '收藏與購物車裡的商品都已經在化妝包裡了'
+                    : '收藏與購物車裡沒有商品');
+                return;
+            }
             if (!window.confirm(`要把 ${keys.length} 件商品加入化妝包嗎？\n\n收藏與購物車代表「想要」，化妝包代表「已經有」。只加入你真的已經擁有的商品，推薦才會準。`)) return;
             let added = 0;
             for (const key of keys) {

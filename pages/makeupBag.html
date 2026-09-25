@@ -18,6 +18,10 @@
             <input type="search" id="mbSearch" placeholder="商品、品牌或色號" autocomplete="off">
         </label>
         <label class="mb-field">
+            <span>類別</span>
+            <select id="mbCat"><option value="">全部類別</option></select>
+        </label>
+        <label class="mb-field">
             <span>品牌</span>
             <select id="mbBrand"><option value="">全部品牌</option></select>
         </label>
@@ -28,6 +32,11 @@
 
 <!-- 已在化妝包裡的商品，依部位分組。分組是刻意的：使用者要一眼看出自己缺哪個部位。 -->
 <section class="mb-owned">
-    <h2>化妝包內容</h2>
+    <div class="mb-owned-head">
+        <h2>化妝包內容</h2>
+        <!-- 化妝包的價值在於後端拿得到（妝容推薦在那端算），
+             所以「有沒有真的存到雲端」必須看得見，不能只閃一個提示。 -->
+        <span class="mb-sync" id="mbSync"></span>
+    </div>
     <div id="mbArea"></div>
 </section>

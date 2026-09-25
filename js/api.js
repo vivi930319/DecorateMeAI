@@ -4391,24 +4391,41 @@ const MakeupBag = {
         Promise.resolve(this.list()).catch(() => {});
     },
 
+    // 最後一次跟伺服器往來的結果。化妝包的價值在於**後端拿得到**（RAG 在那端跑），
+    // 所以「只存在這台裝置」必須讓使用者看得見，不能只閃一個提示就沒了。
+    //   'synced'   伺服器確認收到
+    //   'local'    只寫進本機（未登入、離線或寫入失敗）
+    //   'unknown'  還沒跟伺服器往來過
+    syncState: 'unknown',
+    syncError: '',
+    _mark(state, error) { this.syncState = state; this.syncError = error || ''; },
+
     has(candidateKey) { return this.localList().includes(candidateKey); },
     count() { return this.localList().length; },
     isFull() { return this.count() >= MakeupBagApi.limit; },
     _asItems(keys) { return keys.map(k => ({ candidateKey: k, itemId: null, unavailable: false })); },
 
     async list() {
-        if (!Auth.isLoggedIn?.()) return { ok: true, offline: true, items: this._asItems(this.localList()) };
+        if (!Auth.isLoggedIn?.()) {
+            this._mark('local', '尚未登入');
+            return { ok: true, offline: true, items: this._asItems(this.localList()) };
+        }
         const base = MakeupBagApi.base();
         if (!base) return { ok: false, items: this._asItems(this.localList()) };
         try {
             const res = await Api._fetchWithRelogin(`${base}${MakeupBagApi.paths().list}`, {
                 method: 'GET', credentials: 'include', cache: 'no-store',
             });
-            if (!res.ok) return { ok: false, status: res.status, items: this._asItems(this.localList()) };
+            if (!res.ok) {
+                this._mark('local', `伺服器回 ${res.status}`);
+                return { ok: false, status: res.status, items: this._asItems(this.localList()) };
+            }
             const items = MakeupBagApi.normalize(await res.json().catch(() => ({})));
             this._saveLocal(items.map(i => i.candidateKey));
+            this._mark('synced');
             return { ok: true, items };
         } catch (_) {
+            this._mark('local', '連不上伺服器');
             return { ok: false, items: this._asItems(this.localList()) };
         }
     },
@@ -4455,6 +4472,7 @@ const MakeupBag = {
                 // 清快取或同步失敗之後就不準——伺服器說了算。
                 //
                 // 沒有這個欄位時（舊版後端）退回本機判斷，行為與先前相同。
+                this._mark('synced');
                 const created = data?.created;
                 if (created === false) return { ok: true, already: true };
                 if (typeof data?.total === 'number') this._syncTotal(data.total);
@@ -4467,8 +4485,10 @@ const MakeupBag = {
                 this._saveLocal(this.localList().filter(k => k !== key));
                 return { ok: false, error: `化妝包最多 ${MakeupBagApi.limit} 件，請先移除一些再加入。` };
             }
+            this._mark('local', `伺服器回 ${res.status}`);
             return { ok: false, error: data?.error?.message || '加入化妝包失敗，請稍後再試。' };
         } catch (_) {
+            this._mark('local', '連不上伺服器');
             return { ok: false, error: '連線失敗，已先存在這台裝置上。' };
         }
     },

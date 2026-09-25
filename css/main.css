@@ -4894,3 +4894,8 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
    那不是錯誤，只是資料還沒校對完。 */
 .mb-hit-note { display:block; margin-top:3px; font-family:var(--cjk); font-size:10.5px;
     font-style:normal; color:var(--gold-deep); }
+/* 化妝包內容的標題列與同步狀態。同步正常用低調色，只存本機才用提示色——
+   那代表妝容推薦不會用到這份資料，使用者需要知道。 */
+.mb-owned-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.mb-sync { font-family:var(--cjk); font-size:11.5px; color:var(--mid); }
+.mb-sync.is-local { color:var(--gold-deep); }
