@@ -155,7 +155,8 @@
             const body = loading
                 ? '<div class="mp-hint">正在依你的化妝包計算…</div>'
                 : (!result?.ok
-                    ? `<div class="mp-hint is-error">${escapeHtml(result?.error || '化妝包推薦暫時無法使用。')}
+                    ? `<div class="mp-hint is-error">${escapeHtml(errorText())}
+                       <button type="button" class="mp-link" data-bag>去化妝包看看</button>
                        <button type="button" class="mp-link" data-fallback>改用系統推薦</button></div>`
                     : `
                     ${ranked.length ? `
@@ -211,6 +212,11 @@
                 MakeupPlan.clear();
                 openMakeupPlanModal(picked);
             };
+            const bagBtn = modal.querySelector('[data-bag]');
+            if (bagBtn) bagBtn.onclick = () => {
+                closeModal('bagStyleModal');
+                Router.go('makeupBag');
+            };
             const fallback = modal.querySelector('[data-fallback]');
             if (fallback) fallback.onclick = () => {
                 closeModal('bagStyleModal');
@@ -225,6 +231,20 @@
                 closeModal('bagStyleModal');
                 window.__openStyleModalDirect(picked);
             };
+        };
+
+        // 上游說「沒有化妝包」但本機明明有東西，那不是「還沒建立」，
+        // 是**加入的時候沒寫進資料庫**。照抄上游那句話會讓使用者一直回去重加，
+        // 而每一次都同樣只寫進本機。
+        const errorText = () => {
+            const localCount = (typeof MakeupBag !== 'undefined') ? MakeupBag.count() : 0;
+            const notFound = /NOT_FOUND|EMPTY|尚未建立|沒有化妝包/.test(
+                `${result?.code || ''} ${result?.error || ''}`);
+            if (notFound && localCount) {
+                return `你加的 ${localCount} 件商品還沒同步到雲端，所以這裡讀不到。` +
+                       '妝容推薦是在伺服器上算的，需要雲端那份資料。';
+            }
+            return result?.error || '化妝包推薦暫時無法使用。';
         };
 
         // 覆蓋狀況要說出來，不能只給結論：
