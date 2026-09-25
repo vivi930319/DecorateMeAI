@@ -217,7 +217,31 @@ if ($secretMatches) {
     throw "部署中止：公開前端仍包含上游金鑰欄位或臨時 Tunnel 網址。`n$($secretMatches -join "`n")"
 }
 
-$gitChanges = git status --porcelain -- .
+$gitChanges = @(git status --porcelain -- .)
+
+# 上一次部署留下的版本戳記不算「未提交的變更」。
+#
+# 這個腳本自己會把 index.html 的 ?v= 蓋成當下時間戳，但不會提交它。
+# 於是下一次部署一定被自己擋下來——2026-09-25 一天之內連續發生三次，
+# 每次都要先手動 commit 一個只有時間戳的變更才能繼續。
+#
+# 但**只放行純戳記的變更**：index.html 裡若還有別的改動，照樣擋。
+# 判斷方式是看 diff 的每一行實質內容，不是看檔名——只比檔名的話，
+# 夾帶在 index.html 裡的真實修改會跟著被放行。
+if ($gitChanges.Count -eq 1 -and $gitChanges[0].Trim() -match '^M\s+index\.html$') {
+    $diffLines = @(git diff -U0 -- index.html) |
+        Where-Object { $_ -match '^[+-]' -and $_ -notmatch '^(\+\+\+|---)' }
+    # 去掉 ?v=... 之後如果兩邊完全一樣，這次差異就只有版本戳記。
+    $stripped = $diffLines | ForEach-Object { $_ -replace '\?v=[0-9A-Za-z.\-]+', '?v=' }
+    $adds = @($stripped | Where-Object { $_.StartsWith('+') } | ForEach-Object { $_.Substring(1) })
+    $dels = @($stripped | Where-Object { $_.StartsWith('-') } | ForEach-Object { $_.Substring(1) })
+    if ($adds.Count -gt 0 -and $adds.Count -eq $dels.Count -and
+        (Compare-Object $adds $dels -SyncWindow 0).Count -eq 0) {
+        Write-Host "  index.html 只有版本戳記的差異，視為乾淨" -ForegroundColor DarkGray
+        $gitChanges = @()
+    }
+}
+
 if ($gitChanges -and -not $AllowDirty) {
     throw "部署中止：工作目錄有尚未提交的變更。確認內容後使用 -AllowDirty 進行已授權的緊急部署。"
 }
