@@ -4958,3 +4958,88 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     .makeup-style-actions { flex-wrap:wrap; }
     .makeup-style-actions > button { flex:1 1 auto; }
 }
+
+/* ═══ 我的化妝包 · 主視覺與四主題美編 ═══
+   視覺取自 demo_makeup_flow（Codex 的化妝包美編），流程維持原本的整頁。
+   只用主題變數（--gold / --paper / --white / --ivory-2 / --ink-soft / --line-gold），
+   不寫死顏色：經典奶茶、銀霧、動漫風、黑金四套主題都會覆寫這些變數，自動跟著換。 */
+.mb-hero { position:relative; isolation:isolate; overflow:hidden; display:grid;
+    grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr); gap:28px; align-items:center;
+    margin-bottom:26px; padding:26px 30px; border:1px solid var(--line-gold); border-radius:24px;
+    background:radial-gradient(circle at 26% 50%, var(--white) 0 18%, var(--paper) 48%, var(--ivory-2) 100%);
+    box-shadow:0 0 42px var(--gold-dim); }
+.mb-hero::before { content:'♡  ✦  ✿  ♡'; position:absolute; top:16px; left:22px; z-index:-1;
+    color:var(--gold-dim); font:500 15px/1 var(--serif); letter-spacing:1.1em;
+    animation:mbDoodleDrift 5s ease-in-out infinite; }
+.mb-hero-stage { position:relative; display:grid; place-items:center; width:100%; max-width:360px;
+    aspect-ratio:1.1; margin:0 auto; }
+/* 光暈沿著透明 PNG 的實際輪廓（drop-shadow），不是一顆圓形光球。 */
+.mb-hero-art { position:relative; z-index:2; width:88%; height:auto; object-fit:contain;
+    filter:drop-shadow(0 14px 10px rgba(0,0,0,.14)) drop-shadow(0 0 3px var(--gold))
+           drop-shadow(0 0 12px var(--gold-dim)) drop-shadow(0 0 26px var(--gold-dim));
+    animation:mbArtFloat 4.6s ease-in-out infinite; }
+.mb-doodle, .mb-sticker, .mb-bubble { position:absolute; z-index:3; pointer-events:none; }
+.mb-doodle { color:var(--gold-lt); font-family:var(--serif); text-shadow:0 0 8px var(--gold), 0 0 18px var(--gold-dim);
+    animation:mbDoodlePop 2.8s ease-in-out infinite; }
+.mb-doodle-a { top:10%; left:6%; font-size:22px; }
+.mb-doodle-b { top:30%; right:2%; font-size:28px; animation-delay:.8s; }
+.mb-doodle-c { bottom:10%; left:8%; font-size:22px; animation-delay:1.3s; }
+.mb-sticker { right:4%; bottom:8%; display:grid; place-items:center; width:58px; height:58px;
+    border:2px solid var(--gold-deep); border-radius:50% 45% 52% 46%; color:var(--gold-deep); background:var(--gold-lt);
+    box-shadow:3px 4px 0 var(--gold), 0 0 12px var(--gold-dim);
+    font:700 8px/1.2 var(--sans); letter-spacing:.12em; text-align:center; transform:rotate(9deg); }
+.mb-sticker b { font-size:9px; letter-spacing:.04em; }
+.mb-bubble { border:1px solid var(--edge); border-radius:50%; background:var(--glass);
+    animation:mbBubbleFloat 4s ease-in-out infinite; }
+.mb-bubble-a { left:2%; bottom:24%; width:14px; height:14px; }
+.mb-bubble-b { right:14%; top:12%; width:10px; height:10px; animation-delay:1.1s; }
+
+.mb-hero-copy { min-width:0; }
+.mb-hero-status { display:flex; align-items:center; gap:10px; margin:12px 0 8px; }
+.mb-hero-status b { font-family:var(--cjk); font-size:clamp(22px,2.6vw,30px); font-weight:500; color:var(--ink-soft); letter-spacing:.04em; }
+.mb-live-dot { width:9px; height:9px; flex-shrink:0; border-radius:50%; background:var(--gold);
+    box-shadow:0 0 0 4px var(--gold-dim), 0 0 16px var(--gold); animation:mbDot 1.9s ease-in-out infinite; }
+.mb-hero-copy p { font-family:var(--cjk); font-size:13px; line-height:1.8; color:var(--mid); margin-bottom:14px; }
+/* 八個部位：有的亮、沒有的淡。一眼看出缺哪個部位——這正是分組顯示想達成的事。 */
+.mb-coverage { display:flex; flex-wrap:wrap; gap:7px; }
+.mb-cov { display:inline-flex; align-items:center; gap:6px; padding:6px 11px; border:1px dashed var(--line-gold);
+    border-radius:999px; font-family:var(--cjk); font-size:11.5px; color:var(--muted); background:transparent; }
+.mb-cov.is-own { border-style:solid; border-color:var(--gold); color:var(--ink-soft); background:var(--white);
+    box-shadow:0 0 12px var(--gold-dim); }
+.mb-cov i { font-style:normal; font-family:var(--sans); font-size:10px; min-width:16px; height:16px; padding:0 4px;
+    display:grid; place-items:center; border-radius:99px; color:var(--white); background:var(--gold-deep); }
+
+/* 下方兩個區塊與搜尋結果換成同一套語言：圓角、柔光。 */
+.mb-add, .mb-back { border-radius:20px; box-shadow:0 0 26px var(--gold-dim); }
+.mb-field input, .mb-field select { border-radius:12px; }
+.mb-field input:focus, .mb-field select:focus { outline:none; border-color:var(--gold); box-shadow:0 0 0 3px var(--gold-dim); }
+.mb-hit { border-radius:14px; transition:border-color .25s var(--ease), box-shadow .25s var(--ease), transform .25s var(--ease); }
+.mb-hit:hover:not(:disabled) { transform:translateY(-2px); box-shadow:0 0 16px var(--gold-dim); }
+.mb-hit-img { border-radius:10px; }
+.mb-hit-act { padding:5px 10px; border:1px solid var(--gold); border-radius:999px; }
+.mb-group-n { min-width:22px; height:22px; padding:0 6px; display:inline-grid; place-items:center;
+    border-radius:99px; color:var(--white); background:var(--gold-deep); font-size:11px; }
+
+/* 主題特有的形狀（沿用 demo 的設定）：動漫風是漫畫描邊＋錯位陰影，黑金是銳利直角。 */
+body[data-member-theme="jade"] .mb-hero,
+body[data-member-theme="jade"] .mb-add { border-width:2px; border-color:var(--ink-soft); box-shadow:7px 8px 0 var(--gold-soft); }
+body[data-member-theme="jade"] .mb-hit { border-width:2px; box-shadow:3px 3px 0 var(--gold-lt); }
+body[data-member-theme="noir"] .mb-hero,
+body[data-member-theme="noir"] .mb-add,
+body[data-member-theme="noir"] .mb-back { border-radius:4px; }
+body[data-member-theme="noir"] .mb-hit { border-radius:3px; }
+
+@keyframes mbArtFloat { 0%,100% { transform:translateY(0) rotate(-1.5deg) scale(.98); } 50% { transform:translateY(-8px) rotate(1.5deg) scale(1); } }
+@keyframes mbDoodlePop { 0%,100% { transform:scale(.84) rotate(-8deg); opacity:.66; } 50% { transform:scale(1.12) rotate(8deg); opacity:1; } }
+@keyframes mbBubbleFloat { 0%,100% { transform:translateY(0); opacity:.55; } 50% { transform:translateY(-12px); opacity:1; } }
+@keyframes mbDoodleDrift { 0%,100% { transform:translateY(0); opacity:.6; } 50% { transform:translateY(6px); opacity:1; } }
+@keyframes mbDot { 50% { box-shadow:0 0 0 7px transparent, 0 0 22px var(--gold); } }
+@media (prefers-reduced-motion:reduce) {
+    .mb-hero::before, .mb-hero-art, .mb-doodle, .mb-bubble, .mb-live-dot { animation:none; }
+}
+@media (max-width:760px) {
+    .mb-hero { grid-template-columns:minmax(0,1fr); gap:10px; padding:20px 16px; text-align:center; }
+    .mb-hero-stage { max-width:260px; }
+    .mb-hero-status { justify-content:center; }
+    .mb-coverage { justify-content:center; }
+}

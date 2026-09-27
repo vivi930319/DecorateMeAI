@@ -5895,6 +5895,30 @@ const PageInit = {
         const area = document.getElementById('mbArea');
         if (!area) return;
 
+        // 主視覺（化妝包插圖＋已放入件數＋八個部位的有無）。
+        // 美編來自 demo_makeup_flow，但只取視覺、不取流程：demo 是側邊面板，
+        // 這裡維持原本的整頁與加入方式。顏色全部讀主題變數，四套會員主題自動跟著換。
+        const addForHero = document.querySelector('.mb-add');
+        if (addForHero && !document.getElementById('mbHero')) {
+            const hero = document.createElement('section');
+            hero.id = 'mbHero';
+            hero.className = 'mb-hero';
+            hero.innerHTML = `
+                <div class="mb-hero-stage" aria-hidden="true">
+                    <span class="mb-doodle mb-doodle-a">✦</span><span class="mb-doodle mb-doodle-b">♡</span><span class="mb-doodle mb-doodle-c">✿</span>
+                    <span class="mb-bubble mb-bubble-a"></span><span class="mb-bubble mb-bubble-b"></span>
+                    <img class="mb-hero-art" src="assets/makeup-bag.webp" alt="" decoding="async">
+                    <span class="mb-sticker">YOUR<br><b>BEAUTY</b></span>
+                </div>
+                <div class="mb-hero-copy">
+                    <span class="eyebrow">My Makeup Bag · Personal Edit</span>
+                    <div class="mb-hero-status"><span class="mb-live-dot"></span><b id="mbHeroCount"></b></div>
+                    <p>把手邊的彩妝放進來，選妝容時系統會先用你已經有的。</p>
+                    <div class="mb-coverage" id="mbCoverage"></div>
+                </div>`;
+            addForHero.parentNode.insertBefore(hero, addForHero);
+        }
+
         // 從妝容流程跳來補化妝包的人，補完要能直接回去選妝容。
         // 臉部分析還在，沒有這顆按鈕的話他只能從頭再跑一次分析、再等一次。
         // 用 JS 插入而不是寫進模板：pages/makeupBag.html 與備援模板就不必各改一份。
@@ -5921,6 +5945,22 @@ const PageInit = {
         const renderOwned = (items) => {
             const countEl = document.getElementById('mbCount');
             if (countEl) countEl.textContent = `${items.length} / ${MakeupBagApi.limit} 件`;
+
+            // 主視覺：件數＋八個部位有沒有。部位用 candidateKey 前綴判斷，
+            // 不必等商品目錄載完——目錄是背景載入的，等它的話這塊會空白好幾秒。
+            const heroCount = document.getElementById('mbHeroCount');
+            if (heroCount) heroCount.textContent = items.length ? `已放入 ${items.length} 件` : '化妝包還是空的';
+            const coverageEl = document.getElementById('mbCoverage');
+            if (coverageEl) {
+                const perCat = new Map();
+                for (const item of items) {
+                    const c = MakeupBag.categoryOf(item.candidateKey);
+                    if (c) perCat.set(c, (perCat.get(c) || 0) + 1);
+                }
+                coverageEl.innerHTML = Object.keys(CAT_EN).map(c => perCat.get(c)
+                    ? `<span class="mb-cov is-own">${escapeHtml(c)}<i>${perCat.get(c)}</i></span>`
+                    : `<span class="mb-cov">${escapeHtml(c)}</span>`).join('');
+            }
 
             // 妝容推薦是在後端用這份清單算的，所以「只存在這台裝置」等於功能不會生效。
             // 講清楚比安靜失敗好。

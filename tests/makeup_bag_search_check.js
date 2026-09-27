@@ -48,7 +48,8 @@ const tick = () => new Promise(r => setTimeout(r, 0));
     console: { log() {}, warn() {}, error() {} },
     Array, Object, Promise, Set, Map, String, Number, Boolean, Math, JSON, RegExp,
     setTimeout: (fn) => { fn(); return 0; }, clearTimeout() {},
-    document: { getElementById: (id) => nodes[id] || null },
+    // querySelector 回 null：主視覺與「返回試妝選擇」都掛在 .mb-add 前面，找不到就不插。這支只測搜尋。
+    document: { getElementById: (id) => nodes[id] || null, querySelector: () => null },
     escapeHtml: (v) => String(v == null ? '' : v),
     phBox: () => '',
     showToast() {},
@@ -56,7 +57,7 @@ const tick = () => new Promise(r => setTimeout(r, 0));
     Router: { currentPage: 'makeupBag', generalProductCatalog: [], generalProductLoading: false },
     MakeupBagApi: { limit: 200 },
     MakeupBag: {
-      localList: () => [], _asItems: () => [], has: () => false,
+      localList: () => [], _asItems: () => [], has: () => false, categoryOf: () => '',
       list: () => Promise.resolve({ ok: true, items: [] }),
       add: () => Promise.resolve({ ok: true }),
     },
