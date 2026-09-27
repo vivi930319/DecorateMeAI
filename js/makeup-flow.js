@@ -585,7 +585,7 @@
         pendingStyleModalSelection = preselectedStyleId || Router.selectedStyleId || null;
 
         const draw = () => {
-            modal.innerHTML = `<div class="makeup-style-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Style</span><h2 id="makeupStyleModalTitle">選擇妝容風格</h2><p>選擇一款風格，接著產生你的專屬妝容建議。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="makeup-style-grid">${STYLES.map(style => `<button class="makeup-style-option ${pendingStyleModalSelection === style.id ? 'selected' : ''}" type="button" data-style-id="${escapeHtml(style.id)}"><img src="${escapeHtml(style.img)}" alt="${escapeHtml(style.name)}"><span class="makeup-style-option-copy"><b>${escapeHtml(style.name)}</b><small>${style.tags.map(escapeHtml).join(' · ')}</small>${styleDifficultyHtml(style)}</span></button>`).join('')}</div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-modal-cancel>上一步</button><button class="btn-gold" type="button" data-modal-confirm ${pendingStyleModalSelection ? '' : 'disabled'}>產生妝容建議 →</button></div></div>`;
+            modal.innerHTML = `<div class="makeup-style-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Style</span><h2 id="makeupStyleModalTitle">選擇妝容風格</h2><p>選擇一款風格，接著產生你的專屬妝容建議。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="makeup-style-grid">${STYLES.map(style => `<button class="makeup-style-option ${pendingStyleModalSelection === style.id ? 'selected' : ''}" type="button" data-style-id="${escapeHtml(style.id)}"><img src="${escapeHtml(style.img)}" alt="${escapeHtml(style.name)}"><span class="makeup-style-option-copy"><b>${escapeHtml(style.name)}</b><small>${style.tags.map(escapeHtml).join(' · ')}</small>${styleDifficultyHtml(style)}</span></button>`).join('')}</div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-modal-cancel>上一步</button>${typeof window.switchToMakeupBagPlan === 'function' ? '<button class="btn-outline" type="button" data-use-bag>改用我的化妝包</button>' : ''}<button class="btn-gold" type="button" data-modal-confirm ${pendingStyleModalSelection ? '' : 'disabled'}>產生妝容建議 →</button></div></div>`;
             modal.querySelectorAll('[data-style-id]').forEach(button => {
                 button.onclick = () => {
                     pendingStyleModalSelection = button.dataset.styleId;
@@ -594,6 +594,12 @@
             });
             modal.querySelector('.makeup-style-close').onclick = closeMakeupStyleModal;
             modal.querySelector('[data-modal-cancel]').onclick = closeMakeupStyleModal;
+            // 規劃方式選過就會被記住，系統推薦這邊若沒有出口，選了一次就回不去化妝包路線。
+            const useBag = modal.querySelector('[data-use-bag]');
+            if (useBag) useBag.onclick = () => {
+                closeMakeupStyleModal();
+                window.switchToMakeupBagPlan(pendingStyleModalSelection);
+            };
             modal.querySelector('[data-modal-confirm]').onclick = () => {
                 if (!pendingStyleModalSelection) return;
                 Router.selectedStyleId = pendingStyleModalSelection;

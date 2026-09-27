@@ -498,7 +498,21 @@
     }
     if (!install()) setTimeout(install, 0);
 
+    // 從系統推薦的七選一視窗切到化妝包路線。
+    // 包裡有東西就直接進化妝包推薦並記住這個選擇；空的就開規劃方式視窗——
+    // 那裡會說明為什麼不能選，並給「前往建立化妝包」，不讓使用者卡住。
+    function switchToMakeupBagPlan(styleId) {
+        if (typeof MakeupBag !== 'undefined' && MakeupBag.count()) {
+            MakeupPlan.set('makeupBag');
+            openBagStyleModal(styleId);
+            return;
+        }
+        MakeupPlan.clear();
+        openMakeupPlanModal(styleId);
+    }
+
     window.MakeupPlan = MakeupPlan;
+    window.switchToMakeupBagPlan = switchToMakeupBagPlan;
     window.BagTryOn = BagTryOn;
     window.openMakeupPlanModal = openMakeupPlanModal;
     window.openBagStyleModal = openBagStyleModal;
