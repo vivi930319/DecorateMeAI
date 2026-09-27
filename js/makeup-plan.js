@@ -336,10 +336,11 @@
             };
             modal.querySelector('[data-modal-confirm]').onclick = () => {
                 if (!picked) return;
+                const pickedRow = ranked.find(x => x.style.id === picked)?.row;
+                BagTryOn.record(picked, pickedRow?.contributingProducts, currentChoices(ranked));
                 // 選到化妝包涵蓋不到的風格時，改走系統推薦——這是定案的分流規則。
                 // 路徑 A 的承諾是「用你現有的」，涵蓋不到就沒有東西可推。
                 Router.makeupBagCoveredStyle = rankedIds.has(picked);
-                BagTryOn.record(picked, ranked.find(x => x.style.id === picked)?.row?.contributingProducts, currentChoices(ranked));
                 closeModal('bagStyleModal');
                 confirmStyle(picked);
             };
