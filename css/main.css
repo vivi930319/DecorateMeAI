@@ -4805,7 +4805,9 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 /* ═══ 我的化妝包 ═══
    沿用商品卡（.prod-card / .prod-grid）的既有樣式，這裡只加化妝包特有的部分：
    加入區的控制列、依部位分組的標題、搜尋結果列。
-   不重新定義商品卡——兩邊要看起來是同一套東西。 */
+   不重新定義商品卡——兩邊要看起來是同一套東西。
+   底色一律用 var(--white)，不要寫死 #fff：深色主題會把 --ink-soft 換成淺色，
+   寫死白底就變成白底白字（搜尋欄與搜尋結果曾因此整片看不到字）。 */
 .mb-add { margin-bottom:34px; padding:22px 24px; background:var(--paper); border:1px solid var(--line-gold); }
 .mb-add-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:16px; }
 .mb-add-head h2 { font-family:var(--cjk); font-size:17px; font-weight:500; letter-spacing:.06em; color:var(--gold-deep); }
@@ -4814,14 +4816,15 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 .mb-field { display:flex; flex-direction:column; gap:6px; flex:1 1 180px; min-width:0; }
 .mb-field > span { font-family:var(--sans); font-size:10px; letter-spacing:.2em; text-transform:uppercase; color:var(--gold-deep); }
 .mb-field input, .mb-field select { width:100%; padding:9px 11px; font-family:var(--cjk); font-size:14px;
-    color:var(--ink-soft); background:#fff; border:1px solid var(--edge); }
+    color:var(--ink-soft); background:var(--white); border:1px solid var(--edge); }
+.mb-field input::placeholder { color:var(--muted); }
 .mb-results { margin-top:16px; display:flex; flex-direction:column; gap:8px; }
 .mb-note { font-family:var(--cjk); font-size:13px; color:var(--mid); padding:10px 2px; }
 
 /* 搜尋結果用橫列不用卡片：這裡是「找到並加入」，不是瀏覽商品。
    橫列一次看得到更多筆，也不會跟下面的化妝包內容搶視覺。 */
 .mb-hit { display:flex; align-items:center; gap:12px; width:100%; padding:8px 10px; text-align:left;
-    background:#fff; border:1px solid var(--edge); cursor:pointer; transition:border-color .25s var(--ease); }
+    color:var(--ink-soft); background:var(--white); border:1px solid var(--edge); cursor:pointer; transition:border-color .25s var(--ease); }
 .mb-hit:hover:not(:disabled) { border-color:var(--gold); }
 .mb-hit:disabled { opacity:.55; cursor:default; }
 .mb-hit-img { position:relative; width:46px; height:46px; flex-shrink:0; overflow:hidden; }
@@ -4843,7 +4846,7 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 .mb-remove { position:absolute; right:8px; top:8px; z-index:4; padding:5px 10px;
     font-family:var(--cjk); font-size:11px; color:var(--gold-deep); cursor:pointer;
     background:var(--btn-glass); border:1px solid var(--edge); }
-.mb-remove:hover { background:#fff; }
+.mb-remove:hover { background:var(--white); }
 .mb-remove:disabled { opacity:.5; cursor:default; }
 .mb-gone { font-family:var(--cjk); font-size:11.5px; color:var(--mid); margin-top:4px; }
 
@@ -4910,3 +4913,23 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     background:var(--gold-dim); overflow:hidden; }
 .mp-strength i { display:block; height:100%; border-radius:inherit; background:var(--gold-grad); }
 .mp-used { display:block; font-family:var(--cjk); font-size:10.5px; font-style:normal; color:var(--mid); }
+
+/* 化妝包頁的「回到試妝選擇」。只在已經有臉部分析時出現——
+   從妝容流程跳來補化妝包的人，補完要能直接回去，不必再做一次臉部分析。 */
+.mb-back { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+    margin-bottom:22px; padding:14px 18px; background:var(--paper); border:1px solid var(--line-gold);
+    font-family:var(--cjk); font-size:13px; color:var(--mid); }
+
+/* 化妝包路線：這個妝容沒用到化妝包全部商品時的說明。 */
+.mp-fill-note { margin-top:14px; padding:12px 14px; background:var(--ivory-2);
+    font-family:var(--cjk); font-size:12.5px; line-height:1.7; color:var(--ink-soft); }
+
+/* 化妝包路線的推薦視窗：說明已涵蓋哪些部位、只列缺的。 */
+.rec-bag-note { margin-bottom:14px; padding:12px 14px; background:var(--ivory-2);
+    font-family:var(--cjk); font-size:12.5px; line-height:1.7; color:var(--ink-soft); }
+
+/* 新手難易度（七顆星）。星星用金色，空星用淡色，不要搶過風格名稱。 */
+.style-difficulty { display:flex; align-items:center; gap:6px; margin-top:6px;
+    font-family:var(--cjk); font-size:11px; color:var(--mid); }
+.style-difficulty-stars { color:var(--gold-deep); letter-spacing:1px; font-size:12px; white-space:nowrap; }
+.style-card .style-difficulty { justify-content:center; }

@@ -585,7 +585,7 @@
         pendingStyleModalSelection = preselectedStyleId || Router.selectedStyleId || null;
 
         const draw = () => {
-            modal.innerHTML = `<div class="makeup-style-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Style</span><h2 id="makeupStyleModalTitle">選擇妝容風格</h2><p>選擇一款風格，接著產生你的專屬妝容建議。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="makeup-style-grid">${STYLES.map(style => `<button class="makeup-style-option ${pendingStyleModalSelection === style.id ? 'selected' : ''}" type="button" data-style-id="${escapeHtml(style.id)}"><img src="${escapeHtml(style.img)}" alt="${escapeHtml(style.name)}"><span class="makeup-style-option-copy"><b>${escapeHtml(style.name)}</b><small>${style.tags.map(escapeHtml).join(' · ')}</small></span></button>`).join('')}</div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-modal-cancel>上一步</button><button class="btn-gold" type="button" data-modal-confirm ${pendingStyleModalSelection ? '' : 'disabled'}>產生妝容建議 →</button></div></div>`;
+            modal.innerHTML = `<div class="makeup-style-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Style</span><h2 id="makeupStyleModalTitle">選擇妝容風格</h2><p>選擇一款風格，接著產生你的專屬妝容建議。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="makeup-style-grid">${STYLES.map(style => `<button class="makeup-style-option ${pendingStyleModalSelection === style.id ? 'selected' : ''}" type="button" data-style-id="${escapeHtml(style.id)}"><img src="${escapeHtml(style.img)}" alt="${escapeHtml(style.name)}"><span class="makeup-style-option-copy"><b>${escapeHtml(style.name)}</b><small>${style.tags.map(escapeHtml).join(' · ')}</small>${styleDifficultyHtml(style)}</span></button>`).join('')}</div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-modal-cancel>上一步</button><button class="btn-gold" type="button" data-modal-confirm ${pendingStyleModalSelection ? '' : 'disabled'}>產生妝容建議 →</button></div></div>`;
             modal.querySelectorAll('[data-style-id]').forEach(button => {
                 button.onclick = () => {
                     pendingStyleModalSelection = button.dataset.styleId;
@@ -724,7 +724,7 @@
                 <div class="lookbook-actions">
                     <button class="btn-outline" type="button" data-prev-style>上一步：重新選擇風格</button>
                     <button class="btn-outline" type="button" data-save-look>收藏這次妝容</button>
-                    <button class="btn-gold" type="button" data-products>查看推薦商品 →</button>
+                    <button class="btn-gold" type="button" data-products>${window.BagTryOn?.active() ? '查看化妝包缺少的商品 →' : '查看推薦商品 →'}</button>
                 </div>
             </section>`;
 

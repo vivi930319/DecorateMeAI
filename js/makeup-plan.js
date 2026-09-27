@@ -40,6 +40,57 @@
         },
     ];
 
+    // ── 化妝包路線這次試妝用到哪些商品 ──────────────────────────────
+    //
+    // 選定妝容時記在 Router.makeupBagPlan：{ styleId, usedKeys, bagKeys }。
+    // 渲染完成後的推薦視窗靠它決定「只推化妝包沒涵蓋的部位」——
+    // 否則會推一支使用者包裡已經有、而且剛剛才用來試妝的口紅。
+    //
+    // 只存在記憶體：重新整理後就回到一般推薦。寧可多推，也不要拿一份
+    // 過期的化妝包紀錄把該推的部位藏掉。
+    const BagTryOn = {
+        // contributingProducts 目前是 candidateKey 字串陣列；也接受 { candidateKey } 物件，
+        // 上游改形狀時不會靜默變成 0 件。
+        keysOf(list) {
+            return (Array.isArray(list) ? list : [])
+                .map(x => (typeof x === 'string' ? x : x?.candidateKey))
+                .map(k => String(k || '').trim())
+                .filter(Boolean);
+        },
+        // 這個妝容實際會用到的化妝包商品。粉底不參與風格反推（走膚色色差），
+        // 但它不分風格、一定用得上，所以包裡有粉底就算在「用到」裡。
+        usedKeys(contributing, bagKeys) {
+            const used = new Set(this.keysOf(contributing));
+            for (const k of bagKeys || []) if (MakeupBag.categoryOf(k) === '底妝') used.add(k);
+            return [...used];
+        },
+        record(styleId, contributing) {
+            const bagKeys = MakeupBag.localList();
+            Router.makeupBagPlan = { styleId, bagKeys, usedKeys: this.usedKeys(contributing, bagKeys) };
+        },
+        clear() { Router.makeupBagPlan = null; },
+        // 風格要對得上：使用者之後改走系統推薦、或換了風格，就不再套用。
+        active() {
+            const plan = Router.makeupBagPlan;
+            return plan && plan.styleId === Router.selectedStyleId ? plan : null;
+        },
+        coveredCats(plan = this.active()) {
+            const cats = new Set();
+            for (const k of plan?.usedKeys || []) {
+                const c = MakeupBag.categoryOf(k);
+                if (c) cats.add(c);
+            }
+            return cats;
+        },
+        // 推薦商品只留化妝包沒涵蓋的部位。不在化妝包路線時原樣回傳。
+        filter(products) {
+            const plan = this.active();
+            if (!plan) return products;
+            const covered = this.coveredCats(plan);
+            return (products || []).filter(p => !covered.has(p.cat));
+        },
+    };
+
     function closeModal(id) {
         document.getElementById(id)?.remove();
     }
@@ -115,7 +166,7 @@
                 MakeupPlan.set(picked);
                 closeModal('makeupPlanModal');
                 if (picked === 'makeupBag') openBagStyleModal(preselectedStyleId);
-                else window.__openStyleModalDirect(preselectedStyleId);
+                else { BagTryOn.clear(); window.__openStyleModalDirect(preselectedStyleId); }
             };
         };
         draw();
@@ -201,7 +252,8 @@
                         </button>`).join('')}
                     </div>` : ''}
 
-                    ${noticeHtml()}`);
+                    ${noticeHtml()}
+                    ${fillNoteHtml(ranked)}`);
 
             modal.innerHTML = `<div class="makeup-style-dialog">
                 <div class="makeup-style-head">
@@ -236,6 +288,7 @@
             };
             const fallback = modal.querySelector('[data-fallback]');
             if (fallback) fallback.onclick = () => {
+                BagTryOn.clear();
                 closeModal('bagStyleModal');
                 window.__openStyleModalDirect(picked);
             };
@@ -251,6 +304,7 @@
                 // 選到化妝包涵蓋不到的風格時，改走系統推薦——這是定案的分流規則。
                 // 路徑 A 的承諾是「用你現有的」，涵蓋不到就沒有東西可推。
                 Router.makeupBagCoveredStyle = rankedIds.has(picked);
+                BagTryOn.record(picked, ranked.find(x => x.style.id === picked)?.row?.contributingProducts);
                 closeModal('bagStyleModal');
                 confirmStyle(picked);
             };
@@ -268,6 +322,19 @@
                        '妝容推薦是在伺服器上算的，需要雲端那份資料。';
             }
             return result?.error || '化妝包推薦暫時無法使用。';
+        };
+
+        // 選到的妝容沒用到化妝包全部商品時，先講清楚剩下的部位怎麼處理——
+        // 否則使用者會以為試妝圖就是「只用我包裡的東西」畫出來的。
+        const fillNoteHtml = (ranked) => {
+            if (!picked || !result?.ok) return '';
+            const bagKeys = MakeupBag.localList();
+            const row = ranked.find(x => x.style.id === picked)?.row;
+            const used = BagTryOn.usedKeys(row?.contributingProducts, bagKeys).length;
+            if (!bagKeys.length || used >= bagKeys.length) return '';
+            const name = escapeHtml(styleById(picked)?.name || '');
+            return `<div class="mp-fill-note">這個妝容會用到你化妝包裡的 ${used} 件（共 ${bagKeys.length} 件）。` +
+                `若未使用您化妝包內的彩妝品，剩餘的會用我們系統推薦最符合「${name}」的商品為您試妝。</div>`;
         };
 
         // 覆蓋狀況要說出來，不能只給結論：
@@ -424,6 +491,7 @@
                 return;
             }
             // 記著要用化妝包、但包被清空了：不要卡住，直接走系統推薦。
+            BagTryOn.clear();
             window.__openStyleModalDirect(preselectedStyleId);
         };
         return true;
@@ -431,6 +499,7 @@
     if (!install()) setTimeout(install, 0);
 
     window.MakeupPlan = MakeupPlan;
+    window.BagTryOn = BagTryOn;
     window.openMakeupPlanModal = openMakeupPlanModal;
     window.openBagStyleModal = openBagStyleModal;
     window.openStyleMoreModal = openStyleMoreModal;

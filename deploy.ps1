@@ -102,6 +102,9 @@ Invoke-DeployCheck "妝容校對欄位"            @('tests/curated_style_fields
 # 臉部照片 base64；渲染端超過 64 KB 會回 413，而推薦端沒有大小上限——那邊漏出去
 # 會**成功送出**，不會有任何錯誤訊息。三處白名單散在兩個檔案，漏改不會報錯。
 Invoke-DeployCheck "資料包傳輸白名單"        @('tests/analysis_package_transport_check.js', '.')
+# 化妝包路線試妝後，推薦只列化妝包沒涵蓋的部位；換風格或改走系統推薦就回到完整推薦。
+# 也守住新手難易度的七級順序。
+Invoke-DeployCheck "化妝包試妝後的推薦"      @('tests/bag_tryon_filter_check.js', '.')
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {

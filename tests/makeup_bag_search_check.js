@@ -63,6 +63,8 @@ const tick = () => new Promise(r => setTimeout(r, 0));
     Fav: { list: () => [] },
     Cart: { list: () => [] },
     productCatalogLoaded: () => true,
+    // 沒有臉部分析：「返回試妝選擇」不出現，這支只測搜尋。
+    hasStartedJourney: () => false,
     loadGeneralProductCatalog() {},
     loadProductFacets: (cb) => cb && cb(),
     productFacetBrands: () => [],

@@ -18,6 +18,16 @@ const PAGE_ASSET_VERSION = (() => {
 // ═══ 共用 UI 片段 ═══
 const HEART_SVG = '<span class="pulse"></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.4S3.6 15.6 3.6 9.4C3.6 6.5 5.7 4.7 8 4.7c1.7 0 3.1 1 4 2.4 0.9-1.4 2.3-2.4 4-2.4 2.3 0 4.4 1.8 4.4 4.7 0 6.2-8.4 11-8.4 11z"/></svg>';
 const CAT_EN = { '底妝':'FOUNDATION','眼影':'EYESHADOW','眼線/睫毛':'EYES & LASH','唇彩':'LIP COLOR','腮紅':'BLUSH','眉毛彩妝':'BROW','修容':'CONTOUR','打亮':'HIGHLIGHT' };
+// 新手難易度：七顆星，實心的數量 = STYLES[].difficulty。
+// 數字另外寫在 aria-label 與文字裡——只有星星的話，讀螢幕的人聽到的是七個符號。
+const STYLE_DIFFICULTY_MAX = 7;
+function styleDifficultyHtml(style) {
+    const level = Math.max(0, Math.min(STYLE_DIFFICULTY_MAX, Number(style?.difficulty) || 0));
+    if (!level) return '';
+    const stars = '★'.repeat(level) + '☆'.repeat(STYLE_DIFFICULTY_MAX - level);
+    return `<span class="style-difficulty" aria-label="新手難易度 ${level} / ${STYLE_DIFFICULTY_MAX}">` +
+        `<span class="style-difficulty-label">難易度</span><span class="style-difficulty-stars" aria-hidden="true">${stars}</span></span>`;
+}
 function phBox(cls, label, src){
     const cap = (cls.indexOf('product-thumb')>-1) ? '' : `<span class="ph-cap">${escapeHtml(label||'')}</span>`;
     const img = src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(label||'')}" loading="lazy" decoding="async" onload="this.classList.add('loaded')">` : '';
@@ -3150,7 +3160,7 @@ function openMakeupStyleModal(preselectedStyleId) {
     }
     pendingStyleModalSelection = preselectedStyleId || Router.selectedStyleId || null;
     const renderOptions = () => {
-        modal.innerHTML = `<div class="makeup-style-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Style</span><h2 id="makeupStyleModalTitle">選擇妝容風格</h2><p>選擇一款風格，接著查看妝容建議。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="makeup-style-grid">${STYLES.map(style=>`<button class="makeup-style-option ${pendingStyleModalSelection===style.id?'selected':''}" type="button" data-style-id="${escapeHtml(style.id)}"><img src="${escapeHtml(style.img)}" alt="${escapeHtml(style.name)}"><span class="makeup-style-option-copy"><b>${escapeHtml(style.name)}</b><small>${style.tags.map(escapeHtml).join(' · ')}</small></span></button>`).join('')}</div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-modal-cancel>稍後再選</button><button class="btn-gold" type="button" data-modal-confirm ${pendingStyleModalSelection?'':'disabled'}>確認風格 →</button></div></div>`;
+        modal.innerHTML = `<div class="makeup-style-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Style</span><h2 id="makeupStyleModalTitle">選擇妝容風格</h2><p>選擇一款風格，接著查看妝容建議。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="makeup-style-grid">${STYLES.map(style=>`<button class="makeup-style-option ${pendingStyleModalSelection===style.id?'selected':''}" type="button" data-style-id="${escapeHtml(style.id)}"><img src="${escapeHtml(style.img)}" alt="${escapeHtml(style.name)}"><span class="makeup-style-option-copy"><b>${escapeHtml(style.name)}</b><small>${style.tags.map(escapeHtml).join(' · ')}</small>${styleDifficultyHtml(style)}</span></button>`).join('')}</div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-modal-cancel>稍後再選</button><button class="btn-gold" type="button" data-modal-confirm ${pendingStyleModalSelection?'':'disabled'}>確認風格 →</button></div></div>`;
         modal.querySelectorAll('[data-style-id]').forEach(button=>button.onclick=()=>{pendingStyleModalSelection=button.dataset.styleId;renderOptions();});
         modal.querySelector('.makeup-style-close').onclick=closeMakeupStyleModal; modal.querySelector('[data-modal-cancel]').onclick=closeMakeupStyleModal;
         modal.querySelector('[data-modal-confirm]').onclick=()=>{if(!pendingStyleModalSelection)return;Router.selectedStyleId=pendingStyleModalSelection;closeMakeupStyleModal();Router.go('suggestion');};
@@ -3246,14 +3256,28 @@ function openProductRecommendationModal(){
     modal.id='productRecommendationModal';modal.className='makeup-style-modal open';modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');
     // 使用者個人膚色色號改放在粉底卡片旁邊；推薦視窗標題不再對所有品項共用
     // 一列膚色資訊，避免使用者以為唇彩、眼影等也要依膚色色號挑選。
-    modal.innerHTML=`<div class="makeup-style-dialog product-recommendation-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Products</span><h2>個人化商品推薦</h2><p>粉底、腮紅與唇彩會顯示商品色號；粉底另有個人膚色比較。</p></div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="prod-grid recommendation-modal-grid"></div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-close>稍後再看</button><button class="btn-gold" type="button" data-all>查看所有商品</button></div></div>`;
+    // 化妝包路線：這次試妝已經用了化妝包裡的商品，只推化妝包沒涵蓋的部位。
+    // 推整份清單的話，會推一支使用者包裡已經有、剛剛才拿來試妝的同類商品。
+    const bagPlan=(typeof BagTryOn!=='undefined')?BagTryOn.active():null;
+    const bagCats=bagPlan?[...BagTryOn.coveredCats(bagPlan)]:[];
+    const headHtml=bagPlan
+        ?`<h2>補齊化妝包缺少的部位</h2><p>${bagCats.length?`${escapeHtml(bagCats.join('、'))}這次用你化妝包裡的商品；`:''}以下只列出其他部位的系統推薦。</p>`
+        :'<h2>個人化商品推薦</h2><p>粉底、腮紅與唇彩會顯示商品色號；粉底另有個人膚色比較。</p>';
+    modal.innerHTML=`<div class="makeup-style-dialog product-recommendation-dialog"><div class="makeup-style-head"><div><span class="eyebrow">Products</span>${headHtml}</div><button class="makeup-style-close" type="button" aria-label="關閉">×</button></div><div class="prod-grid recommendation-modal-grid"></div><div class="makeup-style-actions"><button class="btn-outline" type="button" data-close>稍後再看</button><button class="btn-gold" type="button" data-all>查看所有商品</button></div></div>`;
     document.body.appendChild(modal);
     const grid=modal.querySelector('.recommendation-modal-grid');
 
     // 推薦彈窗與商品頁共用同一份後端回傳結果；前端不重排、不補圖、不補價格。
     const draw=()=>{
         if(!document.getElementById('productRecommendationModal'))return;
-        const products=getRecommendedProductCatalog();
+        const allProducts=getRecommendedProductCatalog();
+        const products=bagPlan?BagTryOn.filter(allProducts):allProducts;
+        // 有推薦、但全落在化妝包已涵蓋的部位：那是「不用再買」，不是「推薦壞了」。
+        if(bagPlan&&allProducts.length&&!products.length){
+            grid.classList.remove('prod-grid');
+            grid.innerHTML='<div class="empty-state">這次妝容用到的部位，你的化妝包都有了，不需要再添購。</div>';
+            return;
+        }
         if(!products.length){
             grid.classList.remove('prod-grid');
             // 載入中／後端回報空結果／單純還沒整理好，是三種不同的狀況，
@@ -5031,6 +5055,7 @@ const PageInit = {
                     <div class="sc-visual">${phBox('', s.name, s.img)}</div>
                     <div class="sc-name">${s.name}</div>
                     <div class="sc-tags">${s.tags.map(t=>`<span class="sc-tag">${t}</span>`).join('')}</div>
+                    ${styleDifficultyHtml(s)}
                 </div>
             `).join('');
             grid.querySelectorAll('.style-card').forEach(card => {
@@ -5215,7 +5240,10 @@ const PageInit = {
             const cats = CATEGORIES.map(c => c.id);
             const chips = [`<button class="chip ${filter==='all'?'active':''}" data-filter="all">全部<span class="chip-en">All</span></button>`]
                 .concat(cats.map(id => `<button class="chip ${filter===id?'active':''}" data-filter="${id}">${id}</button>`)).join('');
-            const recommended = getRecommendedProductCatalog();
+            // 化妝包路線只列化妝包沒涵蓋的部位，跟渲染結果頁的推薦視窗同一個規則。
+            const recommended = (typeof BagTryOn !== 'undefined')
+                ? BagTryOn.filter(getRecommendedProductCatalog())
+                : getRecommendedProductCatalog();
             // 後端已決定個人化推薦順序；這裡只做畫面上的分類／品牌／價格篩選，
             // 不重排推薦分數，也不回頭用一般目錄補個人化商品。
             const recommendedAll = recommended;
@@ -5866,6 +5894,22 @@ const PageInit = {
     makeupBag() {
         const area = document.getElementById('mbArea');
         if (!area) return;
+
+        // 從妝容流程跳來補化妝包的人，補完要能直接回去選妝容。
+        // 臉部分析還在，沒有這顆按鈕的話他只能從頭再跑一次分析、再等一次。
+        // 用 JS 插入而不是寫進模板：pages/makeupBag.html 與備援模板就不必各改一份。
+        if (hasStartedJourney() && !document.getElementById('mbBack')) {
+            const addSection = document.querySelector('.mb-add');
+            if (addSection) {
+                const back = document.createElement('div');
+                back.id = 'mbBack';
+                back.className = 'mb-back';
+                back.innerHTML = '<span>臉部分析已完成，整理好化妝包後可以直接回去選妝容。</span>' +
+                    '<button type="button" class="btn-gold" data-mb-back>← 返回試妝選擇</button>';
+                back.querySelector('[data-mb-back]').onclick = () => openMakeupStyleModal(Router.selectedStyleId);
+                addSection.parentNode.insertBefore(back, addSection);
+            }
+        }
 
         // 商品目錄是解析 candidateKey 的依據，沒有它畫不出任何一張卡。
         if (!productCatalogLoaded() && !Router.generalProductLoading) {

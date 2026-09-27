@@ -4571,6 +4571,16 @@ const MakeupBag = {
     _mark(state, error) { this.syncState = state; this.syncError = error || ''; },
 
     has(candidateKey) { return this.localList().includes(candidateKey); },
+    // candidateKey 的前綴是商品 type slug（lipsticks:2813 → 唇彩）。
+    // 分類表只有 _normalizeProduct 裡那一張，借它來查，不另抄一份。
+    // 認不出來時它會退回「底妝」，但 apiType 會是 null——用這點擋掉，
+    // 否則推薦會誤以為使用者已經有粉底。
+    categoryOf(candidateKey) {
+        const slug = String(candidateKey || '').split(':')[0].trim();
+        if (!slug) return '';
+        const probe = Api._normalizeProduct({ type: slug, name: slug });
+        return probe && probe.apiType ? probe.cat : '';
+    },
     count() { return this.localList().length; },
     isFull() { return this.count() >= MakeupBagApi.limit; },
     _asItems(keys) { return keys.map(k => ({ candidateKey: k, itemId: null, unavailable: false })); },
