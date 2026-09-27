@@ -59,14 +59,39 @@
         },
         // 這個妝容實際會用到的化妝包商品。粉底不參與風格反推（走膚色色差），
         // 但它不分風格、一定用得上，所以包裡有粉底就算在「用到」裡。
-        usedKeys(contributing, bagKeys) {
+        //
+        // choices 是使用者在「同一類有好幾件」時挑的那一件：{ 唇彩: 'lipsticks:2734' }。
+        // 有挑的類別只留那一件——一個部位試妝只會用一件，其他同類的不算「這次用到」。
+        usedKeys(contributing, bagKeys, choices = null) {
             const used = new Set(this.keysOf(contributing));
             for (const k of bagKeys || []) if (MakeupBag.categoryOf(k) === '底妝') used.add(k);
-            return [...used];
+            let keys = [...used];
+            if (choices) {
+                keys = keys.filter(k => {
+                    const chosen = choices[MakeupBag.categoryOf(k)];
+                    return !chosen || chosen === k;
+                });
+            }
+            return keys;
         },
-        record(styleId, contributing) {
+        // 這個妝容用得到、而且同一類有兩件以上的：[['唇彩', [key, key]], ...]。
+        // 只算用得到的——不適合這款妝的那支口紅，本來就不會拿來試，不必讓人選。
+        multiCategories(contributing, bagKeys) {
+            const byCat = new Map();
+            for (const k of this.usedKeys(contributing, bagKeys)) {
+                const c = MakeupBag.categoryOf(k);
+                if (!c) continue;
+                if (!byCat.has(c)) byCat.set(c, []);
+                byCat.get(c).push(k);
+            }
+            return [...byCat.entries()].filter(([, keys]) => keys.length >= 2);
+        },
+        record(styleId, contributing, choices = null) {
             const bagKeys = MakeupBag.localList();
-            Router.makeupBagPlan = { styleId, bagKeys, usedKeys: this.usedKeys(contributing, bagKeys) };
+            Router.makeupBagPlan = {
+                styleId, bagKeys, choices: choices ? { ...choices } : null,
+                usedKeys: this.usedKeys(contributing, bagKeys, choices),
+            };
         },
         clear() { Router.makeupBagPlan = null; },
         // 風格要對得上：使用者之後改走系統推薦、或換了風格，就不再套用。
@@ -184,6 +209,8 @@
         const modal = shell('bagStyleModal', 'bagStyleModalTitle');
         let picked = preselectedStyleId || Router.selectedStyleId || null;
         let result = null;
+        // 同一類有好幾件時，這次要用哪一件。換妝容就重選——每款妝用得到的商品不同。
+        let choices = {};
         let loading = true;
 
         const styleById = (id) => STYLES.find(s => s.id === id) || null;
@@ -252,6 +279,7 @@
                         </button>`).join('')}
                     </div>` : ''}
 
+                    ${chooseHtml(ranked)}
                     ${noticeHtml()}
                     ${fillNoteHtml(ranked)}`);
 
@@ -273,7 +301,14 @@
             </div>`;
 
             modal.querySelectorAll('[data-style-id]').forEach(btn => {
-                btn.onclick = () => { picked = btn.dataset.styleId; draw(); };
+                btn.onclick = () => {
+                    if (picked !== btn.dataset.styleId) choices = {};
+                    picked = btn.dataset.styleId;
+                    draw();
+                };
+            });
+            modal.querySelectorAll('[data-choose-key]').forEach(btn => {
+                btn.onclick = () => { choices[btn.dataset.chooseCat] = btn.dataset.chooseKey; draw(); };
             });
             modal.querySelector('.makeup-style-close').onclick = () => closeModal('bagStyleModal');
             modal.querySelector('[data-replan]').onclick = () => {
@@ -304,7 +339,7 @@
                 // 選到化妝包涵蓋不到的風格時，改走系統推薦——這是定案的分流規則。
                 // 路徑 A 的承諾是「用你現有的」，涵蓋不到就沒有東西可推。
                 Router.makeupBagCoveredStyle = rankedIds.has(picked);
-                BagTryOn.record(picked, ranked.find(x => x.style.id === picked)?.row?.contributingProducts);
+                BagTryOn.record(picked, ranked.find(x => x.style.id === picked)?.row?.contributingProducts, currentChoices(ranked));
                 closeModal('bagStyleModal');
                 confirmStyle(picked);
             };
@@ -324,13 +359,56 @@
             return result?.error || '化妝包推薦暫時無法使用。';
         };
 
+        // 同一類有兩件以上時讓使用者挑這次用哪一件。預設第一件，不擋「產生妝容建議」——
+        // 多數人不在意，硬要每類都點一次只是多一道關卡。
+        const multiFor = (ranked) => {
+            if (!picked || !result?.ok) return [];
+            const row = ranked.find(x => x.style.id === picked)?.row;
+            return BagTryOn.multiCategories(row?.contributingProducts, MakeupBag.localList());
+        };
+        const currentChoices = (ranked) => {
+            const out = {};
+            for (const [cat, keys] of multiFor(ranked)) {
+                out[cat] = keys.includes(choices[cat]) ? choices[cat] : keys[0];
+            }
+            return out;
+        };
+        const chooseHtml = (ranked) => {
+            const multi = multiFor(ranked);
+            if (!multi.length) return '';
+            // 商品名稱與圖片從商品目錄查。目錄是背景載入的，還沒到就先顯示「載入中」，
+            // 載完再重畫；不擋操作。
+            if (typeof productCatalogLoaded === 'function' && !productCatalogLoaded()
+                && typeof loadGeneralProductCatalog === 'function' && !Router.generalProductLoading) {
+                loadGeneralProductCatalog(() => { if (document.getElementById('bagStyleModal')) draw(); });
+            }
+            const catalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
+            const byKey = new Map(catalog.filter(p => p.candidateKey).map(p => [p.candidateKey, p]));
+            const chosen = currentChoices(ranked);
+            return `<div class="mp-section-title">同一類有好幾件，這次要用哪一件？</div>
+                <div class="mp-choose">${multi.map(([cat, keys]) => `
+                    <div class="mp-choose-row">
+                        <b class="mp-choose-cat">${escapeHtml(cat)}</b>
+                        <div class="mp-choose-opts" role="radiogroup" aria-label="${escapeHtml(cat)}要用哪一件">${keys.map(k => {
+                            const p = byKey.get(k);
+                            const on = chosen[cat] === k;
+                            return `<button type="button" class="mp-choose-opt${on ? ' selected' : ''}" role="radio"
+                                aria-checked="${on}" data-choose-cat="${escapeHtml(cat)}" data-choose-key="${escapeHtml(k)}">
+                                <span class="mp-choose-img">${p ? phBox('', p.name, p.img) : ''}</span>
+                                <span class="mp-choose-copy"><b>${escapeHtml(p ? p.name : (Router.generalProductLoading ? '商品資料載入中…' : k))}</b>
+                                <small>${escapeHtml(p?.brand || '')}</small></span>
+                            </button>`;
+                        }).join('')}</div>
+                    </div>`).join('')}</div>`;
+        };
+
         // 選到的妝容沒用到化妝包全部商品時，先講清楚剩下的部位怎麼處理——
         // 否則使用者會以為試妝圖就是「只用我包裡的東西」畫出來的。
         const fillNoteHtml = (ranked) => {
             if (!picked || !result?.ok) return '';
             const bagKeys = MakeupBag.localList();
             const row = ranked.find(x => x.style.id === picked)?.row;
-            const used = BagTryOn.usedKeys(row?.contributingProducts, bagKeys).length;
+            const used = BagTryOn.usedKeys(row?.contributingProducts, bagKeys, currentChoices(ranked)).length;
             if (!bagKeys.length || used >= bagKeys.length) return '';
             const name = escapeHtml(styleById(picked)?.name || '');
             return `<div class="mp-fill-note">這個妝容會用到你化妝包裡的 ${used} 件（共 ${bagKeys.length} 件）。` +

@@ -67,6 +67,20 @@ check('usedKeys 含粉底共 3 件', Router.makeupBagPlan.usedKeys.length === 3)
 BagTryOn.record('hongKong', [{ candidateKey: 'lipsticks:2813' }]);
 check('contributingProducts 物件形狀也認得', BagTryOn.coveredCats().has('唇彩'));
 
+// 同一類有兩件以上：讓使用者挑這次用哪一件
+bag = ['lipsticks:1', 'lipsticks:2', 'lipsticks:3', 'blushes:1', 'foundations:7', 'foundations:8'];
+const contributing = ['lipsticks:1', 'lipsticks:2', 'blushes:1'];   // lipsticks:3 不適合這款妝
+const multi = BagTryOn.multiCategories(contributing, bag);
+const multiDesc = multi.map(([c, ks]) => `${c}:${ks.length}`).join(',');
+check(`只列出用得到且同類 ≥2 件的類別（得到 ${multiDesc}）`, multiDesc === '唇彩:2,底妝:2');
+check('不適合這款妝的那支不列入選項', !multi.find(([c]) => c === '唇彩')[1].includes('lipsticks:3'));
+
+BagTryOn.record('hongKong', contributing, { 唇彩: 'lipsticks:2', 底妝: 'foundations:8' });
+const used = Router.makeupBagPlan.usedKeys.slice().sort().join(',');
+check(`挑了之後每類只留那一件（得到 ${used}）`, used === 'blushes:1,foundations:8,lipsticks:2');
+check('choices 有記下來', Router.makeupBagPlan.choices.唇彩 === 'lipsticks:2');
+check('沒挑的類別不受影響', BagTryOn.usedKeys(contributing, bag, { 唇彩: 'lipsticks:1' }).includes('blushes:1'));
+
 // 換了風格 → 不再套用
 Router.selectedStyleId = 'yandere';
 check('換風格後回到完整推薦', BagTryOn.filter(products).length === products.length);

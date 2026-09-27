@@ -5043,3 +5043,24 @@ body[data-member-theme="noir"] .mb-hit { border-radius:3px; }
     .mb-hero-status { justify-content:center; }
     .mb-coverage { justify-content:center; }
 }
+
+/* 化妝包路線：同一類有好幾件時，這次要用哪一件。 */
+.mp-choose { display:grid; gap:12px; }
+.mp-choose-row { display:grid; grid-template-columns:84px minmax(0,1fr); gap:10px; align-items:start; }
+.mp-choose-cat { padding-top:10px; font-family:var(--cjk); font-size:13px; font-weight:500; color:var(--ink-soft); }
+.mp-choose-opts { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:8px; }
+.mp-choose-opt { display:flex; align-items:center; gap:10px; min-width:0; padding:8px 10px; text-align:left;
+    color:var(--ink-soft); background:var(--white); border:1px solid var(--edge); border-radius:14px; cursor:pointer;
+    transition:border-color .2s var(--ease), box-shadow .2s var(--ease); }
+.mp-choose-opt:hover { border-color:var(--gold); }
+.mp-choose-opt.selected { border-color:var(--gold-deep); box-shadow:0 0 0 2px var(--gold-dim), 0 0 14px var(--gold-dim); }
+.mp-choose-img { position:relative; width:40px; height:40px; flex-shrink:0; overflow:hidden; border-radius:10px; }
+.mp-choose-img .ph { position:absolute; inset:0; }
+.mp-choose-copy { min-width:0; display:flex; flex-direction:column; gap:2px; }
+.mp-choose-copy b { font-family:var(--cjk); font-size:12.5px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mp-choose-copy small { font-family:var(--cjk); font-size:10.5px; color:var(--mid); }
+@media (max-width:760px) {
+    .mp-choose-row { grid-template-columns:minmax(0,1fr); gap:6px; }
+    .mp-choose-cat { padding-top:0; }
+    .mp-choose-opts { grid-template-columns:minmax(0,1fr); }
+}
