@@ -4933,3 +4933,25 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     font-family:var(--cjk); font-size:11px; color:var(--mid); }
 .style-difficulty-stars { color:var(--gold-deep); letter-spacing:1px; font-size:12px; white-space:nowrap; }
 .style-card .style-difficulty { justify-content:center; }
+
+/* 手機版風格選擇視窗跑版：格線欄位用 1fr 時，最小寬度等於內容寬度，
+   而卡片裡那行標籤設了不換行（要靠刪節號收尾），於是右欄被撐出畫面外。
+   minmax(0,1fr) 加上卡片 min-width:0，刪節號才真的生效。
+   難易度那一行在窄卡片裡允許換行，不再撐寬。 */
+.makeup-style-grid { grid-template-columns:repeat(4,minmax(0,1fr)); }
+/* 上一行會蓋掉化妝包視窗的欄寬，這兩組要用較高權重重申。 */
+.makeup-style-grid.mp-grid { grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
+.makeup-style-grid.mp-grid-small { grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); }
+.makeup-style-option { min-width:0; }
+.style-difficulty { flex-wrap:wrap; row-gap:2px; }
+@media (max-width:760px) {
+    .makeup-style-grid,
+    .makeup-style-grid.mp-grid-small { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .makeup-style-grid.mp-grid { grid-template-columns:minmax(0,1fr); }
+    .makeup-style-option-copy { padding:11px; }
+    .style-difficulty { gap:4px; font-size:10.5px; }
+    .style-difficulty-stars { font-size:11px; letter-spacing:0; }
+    /* 化妝包視窗底部有三顆按鈕，手機上排不下一列：允許換行，每列撐滿。 */
+    .makeup-style-actions { flex-wrap:wrap; }
+    .makeup-style-actions > button { flex:1 1 auto; }
+}
