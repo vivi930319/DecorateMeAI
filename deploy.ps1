@@ -105,6 +105,19 @@ Invoke-DeployCheck "資料包傳輸白名單"        @('tests/analysis_package_t
 # 化妝包路線試妝後，推薦只列化妝包沒涵蓋的部位；換風格或改走系統推薦就回到完整推薦。
 # 也守住新手難易度的七級順序。
 Invoke-DeployCheck "化妝包試妝後的推薦"      @('tests/bag_tryon_filter_check.js', '.')
+# 其餘測試也全部跑一次，跟 GitHub 的 Frontend CI 同一份清單（tests/*.js 全部，傳 `.`）。
+# 2026-09-27：上面只挑了十幾支，CI 跑全部。color_compare 與 shade_recommendation_flow
+# 從 09-25 起一直是紅的，部署卻次次通過——CI 紅了兩天、推了八次才有人看到通知。
+# 部署前的檢查跟 CI 不一致，等於有一半的測試只在事後才看。
+Get-ChildItem (Join-Path $PSScriptRoot "tests") -Filter *.js | Sort-Object Name | ForEach-Object {
+    $rel = "tests/$($_.Name)"
+    & node $rel . *> $null
+    if ($LASTEXITCODE -ne 0) {
+        & node $rel .
+        throw "部署中止：$rel 沒有通過（離開碼 $LASTEXITCODE）。這支 GitHub CI 也會跑，修好再部署。"
+    }
+}
+Write-Host "  tests/*.js 全部通過（與 Frontend CI 相同清單）"
 
 $firebaseConfig = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw | ConvertFrom-Json
 if ($firebaseConfig.hosting.ignore -notcontains "config.local.js") {

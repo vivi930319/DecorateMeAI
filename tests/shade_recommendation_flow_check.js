@@ -73,6 +73,7 @@ vm.runInContext(`var Api = {
     ${block(api, '    _safeMatchReason(product) {')},
     ${block(api, '    _thumbUrl(raw, px = 400) {')},
     ${block(api, '    _normalizeProduct(product) {')},
+    ${block(api, '    _normalizeCuratedStyles(product) {')},
     ${block(api, '    _normalizeShadeRecommendation(raw) {')}
 };`, normalizeSandbox);
 const rawAnchor = { id: 101, type: 'foundations', category: '底妝', name: 'MAC N18' };

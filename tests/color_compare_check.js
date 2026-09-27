@@ -49,7 +49,9 @@ vm.runInContext('var Api = { '
   + block(apiSrc, '    labToRgb(L, a, b) {') + ',\n'
   + block(apiSrc, '    _safeMatchReason(product) {') + ',\n'
   + block(apiSrc, '    _thumbUrl(raw, px = 400) {') + ',\n'
-  + block(apiSrc, '    _normalizeProduct(product) {') + '\n };', sandbox);
+  + block(apiSrc, '    _normalizeProduct(product) {') + ',\n'
+  // _normalizeProduct 從 2026-09-25 起會呼叫它（七妝容校對欄位），少了整支測試就拋錯。
+  + block(apiSrc, '    _normalizeCuratedStyles(product) {') + '\n };', sandbox);
 
 vm.runInContext(blockUntil(src, 'const COMPARE_SOURCE = Object.freeze(', '});'), sandbox);
 vm.runInContext(block(src, 'function compareKindOf(p) {'), sandbox);
