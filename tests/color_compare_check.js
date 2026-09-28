@@ -57,6 +57,9 @@ vm.runInContext(blockUntil(src, 'const COMPARE_SOURCE = Object.freeze(', '});'),
 vm.runInContext(block(src, 'function compareKindOf(p) {'), sandbox);
 vm.runInContext(blockUntil(src, 'const COMPARE_LABEL = Object.freeze(', '});'), sandbox);
 vm.runInContext(block(src, 'function userLabFor(kind) {'), sandbox);
+// colorCompareHtml 從 2026-09-28 起會問「化妝包有沒有粉底」；沙盒裡沒有 MakeupBag，所以它回 false，行為不變。
+vm.runInContext(block(src, 'function bagHasFoundation() {'), sandbox);
+vm.runInContext(block(src, 'function isFoundationProduct(p) {'), sandbox);
 vm.runInContext(block(src, 'function colorCompareHtml(p) {'), sandbox);
 const html = p => sandbox.colorCompareHtml(p);
 

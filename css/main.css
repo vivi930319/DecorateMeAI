@@ -5152,3 +5152,17 @@ body[data-member-theme="noir"] #bagStyleModal .makeup-style-dialog.bag-dialog { 
 }
 /* 推薦視窗的卡片有收藏愛心（手機上在左上），化妝包標記改放圖片左下，避免互相蓋住 */
 .recommendation-modal-grid .pc-bag-badge { top: auto; bottom: 8px; left: 8px; }
+
+/* 「其他○○商品」視窗：全部商品的部位篩選與分批載入 */
+.mp-more-cats { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 14px; }
+.mp-more-cats .chip { padding: 6px 12px; font-size: 12px; }
+.mp-more-foot { display: flex; justify-content: center; margin: 16px 0 4px; }
+@media (max-width: 620px) {
+    .mp-more-cats { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+    .mp-more-cats .chip { flex: 0 0 auto; }
+    .mp-more-foot .btn-outline { width: 100%; }
+}
+.mp-more-grid .pc-foot { flex-wrap: wrap; row-gap: 8px; }
+@media (max-width: 620px) {
+    .mp-more-grid .pc-foot .pc-own { flex: 1 1 100%; text-align: center; padding: 6px 8px; }
+}

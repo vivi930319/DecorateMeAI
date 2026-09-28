@@ -29,6 +29,8 @@ vm.runInContext(
     // colorContract 是 colorDiffInfo 的新依賴（色彩驗證契約 2026-09-11）：
     // 顏色未經官方數值驗證就不得顯示色差，而那個判斷在 colorContract 裡。
     cut('function colorContract(p) {') + '\n'
+    // 2026-09-28 新依賴：化妝包已有粉底時不講色差。沙盒沒有 MakeupBag，回 false，行為不變。
+    + cut('function bagHasFoundation() {') + '\n'
     + cut('function colorDiffInfo(p) {') + '\n'
     + cut('function colorDiffEntryHtml(p) {') + '\n'
     + 'globalThis.__info = colorDiffInfo; globalThis.__entry = colorDiffEntryHtml;', sandbox);

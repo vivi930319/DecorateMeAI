@@ -480,57 +480,106 @@
 
     // ── 同風格商品延伸推薦 ────────────────────────────────────────
     //
-    // 「看看其他千金妝商品」**就是路徑 B**，只是風格已經由化妝包決定好了。
-    // 所以直接用既有的 recommendProducts，不自己用標籤篩——本機篩得出來，
-    // 但那樣會丟掉臉部分析，而臉部分析正是這個系統的賣點。
+    // 上半部「依你的臉部分析挑的」就是路徑 B（recommendProducts），只是風格已經由化妝包決定好了。
+    // 推薦端一次只給前幾名（預設 12、上限 50），所以 2026-09-28 使用者回報「病嬌沒有全部跑」：
+    // 資料庫裡可推薦的病嬌商品有好幾百件，視窗只看得到 12 件。
     //
-    // 這裡不呼叫 Ollama、不呼叫 /recommend-styles：延伸推薦是「資料庫裡還有什麼可以買」，
-    // 跟「你包裡的怎麼搭」是兩件事，混在一起只會增加失敗面。
+    // 下半部因此補上「全部○○商品」：從已載入的商品目錄，用人工校對的妝容歸屬
+    // （curatedStyleIds）篩出這個妝容的所有可推薦商品，可依部位切換、分批載入。
+    // 這一段不經過臉部分析——它回答的是「資料庫裡還有哪些」，排序依校對分數。
+    //
+    // 兩段都**全部列出**，化妝包裡已經有的也列，並標上「化妝包內容」（2026-09-28 使用者要求：
+    // 先把全部推薦出來，再標出哪些是自己的，而不是把自己的藏起來）。
+    const MORE_PAGE_SIZE = 24;
     function openStyleMoreModal(styleId, onBack) {
         const modal = shell('styleMoreModal', 'styleMoreModalTitle');
         const style = STYLES.find(s => s.id === styleId) || null;
+        const styleName = escapeHtml(style?.name || '');
         let items = null;
         let failed = false;
+        let cat = '';
+        let shown = MORE_PAGE_SIZE;
+
+        const cardHtml = p => `
+            <div class="prod-card" data-pid="${escapeHtml(p.id)}">
+                <div class="pc-imgwrap">${phBox('', p.name, p.img)}${p.candidateKey && MakeupBag.has(p.candidateKey) ? '<span class="pc-bag-badge">化妝包內容</span>' : ''}</div>
+                <div class="pc-cat">${escapeHtml(p.cat || '')}${p.brand ? ` · ${escapeHtml(p.brand)}` : ''}</div>
+                <div class="pc-name">${escapeHtml(p.name)}</div>
+                <div class="pc-foot">
+                    <span class="pc-price">${escapeHtml(p.price || '')}</span>
+                    ${p.candidateKey ? `<button type="button" class="pc-own${MakeupBag.has(p.candidateKey) ? ' is-own' : ''}"
+                        data-own="${escapeHtml(p.candidateKey)}">${MakeupBag.has(p.candidateKey) ? '化妝包已有' : '＋ 加入化妝包'}</button>` : ''}
+                </div>
+            </div>`;
+
+        // 資料庫裡這個妝容的全部可推薦商品（不重複列上半部已經出現的）
+        const allForStyle = () => {
+            const catalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
+            const picked = new Set((items || []).map(p => String(p.id)));
+            const score = p => Number((p.curatedStyleScores || {})[styleId]) || 0;
+            return catalog
+                .filter(p => Array.isArray(p.curatedStyleIds) && p.curatedStyleIds.includes(styleId))
+                .filter(p => !p.recommendationState || p.recommendationState === '可推薦')
+                .filter(p => !picked.has(String(p.id)))
+                .sort((a, b) => score(b) - score(a));
+        };
+
+        const allSectionHtml = () => {
+            const loading = !!Router.generalProductLoading;
+            const catalogReady = Array.isArray(Router.generalProductCatalog);
+            if (!catalogReady) return '<div class="mp-hint">正在載入資料庫裡的商品…</div>';
+            const all = allForStyle();
+            const counts = new Map();
+            for (const p of all) counts.set(p.cat, (counts.get(p.cat) || 0) + 1);
+            const cats = Object.keys(CAT_EN).filter(c => counts.get(c));
+            const list = cat ? all.filter(p => p.cat === cat) : all;
+            const visible = list.slice(0, shown);
+            return `<div class="mp-section-title">資料庫裡全部的${styleName}商品 · ${all.length} 件${loading ? '（還在載入，數字會再增加）' : ''}</div>
+                <div class="mp-more-cats" role="group" aria-label="依部位篩選">
+                    <button type="button" class="chip${cat ? '' : ' active'}" data-more-cat="">全部 ${all.length}</button>
+                    ${cats.map(c => `<button type="button" class="chip${cat === c ? ' active' : ''}" data-more-cat="${escapeHtml(c)}">${escapeHtml(c)} ${counts.get(c)}</button>`).join('')}
+                </div>
+                ${visible.length
+                    ? `<div class="prod-grid mp-more-grid">${visible.map(cardHtml).join('')}</div>`
+                    : `<div class="mp-hint">${loading ? '還在載入商品…' : `目前沒有其他${styleName}商品。`}</div>`}
+                ${list.length > visible.length
+                    ? `<div class="mp-more-foot"><button type="button" class="btn-outline" data-more-page>再看 ${Math.min(MORE_PAGE_SIZE, list.length - visible.length)} 件（還有 ${list.length - visible.length} 件）</button></div>`
+                    : ''}`;
+        };
 
         const draw = () => {
-            let body;
+            const scrollTop = modal.querySelector('.makeup-style-dialog')?.scrollTop || 0;
+            let top;
             if (items === null && !failed) {
-                body = '<div class="mp-hint">正在為你挑選…</div>';
+                top = '<div class="mp-hint">正在依你的臉部分析挑選…</div>';
             } else if (failed) {
-                body = '<div class="mp-hint is-error">商品推薦暫時無法使用，請稍後再試。</div>';
+                top = '<div class="mp-hint is-error">個人化推薦暫時無法使用；下面仍可瀏覽全部商品。</div>';
             } else if (!items.length) {
-                // 0 件是會發生的，不是例外：男士白開水全庫只有約 113 件，
-                // 千金妝的打亮只有 6 件。空白畫面會讓人以為壞了。
-                body = `<div class="mp-hint">目前沒有適合你的${escapeHtml(style?.name || '')}商品。</div>`;
+                // 0 件是會發生的，不是例外：男士白開水全庫只有約 113 件，千金妝的打亮只有 6 件。
+                top = `<div class="mp-hint">目前沒有依臉部分析挑出的${styleName}商品。</div>`;
             } else {
-                body = `<div class="mp-section-title">依你的臉部分析，從${escapeHtml(style?.name || '')}商品中為你挑了 ${items.length} 件</div>
-                    <div class="prod-grid mp-more-grid">${items.map(p => `
-                        <div class="prod-card" data-pid="${escapeHtml(p.id)}">
-                            <div class="pc-imgwrap">${phBox('', p.name, p.img)}</div>
-                            <div class="pc-cat">${escapeHtml(p.brand || '')}</div>
-                            <div class="pc-name">${escapeHtml(p.name)}</div>
-                            <div class="pc-foot">
-                                <span class="pc-price">${escapeHtml(p.price || '')}</span>
-                                ${p.candidateKey ? `<button type="button" class="pc-own${MakeupBag.has(p.candidateKey) ? ' is-own' : ''}"
-                                    data-own="${escapeHtml(p.candidateKey)}">${MakeupBag.has(p.candidateKey) ? '已有' : '加入化妝包'}</button>` : ''}
-                            </div>
-                        </div>`).join('')}</div>`;
+                top = `<div class="mp-section-title">依你的臉部分析，為你挑了 ${items.length} 件</div>
+                    <div class="prod-grid mp-more-grid">${items.map(cardHtml).join('')}</div>`;
             }
 
             modal.innerHTML = `<div class="makeup-style-dialog">
                 <div class="makeup-style-head">
                     <div>
                         <span class="eyebrow">More</span>
-                        <h2 id="styleMoreModalTitle">其他${escapeHtml(style?.name || '')}商品</h2>
-                        <p>這些是資料庫裡的商品，不在你的化妝包內。</p>
+                        <h2 id="styleMoreModalTitle">其他${styleName}商品</h2>
+                        <p>資料庫裡這個妝容的商品；你化妝包裡已經有的，會標上「化妝包內容」。</p>
                     </div>
                     <button class="makeup-style-close" type="button" aria-label="關閉">×</button>
                 </div>
-                ${body}
+                ${top}
+                ${allSectionHtml()}
                 <div class="makeup-style-actions">
                     <button class="btn-outline" type="button" data-back>← 回到我的化妝包結果</button>
                 </div>
             </div>`;
+            // 換部位、載入更多時不要跳回最上面
+            const dialog = modal.querySelector('.makeup-style-dialog');
+            if (dialog) dialog.scrollTop = scrollTop;
 
             modal.querySelector('.makeup-style-close').onclick = () => closeModal('styleMoreModal');
             // 單向道會讓使用者出不去，只能重做一次分析。
@@ -538,6 +587,11 @@
                 closeModal('styleMoreModal');
                 if (typeof onBack === 'function') onBack();
             };
+            modal.querySelectorAll('[data-more-cat]').forEach(btn => {
+                btn.onclick = () => { cat = btn.dataset.moreCat; shown = MORE_PAGE_SIZE; draw(); };
+            });
+            const pageBtn = modal.querySelector('[data-more-page]');
+            if (pageBtn) pageBtn.onclick = () => { shown += MORE_PAGE_SIZE; draw(); };
             modal.querySelectorAll('.pc-own').forEach(btn => {
                 btn.onclick = async (e) => {
                     e.stopPropagation();
@@ -547,20 +601,31 @@
                     btn.disabled = false;
                     if (!result.ok) { showToast(result.error); return; }
                     btn.classList.add('is-own');
-                    btn.textContent = '已有';
+                    btn.textContent = '化妝包已有';
+                    const wrap = btn.closest('.prod-card')?.querySelector('.pc-imgwrap');
+                    if (wrap && !wrap.querySelector('.pc-bag-badge')) wrap.insertAdjacentHTML('beforeend', '<span class="pc-bag-badge">化妝包內容</span>');
                     showToast(result.already ? '已經在化妝包裡了' : '已加入化妝包');
                 };
             });
         };
 
         draw();
+        // 全部商品靠前端的商品目錄。還沒載過就開始載；它會回呼兩次（第一頁、全部），各重畫一次。
+        if (typeof productCatalogLoaded === 'function' && typeof loadGeneralProductCatalog === 'function') {
+            loadGeneralProductCatalog(() => { if (document.getElementById('styleMoreModal')) draw(); });
+            // 目錄若已經在別處載入中，上面那行不會登記回呼（它直接 return）。這種情況自己看著，
+            // 載完或視窗關掉就停。
+            const watch = setInterval(() => {
+                if (!document.getElementById('styleMoreModal')) { clearInterval(watch); return; }
+                if (!Router.generalProductLoading) { clearInterval(watch); draw(); }
+            }, 1200);
+        }
         Promise.resolve(Api.recommendProducts(Router.analysisPackage, styleId)).then(rec => {
             if (!document.getElementById('styleMoreModal')) return;
-            if (!rec || !rec.ok) { failed = true; draw(); return; }
-            // 已經在化妝包裡的不再列出來——這一頁的用途是「還可以買什麼」。
-            items = (rec.products || []).filter(p => !p.candidateKey || !MakeupBag.has(p.candidateKey));
+            if (!rec || !rec.ok) { failed = true; items = []; draw(); return; }
+            items = rec.products || [];
             draw();
-        }).catch(() => { failed = true; draw(); });
+        }).catch(() => { failed = true; items = []; draw(); });
     }
 
     // ── 包在既有視窗外面 ──────────────────────────────────────────

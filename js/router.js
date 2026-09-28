@@ -689,6 +689,7 @@ const RecommendationNotice = {
     foundationNoticeHtml() {
         const st = this.foundationStatus;
         if (!st || st.status === 'matched' || st.status === 'not_requested') return '';
+        if (bagHasFoundation()) return '';
         const msg = String(st.message || '').trim();
         if (!msg) return '';
         // closest_available 與 no_match 的差別，使用者一定要看得出來：
@@ -921,6 +922,20 @@ function isFoundationProduct(p) {
 // 2026-08-29 追加：個人色號只屬於粉底液，其他推薦品項不顯示。
 // tests/color_compare_check.js 一直是綠的，因為它餵的是自己組的物件（帶 `type`），
 // 沒有走過 _normalizeProduct——測試通過與功能可用之間差的就是這一步。
+// 使用者的化妝包裡已經有粉底時，不再提醒「資料庫有沒有相近色號」與色差——
+// 他已經有自己在用的粉底，這些提醒只會讓人以為手上那支不對（2026-09-28 使用者要求）。
+// 只收掉粉底的色號／色差提醒；推薦契合度、唇色比較等其他資訊照常顯示。
+function bagHasFoundation() {
+    try {
+        return typeof MakeupBag !== 'undefined'
+            && MakeupBag.localList().some(k => MakeupBag.categoryOf(k) === '底妝');
+    } catch (_) { return false; }
+}
+function isFoundationProduct(p) {
+    const kind = String(p?.apiType || p?.type || p?.category || p?.cat || '').trim().toLowerCase();
+    return ['foundations', 'foundation', 'base', '底妝'].includes(kind);
+}
+
 function compareKindOf(p) {
     return COMPARE_SOURCE[p?.apiType]
         || COMPARE_SOURCE[p?.type]
@@ -945,6 +960,7 @@ function userLabFor(kind) {
 function colorCompareHtml(p) {
     const kind = compareKindOf(p);
     if (!kind) return '';
+    if (kind === 'skin' && bagHasFoundation()) return '';
     const prodLab = Array.isArray(p.lab) && p.lab.length === 3 && p.lab.every(n => Number.isFinite(Number(n)))
         ? p.lab.map(Number) : null;
     const userLab = userLabFor(kind);
@@ -1148,7 +1164,7 @@ function recommendationCardHtml(p) {
     if (matchPercent != null && !/%/.test(label)) {
         parts.push(`<div class="rec-match-percent">推薦契合度 ${Math.round(matchPercent)}%</div>`);
     }
-    if (pr.headline) parts.push(`<div class="rec-headline">${escapeHtml(pr.headline)}</div>`);
+    if (pr.headline && !(isFoundationProduct(p) && bagHasFoundation())) parts.push(`<div class="rec-headline">${escapeHtml(pr.headline)}</div>`);
     const traits = Array.isArray(pr.suitedTraits) ? pr.suitedTraits.filter(Boolean).slice(0, 4) : [];
     if (traits.length) {
         parts.push(`<div class="rec-traits">${traits
@@ -1179,6 +1195,7 @@ function foundationSkinLines(skin) {
 function colorDiffInfo(p) {
     const kind = String(p?.apiType || p?.type || p?.category || p?.cat || '').trim().toLowerCase();
     if (!['foundations', 'foundation', 'base', '底妝'].includes(kind)) return null;
+    if (bagHasFoundation()) return null;
     // 顏色沒通過官方數值驗證就不能講色差（色彩驗證契約 2026-09-11 §2）。
     //
     // 這一條擋的是**色彩主張**，不是整張推薦卡：`colorMatchReady: false` 的商品
@@ -3314,7 +3331,7 @@ function openProductRecommendationModal(){
             sum.className='rec-bag-summary';
             sum.setAttribute('data-rec-holder','1');
             sum.innerHTML=ownedN
-                ?`其中 <b>${ownedN}</b> 件你的化妝包已經有了，標有「化妝包已有」。`
+                ?`其中 <b>${ownedN}</b> 件你的化妝包已經有了，標有「化妝包內容」。`
                 :'這些都不在你的化妝包裡；手上已經有的，可以按「加入化妝包」登記。';
             holder.insertBefore(sum,grid);
         }
@@ -3323,7 +3340,7 @@ function openProductRecommendationModal(){
                 <div class="pc-imgwrap">
                     ${phBox('',p.name,p.img)}
                     <button class="heart-btn pc-heart ${Fav.has(p.id)?'fav':''}" data-fav="${escapeHtml(p.id)}" aria-label="收藏">${HEART_SVG}</button>
-                    ${p.candidateKey&&MakeupBag.has(p.candidateKey)?'<span class="pc-bag-badge">化妝包已有</span>':''}
+                    ${p.candidateKey&&MakeupBag.has(p.candidateKey)?'<span class="pc-bag-badge">化妝包內容</span>':''}
                 </div>
                 <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}${p.brand?` · ${escapeHtml(p.brand)}`:''}</div>
                 <div class="pc-name">${escapeHtml(p.name)}</div>
@@ -3355,7 +3372,7 @@ function openProductRecommendationModal(){
                 btn.classList.add('is-own');
                 btn.textContent='化妝包已有';
                 const wrap=btn.closest('.prod-card')?.querySelector('.pc-imgwrap');
-                if(wrap&&!wrap.querySelector('.pc-bag-badge'))wrap.insertAdjacentHTML('beforeend','<span class="pc-bag-badge">化妝包已有</span>');
+                if(wrap&&!wrap.querySelector('.pc-bag-badge'))wrap.insertAdjacentHTML('beforeend','<span class="pc-bag-badge">化妝包內容</span>');
                 showToast(result.already?'已經在化妝包裡了':'已加入化妝包');
             };
         });
@@ -5319,12 +5336,12 @@ const PageInit = {
                         const shown = recommendedByCat.slice(0, RECOMMENDED_DISPLAY_LIMIT);
                         const ownedN = shown.filter(p => p.candidateKey && MakeupBag.has(p.candidateKey)).length;
                         return shown.length ? `<p class="rec-bag-summary">${ownedN
-                            ? `其中 <b>${ownedN}</b> 件你的化妝包已經有了，標有「化妝包已有」。`
+                            ? `其中 <b>${ownedN}</b> 件你的化妝包已經有了，標有「化妝包內容」。`
                             : '這些都不在你的化妝包裡；手上已經有的，可以按「加入化妝包」登記。'}</p>` : '';
                     })()}
                     <div class="prod-grid recommended-grid">${recommendedByCat.slice(0, RECOMMENDED_DISPLAY_LIMIT).map((p, i) => `
                         <div class="prod-card reveal-in" data-rec-pid="${escapeHtml(p.id)}" style="animation-delay:${Math.min(i*0.035,0.2)}s">
-                            <div class="pc-imgwrap">${phBox('', p.name, p.img)}${p.candidateKey && MakeupBag.has(p.candidateKey) ? '<span class="pc-bag-badge">化妝包已有</span>' : ''}</div>
+                            <div class="pc-imgwrap">${phBox('', p.name, p.img)}${p.candidateKey && MakeupBag.has(p.candidateKey) ? '<span class="pc-bag-badge">化妝包內容</span>' : ''}</div>
                             <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}${p.brand ? ` · ${escapeHtml(p.brand)}` : ''}</div>
                             <div class="pc-name">${escapeHtml(p.name)}</div>
                             <!-- 色號單獨拉出來。它是使用者實際要記住、要拿去櫃上問的那個字串，
@@ -5572,7 +5589,7 @@ const PageInit = {
                         ownBtn.classList.add('is-own');
                         ownBtn.textContent = ownBtn.dataset.ownLabel || '已有';
                         const wrap = card.querySelector('.pc-imgwrap');
-                        if (wrap && !wrap.querySelector('.pc-bag-badge')) wrap.insertAdjacentHTML('beforeend', '<span class="pc-bag-badge">化妝包已有</span>');
+                        if (wrap && !wrap.querySelector('.pc-bag-badge')) wrap.insertAdjacentHTML('beforeend', '<span class="pc-bag-badge">化妝包內容</span>');
                         showToast(result.already ? '已經在化妝包裡了' : '已加入化妝包');
                     };
                     const heart = card.querySelector('.pc-heart');

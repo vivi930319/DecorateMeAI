@@ -47,6 +47,9 @@ vm.runInContext(cut(src, 'function colorContract(p) {') + '\n'
     // 抽了前者沒抽相依，測試會在執行時炸 ReferenceError。
     + cut(src, 'function userSkinRow() {') + ';\n'
     + cut(src, 'function shadeRecommendationHtml(p) {') + '\n'
+    // 2026-09-28 新依賴：化妝包已有粉底時收起色差與標語。沙盒沒有 MakeupBag，回 false，行為不變。
+    + cut(src, 'function bagHasFoundation() {') + '\n'
+    + cut(src, 'function isFoundationProduct(p) {') + '\n'
     + cut(src, 'function colorDiffInfo(p) {') + '\n'
     + cut(src, 'function colorDiffEntryHtml(p) {') + '\n'
     + cut(src, 'function recommendationCardHtml(p) {') + '\n'
