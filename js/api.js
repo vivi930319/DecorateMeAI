@@ -1289,9 +1289,7 @@ const Api = {
                 ? product.foundationSkinMatch : null,
             // 粉底門檻／校正狀態由推薦後端決定。前端只保存這個狀態，
             // 不從 foundationSkinMatch 或商品色號自行重建 status。
-            foundationMatchStatus: (product.foundationMatchStatus
-                && typeof product.foundationMatchStatus === 'object')
-                ? product.foundationMatchStatus : null,
+            foundationMatchStatus: this._normalizeFoundationStatus(product.foundationMatchStatus),
 
             // ── 色彩驗證契約（《前端必接：色彩驗證欄位…》2026-09-11）──────────────
             //
@@ -3065,6 +3063,15 @@ const Api = {
 
     // options：{ limit?: number, recommendationOptions?: {...} }
     // 第三個參數是 2026-08-23 新增的，舊呼叫（兩個參數）行為完全不變。
+    // foundationMatchStatus 有兩種形狀：舊契約是物件 { status, code, message, rawSkinDeltaE… }，
+    // 妝前基準契約（2026-09-28）的表格直接寫 matched／closest_available／baseline_fallback。
+    // 一律轉成物件，畫面只看 .status。
+    _normalizeFoundationStatus(value) {
+        if (value && typeof value === 'object') return value;
+        const status = typeof value === 'string' ? value.trim() : '';
+        return status ? { status } : null;
+    },
+
     async recommendProducts(analysisPackage, styleId, options = null) {
         const url = this.config.url('product', 'recommendPath');
         if (!url) return { ok: false, products: [] };
@@ -3080,6 +3087,9 @@ const Api = {
             // 一律當成不可信——理由見 _isUsableLab 的說明。
             const skinLab      = this._labToArrayStrict(fa?.skinTone?.lab);
             const skinLabOk    = this._isUsableLab(skinLab);
+            // 妝前膚色基準（2026-09-28）：只影響粉底比色，lab 仍是這次照片量到的值。
+            // 會員資料庫也會在伺服器端自動補，這裡照規格書仍帶上，讓 Gateway 服務間流程也拿得到。
+            const baselineLab  = (typeof SkinBaseline !== 'undefined') ? SkinBaseline.current() : null;
             const lipLab       = this._labToArrayStrict(fa?.lipLab);
             // 眉彩色號只能用眉色或髮色比對，絕不能用膚色（契約 §1）。
             // ⚠️ 目前臉部分析端還沒有產出眉色：Face_analyzer_BASIC 只回「膚色」與
@@ -3135,6 +3145,7 @@ const Api = {
                                 // 2026-08-23 追加：LAB 本身不可用時也一律送 false。
                                 // 推薦端只認這個旗標，不會自己檢查 lab 是壞的。
                                 labReliable: skinLabOk && fa?.skinTone?.labReliable !== false,
+                                ...(this._isUsableLab(baselineLab) ? { baselineLab } : {}),
                             },
                             lipLab: lipLab,
                             ...(browLab ? { browLab } : {}),
@@ -3200,7 +3211,7 @@ const Api = {
                 fallbackReasons,
                 // 粉底的相鄰色階（契約 §5）。null 代表沒有這個區塊，畫面要整個隱藏——
                 // 不要自己補商品湊出「淺一階／深一階」，那是編造的。
-                shadeRecommendation: this._normalizeShadeRecommendation(rec.shadeRecommendation),
+                shadeRecommendation: this._normalizeShadeRecommendation(rec.shadeRecommendation ?? data.shadeRecommendation),
                 // 主推薦粉底的跨品牌近似色號；沿用後端排序與色差，不在前端重算。
                 foundationCrossBrandAlternatives: (Array.isArray(rec.foundationCrossBrandAlternatives)
                     ? rec.foundationCrossBrandAlternatives : [])
@@ -3228,9 +3239,11 @@ const Api = {
                 colorDifferencePolicy: (rec.colorDifferencePolicy
                     && typeof rec.colorDifferencePolicy === 'object')
                     ? rec.colorDifferencePolicy : null,
-                foundationMatchStatus: (rec.foundationMatchStatus
-                    && typeof rec.foundationMatchStatus === 'object')
-                    ? rec.foundationMatchStatus : null,
+                // 規格書要求頂層與 analysisPackage.recommendations 兩處都讀：rec 優先，缺了退回頂層
+                foundationMatchStatus: this._normalizeFoundationStatus(
+                    rec.foundationMatchStatus ?? data.foundationMatchStatus),
+                // before_makeup_baseline（用妝前基準比的）／current_analysis（用這次照片比的）
+                foundationLabSource: String(rec.foundationLabSource ?? data.foundationLabSource ?? '').trim() || null,
                 products
             };
         } catch (_) {
@@ -3286,6 +3299,12 @@ const Api = {
             password: payload.password,
             age: Number(payload.age)
         };
+        // 推薦碼（選填）。只有帶碼時才送裝置指紋——它的唯一用途是擋同一裝置重複領推薦獎勵
+        if (payload.referralCode && typeof Referral !== 'undefined') {
+            body.referral_code = payload.referralCode;
+            const fingerprint = await Referral.fingerprint();
+            if (fingerprint) body.client_fingerprint = fingerprint;
+        }
         let res;
         try {
             const gateway = this.config.services.aiGateway;
@@ -4244,60 +4263,232 @@ const MemberRewards = {
     }
 };
 
-// ═══ 推薦碼 Demo：註冊時自動綁定推薦人，完成註冊即發點（防刷留待正式版再補）══
+// ═══ 推薦碼（正式版，2026-09-28 會員資料庫端上線）═══════════════════════════
+// 推薦碼、綁定、發點、防刷全部在會員資料庫：前端只負責顯示與把碼帶進註冊。
+// 先前的 Demo 版（email 雜湊當推薦碼、localStorage 記帳、瀏覽器自己加點）已整個移除——
+// 那個版本任何人都能在自己的瀏覽器替自己加點，而且換一台裝置紀錄就不見。
 const Referral = {
-    _usedKey: 'beautyReferralUsed',
-    _rewardPoints: 50,
-    _email(email) { return String(email || '').trim().toLowerCase(); },
-    _load(key, fallback) {
-        try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); }
-        catch (_) { return fallback; }
-    },
-    _save(key, value) { localStorage.setItem(key, JSON.stringify(value)); },
-    // 推薦碼是 email 的固定雜湊值，不用額外存表，任何人只要知道 email 就能算出同一組碼
-    myCode(email) {
-        const key = this._email(email);
-        if (!key || key === 'guest') return '';
-        let hash = 0;
-        for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
-        return hash.toString(36).toUpperCase().padStart(6, '0').slice(-6);
-    },
-    // 反查推薦碼屬於哪個 email：只能在「已知會員」清單裡找，找不到就當作無效碼
-    _knownEmails() {
-        const emails = new Set();
+    // 顯示用；實際發幾點以伺服器為準（發放當下的設定值會寫進每一筆紀錄）
+    REFERRER_POINTS: 50,
+    REFEREE_POINTS: 30,
+    REASONS: Object.freeze({
+        INVALID_CODE: '推薦碼不存在，帳號已建立，但這次沒有推薦獎勵。',
+        SELF_REFERRAL: '不能使用自己的推薦碼。',
+        CODE_DISABLED: '這組推薦碼已停用，帳號已建立，但這次沒有推薦獎勵。',
+        ALREADY_REDEEMED: '這個帳號已經使用過推薦碼。',
+    }),
+    STATUS_LABELS: Object.freeze({ pending: '等待對方完成驗證', rewarded: '已發點', rejected: '未發點' }),
+    REJECT_LABELS: Object.freeze({
+        SELF_REFERRAL: '自己推薦自己', DAILY_CAP: '超過每日 5 筆上限', SAME_DEVICE: '同一裝置 30 天內已領過',
+        ADMIN_REJECTED: '管理員撤銷', INVALID_CODE: '推薦碼無效', CODE_DISABLED: '推薦碼已停用',
+    }),
+    _memberBase() { return Api.config.services.memberDatabase.baseUrl || ''; },
+    _gatewayBase() { return Api.config.services.aiGateway.baseUrl || ''; },
+    normalizeCode(code) { return String(code || '').trim().toUpperCase().replace(/[^0-9A-Z]/g, '').slice(0, 16); },
+    reasonText(reason) { return this.REASONS[String(reason || '').toUpperCase()] || ''; },
+
+    // 我的推薦碼與成果：{ code, referredCount, rewardedCount, pendingCount, pointsEarned, recent[] }
+    async mine(email) {
+        const base = this._memberBase();
+        if (!base || !email) return { ok: false };
         try {
-            const members = JSON.parse(localStorage.getItem(Auth._membersKey) || '{}');
-            Object.keys(members).forEach(e => emails.add(e));
-        } catch (_) {}
-        const current = Auth.getProfile()?.email;
-        if (current) emails.add(this._email(current));
-        return Array.from(emails);
+            const res = await Api._fetchWithRelogin(`${base}/api/members/${encodeURIComponent(email)}/referral`, {
+                method: 'GET', credentials: 'include', cache: 'no-store',
+            });
+            if (!res.ok) return { ok: false, status: res.status };
+            const data = await res.json().catch(() => ({}));
+            return {
+                ok: true,
+                code: String(data.code || ''),
+                referredCount: Number(data.referredCount) || 0,
+                rewardedCount: Number(data.rewardedCount) || 0,
+                pendingCount: Number(data.pendingCount) || 0,
+                pointsEarned: Number(data.pointsEarned) || 0,
+                recent: Array.isArray(data.recent) ? data.recent.slice(0, 10) : [],
+            };
+        } catch (_) {
+            return { ok: false, status: 0 };
+        }
     },
-    findEmailByCode(code) {
-        const target = String(code || '').trim().toUpperCase();
-        if (!target) return null;
-        return this._knownEmails().find(email => this.myCode(email) === target) || null;
+
+    // 註冊表單即時檢查。未登入也要能用，所以走 Gateway 的公開路由，不走會員代理。
+    // 回 { ok, valid, rateLimited }；連不到時 ok:false——那不代表碼無效，註冊照樣可以送。
+    async validate(code) {
+        const normalized = this.normalizeCode(code);
+        if (!normalized) return { ok: true, valid: false };
+        try {
+            const res = await fetch(`${this._gatewayBase()}/auth/referral-validate?code=${encodeURIComponent(normalized)}`, {
+                method: 'GET', credentials: 'include', cache: 'no-store',
+            });
+            if (res.status === 429) return { ok: false, rateLimited: true };
+            if (!res.ok) return { ok: false };
+            const data = await res.json().catch(() => ({}));
+            return { ok: true, valid: data.valid === true };
+        } catch (_) {
+            return { ok: false };
+        }
     },
-    // 新會員完成註冊（OTP 驗證通過）當下呼叫一次；同一個帳號只會生效一次，擋掉重複套用
-    applyReferral(newMemberEmail, code) {
-        const newKey = this._email(newMemberEmail);
-        if (!code || !newKey) return { ok: false };
-        const used = this._load(this._usedKey, {});
-        if (used[newKey]) return { ok: false, message: '此帳號已經使用過推薦碼。' };
-        const referrerEmail = this.findEmailByCode(code);
-        if (!referrerEmail) return { ok: false, message: '推薦碼不存在，註冊仍會成功，但不會發送推薦獎勵。' };
-        if (referrerEmail === newKey) return { ok: false, message: '不能使用自己的推薦碼。' };
-        used[newKey] = { code: String(code).toUpperCase(), referrerEmail, grantedAt: new Date().toISOString() };
-        this._save(this._usedKey, used);
-        MemberRewards.addPoints(referrerEmail, this._rewardPoints, '推薦新會員加入獎勵', { type: 'referral', newMemberEmail: newKey });
-        return { ok: true, referrerEmail };
+
+    // 裝置指紋：伺服器用來擋「同一台裝置 30 天內重複換獎勵」。
+    // 只送雜湊（sha256:<64hex>），不送任何原始值。組成是本機隨機 id＋幾個穩定的瀏覽器特徵：
+    // 單靠隨機 id 清掉瀏覽資料就換一個，單靠特徵同型號手機會撞在一起。
+    async fingerprint() {
+        try {
+            if (typeof crypto === 'undefined' || !crypto.subtle) return '';
+            let deviceId = '';
+            try { deviceId = localStorage.getItem('beautyDeviceId') || ''; } catch (_) {}
+            if (!deviceId) {
+                deviceId = (crypto.randomUUID && crypto.randomUUID())
+                    || Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+                try { localStorage.setItem('beautyDeviceId', deviceId); } catch (_) {}
+            }
+            let tz = '';
+            try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) {}
+            const scr = typeof screen !== 'undefined' ? `${screen.width}x${screen.height}x${screen.colorDepth}` : '';
+            const raw = [deviceId, navigator.userAgent || '', navigator.language || '', scr, tz].join('|');
+            const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw));
+            return 'sha256:' + Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+        } catch (_) {
+            return '';
+        }
     },
-    referredBy(email) { return this._load(this._usedKey, {})[this._email(email)] || null; },
-    countReferrals(email) {
-        const used = this._load(this._usedKey, {});
-        const key = this._email(email);
-        return Object.values(used).filter(row => row.referrerEmail === key).length;
-    }
+
+    // ── 管理員：推薦紀錄（Gateway 會再驗一次 admin 身分，一般會員打這兩支會拿到 403）──
+    async adminList({ status = '', from = '', to = '' } = {}) {
+        const base = this._memberBase();
+        if (!base) return { ok: false, items: [], error: '會員資料庫未設定' };
+        const q = new URLSearchParams();
+        if (status) q.set('status', status);
+        if (from) q.set('from', from);
+        if (to) q.set('to', to);
+        try {
+            const res = await Api._fetchWithRelogin(`${base}/api/admin/referrals${q.toString() ? `?${q}` : ''}`, {
+                method: 'GET', credentials: 'include', cache: 'no-store',
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, items: [], error: data?.error?.message || `HTTP ${res.status}` };
+            const items = Array.isArray(data) ? data : (data.items || data.referrals || data.redemptions || []);
+            return { ok: true, items: Array.isArray(items) ? items : [] };
+        } catch (_) {
+            return { ok: false, status: 0, items: [], error: '連不到會員資料庫' };
+        }
+    },
+
+    async adminReject(id, reason = '') {
+        const base = this._memberBase();
+        if (!base || id == null) return { ok: false };
+        try {
+            const res = await Api._fetchWithRelogin(`${base}/api/admin/referrals/${encodeURIComponent(id)}/reject`, {
+                method: 'POST', credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(reason ? { reason } : {}),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, error: data?.error?.message || `HTTP ${res.status}` };
+            return { ok: true, ...data };
+        } catch (_) {
+            return { ok: false, status: 0, error: '連不到會員資料庫' };
+        }
+    },
+};
+
+// ═══ 妝前膚色基準（粉底比色用，2026-09-28 推薦端＋會員資料庫端）═══════════════════
+// 上了妝的照片量到的是粉底的顏色，不是皮膚——拿它去比粉底色號，推薦出來的就是「你現在臉上那支」。
+// 所以第一次在素顏狀態做完分析、LAB 可信時，把那組 LAB 存成會員的基準；之後每次推薦都一起送。
+// 只存三個數字：不存照片、不存 email 以外的識別資料。
+const SkinBaseline = {
+    _cache: null,   // { email, lab: [L,a,b] | null, loaded: true }
+    _base() { return Api.config.services.memberDatabase.baseUrl || ''; },
+    _email() {
+        const email = String(Auth.getProfile()?.email || '').trim().toLowerCase();
+        return email && email !== 'guest' ? email : '';
+    },
+    _url(email) { return `${this._base()}/api/members/${encodeURIComponent(email)}/skin-baseline`; },
+    // 會員資料庫的格式是陣列 [L, a, b]；前端分析結果裡的是物件 { L, a, b }。兩種都收，一律轉成陣列。
+    // （_labToArrayStrict 只認物件——直接拿它讀伺服器回應，每一筆基準都會被當成不存在。）
+    _toArray(lab) {
+        if (Array.isArray(lab)) return lab.length === 3 && lab.every(v => typeof v === 'number' && Number.isFinite(v)) ? [...lab] : null;
+        return Api._labToArrayStrict(lab);
+    },
+    _pickLab(data) {
+        const lab = this._toArray(data?.lab ?? data?.baselineLab ?? data?.baseline?.lab);
+        return Api._isUsableLab(lab) ? lab : null;
+    },
+    // 同步讀：推薦請求組 body 時用；還沒讀過或換了帳號就是 null（推薦端會自己從會員資料庫補）
+    current() {
+        const email = this._email();
+        return (email && this._cache?.email === email) ? this._cache.lab : null;
+    },
+    async load(force = false) {
+        const email = this._email();
+        if (!email || !this._base()) return null;
+        if (!force && this._cache?.email === email) return this._cache.lab;
+        try {
+            const res = await Api._fetchWithRelogin(this._url(email), { method: 'GET', credentials: 'include', cache: 'no-store' });
+            if (res.status === 404) { this._cache = { email, lab: null }; return null; }
+            if (!res.ok) return null;   // 暫時失敗不寫快取，下次再試
+            const lab = this._pickLab(await res.json().catch(() => ({})));
+            this._cache = { email, lab };
+            return lab;
+        } catch (_) {
+            return null;
+        }
+    },
+    async save(lab) {
+        const email = this._email();
+        const clean = this._toArray(lab);
+        if (!email || !this._base() || !Api._isUsableLab(clean)) return { ok: false };
+        try {
+            const res = await Api._fetchWithRelogin(this._url(email), {
+                method: 'PUT', credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lab: clean }),
+            });
+            if (!res.ok) return { ok: false, status: res.status };
+            this._cache = { email, lab: clean };
+            return { ok: true, lab: clean };
+        } catch (_) {
+            return { ok: false, status: 0 };
+        }
+    },
+    // 分析完成時呼叫：只有「還沒有基準」而且這次 LAB 可信才自動建立。
+    // 已經有基準就不覆蓋——之後的照片可能是上了妝拍的；要重建由使用者自己按（見粉底的暫定色號提示）。
+    async captureFromAnalysis(faceAnalysis) {
+        const skin = faceAnalysis?.skinTone;
+        if (!this._email() || !skin || skin.labReliable === false) return { created: false };
+        const lab = this._toArray(skin.lab);
+        if (!Api._isUsableLab(lab)) return { created: false };
+        const existing = await this.load();
+        if (existing) return { created: false, exists: true };
+        // load() 失敗（非 404）時快取不會寫入：不要在不確定有沒有基準的情況下硬寫
+        if (this._cache?.email !== this._email()) return { created: false };
+        const saved = await this.save(lab);
+        return { created: saved.ok };
+    },
+};
+
+// ═══ 分享紀錄（任務點數用）═════════════════════════════════════════════════════
+// 「分享妝容到 IG／Threads」任務的點數由會員資料庫發，前端只回報「按了分享」這個事件。
+// 網頁看不到使用者最後有沒有真的在 IG 發出去（IG 不回傳任何結果），所以這個任務只能是
+// 「完成分享動作」，每日上限由伺服器擋。服務還沒上線時（404）安靜略過，不打擾分享流程。
+const ShareEvents = {
+    PLATFORMS: Object.freeze(['ig_story', 'ig_post', 'threads', 'download']),
+    async record(platform, styleId = '') {
+        const email = String(Auth.getProfile()?.email || '').trim().toLowerCase();
+        const base = Api.config.services.memberDatabase.baseUrl || '';
+        if (!email || email === 'guest' || !base || !this.PLATFORMS.includes(platform)) return { ok: false };
+        try {
+            const res = await Api._fetchWithRelogin(`${base}/api/members/${encodeURIComponent(email)}/share-events`, {
+                method: 'POST', credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ platform, styleId: String(styleId || '').slice(0, 64) || null }),
+            });
+            const data = await res.json().catch(() => ({}));
+            return { ok: res.ok, status: res.status, ...data };
+        } catch (_) {
+            return { ok: false, status: 0 };
+        }
+    },
 };
 
 // ═══ PRO 付費解鎖 Demo：不串正式金流，purchase() 直接視為付款成功並自動開通 ═══
@@ -4373,7 +4564,9 @@ const Tasks = {
     list: [
         { id: 'first_analysis', group: '新手任務', title: '完成第一次臉部分析', reward: 20, daily: false, check: () => (typeof History !== 'undefined' ? History.list().length > 0 : false) },
         { id: 'first_favorite', group: '新手任務', title: '收藏一件商品', reward: 10, daily: false, check: () => (typeof Fav !== 'undefined' ? Fav.list().length > 0 : false) },
-        { id: 'first_referral', group: '新手任務', title: '成功推薦一位好友', reward: 20, daily: false, check: email => (typeof Referral !== 'undefined' ? Referral.countReferrals(email) > 0 : false) },
+        // 下面兩個只提供中文名稱給伺服器任務清單用；完成與否只有會員資料庫知道
+        { id: 'first_referral', group: '新手任務', title: '成功推薦一位好友', reward: 20, daily: false, check: () => false },
+        { id: 'share_look_daily', group: '每日任務', title: '分享妝容到 IG／Threads', reward: 5, daily: true, check: () => false },
         { id: 'daily_checkin', group: '每日任務', title: '完成今日打卡', reward: 5, daily: true, check: email => MemberRewards.checkinStatus(email).checkedToday }
     ],
     _claimKey(taskId, daily) { return daily ? `${taskId}:${this._today()}` : taskId; },

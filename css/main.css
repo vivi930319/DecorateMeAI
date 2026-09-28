@@ -5308,3 +5308,24 @@ body:has(.gt-root) .help-fab { display: none; }
 .share-landing-kicker { font-family: var(--sans); font-size: 11px; letter-spacing: .14em; color: var(--gold-deep); }
 .share-landing b { font-family: var(--cjk); font-size: 16px; font-weight: 500; color: var(--ink-soft); }
 .share-landing p { margin: 0; font-family: var(--cjk); font-size: 13px; line-height: 1.7; color: var(--mid); }
+
+/* ── 推薦碼正式版／粉底妝前基準（2026-09-28）── */
+.referral-hint { display: block; min-height: 1.2em; margin-top: 4px; font-size: 12px; color: var(--text-muted, #8a7a74); }
+.referral-hint.ok { color: #2f7a4f; }
+.referral-hint.bad { color: #b0453b; }
+.referral-hint.warn { color: #9a6b1f; }
+.referral-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.referral-stats { font-size: 12px; opacity: .8; }
+.referral-recent { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.referral-recent li { display: flex; gap: 8px; align-items: center; }
+.referral-status { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: rgba(0,0,0,.06); }
+.referral-status.rs-rewarded, .user-fb-cat.rs-rewarded { background: rgba(47,122,79,.14); color: #2f7a4f; }
+.referral-status.rs-rejected, .user-fb-cat.rs-rejected { background: rgba(176,69,59,.12); color: #b0453b; }
+.referral-row footer { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.rec-foundation-note .rfn-src { font-size: 12px; opacity: .75; }
+.rec-foundation-note.rfn-baseline_fallback { border-style: dashed; }
+.rec-foundation-note .rfn-baseline-btn { margin-top: 8px; }
+@media (max-width: 600px) {
+    .referral-actions { width: 100%; }
+    .referral-actions .btn-sm { flex: 1 1 0; }
+}

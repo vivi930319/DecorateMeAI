@@ -21,6 +21,9 @@
             <button type="button" data-admin-section="userFeedback">
                 <span class="admin-nav-index">05</span><span>使用者意見回饋</span>
             </button>
+            <button type="button" data-admin-section="referrals">
+                <span class="admin-nav-index">06</span><span>推薦紀錄</span>
+            </button>
         </nav>
 
         <div class="admin-account">
@@ -399,6 +402,24 @@
                     <button class="admin-secondary-button" type="button" id="userFbRefresh">重新載入</button>
                 </div>
                 <div id="userFbList" class="user-fb-list"></div>
+            </section>
+
+            <!-- 推薦紀錄（2026-09-28）。GET /api/admin/referrals、POST /api/admin/referrals/{id}/reject；Gateway 限管理員。 -->
+            <section class="admin-view" data-admin-view="referrals" hidden>
+                <div class="admin-view-heading">
+                    <div><span>Referrals</span><h2>推薦紀錄</h2></div>
+                    <span class="admin-crawler-state idle" id="referralAdminState">尚未載入</span>
+                </div>
+                <div class="admin-feedback-tools">
+                    <div class="admin-tabs" id="referralAdminFilter" role="group" aria-label="推薦狀態篩選">
+                        <button class="admin-tab active" type="button" data-rf-status="">全部</button>
+                        <button class="admin-tab" type="button" data-rf-status="pending">等待驗證</button>
+                        <button class="admin-tab" type="button" data-rf-status="rewarded">已發點</button>
+                        <button class="admin-tab" type="button" data-rf-status="rejected">未發點／已撤銷</button>
+                    </div>
+                    <button class="admin-secondary-button" type="button" id="referralAdminRefresh">重新載入</button>
+                </div>
+                <div id="referralAdminList" class="user-fb-list"></div>
             </section>
         </main>
     </div>

@@ -23,7 +23,8 @@ const cut = (sig) => {
     }
 };
 
-const sandbox = { escapeHtml: (s) => String(s), console };
+// Router：暫定色號（baseline_fallback）判斷會讀全域的粉底狀態；空物件＝沒有狀態，行為不變
+const sandbox = { escapeHtml: (s) => String(s), console, Router: {} };
 vm.createContext(sandbox);
 vm.runInContext(
     // colorContract 是 colorDiffInfo 的新依賴（色彩驗證契約 2026-09-11）：
@@ -31,6 +32,8 @@ vm.runInContext(
     cut('function colorContract(p) {') + '\n'
     // 2026-09-28 新依賴：化妝包已有粉底時不講色差。沙盒沒有 MakeupBag，回 false，行為不變。
     + cut('function bagHasFoundation() {') + '\n'
+    + cut('function currentFoundationMatchStatus(product = null) {') + '\n'
+    + cut('function foundationIsProvisional(product = null) {') + '\n'
     + cut('function colorDiffInfo(p) {') + '\n'
     + cut('function colorDiffEntryHtml(p) {') + '\n'
     + 'globalThis.__info = colorDiffInfo; globalThis.__entry = colorDiffEntryHtml;', sandbox);

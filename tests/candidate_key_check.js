@@ -47,6 +47,8 @@ vm.runInContext(
        styleScores: null, styleRankings: [], styleIds: [], styleEligible: null,
        styleExcluded: false, styleUnknown: [], styleReason: null, styleConfidence: null,
      }),
+     // 2026-09-28：粉底狀態字串／物件兩種形狀都收
+     _normalizeFoundationStatus: (v) => (v && typeof v === 'object') ? v : (typeof v === 'string' && v.trim() ? { status: v.trim() } : null),
      productServerFiltering: false,
      ${body}
    };

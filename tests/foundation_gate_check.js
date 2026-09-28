@@ -43,6 +43,10 @@ vm.runInContext(cut(src, 'function colorContract(p) {') + '\n'
     + cut(src, 'function foundationStatusMessage(status) {') + '\n'
     + cut(src, 'function foundationStatusRawDeltaE(status) {') + '\n'
     + cut(src, 'function foundationStatusHtml(product = null) {') + '\n'
+    + cut(src, 'function foundationIsProvisional(product = null) {') + '\n'
+    + cut(src, 'function currentFoundationLabSource() {') + '\n'
+    + cut(src, 'function foundationLabSourceLine() {') + '\n'
+    + cut(src, 'function canCreateBaselineFromCurrent() {') + '\n'
     // shadeRecommendationHtml 會呼叫 userSkinRow（把使用者膚色擺在三欄上面）。
     // 抽了前者沒抽相依，測試會在執行時炸 ReferenceError。
     + cut(src, 'function userSkinRow() {') + ';\n'

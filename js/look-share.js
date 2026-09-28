@@ -224,6 +224,15 @@
         const captionEl = modal.querySelector('[data-caption]');
         const withBeforeEl = modal.querySelector('[data-with-before]');
         const threadsEl = modal.querySelector('[data-threads]');
+        // 任務點數「分享妝容到 IG／Threads」：每次按下分享就回報一次，發不發點、每天幾次由會員資料庫決定。
+        // IG 不會告訴網頁使用者最後有沒有真的發文，所以能回報的只有「分享動作完成」。
+        const reportShare = platform => {
+            if (typeof ShareEvents === 'undefined') return;
+            ShareEvents.record(platform, styleId).then(r => {
+                if (r?.ok && Number(r.pointsAwarded) > 0) showToast(`分享任務完成，獲得 ${Number(r.pointsAwarded)} 點`);
+            }).catch(() => {});
+        };
+        threadsEl.addEventListener('click', () => reportShare('threads'));
         const nativeBtn = modal.querySelector('[data-native]');
         const noteEl = modal.querySelector('[data-note]');
         const linkEl = modal.querySelector('[data-link]');
@@ -290,6 +299,8 @@
             try {
                 if (navigator.canShare(data)) await navigator.share(data);
                 else await navigator.share({ text: captionEl.value, url: currentLink() });
+                // share() 成功只代表使用者選了一個 App，不代表真的發出去；取消會進 catch，不回報
+                reportShare(format === 'story' ? 'ig_story' : 'ig_post');
             } catch (err) {
                 // 使用者自己取消分享面板不算錯誤
                 if (err && err.name !== 'AbortError') showToast('這台裝置無法直接分享，請改用下載圖片');
@@ -300,6 +311,7 @@
             const a = document.createElement('a');
             a.href = url; a.download = fileName();
             document.body.appendChild(a); a.click(); a.remove();
+            reportShare('download');
         };
         modal.querySelector('[data-copy-link]').onclick = async () => {
             try { await navigator.clipboard.writeText(currentLink()); showToast('已複製連結'); }

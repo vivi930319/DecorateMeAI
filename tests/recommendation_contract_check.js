@@ -56,6 +56,10 @@ vm.runInContext(
   + cut('function foundationStatusMessage(status) {') + '\n'
   + cut('function foundationStatusRawDeltaE(status) {') + '\n'
   + cut('function foundationStatusHtml(product = null) {') + '\n'
+  + cut('function foundationIsProvisional(product = null) {') + '\n'
+  + cut('function currentFoundationLabSource() {') + '\n'
+  + cut('function foundationLabSourceLine() {') + '\n'
+  + cut('function canCreateBaselineFromCurrent() {') + '\n'
   + cut('function recommendationPanelHtml(p) {') + '\n'
   // recommendationPanelHtml 會呼叫色差入口，抽了前者沒抽相依，
   // 測試會在執行時炸 ReferenceError——那是測試的問題，不是程式的。

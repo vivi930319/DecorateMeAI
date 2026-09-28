@@ -26,8 +26,9 @@ const check = (name, condition) => {
 console.log('\n=== 1. API 回應欄位接線 ===');
 check('從 analysisPackage.recommendations 讀取回應',
     /data\.analysisPackage\?\.recommendations\s*\|\|\s*data\.recommendations/.test(api));
+// 2026-09-28 妝前基準契約：recommendations 裡沒有時退回頂層
 check('讀取 shadeRecommendation 並正規化',
-    /shadeRecommendation:\s*this\._normalizeShadeRecommendation\(rec\.shadeRecommendation\)/.test(api));
+    /shadeRecommendation:\s*this\._normalizeShadeRecommendation\(rec\.shadeRecommendation(\s*\?\?\s*data\.shadeRecommendation)?\)/.test(api));
 check('色階商品使用 imageUrl 進入詳情圖欄位',
     /imgFull:\s*product\.imageUrl\s*\|\|/.test(api));
 
@@ -74,6 +75,7 @@ vm.runInContext(`var Api = {
     ${block(api, '    _thumbUrl(raw, px = 400) {')},
     ${block(api, '    _normalizeProduct(product) {')},
     ${block(api, '    _normalizeCuratedStyles(product) {')},
+    ${block(api, '    _normalizeFoundationStatus(value) {')},
     ${block(api, '    _normalizeShadeRecommendation(raw) {')}
 };`, normalizeSandbox);
 const rawAnchor = { id: 101, type: 'foundations', category: '底妝', name: 'MAC N18' };

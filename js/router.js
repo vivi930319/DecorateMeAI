@@ -644,6 +644,7 @@ const RecommendationNotice = {
         this.foundationStatus = (rec.foundationMatchStatus
             && typeof rec.foundationMatchStatus === 'object') ? rec.foundationMatchStatus : null;
         Router.foundationMatchStatus = this.foundationStatus;
+        Router.foundationLabSource = rec.foundationLabSource || null;
         // 契約 §3：personalization 要讓使用者知道有沒有套用個人化、依據多少互動。
         // 後端一直有回這包，先前前端完全沒用——於是「這是依你的使用紀錄推的」還是
         // 「這只是依這次的臉部分析推的」，畫面上分不出來。
@@ -1140,13 +1141,17 @@ function recommendationCardHtml(p) {
         || !Number.isFinite(Number(rawPercent))) ? null : Number(rawPercent);
     const foundationStatus = currentFoundationMatchStatus(p);
     const closestAvailable = foundationStatus?.status === 'closest_available';
+    const provisional = foundationStatus?.status === 'baseline_fallback';
     const backendLabel = String(
         p?.recommendationLabel || pr.recommendationLabel || pr.recommendation_label
         || pr.matchLabel || ''
     ).trim();
     // closest_available 不得被舊版的 MATCH／匹配／最適合文案重新包裝成 matched。
     // 這只是狀態型顯示保護，不會改變後端排序或色號選擇。
-    const label = (closestAvailable && /\bMATCH\b|匹配|最適合你/i.test(backendLabel))
+    // baseline_fallback（暫定色號）連百分比都不顯示，只標「暫定色號」。
+    const label = provisional
+        ? '暫定色號'
+        : (closestAvailable && /\bMATCH\b|匹配|最適合你/i.test(backendLabel))
         ? ''
         : (backendLabel || (matchPercent == null ? '' : `推薦契合度 ${Math.round(matchPercent)}%`));
 
@@ -1155,13 +1160,13 @@ function recommendationCardHtml(p) {
     // matchPercent 是綜合排序的契合度，不是上妝成功率；只要推薦項目有這個欄位
     // 就一定顯示，不再用 displayScore、score 或 showMatchPercent 把它擋掉。
     if (label) {
-        const hasQualifier = /推薦契合度/.test(label);
+        const hasQualifier = /推薦契合度/.test(label) || provisional;
         parts.push(`<div class="rec-match"><b>${escapeHtml(label)}</b>${hasQualifier ? '' : '<small>推薦契合度</small>'}</div>`);
     }
     // 後端的 recommendationLabel 可能是純文字（例如「暖色調協調」），
     // 仍要把後端回傳的 matchPercent 明確顯示出來；這個百分比是推薦契合度，
     // 不是機率，也不是上妝成功率。
-    if (matchPercent != null && !/%/.test(label)) {
+    if (matchPercent != null && !provisional && !/%/.test(label)) {
         parts.push(`<div class="rec-match-percent">推薦契合度 ${Math.round(matchPercent)}%</div>`);
     }
     if (pr.headline && !(isFoundationProduct(p) && bagHasFoundation())) parts.push(`<div class="rec-headline">${escapeHtml(pr.headline)}</div>`);
@@ -1196,6 +1201,7 @@ function colorDiffInfo(p) {
     const kind = String(p?.apiType || p?.type || p?.category || p?.cat || '').trim().toLowerCase();
     if (!['foundations', 'foundation', 'base', '底妝'].includes(kind)) return null;
     if (bagHasFoundation()) return null;
+    if (foundationIsProvisional(p)) return null;
     // 顏色沒通過官方數值驗證就不能講色差（色彩驗證契約 2026-09-11 §2）。
     //
     // 這一條擋的是**色彩主張**，不是整張推薦卡：`colorMatchReady: false` 的商品
@@ -1297,16 +1303,19 @@ function recommendationPanelHtml(p) {
         ? p.recommendationPresentation : {};
     const rawPercent = p?.matchPercent ?? pr.matchPercent ?? pr.match_percent;
     const pct = (rawPercent == null || rawPercent === '') ? NaN : Number(rawPercent);
-    const hasPct = Number.isFinite(pct);
     const foundationStatus = currentFoundationMatchStatus(p);
     const closestAvailable = foundationStatus?.status === 'closest_available';
+    const provisional = foundationStatus?.status === 'baseline_fallback';
+    const hasPct = Number.isFinite(pct) && !provisional;
     const backendLabel = String(
         p?.recommendationLabel || pr.recommendationLabel || pr.recommendation_label
         || pr.matchLabel || ''
     ).trim();
     // closest_available 不能被舊版 MATCH／匹配／最適合文案誤標為 matched；
     // 百分比仍照契約顯示為「推薦契合度」，不代表機率或通過膚色門檻。
-    const label = (closestAvailable && /\bMATCH\b|匹配|最適合你/i.test(backendLabel))
+    const label = provisional
+        ? '暫定色號'
+        : (closestAvailable && /\bMATCH\b|匹配|最適合你/i.test(backendLabel))
         ? ''
         : (backendLabel || (hasPct ? `推薦契合度 ${Math.round(pct)}%` : ''));
     const labelHasPercent = /%/.test(label);
@@ -1323,7 +1332,7 @@ function recommendationPanelHtml(p) {
     // matchWord 的內容正是「此色號與您的膚色相近（色差 1.3）」這一類，而那個 1.3
     // 是用不可信的估計 hex 算出來的——講出來比不講更糟。
     const colorClaimAllowed = colorContract(p).ready;
-    const { matchWord, gate } = (closestAvailable || !colorClaimAllowed)
+    const { matchWord, gate } = (closestAvailable || provisional || !colorClaimAllowed)
         ? { matchWord: '', gate: '' }
         : foundationSkinLines(p?.foundationSkinMatch);
     // 後端的 reasonTexts 常有一句就是「此色號與您的膚色相近（色差 1.3）」，
@@ -1335,6 +1344,8 @@ function recommendationPanelHtml(p) {
     const reasons = backendReasons
         .filter(r => !(matchWord && String(r).includes('色差')))
         .filter(r => colorClaimAllowed || !/色差|膚色相近|與您的膚色|與你膚色/.test(String(r)))
+        // 暫定色號（baseline_fallback）：任何色差、匹配或百分比的說法都不能出現
+        .filter(r => !provisional || !/色差|ΔE|膚色相近|與您的膚色|與你膚色|匹配|%/.test(String(r)))
         .slice(0, 3);
 
     return `<section class="rec-panel">
@@ -1343,7 +1354,7 @@ function recommendationPanelHtml(p) {
             ${label ? `<div class="rec-bigmatch">${escapeHtml(label)}</div>` : ''}
             ${hasPct && !labelHasPercent
                 ? `<div class="rec-match-percent">推薦契合度 ${Math.round(pct)}%</div>` : ''}
-            <div class="rec-bigmatch-sub">推薦契合度</div>
+            ${provisional ? '' : '<div class="rec-bigmatch-sub">推薦契合度</div>'}
             ${pr.headline ? `<div class="rec-panel-headline">${escapeHtml(pr.headline)}</div>` : ''}
             ${traits.length ? `<div class="rec-traits">${traits
                 .map(t => `<span>${escapeHtml(String(t))}</span>`).join('')}</div>` : ''}
@@ -1436,6 +1447,49 @@ function currentFoundationMatchStatus(product = null) {
     return saved && typeof saved === 'object' ? saved : null;
 }
 
+// 妝前膚色基準契約（2026-09-28）：baseline_fallback＝還沒有素顏基準、用這次照片暫定的色號。
+// 這個狀態下**不能**顯示 ΔE00 或任何匹配百分比——那個數字是拿可能帶妝的膚色算的。
+function foundationIsProvisional(product = null) {
+    return currentFoundationMatchStatus(product)?.status === 'baseline_fallback';
+}
+
+// before_makeup_baseline／current_analysis。來源跟著這一次推薦，不屬於單一商品。
+function currentFoundationLabSource() {
+    const v = Router.foundationLabSource
+        || Router?.analysisPackage?.recommendations?.foundationLabSource
+        || (typeof AnalysisDraft !== 'undefined' ? AnalysisDraft.load()?.recommendations?.foundationLabSource : null);
+    return v === 'before_makeup_baseline' || v === 'current_analysis' ? v : null;
+}
+
+function foundationLabSourceLine() {
+    const src = currentFoundationLabSource();
+    if (src === 'before_makeup_baseline') return '<p class="rfn-src">比色依據：你的妝前素顏膚色基準</p>';
+    if (src === 'current_analysis') return '<p class="rfn-src">比色依據：這次照片的膚色</p>';
+    return '';
+}
+
+// 「用這次分析建立素顏基準」按鈕。只有會員、而且這次 LAB 可信才給按——
+// 不可信的 LAB 存成基準，之後每一次粉底推薦都會被它帶偏。
+function canCreateBaselineFromCurrent() {
+    if (typeof SkinBaseline === 'undefined' || isGuest()) return false;
+    const skin = Router.analysisPackage?.faceAnalysis?.skinTone;
+    return !!skin && skin.labReliable !== false && Api._isUsableLab(SkinBaseline._toArray(skin.lab));
+}
+
+window.createSkinBaselineFromCurrent = function () {
+    if (!canCreateBaselineFromCurrent()) {
+        showAlert('這次分析的膚色數值不夠可靠。請卸妝、在自然光下重新做一次臉部分析。');
+        return;
+    }
+    showConfirm('這次上傳的是素顏照片嗎？基準會用在之後每一次粉底比色，帶妝的照片會讓色號偏掉。', {
+        title: '建立妝前素顏基準', okText: '是素顏，建立基準', cancelText: '先不要',
+        onOk: async () => {
+            const r = await SkinBaseline.save(Router.analysisPackage.faceAnalysis.skinTone.lab);
+            showToast(r.ok ? '已建立素顏基準，下次推薦粉底會用它比色' : '建立失敗，請稍後再試');
+        }
+    });
+};
+
 function foundationStatusMessage(status) {
     if (!status || typeof status !== 'object') return '';
     return String(status.message ?? status.reason ?? status.description
@@ -1460,6 +1514,26 @@ function foundationStatusHtml(product = null) {
     const calibrated = code === 'FOUNDATION_CALIBRATED_SAME_LANE';
     const closest = state === 'closest_available';
     const noMatch = state === 'no_match';
+    const provisional = state === 'baseline_fallback';
+    const matched = state === 'matched';
+    const srcLine = foundationLabSourceLine();
+    if (provisional) {
+        // 暫定色號：不顯示 ΔE00、不顯示匹配百分比，只請使用者建立素顏基準
+        const btn = canCreateBaselineFromCurrent()
+            ? '<button type="button" class="btn-outline btn-sm rfn-baseline-btn" onclick="createSkinBaselineFromCurrent()">這次是素顏，用它建立基準</button>'
+            : '';
+        return `<div class="rec-foundation-note rfn-baseline_fallback">
+            <span class="rfn-mark">✦</span>
+            <div><p><b>暫定色號</b>：還沒有你的妝前素顏膚色基準，這支是依這次照片暫定的，可能受妝感或光線影響。</p>
+            ${foundationStatusMessage(status) ? `<p>${escapeHtml(foundationStatusMessage(status))}</p>` : ''}
+            <p class="rfn-sub">卸妝後在自然光下做一次臉部分析，就能建立素顏基準，之後的粉底色號會更準。</p>
+            ${btn}</div>
+        </div>`;
+    }
+    if (matched && !calibrated) {
+        // matched：色差照常由卡片其他區塊顯示；這裡只補一行比色依據
+        return srcLine ? `<div class="rec-foundation-note rfn-matched"><span class="rfn-mark">✦</span><div>${srcLine}</div></div>` : '';
+    }
     if (!calibrated && !closest && !noMatch) return '';
 
     const message = foundationStatusMessage(status);
@@ -1469,6 +1543,7 @@ function foundationStatusHtml(product = null) {
         return `<div class="rec-foundation-note rfn-${statusClass}">
             <span class="rfn-mark">✦</span>
             <div>${message ? `<p>${escapeHtml(message)}</p>` : ''}
+            ${srcLine}
             <p class="rfn-sub">${reminder}</p></div>
         </div>`;
     }
@@ -1477,8 +1552,9 @@ function foundationStatusHtml(product = null) {
         const rawText = raw == null ? '' : `（原始膚色 ΔE00 ${raw.toFixed(2)}）`;
         return `<div class="rec-foundation-note rfn-closest_available">
             <span class="rfn-mark">✦</span>
-            <div><p>資料庫目前最接近${rawText}</p>
+            <div><p>目前最接近的色號${rawText}（不是精準匹配）</p>
             ${message ? `<p>${escapeHtml(message)}</p>` : ''}
+            ${srcLine}
             <p class="rfn-sub">${reminder}</p></div>
         </div>`;
     }
@@ -1613,10 +1689,11 @@ function shadeRecommendationHtml(p) {
     const hasPct = Number.isFinite(pct);
     const foundationStatus = currentFoundationMatchStatus(p);
     const closestAvailable = foundationStatus?.status === 'closest_available';
+    const provisional = foundationStatus?.status === 'baseline_fallback';
 
     // 粉底門檻與校正狀態由 foundationMatchStatus 控制。closest_available
-    // 不得沿用 matched／校正成功的膚色文案。
-    const { matchWord, gate } = closestAvailable
+    // 不得沿用 matched／校正成功的膚色文案；baseline_fallback 不顯示任何色差或百分比。
+    const { matchWord, gate } = (closestAvailable || provisional)
         ? { matchWord: '', gate: '' }
         : foundationSkinLines(a.product?.foundationSkinMatch);
 
@@ -1660,7 +1737,8 @@ function shadeRecommendationHtml(p) {
         if (kind === 'anchor') {
             // 不把 foundationSkinMatch.rawSkinDeltaE／deltaE 畫成主推薦色差；
             // 校正與 closest_available 的原始色差只能由狀態提示依契約分流顯示。
-            if (Number.isFinite(np)) metric = `推薦契合度 ${Math.round(np)}%`;
+            if (provisional) metric = '暫定色號';
+            else if (Number.isFinite(np)) metric = `推薦契合度 ${Math.round(np)}%`;
         } else {
             const anchorDeltaE = num(node.anchorDeltaE);
             if (anchorDeltaE != null) {
@@ -3554,6 +3632,7 @@ async function runMakeupSuggestion(onProgress) {
                     foundationCrossBrandAlternatives: rec.foundationCrossBrandAlternatives || [],
                     foundationAvailableTargetBrands: rec.foundationAvailableTargetBrands || [],
                     foundationMatchStatus: rec.foundationMatchStatus || null,
+                    foundationLabSource: rec.foundationLabSource || null,
                 }
             });
             AnalysisDraft.save(Router.analysisPackage);
@@ -5093,6 +5172,12 @@ const PageInit = {
                     }
                 });
                 AnalysisDraft.save(Router.analysisPackage);
+                // 妝前膚色基準：會員第一次拿到可信 LAB 時自動建立（已經有就不覆蓋，見 SkinBaseline）
+                if (typeof SkinBaseline !== 'undefined' && !isGuest()) {
+                    SkinBaseline.captureFromAnalysis(Router.analysisPackage.faceAnalysis)
+                        .then(r => { if (r?.created) showToast('已建立你的素顏膚色基準，之後推薦粉底會用它比色'); })
+                        .catch(() => {});
+                }
                 updatePackageStatus();
                 fill.style.width = '100%';
                 setLoadingStatus('分析完成', false);
@@ -5582,7 +5667,8 @@ const PageInit = {
                                         shadeRecommendation: rec?.shadeRecommendation || null,
                                         foundationCrossBrandAlternatives: rec?.foundationCrossBrandAlternatives || [],
                                         foundationAvailableTargetBrands: rec?.foundationAvailableTargetBrands || [],
-                                        foundationMatchStatus: rec?.foundationMatchStatus || null
+                                        foundationMatchStatus: rec?.foundationMatchStatus || null,
+                                        foundationLabSource: rec?.foundationLabSource || null
                                     }
                                 });
                                 AnalysisDraft.save(Router.analysisPackage);
@@ -7079,21 +7165,37 @@ const PageInit = {
         const referralCard = document.getElementById('profileReferralCard');
         if (referralCard) {
             if (isGuest() || typeof Referral === 'undefined') {
-                referralCard.innerHTML = '<div class="empty-state compact">登入會員後即可產生你的專屬推薦碼</div>';
+                referralCard.innerHTML = '<div class="empty-state compact">登入會員後即可取得你的專屬推薦碼</div>';
             } else {
-                const code = Referral.myCode(profile.email);
-                const count = Referral.countReferrals(profile.email);
-                referralCard.innerHTML = `<div class="member-action-card">
-                    <div>
-                        <b>你的推薦碼：<span id="myReferralCode">${escapeHtml(code)}</span></b>
-                        <p>朋友註冊時填入這組碼，驗證完成後你會獲得 ${Referral._rewardPoints} 點；已成功推薦 ${count} 人。</p>
-                    </div>
-                    <button class="btn-outline btn-sm" id="copyReferralBtn">複製推薦碼</button>
-                </div>`;
-                const copyBtn = document.getElementById('copyReferralBtn');
-                if (copyBtn) copyBtn.onclick = () => {
-                    navigator.clipboard?.writeText(code).then(() => showToast('推薦碼已複製')).catch(() => showToast('複製失敗，請手動選取'));
-                };
+                referralCard.innerHTML = '<div class="empty-state compact">讀取推薦碼中…</div>';
+                Referral.mine(profile.email).then(r => {
+                    if (!r.ok || !r.code) {
+                        referralCard.innerHTML = `<div class="empty-state compact">${r.status === 404 ? '推薦碼服務準備中' : '暫時讀不到推薦碼，請稍後再試'}</div>`;
+                        return;
+                    }
+                    const inviteLink = `${location.origin}/?invite=${encodeURIComponent(r.code)}`;
+                    const recent = r.recent.length ? `<ul class="referral-recent">${r.recent.map(row => `
+                        <li><span>${escapeHtml(String(row.refereeName || '新會員'))}</span>
+                        <span class="referral-status rs-${escapeHtml(String(row.status || ''))}">${escapeHtml(Referral.STATUS_LABELS[row.status] || row.status || '')}</span>
+                        ${row.status === 'rewarded' && row.points ? `<b>+${Number(row.points)}</b>` : ''}</li>`).join('')}</ul>` : '';
+                    referralCard.innerHTML = `<div class="member-action-card">
+                        <div>
+                            <b>你的推薦碼：<span id="myReferralCode">${escapeHtml(r.code)}</span></b>
+                            <p>朋友註冊時填入這組碼、完成信箱驗證後，你得 ${Referral.REFERRER_POINTS} 點、朋友得 ${Referral.REFEREE_POINTS} 點。</p>
+                            <p class="referral-stats">已推薦 ${r.referredCount} 人 · 已發點 ${r.rewardedCount} 人${r.pendingCount ? ` · 等待驗證 ${r.pendingCount} 人` : ''} · 累積 ${r.pointsEarned} 點</p>
+                        </div>
+                        <div class="referral-actions">
+                            <button class="btn-outline btn-sm" id="copyReferralBtn">複製推薦碼</button>
+                            <button class="btn-outline btn-sm" id="copyInviteLinkBtn">複製邀請連結</button>
+                        </div>
+                    </div>${recent}`;
+                    const copy = (text, ok) => navigator.clipboard?.writeText(text)
+                        .then(() => showToast(ok)).catch(() => showToast('複製失敗，請手動選取'));
+                    document.getElementById('copyReferralBtn').onclick = () => copy(r.code, '推薦碼已複製');
+                    document.getElementById('copyInviteLinkBtn').onclick = () => copy(inviteLink, '邀請連結已複製，朋友點開註冊會自動帶入推薦碼');
+                }).catch(() => {
+                    referralCard.innerHTML = '<div class="empty-state compact">暫時讀不到推薦碼，請稍後再試</div>';
+                });
             }
         }
 
@@ -7427,7 +7529,8 @@ const PageInit = {
             members: { eyebrow: 'MEMBER ACCESS', title: '會員與權限管理' },
             products: { eyebrow: 'PRODUCT CATALOG', title: '商品管理' },
             feedback: { eyebrow: 'MODEL CORRECTION REVIEW', title: '模型修正複核' },
-            userFeedback: { eyebrow: 'USER FEEDBACK', title: '使用者意見回饋' }
+            userFeedback: { eyebrow: 'USER FEEDBACK', title: '使用者意見回饋' },
+            referrals: { eyebrow: 'REFERRALS', title: '推薦紀錄' }
         };
         const sectionButtons = Array.from(document.querySelectorAll('[data-admin-section]'));
         const sectionViews = Array.from(document.querySelectorAll('[data-admin-view]'));
@@ -7449,6 +7552,7 @@ const PageInit = {
             if (next === 'feedback') Router._loadFeedbackOnce?.();
             if (next === 'products') Router._loadProductAuditOnce?.();
             if (next === 'userFeedback') Router._loadUserFeedbackOnce?.();
+            if (next === 'referrals') Router._loadReferralsOnce?.();
             // 換了區塊就要看到新區塊的開頭，否則視窗會停在上一區的捲動位置。
             //
             // ⚠️ 原本這行是 `document.querySelector('.admin-stage')?.scrollTo(...)`，
@@ -7470,6 +7574,76 @@ const PageInit = {
                 }
             }
         };
+        // ── 推薦紀錄（2026-09-28）：GET /api/admin/referrals、POST …/{id}/reject ──
+        // Gateway 對 api/admin/* 會再驗一次管理員身分，一般會員拿不到這些資料。
+        {
+            const rfState = document.getElementById('referralAdminState');
+            const rfList = document.getElementById('referralAdminList');
+            const rfFilter = document.getElementById('referralAdminFilter');
+            const rfRefresh = document.getElementById('referralAdminRefresh');
+            let rfStatus = '';
+            let rfLoaded = false;
+            const setRfState = (text, cls) => { if (rfState) { rfState.textContent = text; rfState.className = `admin-crawler-state ${cls}`; } };
+            const when = v => escapeHtml(String(v || '').replace('T', ' ').slice(0, 16));
+            const loadReferrals = async () => {
+                if (!rfList || typeof Referral === 'undefined') return;
+                setRfState('載入中…', 'running');
+                const res = await Referral.adminList({ status: rfStatus });
+                if (!res.ok) {
+                    const why = res.status === 404 ? '會員資料庫還沒有推薦紀錄的 API'
+                        : (res.status === 401 || res.status === 403) ? '需要管理員身分才能檢視，請重新登入'
+                        : `讀取失敗${res.error ? `：${res.error}` : ''}`;
+                    setRfState('無法載入', 'error');
+                    rfList.innerHTML = `<div class="empty-state">${escapeHtml(why)}</div>`;
+                    return;
+                }
+                rfLoaded = true;
+                setRfState(`共 ${res.items.length} 筆`, 'idle');
+                if (!res.items.length) { rfList.innerHTML = '<div class="empty-state">目前沒有這個狀態的推薦紀錄。</div>'; return; }
+                rfList.innerHTML = res.items.map(it => {
+                    const status = String(it.status || '');
+                    const reason = it.rejectReason || it.reject_reason || '';
+                    const referrer = it.referrerName || it.referrerEmail || it.referrer_email || it.referrer || '';
+                    const referee = it.refereeName || it.refereeEmail || it.referee_email || it.referee || '';
+                    const pts = [it.referrerPoints ?? it.referrer_points, it.refereePoints ?? it.referee_points];
+                    return `<article class="user-fb-item referral-row" data-rf-id="${escapeHtml(String(it.id))}">
+                        <header>
+                            <span class="user-fb-cat rs-${escapeHtml(status)}">${escapeHtml(Referral.STATUS_LABELS[status] || status || '—')}</span>
+                            <span class="user-fb-meta">${when(it.createdAt || it.created_at)}${it.code ? ` · 推薦碼 ${escapeHtml(it.code)}` : ''}</span>
+                        </header>
+                        <p>推薦人：${escapeHtml(referrer)}　→　新會員：${escapeHtml(referee)}</p>
+                        <footer>
+                            ${status === 'rewarded' ? `<small>已發點：推薦人 +${Number(pts[0]) || 0}、新會員 +${Number(pts[1]) || 0}</small>` : ''}
+                            ${reason ? `<small>原因：${escapeHtml(Referral.REJECT_LABELS[reason] || reason)}</small>` : ''}
+                            ${status !== 'rejected' ? '<button type="button" class="admin-secondary-button" data-rf-reject>撤銷並扣回點數</button>' : ''}
+                        </footer>
+                    </article>`;
+                }).join('');
+                rfList.querySelectorAll('[data-rf-reject]').forEach(btn => {
+                    btn.onclick = () => {
+                        const id = btn.closest('[data-rf-id]').dataset.rfId;
+                        showConfirm('撤銷這筆推薦？已發出的點數會從推薦人與新會員扣回，無法復原。', {
+                            title: '撤銷推薦獎勵', type: 'error', okText: '撤銷', cancelText: '取消',
+                            onOk: async () => {
+                                btn.disabled = true;
+                                const r = await Referral.adminReject(id);
+                                showToast(r.ok ? '已撤銷並扣回點數' : `撤銷失敗${r.error ? `：${r.error}` : ''}`);
+                                if (r.ok) loadReferrals(); else btn.disabled = false;
+                            }
+                        });
+                    };
+                });
+            };
+            Router._loadReferralsOnce = () => { if (!rfLoaded) loadReferrals(); };
+            if (rfRefresh) rfRefresh.onclick = () => loadReferrals();
+            rfFilter?.querySelectorAll('[data-rf-status]').forEach(btn => {
+                btn.onclick = () => {
+                    rfStatus = btn.dataset.rfStatus;
+                    rfFilter.querySelectorAll('[data-rf-status]').forEach(b => b.classList.toggle('active', b === btn));
+                    loadReferrals();
+                };
+            });
+        }
         // ── 使用者意見回饋（2026-09-28）：資料在會員資料庫，Gateway 放行 api/feedback ──
         {
             const fbState = document.getElementById('userFbState');
@@ -10541,6 +10715,8 @@ function showApp(preferredPage) {
     } catch (_) {}
     syncRemoteFavorites();
     syncRemoteCart();
+    // 粉底推薦要帶妝前基準：先讀進快取，組推薦請求時同步取用
+    if (typeof SkinBaseline !== 'undefined' && !isGuest()) SkinBaseline.load().catch(() => {});
     const landing = (typeof AdminStore !== 'undefined' && AdminStore.isAdmin()) ? 'admin' : 'dashboard';
     // 管理員一律進後台（Router.go 內另有一道相同的守衛）；其餘情況才還原原本那一頁。
     const wanted = String(preferredPage || '').replace(/^#/, '');
@@ -10677,6 +10853,19 @@ function shareLandingHtml() {
     </div>`;
 }
 
+// 邀請連結（?invite=CODE）：記下推薦碼，註冊表單會自動帶入。登入頁上方提示「朋友邀請你」。
+function inviteLandingHtml() {
+    let code = '';
+    try { code = Referral.normalizeCode(new URLSearchParams(location.search).get('invite')); } catch (_) {}
+    if (code) { try { sessionStorage.setItem('beautyInviteCode', code); } catch (_) {} }
+    if (!code) return '';
+    return `<div class="share-landing invite-landing">
+        <span class="share-landing-kicker">✦ 朋友邀請你加入</span>
+        <b>用推薦碼 ${escapeHtml(code)} 註冊，完成信箱驗證就送你 ${Referral.REFEREE_POINTS} 點</b>
+        <button class="btn-gold btn-full" type="button" onclick="showRegister()">用推薦碼註冊 →</button>
+    </div>`;
+}
+
 function showLogin() {
     Router.currentPage = null;
     Router._reloadAdmin = null;
@@ -10687,7 +10876,7 @@ function showLogin() {
         <div class="auth-overlay">
             <section class="auth-editorial" aria-label="Decorate Me 登入">
               <div class="auth-brand-panel"><span class="auth-kicker">DECORATE ME</span><h1>妝識<br>你的美</h1><p>從臉部分析開始，保存每一次妝容建議、收藏與專屬風格。</p></div>
-              <div class="auth-form-panel"><div class="auth-card">${shareLandingHtml()}<span class="auth-kicker">會員登入</span><h2>歡迎回來</h2><p class="auth-description">登入後同步分析紀錄、收藏商品與會員主題。</p>
+              <div class="auth-form-panel"><div class="auth-card">${shareLandingHtml()}${typeof Referral !== 'undefined' ? inviteLandingHtml() : ''}<span class="auth-kicker">會員登入</span><h2>歡迎回來</h2><p class="auth-description">登入後同步分析紀錄、收藏商品與會員主題。</p>
                 <div class="input-group"><label>電子郵件</label>
                   <div class="ig-field">
                     <span class="ig-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3.5 7l8.5 6 8.5-6"/></svg></span>
@@ -10727,12 +10916,13 @@ function showRegister() {
                 <div class="input-group"><label>年齡</label><input type="number" id="regAge" placeholder="20"></div>
                 <div class="input-group"><label>密碼</label><input type="password" id="regPwd" placeholder="••••••••"></div>
                 <div class="input-group"><label>確認密碼</label><input type="password" id="regPwd2" placeholder="••••••••"></div>
-                <div class="input-group"><label>推薦碼（選填）</label><input type="text" id="regReferral" placeholder="朋友的推薦碼"></div>
+                <div class="input-group"><label>推薦碼（選填）</label><input type="text" id="regReferral" placeholder="朋友的推薦碼" autocomplete="off" autocapitalize="characters" maxlength="16"><small class="referral-hint" id="regReferralHint" aria-live="polite"></small></div>
                 <button class="btn-gold btn-full" id="regSubmitBtn" onclick="doRegisterAction()" style="margin-top:8px;">註　冊</button>
                 <div style="margin-top:16px;"><span class="auth-link" onclick="showLogin()">已有帳號？返回登入</span></div>
             </div>
         </div>
     `;
+    bindRegisterReferral();
     // 從登入失敗「去註冊」帶過來的帳密：自動填入 email 與密碼（含確認），使用者只要補其他欄位
     const pf = Router.prefillRegister;
     if (pf) {
@@ -10892,6 +11082,32 @@ function doGuestLogin() {
 }
 
 // 寄送驗證碼期間鎖定註冊按鈕，避免重複建立帳號。
+// 推薦碼欄位：停手 0.5 秒後向伺服器確認。只是提示——碼無效也照樣能註冊（規格書 3.3）。
+function bindRegisterReferral() {
+    const input = document.getElementById('regReferral');
+    const hint = document.getElementById('regReferralHint');
+    if (!input || !hint || typeof Referral === 'undefined') return;
+    let timer = null;
+    let seq = 0;
+    const paint = (text, cls) => { hint.textContent = text; hint.className = `referral-hint ${cls || ''}`; };
+    const check = async () => {
+        const code = Referral.normalizeCode(input.value);
+        if (!code) { paint('', ''); return; }
+        const mine = ++seq;
+        paint('檢查中…', 'checking');
+        const r = await Referral.validate(code);
+        if (mine !== seq) return;   // 使用者又改了，這個結果作廢
+        if (r.rateLimited) paint('檢查太頻繁，稍後再試（不影響註冊）', 'warn');
+        else if (!r.ok) paint('暫時無法確認推薦碼（不影響註冊）', 'warn');
+        else if (r.valid) paint(`✓ 推薦碼有效，完成信箱驗證後你會拿到 ${Referral.REFEREE_POINTS} 點`, 'ok');
+        else paint('✗ 找不到這組推薦碼，請確認大小寫與數字（仍可註冊）', 'bad');
+    };
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(check, 500); });
+    let invited = '';
+    try { invited = sessionStorage.getItem('beautyInviteCode') || ''; } catch (_) {}
+    if (invited && !input.value) { input.value = invited; check(); }
+}
+
 let registerInFlight = false;
 
 async function doRegisterAction() {
@@ -10903,7 +11119,8 @@ async function doRegisterAction() {
     const password = document.getElementById('regPwd').value;
     const confirm = document.getElementById('regPwd2').value;
     const avatar = document.getElementById('regAvatarPreview').src || '';
-    const referralCode = document.getElementById('regReferral')?.value.trim() || '';
+    const referralCode = typeof Referral !== 'undefined'
+        ? Referral.normalizeCode(document.getElementById('regReferral')?.value) : '';
 
     if (!name || !phone || !email || !age || !password || !confirm) {
         showAlert('請完整填寫所有欄位');
@@ -10930,6 +11147,8 @@ async function doRegisterAction() {
         // sendOTP 會寄出第二封，使用者手上兩組碼卻只有一組有效，還多燒一次寄信配額。
         // 保留 else 分支是為了相容還沒更新的後端：沒有回報寄出就自己補一次。
         const registered = await Api.register(Router.pendingRegister);
+        // 推薦碼有沒有套用由伺服器決定，驗證完成的訊息要照它講
+        if (Router.pendingRegister) Router.pendingRegister.referral = registered?.referral || null;
         if (!registered || registered.otpSent !== true) {
             await Api.sendOTP(email);
         }
@@ -11001,14 +11220,18 @@ async function doVerifyOTP() {
         avatar: pending.avatar,
         renderQuota: member.renderQuota || null
     });
-    const referralResult = (typeof Referral !== 'undefined' && pending.referralCode)
-        ? Referral.applyReferral(pending.email, pending.referralCode)
-        : { ok: false };
+    // 推薦獎勵在伺服器端、信箱驗證完成的同一刻發放；前端只轉述註冊時伺服器回的結果
+    const referral = pending.referral;
+    const referralMsg = !pending.referralCode ? ''
+        : referral?.applied ? `推薦碼已套用，符合資格的 ${Referral.REFEREE_POINTS} 點會直接存入你的帳戶。`
+        : referral ? (Referral.reasonText(referral.reason) || '推薦碼這次沒有套用。')
+        : '';
+    try { sessionStorage.removeItem('beautyInviteCode'); } catch (_) {}
     Router.pendingRegister = null;
     // 剛註冊登入：同上，把註冊前的訪客購物車與（通常為空的）伺服器車合併一次。
     if (typeof Cart !== 'undefined') Cart._mergeGuestOnce = true;
     showAlert(
-        referralResult.ok ? '帳號已成功建立，推薦碼已套用' : '帳號已成功建立',
+        referralMsg ? `帳號已成功建立。${referralMsg}` : '帳號已成功建立',
         { type:'success', onOk: showApp }
     );
 }
