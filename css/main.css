@@ -104,8 +104,9 @@ body {
 .topbar-brand { cursor:pointer; flex-shrink:0; display:flex; align-items:center; gap:11px; }
 .brand-round-mark { position:relative; width:44px; height:44px; flex:0 0 44px; overflow:hidden; border-radius:50%;
     background:#fff; border:1px solid rgba(232,196,180,.46); box-shadow:0 6px 18px rgba(20,12,14,.2); }
-.brand-round-mark img { position:absolute; width:289%; max-width:none; height:auto; left:50%; top:50%;
-    transform:translate(-50%,-45%); }
+/* 圖檔本身就是裁好的圓形 LOGO（透明外框），直接填滿。先前用的是含尺寸標註的設計稿整張圖，
+   靠放大 289% 硬裁中間，小尺寸下看得出草圖的虛線與文字。 */
+.brand-round-mark img { display:block; width:100%; height:100%; object-fit:contain; }
 .topbar-brand-copy { display:flex; flex-direction:column; min-width:0; }
 .sb-name { font-family:var(--cjk); font-size:20px; font-weight:500; letter-spacing:.14em; line-height:1.1;
     color:var(--gold-lt);
@@ -4337,7 +4338,7 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
     .drawer-head { display:flex; align-items:center; gap:13px; margin-bottom:22px; padding:0 4px; }
     .drawer-mark { flex:0 0 auto; width:52px; height:52px; border-radius:50%; overflow:hidden;
         border:1px solid var(--line-gold); background:var(--paper); }
-    .drawer-mark img { width:100%; height:100%; object-fit:cover; }
+    .drawer-mark img { display:block; width:100%; height:100%; object-fit:contain; }
     .drawer-brand { display:grid; gap:3px; }
     .db-en { font-family:var(--sans); font-size:10px; letter-spacing:.26em; color:var(--gold-deep); }
     .db-zh { font-family:var(--cjk); font-size:15px; color:var(--ink-soft); }
