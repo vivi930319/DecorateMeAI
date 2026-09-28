@@ -209,6 +209,7 @@
         const modal = shell('bagStyleModal', 'bagStyleModalTitle');
         let picked = preselectedStyleId || Router.selectedStyleId || null;
         let result = null;
+        let firstDraw = true;
         // 同一類有好幾件時，這次要用哪一件。換妝容就重選——每款妝用得到的商品不同。
         let choices = {};
         let loading = true;
@@ -283,7 +284,14 @@
                     ${noticeHtml()}
                     ${fillNoteHtml(ranked)}`);
 
-            modal.innerHTML = `<div class="makeup-style-dialog">
+            // 化妝包造型的外框：提把、拉鍊、菱格車線。進場動畫（彈出＋拉鍊拉開）只在第一次畫時播——
+            // 這個視窗每點一張卡就整個重畫，每次都播會變成一直閃。
+            modal.innerHTML = `<div class="makeup-style-dialog bag-dialog${firstDraw ? ' is-opening' : ''}">
+                <div class="bag-dialog-top" aria-hidden="true">
+                    <span class="bag-dialog-handle"></span>
+                    <span class="bag-dialog-zip"><i class="bag-dialog-pull"></i></span>
+                    <span class="bag-dialog-doodle d1">✦</span><span class="bag-dialog-doodle d2">♡</span><span class="bag-dialog-doodle d3">✿</span>
+                </div>
                 <div class="makeup-style-head">
                     <div>
                         <span class="eyebrow">Makeup Bag</span>
@@ -307,6 +315,7 @@
                     draw();
                 };
             });
+            firstDraw = false;
             modal.querySelectorAll('[data-choose-key]').forEach(btn => {
                 btn.onclick = () => { choices[btn.dataset.chooseCat] = btn.dataset.chooseKey; draw(); };
             });

@@ -5064,3 +5064,73 @@ body[data-member-theme="noir"] .mb-hit { border-radius:3px; }
     .mp-choose-cat { padding-top:0; }
     .mp-choose-opts { grid-template-columns:minmax(0,1fr); }
 }
+
+/* ═══ 「依你的化妝包推薦」視窗：化妝包造型 ═══
+   提把＋拉鍊＋菱格車線＋底部荷葉邊，顏色只用主題變數，四套會員主題自動換色。
+   #bagStyleModal 的權重要高過各主題對 .makeup-style-dialog 的圓角與邊框設定。 */
+#bagStyleModal .makeup-style-dialog.bag-dialog {
+    position: relative; isolation: isolate;
+    border: 2px solid var(--gold); border-radius: 34px 34px 44px 44px;
+    padding: 64px 32px 44px;
+    background:
+        repeating-linear-gradient(45deg, transparent 0 26px, color-mix(in srgb, var(--gold) 12%, transparent) 26px 27px),
+        repeating-linear-gradient(-45deg, transparent 0 26px, color-mix(in srgb, var(--gold) 12%, transparent) 26px 27px),
+        radial-gradient(circle at 50% 0%, var(--white), var(--paper) 60%);
+    box-shadow: 0 28px 90px rgba(45,25,27,.22), 0 0 0 6px color-mix(in srgb, var(--gold-lt) 45%, transparent), 0 0 46px var(--gold-dim);
+}
+/* 底部荷葉邊：一排半圓，像化妝包下緣的車縫口袋 */
+#bagStyleModal .bag-dialog::after {
+    content: ''; display: block; height: 18px; margin: 26px -32px -44px;
+    background: radial-gradient(circle at 16px 0, var(--gold-lt) 0 14px, transparent 15px) repeat-x;
+    background-size: 32px 18px; opacity: .7; pointer-events: none;
+}
+.bag-dialog-top { position: absolute; top: 0; left: 0; right: 0; height: 56px; pointer-events: none; }
+.bag-dialog-handle { position: absolute; top: 6px; left: 50%; width: 92px; height: 34px; transform: translateX(-50%);
+    border: 6px solid var(--gold); border-bottom: 0; border-radius: 60px 60px 0 0; opacity: .85; }
+.bag-dialog-zip { position: absolute; top: 40px; left: 26px; right: 26px; height: 8px; border-radius: 99px;
+    background: repeating-linear-gradient(90deg, var(--gold-lt) 0 3px, var(--gold-deep) 3px 5px);
+    box-shadow: 0 0 8px var(--gold-dim); }
+.bag-dialog-pull { position: absolute; top: -5px; right: -4px; width: 14px; height: 22px; border-radius: 4px 4px 9px 9px;
+    background: var(--gold-deep); box-shadow: 0 0 0 2px var(--gold-lt) inset; transform-origin: 50% 0; }
+.bag-dialog-pull::after { content: '♡'; position: absolute; top: 5px; left: 0; right: 0; text-align: center;
+    color: var(--gold-lt); font-size: 9px; line-height: 1; font-style: normal; }
+.bag-dialog-doodle { position: absolute; color: var(--gold); font-family: var(--serif); text-shadow: 0 0 10px var(--gold-dim);
+    animation: bagDialogFloat 3.2s ease-in-out infinite; }
+.bag-dialog-doodle.d1 { top: 10px; left: 24px; font-size: 18px; }
+.bag-dialog-doodle.d2 { top: 8px; right: 30px; font-size: 20px; animation-delay: .9s; }
+.bag-dialog-doodle.d3 { top: 14px; right: 96px; font-size: 14px; animation-delay: 1.6s; }
+/* 平常拉鍊頭會輕輕晃 */
+.bag-dialog-pull { animation: bagPullSwing 2.6s ease-in-out infinite; }
+
+/* 進場：包包彈出來 → 拉鍊從左拉到右 → 內容浮上來。只有第一次畫時帶 .is-opening。 */
+#bagStyleModal .bag-dialog.is-opening { animation: bagDialogPop .62s cubic-bezier(.2,1.4,.4,1) both; }
+.bag-dialog.is-opening .bag-dialog-zip { animation: bagZipOpen .7s .25s ease-out both; }
+.bag-dialog.is-opening .bag-dialog-pull { animation: bagPullRun .7s .25s ease-out both, bagPullSwing 2.6s .95s ease-in-out infinite; }
+.bag-dialog.is-opening .bag-dialog-handle { animation: bagHandleUp .5s .1s ease-out both; }
+.bag-dialog.is-opening > :not(.bag-dialog-top) { animation: bagContentIn .45s .55s ease-out both; }
+
+@keyframes bagDialogPop { 0% { transform: translateY(26px) scale(.86); opacity: 0; } 60% { transform: translateY(-4px) scale(1.02); opacity: 1; } 100% { transform: none; } }
+@keyframes bagZipOpen { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes bagPullRun { from { right: calc(100% - 10px); } to { right: -4px; } }
+@keyframes bagPullSwing { 0%, 100% { transform: rotate(-8deg); } 50% { transform: rotate(8deg); } }
+@keyframes bagHandleUp { from { transform: translateX(-50%) translateY(14px); opacity: 0; } to { transform: translateX(-50%); opacity: .85; } }
+@keyframes bagContentIn { from { transform: translateY(10px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes bagDialogFloat { 0%, 100% { transform: translateY(0) rotate(-6deg); opacity: .6; } 50% { transform: translateY(-5px) rotate(6deg); opacity: 1; } }
+
+/* 卡片也圓一點，跟包包的語言一致 */
+#bagStyleModal .makeup-style-option { border-radius: 18px; overflow: hidden; }
+#bagStyleModal .mp-fill-note, #bagStyleModal .mp-notice, #bagStyleModal .mp-hint { border-radius: 14px; }
+
+/* 動漫風主題：漫畫描邊＋錯位陰影；黑金：收斂圓角 */
+body[data-member-theme="jade"] #bagStyleModal .makeup-style-dialog.bag-dialog { border: 3px solid var(--ink-soft); box-shadow: 10px 12px 0 var(--gold-soft), 0 0 40px var(--gold-dim); }
+body[data-member-theme="noir"] #bagStyleModal .makeup-style-dialog.bag-dialog { border-radius: 18px 18px 22px 22px; }
+
+@media (max-width: 760px) {
+    #bagStyleModal .makeup-style-dialog.bag-dialog { padding: 58px 16px 40px; border-radius: 26px 26px 32px 32px; }
+    #bagStyleModal .bag-dialog::after { margin: 22px -16px -40px; }
+    .bag-dialog-zip { left: 18px; right: 18px; }
+    .bag-dialog-doodle.d3 { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+    #bagStyleModal .bag-dialog.is-opening, .bag-dialog.is-opening *, .bag-dialog-pull, .bag-dialog-doodle { animation: none !important; }
+}
