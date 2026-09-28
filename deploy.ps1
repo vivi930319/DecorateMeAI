@@ -51,6 +51,7 @@ Invoke-DeployCheck "api.js 語法"             @('--check', 'js/api.js')
 Invoke-DeployCheck "router.js 語法"          @('--check', 'js/router.js')
 Invoke-DeployCheck "makeup-contract.js 語法" @('--check', 'js/makeup-contract.js')
 Invoke-DeployCheck "makeup-flow.js 語法"     @('--check', 'js/makeup-flow.js')
+Invoke-DeployCheck "makeup-tutorial.js 語法" @('--check', 'js/makeup-tutorial.js')
 Invoke-DeployCheck "前端冒煙測試"             @('frontend_smoke_check.js')
 # 用到不存在的變數：語法完全合法，node --check 過得了，只有跑到那一行才炸。
 # 2026-08-28 有一個藏在覆核清單重畫裡，讓訓練批次整整一天載不出來。

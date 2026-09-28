@@ -1329,3 +1329,41 @@ body[data-member-theme="noir"] .topbar-nav a:focus-visible { background: linear-
 .pd-img .ph img.loaded {
     object-fit: contain;
 }
+
+/* ═══ 妝後照上的上妝示範（js/makeup-tutorial.js） ═══
+   畫布疊在人像框上、跟框一樣大；座標換算在 JS 裡依 object-fit:cover 處理。
+   顏色走主題變數，只有動畫本身的馬卡龍色照使用者的規格。 */
+.look-tutor-canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; opacity: 0; transition: opacity .3s ease; }
+.look-tutor-canvas.is-on { opacity: 1; }
+.look-portrait-frame figcaption { z-index: 3; }
+.look-tutor-chip { position: absolute; top: 14px; left: 14px; z-index: 3; display: inline-flex; align-items: center; gap: 7px;
+    max-width: calc(100% - 28px); padding: 6px 12px; border: 1px solid var(--line-gold); border-radius: 999px;
+    background: color-mix(in srgb, var(--paper) 86%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    color: var(--ink-soft); font-family: var(--cjk); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.look-tutor-chip i, .look-tutor-head i { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+.look-tutor { display: grid; justify-items: center; gap: 14px; width: min(640px, 100%); margin: 22px auto 0; }
+.look-tutor-play { min-width: 180px; }
+.look-tutor-play:disabled { opacity: .7; cursor: progress; }
+.look-tutor-card { width: 100%; padding: 16px 18px; border: 1px solid var(--line-gold); border-radius: 16px;
+    background: var(--paper); box-shadow: 0 0 22px var(--gold-dim); text-align: left; }
+.look-tutor-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-family: var(--cjk); }
+.look-tutor-head b { font-size: 15px; font-weight: 500; color: var(--ink-soft); }
+.look-tutor-head span { margin-left: auto; font-size: 11.5px; color: var(--mid); letter-spacing: .06em; }
+.look-tutor-card p { margin: 0; font-family: var(--cjk); font-size: 13px; line-height: 1.8; color: var(--ink-soft); }
+.look-tutor-card small { display: block; margin-top: 8px; font-family: var(--cjk); font-size: 12px; line-height: 1.6; color: var(--gold-deep); }
+.look-tutor-card .look-tutor-error { color: var(--mid); }
+.look-tutor-ctrl { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.look-tutor-ctrl button { flex: 1 1 auto; min-width: 88px; }
+/* 正在示範的部位按鈕保持亮起，讓人知道畫面上那塊顏色對應哪一個 */
+.look-pin.is-demo span { color: var(--btn-ink); border-color: transparent; background: var(--btn-grad); }
+@media (max-width: 620px) {
+    .look-tutor { margin-top: 18px; }
+    .look-tutor-play { width: 100%; }
+    .look-tutor-card { padding: 14px; }
+    .look-tutor-ctrl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .look-tutor-ctrl [data-tutor-advice] { grid-column: 1 / -1; }
+    .look-tutor-chip { top: 10px; left: 10px; font-size: 11.5px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .look-tutor-canvas { transition: none; }
+}

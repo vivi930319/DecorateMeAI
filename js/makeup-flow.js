@@ -718,6 +718,7 @@
                         <img id="lookPortrait" src="${escapeHtml(after)}" alt="${escapeHtml(style.name)}妝後效果" style="opacity:.45">
                         ${before ? `<img id="lookPortraitBefore" src="${escapeHtml(before)}" alt="${escapeHtml(style.name)}妝前照片" style="display:none">` : ''}
                         <figcaption id="lookPhotoCaption">妝後 · 載入中…</figcaption>
+                        <div class="look-tutor-chip" id="lookTutorChip" hidden></div>
                     </figure>
                     <div class="look-pin-lane right-lane">${pinLayout.filter(item => item.side === 'right').map(pin).join('')}</div>
                 </div>
@@ -725,7 +726,13 @@
                     <button type="button" data-photo="before" ${before ? '' : 'disabled'}>妝前</button>
                     <button type="button" class="active" data-photo="after">妝後</button>
                 </div>
-                <p class="look-pin-hint">點選人像兩側的部位標籤，查看快速妝容做法與對應的個人化調整。</p>
+                ${window.MakeupTutorial ? `<div class="look-tutor" id="lookTutor">
+                    <button class="btn-gold look-tutor-play" type="button" data-tutor-all>▶ 上妝示範</button>
+                    <div class="look-tutor-card" id="lookTutorCard" hidden></div>
+                </div>` : ''}
+                <p class="look-pin-hint">${window.MakeupTutorial
+                    ? '點選部位標籤，會在妝後照上示範這個部位怎麼畫；也可以播放完整的上妝示範。'
+                    : '點選人像兩側的部位標籤，查看快速妝容做法與對應的個人化調整。'}</p>
                 ${personalizationTriggerHtml(structured.personalization)}
                 <div class="lookbook-actions">
                     <button class="btn-outline" type="button" data-prev-style>上一步：重新選擇風格</button>
@@ -767,6 +774,8 @@
                 if (!isAfter && !portraitBefore) return;
                 portrait.style.display = isAfter ? 'block' : 'none';
                 if (portraitBefore) portraitBefore.style.display = isAfter ? 'none' : 'block';
+                // 示範的定位點是妝後圖的，疊在妝前照上會歪，切走就收起來。
+                if (!isAfter && tutor) tutor.hide();
                 if (caption) {
                     caption.dataset.showing = isAfter ? 'after' : 'before';
                     const afterReady = portrait.complete && portrait.naturalWidth > 0;
@@ -775,8 +784,79 @@
                 area.querySelectorAll('[data-photo]').forEach(item => item.classList.toggle('active', item === button));
             };
         });
+        // ── 上妝示範（js/makeup-tutorial.js） ──
+        //
+        // 部位按鈕先在妝後照上示範該部位，說明卡裡再給「看你的完整做法」開原本的建議視窗。
+        // 定位失敗（圖讀不到、找不到臉）時退回原本的行為：直接開建議視窗，不讓按鈕變成沒反應。
+        const tutorBox = area.querySelector('#lookTutor');
+        const tutorCard = area.querySelector('#lookTutorCard');
+        const tutorChip = area.querySelector('#lookTutorChip');
+        const tutorAll = area.querySelector('[data-tutor-all]');
+        const frameEl = area.querySelector('.look-portrait-frame');
+        let tutor = null;
+        let tutorPart = null;
+        const paintTutor = (snap) => {
+            if (!tutorCard) return;
+            area.querySelectorAll('[data-look-part]').forEach(b =>
+                b.classList.toggle('is-demo', !!snap.step && snap.mode !== 'all' && b.dataset.lookPart === snap.mode));
+            if (tutorAll) {
+                tutorAll.disabled = snap.state === 'loading';
+                tutorAll.textContent = snap.state === 'loading' ? '正在定位臉部…'
+                    : (snap.mode === 'all' && snap.playing ? '示範播放中' : '▶ 上妝示範');
+            }
+            if (snap.state === 'error') {
+                tutorChip.hidden = true;
+                tutorCard.hidden = false;
+                tutorCard.innerHTML = `<p class="look-tutor-error">上妝示範暫時無法使用：${escapeHtml(snap.error)}。部位標籤仍可查看文字做法。</p>`;
+                return;
+            }
+            if (!snap.step) { tutorCard.hidden = true; tutorChip.hidden = true; return; }
+            const st = snap.step;
+            const sw = `rgb(${st.color.join(',')})`;
+            tutorChip.hidden = false;
+            tutorChip.innerHTML = `<i style="background:${sw}"></i>${snap.total > 1 ? `${snap.index + 1}/${snap.total} · ` : ''}${escapeHtml(st.label)}`;
+            tutorCard.hidden = false;
+            tutorCard.innerHTML = `
+                <div class="look-tutor-head"><i style="background:${sw}"></i><b>${escapeHtml(st.label)}</b>
+                    ${snap.total > 1 ? `<span>步驟 ${snap.index + 1} / ${snap.total}</span>` : ''}</div>
+                <p>${escapeHtml(st.body)}</p>
+                <small>${escapeHtml(st.tip)}</small>
+                <div class="look-tutor-ctrl">
+                    ${snap.total > 1 ? '<button type="button" class="btn-outline" data-tutor-prev>上一步</button>' : ''}
+                    <button type="button" class="btn-outline" data-tutor-toggle>${snap.finished ? '重播' : (snap.playing ? '暫停' : '播放')}</button>
+                    ${snap.total > 1 ? '<button type="button" class="btn-outline" data-tutor-next>下一步</button>' : ''}
+                    ${structured.parts?.[st.part] ? '<button type="button" class="btn-outline" data-tutor-advice>看你的完整做法</button>' : ''}
+                </div>`;
+            tutorCard.querySelector('[data-tutor-prev]')?.addEventListener('click', () => tutor.go(-1));
+            tutorCard.querySelector('[data-tutor-next]')?.addEventListener('click', () => tutor.go(1));
+            tutorCard.querySelector('[data-tutor-toggle]')?.addEventListener('click', () => tutor.toggle());
+            tutorCard.querySelector('[data-tutor-advice]')?.addEventListener('click', () => openPartAdviceModal(st.part));
+        };
+        if (window.MakeupTutorial && tutorBox && frameEl) {
+            tutor = window.MakeupTutorial.create({ frame: frameEl, img: portrait, url: after, onChange: paintTutor });
+        }
+        // 示範一定畫在妝後圖上：使用者正在看妝前時先切回來。
+        const showAfter = () => area.querySelector('[data-photo="after"]')?.click();
+        // 手機版部位按鈕在照片下方，按了要把照片捲回視線內，否則動畫在畫面外播完了。
+        const revealFrame = () => {
+            if (window.matchMedia && window.matchMedia('(max-width: 900px)').matches) {
+                frameEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        };
+        if (tutorAll) tutorAll.onclick = async () => {
+            showAfter(); revealFrame();
+            tutorPart = null;
+            await tutor.playAll();
+        };
         area.querySelectorAll('[data-look-part]').forEach(button => {
-            button.onclick = () => openPartAdviceModal(button.dataset.lookPart);
+            button.onclick = async () => {
+                const part = button.dataset.lookPart;
+                if (!tutor || tutor.snapshot().state === 'error') { openPartAdviceModal(part); return; }
+                showAfter(); revealFrame();
+                tutorPart = part;
+                await tutor.playPart(part);
+                if (tutor.snapshot().state === 'error' && tutorPart === part) openPartAdviceModal(part);
+            };
         });
         area.querySelector('[data-personalized-analysis]')?.addEventListener('click', () => openPersonalizationModal(structured));
         area.querySelector('[data-prev-style]').onclick = () => openMakeupStyleModal(Router.selectedStyleId);
