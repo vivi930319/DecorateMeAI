@@ -614,6 +614,20 @@ class AiGatewayTest(unittest.TestCase):
             _authorize_member_path(claims, "api/members/other@example.com/saved-looks")
         self.assertEqual(raised.exception.status_code, 403)
 
+    def test_user_feedback_routes_are_allowed_and_member_scoped(self):
+        # 使用者意見回饋（2026-09-28）：送出走會員路徑、後台讀全部走 api/feedback。
+        # 少放行一條，前端只會看到「找不到要求資料」，不會知道是 Gateway 擋的。
+        from gateway.ai_gateway import UPSTREAMS, is_path_allowed
+        member_db = UPSTREAMS["member-database"]
+        for path in ("api/members/member@example.com/feedback", "api/feedback", "api/feedback/42"):
+            self.assertTrue(is_path_allowed(member_db, path), path)
+        self.assertFalse(is_path_allowed(member_db, "api/feedback/42/extra"))
+        # 不能替別人送意見
+        claims = {"sub": "member@example.com", "role": "member"}
+        with self.assertRaises(Exception) as raised:
+            _authorize_member_path(claims, "api/members/other@example.com/feedback")
+        self.assertEqual(raised.exception.status_code, 403)
+
     def test_expected_actor_pins_the_tab_to_its_signed_in_account(self):
         # A tab records its opaque actor at login and echoes it on every write.
         # Matching the current session is allowed; a stale actor (the cookie was

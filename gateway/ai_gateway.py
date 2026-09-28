@@ -214,6 +214,13 @@ UPSTREAMS = {
             # 搬到這裡之後身分自然就通了，而且路徑帶 email，
             # _authorize_member_path 的跨會員檢查自動適用。
             r"api/members/[^/]+/recommend-styles",
+            # 使用者意見回饋（2026-09-28）。送出走會員路徑：路徑帶 email，
+            # _authorize_member_path 的跨會員檢查自動適用，不能替別人送。
+            r"api/members/[^/]+/feedback",
+            # 後台「使用者意見回饋」讀全部與改處理狀態。跟 api/members 清單同一個模式：
+            # 會員資料庫自己用 session 判斷是不是管理員（非管理員回 403），Gateway 只負責放行。
+            r"api/feedback",
+            r"api/feedback/[^/]+",
         ),
         requires_upstream_api_key=False,
         requires_cloud_run_iam=False,
