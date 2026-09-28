@@ -18,6 +18,9 @@
             <button type="button" data-admin-section="feedback">
                 <span class="admin-nav-index">04</span><span>模型修正複核</span>
             </button>
+            <button type="button" data-admin-section="userFeedback">
+                <span class="admin-nav-index">05</span><span>使用者意見回饋</span>
+            </button>
         </nav>
 
         <div class="admin-account">
@@ -378,6 +381,24 @@
                         </div>
                     </section>
                 </div>
+            </section>
+
+            <!-- 使用者意見回饋（2026-09-28）。資料在會員資料庫：GET /api/feedback、PATCH /api/feedback/{id}。 -->
+            <section class="admin-view" data-admin-view="userFeedback" hidden>
+                <div class="admin-view-heading">
+                    <div><span>User Feedback</span><h2>使用者意見回饋</h2></div>
+                    <span class="admin-crawler-state idle" id="userFbState">尚未載入</span>
+                </div>
+                <div class="admin-feedback-tools">
+                    <div class="admin-tabs" id="userFbFilter" role="group" aria-label="處理狀態篩選">
+                        <button class="admin-tab active" type="button" data-fb-status="">全部</button>
+                        <button class="admin-tab" type="button" data-fb-status="new">未處理</button>
+                        <button class="admin-tab" type="button" data-fb-status="in_progress">處理中</button>
+                        <button class="admin-tab" type="button" data-fb-status="resolved">已處理</button>
+                    </div>
+                    <button class="admin-secondary-button" type="button" id="userFbRefresh">重新載入</button>
+                </div>
+                <div id="userFbList" class="user-fb-list"></div>
             </section>
         </main>
     </div>

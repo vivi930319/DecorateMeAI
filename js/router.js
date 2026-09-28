@@ -7426,7 +7426,8 @@ const PageInit = {
             overview: { eyebrow: 'ADMIN OVERVIEW', title: '營運總覽' },
             members: { eyebrow: 'MEMBER ACCESS', title: '會員與權限管理' },
             products: { eyebrow: 'PRODUCT CATALOG', title: '商品管理' },
-            feedback: { eyebrow: 'MODEL CORRECTION REVIEW', title: '模型修正複核' }
+            feedback: { eyebrow: 'MODEL CORRECTION REVIEW', title: '模型修正複核' },
+            userFeedback: { eyebrow: 'USER FEEDBACK', title: '使用者意見回饋' }
         };
         const sectionButtons = Array.from(document.querySelectorAll('[data-admin-section]'));
         const sectionViews = Array.from(document.querySelectorAll('[data-admin-view]'));
@@ -7447,6 +7448,7 @@ const PageInit = {
             // 切進來才載入，避免每次開後台都去打一次不一定會看的資料。
             if (next === 'feedback') Router._loadFeedbackOnce?.();
             if (next === 'products') Router._loadProductAuditOnce?.();
+            if (next === 'userFeedback') Router._loadUserFeedbackOnce?.();
             // 換了區塊就要看到新區塊的開頭，否則視窗會停在上一區的捲動位置。
             //
             // ⚠️ 原本這行是 `document.querySelector('.admin-stage')?.scrollTo(...)`，
@@ -7468,6 +7470,68 @@ const PageInit = {
                 }
             }
         };
+        // ── 使用者意見回饋（2026-09-28）：資料在會員資料庫，Gateway 放行 api/feedback ──
+        {
+            const fbState = document.getElementById('userFbState');
+            const fbList = document.getElementById('userFbList');
+            const fbFilter = document.getElementById('userFbFilter');
+            const fbRefresh = document.getElementById('userFbRefresh');
+            const STATUS_LABEL = { new: '未處理', in_progress: '處理中', resolved: '已處理' };
+            let fbStatus = '';
+            let fbLoaded = false;
+            const setState = (text, cls) => { if (fbState) { fbState.textContent = text; fbState.className = `admin-crawler-state ${cls}`; } };
+            const loadUserFeedback = async () => {
+                if (!fbList || typeof UserFeedbackApi === 'undefined') return;
+                setState('載入中…', 'running');
+                const res = await UserFeedbackApi.listAdmin({ status: fbStatus });
+                if (!res.ok) {
+                    // 服務還沒上線（404）與權限不足要分開講，否則會往錯的方向查
+                    const why = res.status === 404 ? '會員資料庫還沒有意見回饋的 API（規格書已交）'
+                        : (res.status === 401 || res.status === 403) ? '需要管理員身分才能檢視，請重新登入'
+                        : `讀取失敗${res.error ? `：${res.error}` : ''}`;
+                    setState('無法載入', 'error');
+                    fbList.innerHTML = `<div class="empty-state">${escapeHtml(why)}</div>`;
+                    return;
+                }
+                fbLoaded = true;
+                setState(`共 ${res.total || res.items.length} 則`, 'idle');
+                if (!res.items.length) { fbList.innerHTML = '<div class="empty-state">目前沒有這個狀態的回饋。</div>'; return; }
+                fbList.innerHTML = res.items.map(it => `
+                    <article class="user-fb-item" data-fb-id="${escapeHtml(String(it.id))}">
+                        <header>
+                            <span class="user-fb-cat">${escapeHtml(it.category || '其他')}</span>
+                            ${it.rating ? `<span class="user-fb-rating" aria-label="滿意度 ${Number(it.rating)} / 5">${'★'.repeat(Number(it.rating))}${'☆'.repeat(5 - Number(it.rating))}</span>` : ''}
+                            <span class="user-fb-meta">${escapeHtml(it.memberName || it.memberEmail || '')} · ${escapeHtml(String(it.createdAt || '').replace('T', ' ').slice(0, 16))}${it.page ? ` · 頁面：${escapeHtml(it.page)}` : ''}</span>
+                        </header>
+                        <p>${escapeHtml(it.message || '')}</p>
+                        <footer>
+                            <label>處理狀態
+                                <select data-fb-set>${Object.entries(STATUS_LABEL).map(([k, v]) => `<option value="${k}"${(it.status || 'new') === k ? ' selected' : ''}>${v}</option>`).join('')}</select>
+                            </label>
+                            ${it.appVersion ? `<small>版本 ${escapeHtml(it.appVersion)}</small>` : ''}
+                        </footer>
+                    </article>`).join('');
+                fbList.querySelectorAll('[data-fb-set]').forEach(sel => {
+                    sel.onchange = async () => {
+                        const id = sel.closest('[data-fb-id]').dataset.fbId;
+                        sel.disabled = true;
+                        const r = await UserFeedbackApi.updateStatus(id, sel.value);
+                        sel.disabled = false;
+                        showToast(r.ok ? '已更新處理狀態' : '更新失敗，請稍後再試');
+                    };
+                });
+            };
+            Router._loadUserFeedbackOnce = () => { if (!fbLoaded) loadUserFeedback(); };
+            if (fbRefresh) fbRefresh.onclick = () => loadUserFeedback();
+            fbFilter?.querySelectorAll('[data-fb-status]').forEach(btn => {
+                btn.onclick = () => {
+                    fbStatus = btn.dataset.fbStatus;
+                    fbFilter.querySelectorAll('[data-fb-status]').forEach(b => b.classList.toggle('active', b === btn));
+                    loadUserFeedback();
+                };
+            });
+        }
+
         let initialSection = 'overview';
         try { initialSection = sessionStorage.getItem('beautyAdminSection') || 'overview'; } catch (_) {}
         sectionButtons.forEach(btn => { btn.onclick = () => setAdminSection(btn.dataset.adminSection); });
@@ -10488,6 +10552,12 @@ function showApp(preferredPage) {
     // Router.go 有自己的守衛（訪客的收藏／分析紀錄、權限不足）會直接 return 不換頁。
     // 還原 hash 時撞上守衛就會停在空白畫面，所以沒有渲染成任何一頁就退回 landing。
     Promise.resolve(Router.go(targetPage, { fromHash: true, lookId: targetLookId })).then(() => {
+        // 右下角「?」（使用導覽、意見回饋）與新手第一次進入的導覽。後台不出現。
+        if (typeof HelpCenter !== 'undefined') {
+            HelpCenter.mountButton();
+            HelpCenter.syncVisibility();
+            if (landing !== 'admin') HelpCenter.maybeStartTour();
+        }
         if (Router.currentPage) return;
         const homeUrl = `${location.pathname}${location.search}#${landing}`;
         if (location.hash !== `#${landing}`) history.replaceState(null, '', homeUrl);

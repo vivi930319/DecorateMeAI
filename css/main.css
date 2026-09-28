@@ -5198,3 +5198,71 @@ body[data-member-theme="noir"] #bagStyleModal .makeup-style-dialog.bag-dialog { 
     .look-share-body { grid-template-columns: minmax(0, 1fr); }
     .look-share-preview { max-width: 320px; width: 100%; margin: 0 auto; }
 }
+
+/* ═══ 右下角「?」：使用導覽與意見回饋 ═══ */
+.help-fab { position: fixed; right: 18px; bottom: 22px; z-index: 900; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.help-fab[hidden] { display: none; }
+.help-fab-btn { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--line-gold); cursor: pointer;
+    background: var(--btn-grad, var(--gold)); color: var(--btn-ink, #fff); font: 600 20px/1 var(--serif);
+    box-shadow: 0 10px 26px rgba(60,30,30,.22), 0 0 18px var(--gold-dim); }
+.help-fab-menu { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line-gold); border-radius: 16px;
+    background: var(--paper); box-shadow: 0 14px 34px rgba(60,30,30,.18); }
+.help-fab-menu[hidden] { display: none; }
+.help-fab-menu button { padding: 10px 16px; border: 0; border-radius: 10px; background: transparent; cursor: pointer;
+    font-family: var(--cjk); font-size: 14px; color: var(--ink-soft); text-align: left; white-space: nowrap; }
+.help-fab-menu button:hover { background: var(--ivory-2); }
+
+/* 使用導覽卡片 */
+.tour-dialog { position: relative; max-width: 460px; text-align: center; }
+.tour-dialog .makeup-style-close { position: absolute; top: 14px; right: 14px; }
+.tour-art { width: 150px; height: 150px; margin: 6px auto 14px; border-radius: 50%; overflow: hidden;
+    background: var(--ivory-2); box-shadow: 0 0 0 6px color-mix(in srgb, var(--gold-lt) 45%, transparent), 0 0 30px var(--gold-dim); }
+.tour-art img { width: 100%; height: 100%; object-fit: cover; }
+.tour-copy h2 { margin: 6px 0 10px; font-family: var(--cjk); font-size: 22px; font-weight: 500; color: var(--ink-soft); }
+.tour-copy p { font-family: var(--cjk); font-size: 14px; line-height: 1.85; color: var(--mid); }
+.tour-dots { display: flex; justify-content: center; gap: 7px; margin: 16px 0 4px; }
+.tour-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--line-gold); }
+.tour-dots i.on { width: 20px; border-radius: 99px; background: var(--gold-deep); }
+.tour-actions { justify-content: space-between; }
+
+/* 意見回饋表單 */
+.feedback-dialog { max-width: 560px; }
+.fb-form { display: grid; gap: 14px; }
+.fb-row { display: grid; gap: 7px; }
+.fb-label { font-family: var(--cjk); font-size: 12px; letter-spacing: .06em; color: var(--gold-deep); }
+.fb-cats { display: flex; flex-wrap: wrap; gap: 7px; }
+.fb-cats .chip { padding: 6px 12px; font-size: 12.5px; }
+.fb-stars { display: flex; gap: 4px; }
+.fb-stars button { border: 0; background: none; cursor: pointer; font-size: 26px; line-height: 1; color: var(--gold-deep); padding: 2px; }
+.fb-row textarea { width: 100%; padding: 12px; border: 1px solid var(--edge); border-radius: 12px; background: var(--white);
+    color: var(--ink-soft); font-family: var(--cjk); font-size: 14px; line-height: 1.7; resize: vertical; }
+.fb-count { justify-self: end; font-size: 11px; color: var(--muted); }
+.fb-check { display: flex; gap: 8px; align-items: center; font-family: var(--cjk); font-size: 12.5px; color: var(--mid); }
+.fb-status { margin: 0; min-height: 1.2em; font-family: var(--cjk); font-size: 12.5px; color: var(--mid); }
+.fb-status.is-error { color: var(--danger); }
+
+/* 後台：使用者意見回饋 */
+.admin-feedback-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.user-fb-list { display: grid; gap: 12px; }
+.user-fb-item { padding: 14px 16px; border: 1px solid var(--line-gold); border-radius: 14px; background: var(--paper); }
+.user-fb-item header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; }
+.user-fb-cat { padding: 3px 10px; border-radius: 99px; background: var(--gold-deep); color: var(--white); font-size: 12px; }
+.user-fb-rating { color: var(--gold-deep); letter-spacing: 1px; }
+.user-fb-meta { font-size: 12px; color: var(--mid); }
+.user-fb-item p { margin: 0; white-space: pre-wrap; font-family: var(--cjk); font-size: 14px; line-height: 1.75; color: var(--ink-soft); }
+.user-fb-item footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 10px; font-size: 12px; color: var(--mid); }
+.user-fb-item select { margin-left: 6px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--edge); background: var(--white); color: var(--ink-soft); }
+
+@media (max-width: 760px) {
+    /* 760px 以下底部有分頁列（.tabbar），「?」往上抬避開 */
+    .help-fab { right: 12px; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); }
+}
+@media (max-width: 620px) {
+    .help-fab-btn { width: 44px; height: 44px; }
+    .tour-art { width: 120px; height: 120px; }
+    .tour-copy h2 { font-size: 19px; }
+}
+@media (prefers-reduced-motion: reduce) { .help-fab-btn { transition: none; } }
+/* 有任何視窗打開時收起「?」，免得蓋住視窗底部的按鈕 */
+body:has(.makeup-style-modal.open) .help-fab { display: none; }
+.fb-cats .chip.active { background: var(--gold-deep); color: var(--white); border-color: var(--gold-deep); box-shadow: none; }

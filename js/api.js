@@ -4540,6 +4540,100 @@ const MakeupBagApi = {
     },
 };
 
+// ═══ 使用者意見回饋（2026-09-28）══════════════════════════════════
+//
+// 送出：POST /api/members/{email}/feedback（會員路徑，Gateway 的跨會員檢查自動適用）
+// 後台：GET /api/feedback、PATCH /api/feedback/{id}（會員資料庫自己判斷是不是管理員）
+// 規格：給會員資料庫端_使用者意見回饋_規格書_2026-09-28.md
+//
+// 服務還沒上線（404）或暫時連不到時，不假裝送出成功：先存在這台裝置的待送清單，
+// 下次開啟回饋箱時自動重送，畫面上講清楚「還沒送出」。
+const UserFeedbackApi = {
+    _outboxKey: 'beautyFeedbackOutbox',
+    CATEGORIES: Object.freeze(['功能建議', '問題回報', '妝容效果', '商品推薦', '其他']),
+    base() { return Api.config.services.memberDatabase.baseUrl || ''; },
+    _email() { return String(Auth.getProfile()?.email || '').trim(); },
+    outbox() { try { return JSON.parse(localStorage.getItem(this._outboxKey) || '[]'); } catch (_) { return []; } },
+    _saveOutbox(list) { try { localStorage.setItem(this._outboxKey, JSON.stringify(list.slice(-20))); } catch (_) {} },
+
+    async _post(payload) {
+        const email = this._email();
+        if (!this.base() || !email) return { ok: false, status: 0 };
+        try {
+            const res = await Api._fetchWithRelogin(`${this.base()}/api/members/${encodeURIComponent(email)}/feedback`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const data = await res.json().catch(() => ({}));
+            return { ok: res.ok, status: res.status, data };
+        } catch (_) {
+            return { ok: false, status: 0 };
+        }
+    },
+
+    // 回傳 { ok: true } 或 { ok: false, queued: true|false, error }
+    async submit(payload) {
+        const res = await this._post(payload);
+        if (res.ok) return { ok: true };
+        if (res.status === 400) return { ok: false, queued: false, error: res.data?.error?.message || '回饋內容格式不正確。' };
+        if (res.status === 401) return { ok: false, queued: false, error: '請先登入再送出回饋。' };
+        if (res.status === 429) return { ok: false, queued: false, error: '送出太頻繁，請稍後再試。' };
+        // 404（服務尚未上線）、5xx、連不到：存進待送清單，不讓使用者白寫
+        const list = this.outbox();
+        list.push({ ...payload, queuedAt: new Date().toISOString(), email: this._email() });
+        this._saveOutbox(list);
+        return { ok: false, queued: true, error: '回饋服務暫時連不到，已先存在這台裝置，之後會自動再送。' };
+    },
+
+    // 重送待送清單；只送屬於目前登入帳號的那幾筆
+    async flushOutbox() {
+        const email = this._email();
+        if (!email) return 0;
+        const list = this.outbox();
+        const keep = [];
+        let sent = 0;
+        for (const item of list) {
+            if (item.email !== email) { keep.push(item); continue; }
+            const { queuedAt, email: _e, ...payload } = item;
+            const res = await this._post(payload);
+            if (res.ok) sent += 1; else keep.push(item);
+        }
+        this._saveOutbox(keep);
+        return sent;
+    },
+
+    async listAdmin({ status = '', limit = 100 } = {}) {
+        if (!this.base()) return { ok: false, items: [], error: '會員資料庫未設定' };
+        const q = new URLSearchParams();
+        if (status) q.set('status', status);
+        q.set('limit', String(limit));
+        try {
+            const res = await Api._fetchWithRelogin(`${this.base()}/api/feedback?${q}`, { credentials: 'include' });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) return { ok: false, status: res.status, items: [], error: data?.error?.message || '' };
+            return { ok: true, items: Array.isArray(data.items) ? data.items : [], total: Number(data.total ?? 0) };
+        } catch (_) {
+            return { ok: false, status: 0, items: [], error: '連線失敗' };
+        }
+    },
+
+    async updateStatus(id, status, adminNote = '') {
+        try {
+            const res = await Api._fetchWithRelogin(`${this.base()}/api/feedback/${encodeURIComponent(id)}`, {
+                method: 'PATCH',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status, adminNote }),
+            });
+            return { ok: res.ok, status: res.status };
+        } catch (_) {
+            return { ok: false, status: 0 };
+        }
+    },
+};
+
 const MakeupBag = {
     _key: 'beautyMakeupBag',
 
