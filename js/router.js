@@ -3306,11 +3306,24 @@ function openProductRecommendationModal(){
             holder.insertBefore(box, grid);
             RecommendationNotice.bind(box);
         }
-        grid.innerHTML=products.slice(0,RECOMMENDED_DISPLAY_LIMIT).map((p,i)=>`
+        // 化妝包已有幾件：跟商品頁的推薦區同一套標記與文字，兩邊講法一致。
+        const shownProducts=products.slice(0,RECOMMENDED_DISPLAY_LIMIT);
+        const ownedN=shownProducts.filter(p=>p.candidateKey&&MakeupBag.has(p.candidateKey)).length;
+        if(holder){
+            const sum=document.createElement('p');
+            sum.className='rec-bag-summary';
+            sum.setAttribute('data-rec-holder','1');
+            sum.innerHTML=ownedN
+                ?`其中 <b>${ownedN}</b> 件你的化妝包已經有了，標有「化妝包已有」。`
+                :'這些都不在你的化妝包裡；手上已經有的，可以按「加入化妝包」登記。';
+            holder.insertBefore(sum,grid);
+        }
+        grid.innerHTML=shownProducts.map((p,i)=>`
             <div class="prod-card reveal-in" data-pid="${escapeHtml(p.id)}" style="animation-delay:${Math.min(i*0.035,0.2)}s">
                 <div class="pc-imgwrap">
                     ${phBox('',p.name,p.img)}
                     <button class="heart-btn pc-heart ${Fav.has(p.id)?'fav':''}" data-fav="${escapeHtml(p.id)}" aria-label="收藏">${HEART_SVG}</button>
+                    ${p.candidateKey&&MakeupBag.has(p.candidateKey)?'<span class="pc-bag-badge">化妝包已有</span>':''}
                 </div>
                 <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}${p.brand?` · ${escapeHtml(p.brand)}`:''}</div>
                 <div class="pc-name">${escapeHtml(p.name)}</div>
@@ -3318,13 +3331,32 @@ function openProductRecommendationModal(){
                 ${(!p.recommendationPresentation?.headline && p.matchReason)?`<div class="pc-reason">${escapeHtml(p.matchReason)}</div>`:''}
                 ${colorCompareHtml(p)}
                 ${recommendationCardHtml(p)}
-                <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
+                <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span>
+                    ${p.candidateKey?`<button type="button" class="pc-own${MakeupBag.has(p.candidateKey)?' is-own':''}" data-own="${escapeHtml(p.candidateKey)}"
+                        aria-label="把「${escapeHtml(p.name)}」登記為我已經有的">${MakeupBag.has(p.candidateKey)?'化妝包已有':'＋ 加入化妝包'}</button>`:''}
+                </div>
             </div>`).join('');
         grid.querySelectorAll('.prod-card').forEach(card=>{
             card.onclick=e=>{
-                if(e.target.closest('.heart-btn'))return;
+                if(e.target.closest('.heart-btn')||e.target.closest('.pc-own'))return;
                 closeProductRecommendationModal();
                 Router.go('products',{productId:card.dataset.pid});
+            };
+        });
+        // 只加不刪，跟商品頁一樣：要移除請去化妝包頁。
+        grid.querySelectorAll('.pc-own').forEach(btn=>{
+            btn.onclick=async e=>{
+                e.stopPropagation();
+                if(btn.classList.contains('is-own')){showToast('已經在化妝包裡了');return;}
+                btn.disabled=true;
+                const result=await MakeupBag.add(btn.dataset.own);
+                btn.disabled=false;
+                if(!result.ok){showToast(result.error);return;}
+                btn.classList.add('is-own');
+                btn.textContent='化妝包已有';
+                const wrap=btn.closest('.prod-card')?.querySelector('.pc-imgwrap');
+                if(wrap&&!wrap.querySelector('.pc-bag-badge'))wrap.insertAdjacentHTML('beforeend','<span class="pc-bag-badge">化妝包已有</span>');
+                showToast(result.already?'已經在化妝包裡了':'已加入化妝包');
             };
         });
         grid.querySelectorAll('.pc-heart').forEach(btn=>{
