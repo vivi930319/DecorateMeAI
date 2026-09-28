@@ -477,6 +477,42 @@
                 octx.restore();
             }
         }
+        function axisOf(sh) {
+            if (sh.axis) return sh.axis;
+            const b = sh.type === 'poly' ? bbox(sh.pts) : ebox(sh.e);
+            return { S: { x: b.minX, y: (b.minY + b.maxY) / 2 }, E: { x: b.maxX, y: (b.minY + b.maxY) / 2 } };
+        }
+        // 方向陰影（2026-09-28 使用者要求「有方向感、左右移動的陰影」）：
+        // 一道比色塊深的柔邊陰影帶，沿筆刷方向移動。刷色時貼著前緣走；刷完之後在區塊裡來回掃，
+        // 讓人一直看得出這一步是往哪個方向刷。只畫在區塊裡面（clip），不會跑到五官外。
+        // pos 是 0～1 沿軸線的位置；由內往外擴散的部位（唇、Igari 腮紅…）改成一圈往外推的環。
+        function sweepShadow(sh, st, pos) {
+            const trace = sh.type === 'poly' ? c => pathPoly(c, sh.pts) : c => pathEllipse(c, sh.e);
+            const shade = ink(st.color);
+            const a = 0.5 * Math.min(1, st.k + 0.2);
+            octx.save(); trace(octx); octx.clip();
+            let g;
+            if (sh.radial) {
+                const c = sh.type === 'poly' ? centroid(sh.pts) : { x: sh.e.cx, y: sh.e.cy };
+                const b = sh.type === 'poly' ? bbox(sh.pts) : ebox(sh.e);
+                const R = Math.hypot(b.maxX - b.minX, b.maxY - b.minY) * 0.55 + 2;
+                g = octx.createRadialGradient(c.x, c.y, 0, c.x, c.y, R);
+                const m = clamp(pos, 0.08, 0.95), w = 0.14;
+                g.addColorStop(0, rgba(shade, 0)); g.addColorStop(Math.max(0, m - w), rgba(shade, 0));
+                g.addColorStop(m, rgba(shade, a)); g.addColorStop(Math.min(1, m + w), rgba(shade, 0)); g.addColorStop(1, rgba(shade, 0));
+            } else {
+                const ax = axisOf(sh);
+                g = octx.createLinearGradient(ax.S.x, ax.S.y, ax.E.x, ax.E.y);
+                const m = clamp(pos, 0, 1), w = 0.16;
+                g.addColorStop(0, rgba(shade, 0));
+                if (m - w > 0) g.addColorStop(m - w, rgba(shade, 0));
+                g.addColorStop(m, rgba(shade, a));
+                if (m + w < 1) g.addColorStop(m + w, rgba(shade, 0));
+                g.addColorStop(1, rgba(shade, 0));
+            }
+            octx.fillStyle = g; octx.fillRect(0, 0, W, H);
+            octx.restore();
+        }
         function revealMask(sh, p) {
             if (sh.radial) {
                 const c = sh.type === 'poly' ? centroid(sh.pts) : { x: sh.e.cx, y: sh.e.cy };
@@ -490,7 +526,7 @@
                 octx.save(); octx.globalCompositeOperation = 'destination-in'; octx.fillStyle = g; octx.fillRect(0, 0, W, H); octx.restore();
                 return;
             }
-            const ax = sh.axis || (() => { const b = sh.type === 'poly' ? bbox(sh.pts) : ebox(sh.e); return { S: { x: b.minX, y: (b.minY + b.maxY) / 2 }, E: { x: b.maxX, y: (b.minY + b.maxY) / 2 } }; })();
+            const ax = axisOf(sh);
             const d = sub(ax.E, ax.S), Ltot = len(d) || 1, feather = Math.max(14, Ltot * 0.22);
             const head = p * (Ltot + feather), t0 = clamp(head / Ltot, 0, 1), t1 = clamp((head + feather) / Ltot, 0, 1);
             const g = octx.createLinearGradient(ax.S.x, ax.S.y, ax.E.x, ax.E.y);
@@ -513,7 +549,19 @@
                 else if (acc < drawLen) { const f = (drawLen - acc) / L; octx.beginPath(); octx.moveTo(path[i].x, path[i].y); octx.lineTo(lerp(path[i].x, path[i + 1].x, f), lerp(path[i].y, path[i + 1].y, f)); octx.stroke(); break; }
                 acc += L;
             }
-            octx.restore(); compositeSoft(0.4);
+            octx.restore();
+            // 筆尖陰影：畫到哪裡，筆就在哪裡
+            if (o.reveal && o.p < 1 && drawLen > 0) {
+                let rem = drawLen, tip = path[0];
+                for (let i = 0; i < segs.length; i++) {
+                    if (rem <= segs[i]) { const f = rem / segs[i]; tip = { x: lerp(path[i].x, path[i + 1].x, f), y: lerp(path[i].y, path[i + 1].y, f) }; break; }
+                    rem -= segs[i]; tip = path[i + 1];
+                }
+                const r = d.eyeW * 0.16, gg = octx.createRadialGradient(tip.x, tip.y, 0, tip.x, tip.y, r);
+                gg.addColorStop(0, rgba(ink(st.color), 0.55)); gg.addColorStop(1, rgba(ink(st.color), 0));
+                octx.fillStyle = gg; octx.beginPath(); octx.arc(tip.x, tip.y, r, 0, Math.PI * 2); octx.fill();
+            }
+            compositeSoft(0.4);
         }
         function drawLashes(strokes, st, o) {
             const n = strokes.length, shown = o.reveal ? o.p * n : n;
@@ -533,6 +581,7 @@
                 if (sh.type === 'lashes') { drawLashes(sh.strokes, st, o); continue; }
                 renderZone(sh, st, o);
                 if (o.reveal && o.p < 1) revealMask(sh, o.p);
+                if (o.sweep != null && st.kind !== 'base') sweepShadow(sh, st, o.sweep);
                 compositeSoft(SOFT_KINDS.has(st.kind) ? 1.0 : 0.35);
             }
         }
@@ -546,7 +595,13 @@
             const st = plan[seq[pos]];
             if (finished) { drawStep(st, { fill: 0.9, line: 0.7, reveal: false }); return; }
             const p = reduceMotion ? 1 : smooth(clamp((stepT - 0.18) / applyTime(st), 0, 1));
-            drawStep(st, { fill: 1, line: 1, reveal: !reduceMotion, p, flow: !reduceMotion });
+            // 陰影位置：刷色時跟著前緣；刷完後以 1.1 秒一趟來回掃（0→1→0），直到下一步
+            let sweep = null;
+            if (!reduceMotion) {
+                if (p < 1) sweep = Math.min(1, p * 1.08);
+                else { const t = (stepT - 0.18 - applyTime(st)) / 1.1; sweep = 0.5 - 0.5 * Math.cos(Math.PI * t); }
+            }
+            drawStep(st, { fill: 1, line: 1, reveal: !reduceMotion, p, flow: !reduceMotion, sweep });
         }
         function frameTick(ts) {
             raf = 0;
