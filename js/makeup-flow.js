@@ -620,13 +620,15 @@
         return `本次 Ollama 回傳沒有可對應到${label}的避免事項。`;
     }
 
-    function openPartAdviceModal(partKey) {
+    // 部位建議的內容。視窗（openPartAdviceModal）與妝後照旁的示範面板共用同一份，
+    // 兩邊講的東西不會分岔。
+    function partAdviceContent(partKey) {
         const style = getStyle();
         const structured = resolveStructured(Router.analysisPackage, style);
         const advice = structured?.parts?.[partKey] || null;
         const label = advice?.label || (partKey === 'color' ? '色彩季型' : partKey);
         const personalHtml = personalizationPartHtml(structured?.personalization, partKey);
-        if (!advice && !personalHtml) return;
+        if (!advice && !personalHtml) return null;
 
         const sections = [];
         if (advice) {
@@ -645,7 +647,13 @@
             <div class="part-advice-avoid"><b>${escapeHtml(avoidTitle)}</b><p>${escapeHtml(avoidText)}</p></div>`);
         }
         if (personalHtml) sections.push(personalHtml);
-        const modal = journeyShell('QUICK MAKEUP ADVICE', `${label}建議`, sections.join(''),
+        return { label, html: sections.join('') };
+    }
+
+    function openPartAdviceModal(partKey) {
+        const content = partAdviceContent(partKey);
+        if (!content) return;
+        const modal = journeyShell('QUICK MAKEUP ADVICE', `${content.label}建議`, content.html,
             '<button class="btn-gold" type="button" data-close>看完了</button>');
         modal.querySelector('[data-close]').onclick = removeJourneyModal;
         // backdrop 與右上 ✕ 的關閉已由 journeyShell 統一處理。
@@ -728,7 +736,6 @@
                 </div>
                 ${window.MakeupTutorial ? `<div class="look-tutor" id="lookTutor">
                     <button class="btn-gold look-tutor-play" type="button" data-tutor-all>▶ 上妝示範</button>
-                    <div class="look-tutor-card" id="lookTutorCard" hidden></div>
                 </div>` : ''}
                 <p class="look-pin-hint">${window.MakeupTutorial
                     ? '點選部位標籤，會在妝後照上示範這個部位怎麼畫；也可以播放完整的上妝示範。'
@@ -786,66 +793,118 @@
         });
         // ── 上妝示範（js/makeup-tutorial.js） ──
         //
-        // 部位按鈕先在妝後照上示範該部位，說明卡裡再給「看你的完整做法」開原本的建議視窗。
-        // 定位失敗（圖讀不到、找不到臉）時退回原本的行為：直接開建議視窗，不讓按鈕變成沒反應。
+        // 示範依這次的妝容（七種各有自己的上妝區域與順序）。說明與個人化建議放在
+        // **不擋臉的面板**：桌機貼在人像旁邊、放在被點的另一側（這一側的部位按鈕還按得到），
+        // 手機是下方抽屜、並把照片捲到畫面上半部。以前是置中的視窗，會把臉整個蓋住，
+        // 看建議就看不到動畫。
+        // 定位失敗（圖讀不到、找不到臉）時退回原本的行為：直接開建議視窗。
         const tutorBox = area.querySelector('#lookTutor');
-        const tutorCard = area.querySelector('#lookTutorCard');
         const tutorChip = area.querySelector('#lookTutorChip');
         const tutorAll = area.querySelector('[data-tutor-all]');
         const frameEl = area.querySelector('.look-portrait-frame');
+        const narrow = () => !!(window.matchMedia && window.matchMedia('(max-width: 900px)').matches);
+        const clampNum = (v, a, b) => Math.max(a, Math.min(b, v));
         let tutor = null;
-        let tutorPart = null;
+        let sheetSide = 'right';
+        document.getElementById('lookAdviceSheet')?.remove();
+        const sheet = document.createElement('aside');
+        sheet.id = 'lookAdviceSheet';
+        sheet.className = 'look-advice-sheet';
+        sheet.setAttribute('aria-live', 'polite');
+        sheet.hidden = true;
+        document.body.appendChild(sheet);
+
+        const placeSheet = () => {
+            if (sheet.hidden || !frameEl || !document.body.contains(frameEl)) return;
+            if (narrow()) {
+                sheet.classList.add('is-bottom');
+                sheet.style.left = ''; sheet.style.top = ''; sheet.style.width = '';
+                return;
+            }
+            sheet.classList.remove('is-bottom');
+            const r = frameEl.getBoundingClientRect(), vw = document.documentElement.clientWidth;
+            const room = sheetSide === 'left' ? r.left : vw - r.right;
+            const width = Math.min(360, Math.max(260, room - 28));
+            const left = clampNum(sheetSide === 'left' ? r.left - width - 16 : r.right + 16, 12, vw - width - 12);
+            sheet.style.width = `${width}px`;
+            sheet.style.left = `${left + window.scrollX}px`;
+            sheet.style.top = `${r.top + window.scrollY}px`;
+        };
+        window.addEventListener('resize', placeSheet);
+        // 面板掛在 body 上，離開這一頁要自己收掉
+        window.addEventListener('hashchange', () => {
+            sheet.remove();
+            window.removeEventListener('resize', placeSheet);
+        }, { once: true });
+
+        const closeSheet = () => { sheet.hidden = true; if (tutor) tutor.hide(); };
         const paintTutor = (snap) => {
-            if (!tutorCard) return;
             area.querySelectorAll('[data-look-part]').forEach(b =>
-                b.classList.toggle('is-demo', !!snap.step && snap.mode !== 'all' && b.dataset.lookPart === snap.mode));
+                b.classList.toggle('is-demo', snap.mode !== 'all' && b.dataset.lookPart === snap.mode && (!!snap.step || !!snap.note)));
             if (tutorAll) {
                 tutorAll.disabled = snap.state === 'loading';
                 tutorAll.textContent = snap.state === 'loading' ? '正在定位臉部…'
                     : (snap.mode === 'all' && snap.playing ? '示範播放中' : '▶ 上妝示範');
             }
+            if (!snap.step && tutorChip) tutorChip.hidden = true;
+            let body = '';
             if (snap.state === 'error') {
-                tutorChip.hidden = true;
-                tutorCard.hidden = false;
-                tutorCard.innerHTML = `<p class="look-tutor-error">上妝示範暫時無法使用：${escapeHtml(snap.error)}。部位標籤仍可查看文字做法。</p>`;
+                body = `<p class="look-tutor-error">上妝示範暫時無法使用：${escapeHtml(snap.error)}。</p>`;
+            } else if (snap.note) {
+                const advice = partAdviceContent(snap.mode);
+                body = `<div class="look-tutor-head"><b>${escapeHtml(advice?.label || '這個部位')}</b></div>
+                    <p>${escapeHtml(snap.note)}</p>
+                    ${advice ? `<div class="look-advice-body">${advice.html}</div>` : ''}`;
+            } else if (snap.step) {
+                const st = snap.step, sw = `rgb(${st.color.join(',')})`;
+                if (tutorChip) {
+                    tutorChip.hidden = false;
+                    tutorChip.innerHTML = `<i style="background:${sw}"></i>${snap.total > 1 ? `${snap.index + 1}/${snap.total} · ` : ''}${escapeHtml(st.label)}`;
+                }
+                const advice = partAdviceContent(st.part);
+                body = `<div class="look-tutor-head"><i style="background:${sw}"></i><b>${escapeHtml(st.label)}</b>
+                        ${snap.total > 1 ? `<span>步驟 ${snap.index + 1} / ${snap.total}</span>` : ''}</div>
+                    <p>${escapeHtml(st.body)}</p>
+                    <small>${escapeHtml(st.tip)}</small>
+                    <div class="look-tutor-ctrl">
+                        ${snap.total > 1 ? '<button type="button" class="btn-outline" data-tutor-prev>上一步</button>' : ''}
+                        <button type="button" class="btn-outline" data-tutor-toggle>${snap.finished ? '重播' : (snap.playing ? '暫停' : '播放')}</button>
+                        ${snap.total > 1 ? '<button type="button" class="btn-outline" data-tutor-next>下一步</button>' : ''}
+                    </div>
+                    ${advice ? `<details class="look-advice-more"${snap.mode === 'all' ? '' : ' open'}><summary>你的${escapeHtml(advice.label)}建議</summary><div class="look-advice-body">${advice.html}</div></details>` : ''}`;
+            } else {
+                sheet.hidden = true;
                 return;
             }
-            if (!snap.step) { tutorCard.hidden = true; tutorChip.hidden = true; return; }
-            const st = snap.step;
-            const sw = `rgb(${st.color.join(',')})`;
-            tutorChip.hidden = false;
-            tutorChip.innerHTML = `<i style="background:${sw}"></i>${snap.total > 1 ? `${snap.index + 1}/${snap.total} · ` : ''}${escapeHtml(st.label)}`;
-            tutorCard.hidden = false;
-            tutorCard.innerHTML = `
-                <div class="look-tutor-head"><i style="background:${sw}"></i><b>${escapeHtml(st.label)}</b>
-                    ${snap.total > 1 ? `<span>步驟 ${snap.index + 1} / ${snap.total}</span>` : ''}</div>
-                <p>${escapeHtml(st.body)}</p>
-                <small>${escapeHtml(st.tip)}</small>
-                <div class="look-tutor-ctrl">
-                    ${snap.total > 1 ? '<button type="button" class="btn-outline" data-tutor-prev>上一步</button>' : ''}
-                    <button type="button" class="btn-outline" data-tutor-toggle>${snap.finished ? '重播' : (snap.playing ? '暫停' : '播放')}</button>
-                    ${snap.total > 1 ? '<button type="button" class="btn-outline" data-tutor-next>下一步</button>' : ''}
-                    ${structured.parts?.[st.part] ? '<button type="button" class="btn-outline" data-tutor-advice>看你的完整做法</button>' : ''}
-                </div>`;
-            tutorCard.querySelector('[data-tutor-prev]')?.addEventListener('click', () => tutor.go(-1));
-            tutorCard.querySelector('[data-tutor-next]')?.addEventListener('click', () => tutor.go(1));
-            tutorCard.querySelector('[data-tutor-toggle]')?.addEventListener('click', () => tutor.toggle());
-            tutorCard.querySelector('[data-tutor-advice]')?.addEventListener('click', () => openPartAdviceModal(st.part));
+            // 使用者展開／收合過「你的建議」就保留，不要每一步重畫都彈回去
+            const prevMore = sheet.querySelector('.look-advice-more');
+            const wasOpen = prevMore ? prevMore.open : null;
+            const scrollTop = sheet.scrollTop;
+            sheet.innerHTML = `<button type="button" class="look-advice-close" aria-label="關閉">×</button><div class="look-advice-inner">${body}</div>`;
+            const more = sheet.querySelector('.look-advice-more');
+            if (more && wasOpen != null) more.open = wasOpen;
+            sheet.scrollTop = scrollTop;
+            sheet.hidden = false;
+            sheet.querySelector('.look-advice-close').onclick = closeSheet;
+            sheet.querySelector('[data-tutor-prev]')?.addEventListener('click', () => tutor.go(-1));
+            sheet.querySelector('[data-tutor-next]')?.addEventListener('click', () => tutor.go(1));
+            sheet.querySelector('[data-tutor-toggle]')?.addEventListener('click', () => tutor.toggle());
+            placeSheet();
         };
         if (window.MakeupTutorial && tutorBox && frameEl) {
-            tutor = window.MakeupTutorial.create({ frame: frameEl, img: portrait, url: after, onChange: paintTutor });
+            tutor = window.MakeupTutorial.create({
+                frame: frameEl, url: after,
+                styleId: resultStyleId || Router.selectedStyleId,
+                onChange: paintTutor,
+            });
         }
         // 示範一定畫在妝後圖上：使用者正在看妝前時先切回來。
         const showAfter = () => area.querySelector('[data-photo="after"]')?.click();
-        // 手機版部位按鈕在照片下方，按了要把照片捲回視線內，否則動畫在畫面外播完了。
-        const revealFrame = () => {
-            if (window.matchMedia && window.matchMedia('(max-width: 900px)').matches) {
-                frameEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
-        };
+        // 手機：照片捲到畫面上半部，下半部留給抽屜——臉跟建議同時看得到。
+        const revealFrame = () => { if (narrow()) frameEl?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
         if (tutorAll) tutorAll.onclick = async () => {
             showAfter(); revealFrame();
-            tutorPart = null;
+            sheetSide = 'right';
             await tutor.playAll();
         };
         area.querySelectorAll('[data-look-part]').forEach(button => {
@@ -853,9 +912,9 @@
                 const part = button.dataset.lookPart;
                 if (!tutor || tutor.snapshot().state === 'error') { openPartAdviceModal(part); return; }
                 showAfter(); revealFrame();
-                tutorPart = part;
+                sheetSide = button.classList.contains('right') ? 'left' : 'right';
                 await tutor.playPart(part);
-                if (tutor.snapshot().state === 'error' && tutorPart === part) openPartAdviceModal(part);
+                if (tutor.snapshot().state === 'error') openPartAdviceModal(part);
             };
         });
         area.querySelector('[data-personalized-analysis]')?.addEventListener('click', () => openPersonalizationModal(structured));

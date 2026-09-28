@@ -1367,3 +1367,29 @@ body[data-member-theme="noir"] .topbar-nav a:focus-visible { background: linear-
 @media (prefers-reduced-motion: reduce) {
     .look-tutor-canvas { transition: none; }
 }
+
+/* 部位示範的說明面板：不擋臉。桌機貼在人像旁（位置由 JS 依人像框算出），
+   手機是下方抽屜、照片捲到上半部。取代原本置中、會蓋住整張臉的建議視窗。 */
+.look-advice-sheet { position: absolute; z-index: 60; max-height: min(78vh, 720px); overflow: auto;
+    padding: 18px 18px 16px; border: 1px solid var(--line-gold); border-radius: 18px;
+    background: color-mix(in srgb, var(--paper) 94%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 18px 50px rgba(45,25,27,.18), 0 0 24px var(--gold-dim);
+    animation: lookSheetIn .28s ease-out both; }
+.look-advice-sheet[hidden] { display: none; }
+.look-advice-sheet.is-bottom { position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto; max-height: 46vh;
+    border-radius: 20px 20px 0 0; border-bottom: 0; padding: 16px 16px calc(14px + env(safe-area-inset-bottom, 0px));
+    animation-name: lookSheetUp; }
+.look-advice-close { position: sticky; top: 0; float: right; width: 32px; height: 32px; margin: -6px -6px 0 8px; border: 1px solid var(--line-gold);
+    border-radius: 50%; background: var(--paper); color: var(--ink-soft); cursor: pointer; font-size: 18px; line-height: 1; z-index: 1; }
+.look-advice-inner p { margin: 0; font-family: var(--cjk); font-size: 13px; line-height: 1.8; color: var(--ink-soft); }
+.look-advice-inner > small { display: block; margin-top: 8px; font-family: var(--cjk); font-size: 12px; line-height: 1.6; color: var(--gold-deep); }
+.look-advice-more { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
+.look-advice-more summary { cursor: pointer; font-family: var(--cjk); font-size: 13px; font-weight: 500; color: var(--gold-deep); }
+.look-advice-body { margin-top: 10px; font-family: var(--cjk); font-size: 12.5px; line-height: 1.75; color: var(--ink-soft); }
+.look-advice-body h3 { font-size: 13px; margin: 10px 0 4px; }
+.look-advice-body ol { padding-left: 18px; margin: 4px 0; }
+/* 抽屜打開時，頁面底部多留空間，最後面的按鈕才不會永遠被蓋住 */
+body:has(.look-advice-sheet.is-bottom:not([hidden])) .lookbook-result { padding-bottom: 48vh; }
+@keyframes lookSheetIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes lookSheetUp { from { transform: translateY(100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .look-advice-sheet { animation: none; } }
