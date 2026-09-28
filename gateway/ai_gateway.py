@@ -221,6 +221,13 @@ UPSTREAMS = {
             # 會員資料庫自己用 session 判斷是不是管理員（非管理員回 403），Gateway 只負責放行。
             r"api/feedback",
             r"api/feedback/[^/]+",
+            # 推薦碼正式版（2026-09-28 會員資料庫端完成）：我的推薦碼與成果，路徑帶 email。
+            r"api/members/[^/]+/referral",
+            # 後台推薦紀錄與撤銷。只給管理員——見 proxy 裡的 ADMIN_ONLY_MEMBER_PATHS。
+            r"api/admin/referrals",
+            r"api/admin/referrals/[^/]+/reject",
+            # 粉底用的妝前膚色基準（2026-09-28）。會員只能讀寫自己的，路徑帶 email。
+            r"api/members/[^/]+/skin-baseline",
         ),
         requires_upstream_api_key=False,
         requires_cloud_run_iam=False,
@@ -1374,6 +1381,21 @@ def build_upstream_headers(request: Request, upstream: Upstream, identity_token:
     return headers
 
 
+# 會員資料庫上「只給管理員」的路徑。會員資料庫自己也會用 session 判斷角色，
+# 但 Gateway 這一層再擋一次：上游改錯或切成寬鬆模式時，不會變成任何會員都讀得到全站回饋與推薦紀錄。
+ADMIN_ONLY_MEMBER_PATHS = re.compile(r"^(?:api/admin/.+|api/feedback(?:/[^/]+)?)$")
+
+
+def _require_admin_member_path(claims: dict, path: str) -> None:
+    if not ADMIN_ONLY_MEMBER_PATHS.match(path):
+        return
+    if str(claims.get("role") or "").strip().lower() != "admin":
+        raise HTTPException(
+            status_code=403,
+            detail={"error": {"code": "ADMIN_REQUIRED", "message": "Administrator access is required."}},
+        )
+
+
 def _authorize_member_path(claims: dict, path: str) -> str | None:
     """Return a target member e-mail and block cross-member path changes."""
     match = MEMBER_SCOPE_RE.match(path)
@@ -2287,6 +2309,35 @@ async def forgot_password(request: Request):
 @app.post("/auth/verify-otp")
 async def verify_otp(request: Request):
     return await proxy_public_member_request(request, "/api/verify-otp")
+
+
+@app.get("/auth/referral-validate")
+async def referral_validate(request: Request, code: str = ""):
+    """註冊表單即時檢查推薦碼（登入前就要能用，所以不走會員代理）。
+
+    上游只回 {"valid": true|false}，不洩漏推薦人。上游依 IP 每分鐘 20 次限流，
+    經過 Gateway 後它看到的都是 Gateway 的位址——所以一定要把真正的使用者位址放進
+    X-Forwarded-For，否則全站會共用那 20 次。"""
+    code = str(code or "").strip()[:16]
+    if not code or not re.fullmatch(r"[0-9A-Za-z]+", code):
+        return JSONResponse(status_code=200, content={"valid": False})
+    if not MEMBER_DATABASE_URL:
+        raise HTTPException(status_code=503, detail={"error": {"code": "AUTH_NOT_CONFIGURED", "message": "Member authentication is unavailable."}})
+    headers = with_member_gateway_key({"Accept": "application/json", "X-Forwarded-For": client_ip(request)})
+    try:
+        response = await request.app.state.http_client.get(
+            f"{MEMBER_DATABASE_URL}/api/referral/validate",
+            params={"code": code}, headers=headers, timeout=10,
+        )
+    except httpx.HTTPError:
+        return JSONResponse(status_code=503, content={"error": {"code": "MEMBER_SERVICE_UNAVAILABLE", "message": "Member service is unavailable."}})
+    if response.status_code == 429:
+        return JSONResponse(status_code=429, content={"error": {"code": "RATE_LIMITED", "message": "操作次數過多，請稍後再試。"}})
+    try:
+        valid = bool(response.json().get("valid")) if response.status_code == 200 else False
+    except (ValueError, AttributeError):
+        valid = False
+    return JSONResponse(status_code=200, content={"valid": valid})
 
 
 async def proxy_admin_request(request: Request, upstream_path: str):
@@ -3629,6 +3680,8 @@ async def proxy(service: str, path: str, request: Request):
         claims = require_member_access(request)
         acting_owner_id = opaque_actor_id(str(claims.get("sub") or ""))
         enforce_expected_actor(request, acting_owner_id)
+    if service == "member-database":
+        _require_admin_member_path(claims, path)
     target_email = _authorize_member_path(claims, path) if service == "member-database" else None
     target_owner_id = opaque_actor_id(target_email) if target_email else acting_owner_id
     pro_member_cookie, pro_rotated_cookie = "", ""

@@ -628,6 +628,31 @@ class AiGatewayTest(unittest.TestCase):
             _authorize_member_path(claims, "api/members/other@example.com/feedback")
         self.assertEqual(raised.exception.status_code, 403)
 
+    def test_referral_and_skin_baseline_routes_are_allowed(self):
+        from gateway.ai_gateway import UPSTREAMS, is_path_allowed
+        member_db = UPSTREAMS["member-database"]
+        for path in ("api/members/a@b.c/referral", "api/members/a@b.c/skin-baseline",
+                     "api/admin/referrals", "api/admin/referrals/7/reject"):
+            self.assertTrue(is_path_allowed(member_db, path), path)
+        claims = {"sub": "a@b.c", "role": "member"}
+        with self.assertRaises(Exception) as raised:
+            _authorize_member_path(claims, "api/members/other@b.c/skin-baseline")
+        self.assertEqual(raised.exception.status_code, 403)
+
+    def test_admin_only_member_paths_need_admin_role_at_the_gateway(self):
+        # 上游也會擋，但 Gateway 自己再擋一次：一般會員讀不到全站回饋與推薦紀錄
+        from gateway.ai_gateway import _require_admin_member_path
+        member = {"sub": "a@b.c", "role": "member"}
+        admin = {"sub": "boss@b.c", "role": "admin"}
+        for path in ("api/feedback", "api/feedback/3", "api/admin/referrals", "api/admin/referrals/3/reject"):
+            with self.assertRaises(Exception) as raised:
+                _require_admin_member_path(member, path)
+            self.assertEqual(raised.exception.status_code, 403, path)
+            _require_admin_member_path(admin, path)
+        # 會員自己的路徑不受影響
+        _require_admin_member_path(member, "api/members/a@b.c/feedback")
+        _require_admin_member_path(member, "api/members/a@b.c/referral")
+
     def test_expected_actor_pins_the_tab_to_its_signed_in_account(self):
         # A tab records its opaque actor at login and echoes it on every write.
         # Matching the current session is allowed; a stale actor (the cookie was
