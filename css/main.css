@@ -5167,3 +5167,34 @@ body[data-member-theme="noir"] #bagStyleModal .makeup-style-dialog.bag-dialog { 
 @media (max-width: 620px) {
     .mp-more-grid .pc-foot .pc-own { flex: 1 1 100%; text-align: center; padding: 6px 8px; }
 }
+
+/* 收藏妝容圖的授權：管理員在後台看得到，必須先勾選同意才能收藏 */
+.look-consent { display: flex; gap: 10px; align-items: flex-start; margin: 14px 0 4px; padding: 12px 14px;
+    border: 1px solid var(--line-gold); border-radius: 12px; background: var(--ivory-2); cursor: pointer;
+    font-family: var(--cjk); font-size: 12.5px; line-height: 1.7; color: var(--ink-soft); text-align: left; }
+.look-consent input { margin-top: 4px; width: 16px; height: 16px; flex-shrink: 0; accent-color: var(--gold-deep); }
+.look-consent b { display: block; color: var(--gold-deep); font-weight: 600; }
+.look-save-reminder { max-width: 560px; }
+.makeup-style-actions button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* 分享到 IG／Threads */
+.look-share-dialog { max-width: 880px; }
+.look-share-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 22px; align-items: start; }
+.look-share-preview { aspect-ratio: 4 / 5; border-radius: 16px; overflow: hidden; background: var(--ivory-2);
+    display: grid; place-items: center; border: 1px solid var(--line-gold); }
+.look-share-preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.look-share-loading { padding: 20px; font-family: var(--cjk); font-size: 13px; color: var(--mid); text-align: center; }
+.look-share-side { display: grid; gap: 14px; }
+.look-share-opt { display: flex; gap: 10px; align-items: flex-start; font-family: var(--cjk); font-size: 13.5px; color: var(--ink-soft); cursor: pointer; }
+.look-share-opt input { margin-top: 3px; accent-color: var(--gold-deep); }
+.look-share-opt small { display: block; color: var(--mid); font-size: 12px; margin-top: 2px; }
+.look-share-caption { display: grid; gap: 6px; font-family: var(--cjk); font-size: 12px; color: var(--gold-deep); }
+.look-share-caption textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--edge); border-radius: 12px;
+    background: var(--white); color: var(--ink-soft); font-family: var(--cjk); font-size: 13.5px; line-height: 1.6; resize: vertical; }
+.look-share-actions { display: grid; gap: 8px; }
+.look-share-actions > * { width: 100%; text-align: center; text-decoration: none; }
+.look-share-note { margin: 0; font-family: var(--cjk); font-size: 12px; line-height: 1.7; color: var(--mid); }
+@media (max-width: 760px) {
+    .look-share-body { grid-template-columns: minmax(0, 1fr); }
+    .look-share-preview { max-width: 320px; width: 100%; margin: 0 auto; }
+}

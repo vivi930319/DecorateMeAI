@@ -744,6 +744,7 @@
                 <div class="lookbook-actions">
                     <button class="btn-outline" type="button" data-prev-style>上一步：重新選擇風格</button>
                     <button class="btn-outline" type="button" data-save-look>收藏這次妝容</button>
+                    ${window.LookShare ? '<button class="btn-outline" type="button" data-share-look>分享到 IG／Threads</button>' : ''}
                     <button class="btn-gold" type="button" data-products>${window.BagTryOn?.active() ? '查看化妝包缺少的商品 →' : '查看推薦商品 →'}</button>
                 </div>
             </section>`;
@@ -920,7 +921,11 @@
         area.querySelector('[data-personalized-analysis]')?.addEventListener('click', () => openPersonalizationModal(structured));
         area.querySelector('[data-prev-style]').onclick = () => openMakeupStyleModal(Router.selectedStyleId);
         area.querySelector('[data-save-look]').onclick = openSaveLookModal;
-        area.querySelector('[data-products]').onclick = openProductRecommendationModal;
+        area.querySelector('[data-products]').onclick = openProductsWithSaveReminder;
+        area.querySelector('[data-share-look]')?.addEventListener('click', () => {
+            // 分享圖的妝前用使用者自己的照片（資料包裡的壓縮版），沒有才用渲染端存的那份
+            window.LookShare.open({ before, after, styleName: resultStyle(style).name });
+        });
     };
 
     window.MakeupFlowUI = {

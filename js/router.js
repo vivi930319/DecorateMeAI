@@ -2705,6 +2705,29 @@ function mapRemoteSavedLook(L){
     };
 }
 
+// 收藏妝容圖的授權（2026-09-28 使用者定案）。
+//
+// 收藏的妝前／妝後圖**管理員在後台看得到**（見 gateway 的 /media/render 管理員豁免與稽核）。
+// 目的是測試渲染、儲存與會員資料之間串接的穩定性。使用者必須在存之前就知道這件事，
+// 而且要自己勾選同意——不勾就不能存，但**不影響看商品**（兩件事獨立）。
+// 措辭改了就換 version，舊紀錄才分得出當時同意的是哪一版。
+const LOOK_SAVE_CONSENT = Object.freeze({
+    version: '2026-09-28',
+    text: '收藏後，這組妝前／妝後圖（包含你的妝前照片）會存進你的會員收藏；'
+        + '為了測試系統串接的穩定性，管理員可以在後台看到你收藏的妝容圖。不收藏就不會存。',
+});
+function lookConsentHtml() {
+    return `<label class="look-consent"><input type="checkbox" data-look-consent>
+        <span><b>我了解並同意</b>${escapeHtml(LOOK_SAVE_CONSENT.text)}</span></label>`;
+}
+// 勾選前把「收藏」類按鈕鎖住
+function bindLookConsent(root, buttons) {
+    const box = root.querySelector('[data-look-consent]');
+    const sync = () => buttons.forEach(b => { if (b) b.disabled = !box || !box.checked; });
+    if (box) box.addEventListener('change', sync);
+    sync();
+}
+
 function saveCurrentLook(){
     if (isGuest()) {
         promptGuestAuth('收藏妝容對比圖');
@@ -2713,7 +2736,9 @@ function saveCurrentLook(){
     // 收藏時重建最新資料；無法取得渲染圖時才使用暫存快照。
     const fresh = buildCurrentLookRecord();
     const record = fresh.renderedImage ? fresh : (Router.pendingLook || fresh);
-    const stored = { ...record, timestamp: new Date().toISOString() };
+    const stored = { ...record, timestamp: new Date().toISOString(),
+        // 同意是在收藏視窗或看商品前的提醒裡勾的；存下版本與時間，之後查得到當時同意了什麼
+        adminReviewConsent: { version: LOOK_SAVE_CONSENT.version, at: new Date().toISOString() } };
     const records = JSON.parse(localStorage.getItem(looksKey()) || '[]');
     records.unshift(stored);
     persistSavedLooks(records);
@@ -3218,6 +3243,7 @@ function openSaveLookModal() {
         <div class="save-look-meta">
             <div class="detail-pill">${escapeHtml(style.name)}</div>
             ${isTemp ? `<p class="save-look-warn">妝後圖目前是臨時網址，收藏後可能日後失效。渲染端改用永久網址後就不會有這個問題。</p>` : ''}
+            ${after ? lookConsentHtml() : ''}
         </div>
         <div class="makeup-style-actions">
             <button class="btn-outline" type="button" data-cancel>取消</button>
@@ -3259,12 +3285,61 @@ function openSaveLookModal() {
     modal.querySelector('[data-cancel]').onclick = closeSaveLookModal;
     // 沒有妝後圖就不讓存。這道守在視窗裡而不是各個按鈕上，因為入口有兩個
     // （妝容建議頁的 Step 2、妝容對比圖頁），守在按鈕上就得守兩次、漏一次就破功。
-    modal.querySelector('[data-confirm]').onclick = () => {
-        if (!after) return;
+    const confirmBtn = modal.querySelector('[data-confirm]');
+    if (after) bindLookConsent(modal, [confirmBtn]);
+    confirmBtn.onclick = () => {
+        if (!after || !modal.querySelector('[data-look-consent]')?.checked) return;
         closeSaveLookModal();
         if (saveCurrentLook()) showToast('已收藏妝容對比圖');
     };
     modal.onclick = (e) => { if (e.target === modal) closeSaveLookModal(); };
+}
+
+// 「查看推薦商品」前先提醒收藏妝容圖。這只是提醒，不是關卡：
+// 「只看商品，不收藏」一定走得過去；同一張妝後圖選過一次就不再問。
+function openProductsWithSaveReminder() {
+    const pkg = Router.analysisPackage || {};
+    const rd = pkg.render || {};
+    const after = rd.afterImageUrl || rd.afterImageDataUrl || rd.makeupOutput?.imageUrl || rd.makeupOutput?.imageDataUrl || '';
+    if (isGuest() || !after || Router.pendingLookSaved || Router.lookSaveDeclinedFor === after) {
+        openProductRecommendationModal();
+        return;
+    }
+    document.getElementById('lookSaveReminder')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'lookSaveReminder';
+    modal.className = 'makeup-style-modal open';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'lookSaveReminderTitle');
+    modal.innerHTML = `<div class="makeup-style-dialog look-save-reminder">
+        <div class="makeup-style-head">
+            <div><span class="eyebrow">Save</span><h2 id="lookSaveReminderTitle">看商品之前，要收藏這次的妝容圖嗎？</h2>
+            <p>收藏後可以在「收藏」頁隨時再看這組妝前妝後。只想看商品也可以，兩件事互不影響。</p></div>
+            <button class="makeup-style-close" type="button" aria-label="關閉">×</button>
+        </div>
+        ${lookConsentHtml()}
+        <div class="makeup-style-actions">
+            <button class="btn-outline" type="button" data-only-products>只看商品，不收藏</button>
+            <button class="btn-gold" type="button" data-save-and-products>收藏並看商品</button>
+        </div>
+    </div>`;
+    document.body.appendChild(modal);
+    const saveBtn = modal.querySelector('[data-save-and-products]');
+    bindLookConsent(modal, [saveBtn]);
+    const close = () => modal.remove();
+    modal.querySelector('.makeup-style-close').onclick = close;
+    modal.querySelector('[data-only-products]').onclick = () => {
+        Router.lookSaveDeclinedFor = after;
+        close();
+        openProductRecommendationModal();
+    };
+    saveBtn.onclick = () => {
+        if (!modal.querySelector('[data-look-consent]')?.checked) return;
+        close();
+        if (saveCurrentLook()) showToast('已收藏妝容對比圖');
+        openProductRecommendationModal();
+    };
 }
 
 function closeProductRecommendationModal(){document.getElementById('productRecommendationModal')?.remove();}
@@ -5211,7 +5286,7 @@ const PageInit = {
                 <div style="text-align:center;margin-top:20px;">
                     <button class="btn-outline" onclick="Router.go('compare')" style="margin-right:8px;">查看前後對比</button>
                     <button class="btn-outline" onclick="Router.go('suggestion')" style="margin-right:8px;">查看妝容建議</button>
-                    <button class="btn-gold" onclick="openProductRecommendationModal()">查看推薦商品 →</button>
+                    <button class="btn-gold" onclick="openProductsWithSaveReminder()">查看推薦商品 →</button>
                 </div>
             `;
         }
@@ -6548,7 +6623,7 @@ const PageInit = {
             </div>
             <div class="suggestion-footer-actions">
                 <button class="btn-outline" onclick="Router.go('compare')">查看前後對比</button>
-                <button class="btn-gold" onclick="openProductRecommendationModal()">查看推薦商品 →</button>
+                <button class="btn-gold" onclick="openProductsWithSaveReminder()">查看推薦商品 →</button>
             </div>
         `;
         Router.pendingLook = Router.pendingLook || buildCurrentLookRecord();

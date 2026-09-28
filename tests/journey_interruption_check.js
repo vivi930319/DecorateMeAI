@@ -69,9 +69,10 @@ console.log('=== 3. 標題與內文必須出自同一次請求 ===');
 check('記下這份建議是哪個風格產生的', /let resultStyleId = null;/.test(src));
 check('建議成功時才寫入', /resultStyleId = Router\.selectedStyleId;/.test(src));
 check('有一支專門解析「結果的風格」', /function resultStyle\(fallbackStyle\)/.test(src));
-// 三處：完成視窗、續作卡片、結果頁標題。
+// 至少三處：完成視窗、續作卡片、結果頁標題。2026-09-28 起分享圖的妝容名稱也用它
+// （分享的是這份結果，名稱要跟結果一致），所以是「至少」而不是剛好三處。
 const titled = (src.match(/resultStyle\(style\)\.name/g) || []).length;
-check('三處標題都改用結果的風格', titled === 3, `找到 ${titled} 處`);
+check('三處標題都改用結果的風格', titled >= 3, `找到 ${titled} 處`);
 check('沒有殘留直接用當前選擇當標題的寫法',
   !/escapeHtml\(style\.name\)\}妝容建議/.test(src) && !/\$\{style\.name\}妝容建議`/.test(src));
 
