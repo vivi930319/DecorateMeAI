@@ -201,11 +201,18 @@ const indexSource = fs.readFileSync(path.join(rootDir, 'index.html'), 'utf8');
 // 但這裡不再要求它出現在畫面上——否則這條會擋住一個刻意的移除。
 //
 // 圓形品牌章仍然要守：頂欄與抽屜的品牌頭都在用，掉了那兩處會變成空白方塊。
-for (const assetPath of ['assets/brand/decorate-me-round-source.jpg']) {
+//
+// 2026-09-28：原本守的 decorate-me-round-source.jpg 其實是 LOGO 的**設計稿整張圖**
+// （有尺寸標註、虛線框、小預覽），頂欄放大 289% 硬裁、抽屜整張塞進圓裡，小尺寸看得出草圖。
+// 改用裁好的透明圓形 LOGO，並反過來擋住設計稿再被放回畫面上。
+for (const assetPath of ['assets/brand/decorate-me-logo-160.png', 'assets/brand/decorate-me-logo.png']) {
   if (!fs.existsSync(path.join(rootDir, assetPath))) throw new Error(`Missing brand asset: ${assetPath}`);
 }
-if (!indexSource.includes('decorate-me-round-source.jpg')) {
-  throw new Error('Homepage brand assets are not wired into the rendered templates');
+if ((indexSource.match(/assets\/brand\/decorate-me-logo-160\.png/g) || []).length < 2) {
+  throw new Error('Homepage brand assets are not wired into the rendered templates (top bar + drawer)');
+}
+if (indexSource.includes('decorate-me-round-source.jpg')) {
+  throw new Error('The logo design sheet (decorate-me-round-source.jpg) is back in the page; use decorate-me-logo-160.png');
 }
 
 // ── 正式妝容流程與 Ollama 回傳契約 ──────────────────────────
