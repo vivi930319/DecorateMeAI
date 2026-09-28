@@ -4402,12 +4402,14 @@ const Referral = {
 // （101 號 p90 12.8 → 7.1）。所以基準改成保留最近 5 次素顏量測、用中位數。
 //   · 第一筆自動建立（沒有基準時）；之後每一筆都要使用者確認「這張是素顏」才加入——
 //     帶妝照片混進來，中位數也救不回來。
-//   · 會員資料庫若回傳 readings 清單，就整份存在伺服器；還沒支援時存在這台裝置，
-//     只把中位數用 {lab} 送上去——現在就能用，伺服器支援後自動改存伺服器。
+//   · 清單存在會員資料庫（2026-09-28 會員資料庫端已實作 readings，最多 5 筆，
+//     和 lab 同一次交易寫入）。一律連同 readings 送出：伺服器只有「真的存過」才會在 GET
+//     回 readings，若等它先回才開始送，只有舊 lab 的會員永遠不會切過去。
+//   · 伺服器上線前在這台裝置累積的量測，下一次寫入時一併上傳，成功後清掉本機那份。
 const SkinBaseline = {
     MAX_READINGS: 5,
     TARGET_READINGS: 3,
-    _cache: null,   // { email, lab: 中位數 [L,a,b] | null, readings: [{lab, at, analysisId}], serverReadings: bool }
+    _cache: null,   // { email, lab: 中位數 [L,a,b] | null, readings: [{lab, at, analysisId}] }
     _base() { return Api.config.services.memberDatabase.baseUrl || ''; },
     _email() {
         const email = String(Auth.getProfile()?.email || '').trim().toLowerCase();
@@ -4427,7 +4429,9 @@ const SkinBaseline = {
     },
     _cleanReadings(list) {
         return (Array.isArray(list) ? list : [])
-            .map(r => ({ lab: this._toArray(r?.lab), at: r?.at || null, analysisId: r?.analysisId || null }))
+            // analysisId 伺服器上限 64 字；at 必須是含時區的 ISO（toISOString 的 Z 符合）
+            .map(r => ({ lab: this._toArray(r?.lab), at: r?.at || null,
+                analysisId: r?.analysisId ? String(r.analysisId).slice(0, 64) : null }))
             .filter(r => Api._isUsableLab(r.lab))
             .slice(-this.MAX_READINGS);
     },
@@ -4444,8 +4448,8 @@ const SkinBaseline = {
     _loadLocal(email) {
         try { return this._cleanReadings(JSON.parse(localStorage.getItem(this._localKey(email)) || '[]')); } catch (_) { return []; }
     },
-    _saveLocal(email, readings) {
-        try { localStorage.setItem(this._localKey(email), JSON.stringify(readings)); } catch (_) {}
+    _clearLocal(email) {
+        try { localStorage.removeItem(this._localKey(email)); } catch (_) {}
     },
     // 同步讀：推薦請求組 body 時用；還沒讀過或換了帳號就是 null（推薦端會自己從會員資料庫補）
     current() {
@@ -4465,18 +4469,20 @@ const SkinBaseline = {
         if (!force && this._cache?.email === email) return this._cache.lab;
         try {
             const res = await Api._fetchWithRelogin(this._url(email), { method: 'GET', credentials: 'include', cache: 'no-store' });
-            if (res.status === 404) {
-                this._cache = { email, lab: null, readings: [], serverReadings: false };
-                return null;
+            if (res.status === 404) {   // SKIN_BASELINE_NOT_FOUND：還沒有任何基準
+                const local = this._loadLocal(email);
+                this._cache = { email, lab: this.median(local), readings: local };
+                return this._cache.lab;
             }
             if (!res.ok) return null;   // 暫時失敗不寫快取，下次再試
             const data = await res.json().catch(() => ({}));
-            const serverReadings = Array.isArray(data?.readings);
-            let readings = serverReadings ? this._cleanReadings(data.readings) : this._loadLocal(email);
+            // 伺服器有清單就以伺服器為準；沒有時用這台裝置先前累積的（下一次寫入會一併上傳）
+            let readings = Array.isArray(data?.readings) && data.readings.length
+                ? this._cleanReadings(data.readings) : this._loadLocal(email);
             const serverLab = this._pickLab(data);
-            // 舊資料或別台裝置建的：伺服器只有一組 lab、這台沒有清單 → 當成第一筆
+            // 舊資料：伺服器只有一組 lab、也沒有任何清單 → 當成第一筆
             if (!readings.length && serverLab) readings = [{ lab: serverLab, at: null, analysisId: null }];
-            this._cache = { email, lab: this.median(readings) || serverLab, readings, serverReadings };
+            this._cache = { email, lab: this.median(readings) || serverLab, readings };
             return this._cache.lab;
         } catch (_) {
             return null;
@@ -4489,10 +4495,11 @@ const SkinBaseline = {
         if (!email || !this._base() || !Api._isUsableLab(clean)) return { ok: false };
         if (this._cache?.email !== email) await this.load();
         if (this._cache?.email !== email) return { ok: false };   // 讀不到現況就不寫，免得蓋掉別的量測
+        analysisId = analysisId ? String(analysisId).slice(0, 64) : null;   // 伺服器上限 64 字
         if (analysisId && this.has(analysisId)) return { ok: false, duplicate: true, count: this.count() };
         const readings = [...this._cache.readings, { lab: clean, at: new Date().toISOString(), analysisId }].slice(-this.MAX_READINGS);
         const median = this.median(readings);
-        const body = { lab: median, ...(this._cache.serverReadings ? { readings } : {}) };
+        const body = { lab: median, readings };
         try {
             const res = await Api._fetchWithRelogin(this._url(email), {
                 method: 'PUT', credentials: 'include',
@@ -4500,7 +4507,7 @@ const SkinBaseline = {
                 body: JSON.stringify(body),
             });
             if (!res.ok) return { ok: false, status: res.status };
-            if (!this._cache.serverReadings) this._saveLocal(email, readings);
+            this._clearLocal(email);   // 已經在伺服器上了
             this._cache = { ...this._cache, lab: median, readings };
             return { ok: true, lab: median, count: readings.length };
         } catch (_) {

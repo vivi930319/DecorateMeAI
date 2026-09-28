@@ -113,7 +113,9 @@ const lastBody = () => JSON.parse(calls[calls.length - 1].opts.body);
     const made = await SkinBaseline.captureFromAnalysis({ skinTone: { lab: { L: 61.5, a: 9.2, b: 17.1 }, labReliable: true } });
     sandbox.fetch = realFetch;
     const put = calls.filter(c => c.opts.method === 'PUT').pop();
-    check('沒有基準時建立（PUT {lab:[…]}）', made.created && put && put.opts.body === '{"lab":[61.5,9.2,17.1]}', put && put.opts.body);
+    check('沒有基準時建立（PUT {lab, readings:[1 筆]}）', made.created && put
+        && JSON.stringify(JSON.parse(put.opts.body).lab) === '[61.5,9.2,17.1]'
+        && JSON.parse(put.opts.body).readings.length === 1, put && put.opts.body);
     Auth.getProfile = () => ({ email: 'Member@Test.io' });
 
     // 訪客不讀不寫
@@ -124,7 +126,7 @@ const lastBody = () => JSON.parse(calls[calls.length - 1].opts.body);
     Auth.getProfile = () => ({ email: 'Member@Test.io' });
 
     console.log('\n=== 1b. 多張素顏取中位數 ===');
-    // 伺服器還不支援 readings：清單存這台裝置，只送中位數 {lab}
+    // 會員資料庫已支援 readings：一律連同清單送出（只有舊 lab 的會員也要能切過去）
     Auth.getProfile = () => ({ email: 'multi@test.io' });
     const seqM = [{ status: 404, body: {} }];
     const fetchM = sandbox.fetch;
@@ -139,8 +141,9 @@ const lastBody = () => JSON.parse(calls[calls.length - 1].opts.body);
     const r3 = await SkinBaseline.addReading([64, 30, 16], 'AN-C');
     const lastPut = JSON.parse(calls.filter(c => c.opts.method === 'PUT').pop().opts.body);
     check('三筆取各軸中位數', r3.ok && r3.count === 3 && JSON.stringify(lastPut.lab) === '[64,12,16]', JSON.stringify(lastPut));
-    check('伺服器不支援清單時只送 {lab}', !('readings' in lastPut));
-    check('清單存在這台裝置', JSON.parse(sandbox.localStorage.getItem('beautySkinReadings:multi@test.io')).length === 3);
+    check('一律連同 readings 送出', Array.isArray(lastPut.readings) && lastPut.readings.length === 3);
+    check('readings 每筆是 {lab, at, analysisId}，at 是含時區的 ISO',
+        lastPut.readings.every(r => Array.isArray(r.lab) && /Z$/.test(r.at) && typeof r.analysisId === 'string'));
     check('推薦用的是中位數', JSON.stringify(SkinBaseline.current()) === '[64,12,16]');
     const dup = await SkinBaseline.addReading({ L: 99, a: 0, b: 0 }, 'AN-C');
     check('同一次分析不重複加入', dup.duplicate === true && SkinBaseline.count() === 3);
@@ -151,7 +154,30 @@ const lastBody = () => JSON.parse(calls[calls.length - 1].opts.body);
         && !SkinBaseline._cache.readings.some(r => r.analysisId === 'AN-A'));
     sandbox.fetch = fetchM;
 
-    // 伺服器支援 readings：整份清單送上去
+    // 舊會員：伺服器只有 lab、沒有清單 → 當第一筆，下一次寫入就把清單送上去
+    Auth.getProfile = () => ({ email: 'old@test.io' });
+    nextResponse = { status: 200, body: { lab: [60, 10, 15] } };
+    await SkinBaseline.load(true);
+    nextResponse = { status: 200, body: {} };
+    await SkinBaseline.addReading([62, 11, 16], 'AN-O');
+    const oldPut = JSON.parse(calls.filter(c => c.opts.method === 'PUT').pop().opts.body);
+    check('只有舊 lab 的會員，下一次寫入就開始存清單', oldPut.readings.length === 2 && oldPut.readings[0].at === null);
+
+    // 伺服器上線前存在這台裝置的量測：下一次寫入一併上傳，成功後清掉本機
+    Auth.getProfile = () => ({ email: 'dev@test.io' });
+    sandbox.localStorage.setItem('beautySkinReadings:dev@test.io', JSON.stringify([{ lab: [58, 9, 14], at: '2026-09-28T01:00:00.000Z', analysisId: 'AN-L' }]));
+    nextResponse = { status: 404, body: { error: { code: 'SKIN_BASELINE_NOT_FOUND' } } };
+    await SkinBaseline.load(true);
+    nextResponse = { status: 200, body: {} };
+    await SkinBaseline.addReading([60, 10, 15], 'AN-N');
+    const devPut = JSON.parse(calls.filter(c => c.opts.method === 'PUT').pop().opts.body);
+    check('裝置上的舊量測一併上傳', devPut.readings.length === 2 && devPut.readings[0].analysisId === 'AN-L');
+    check('上傳成功後清掉本機那份', sandbox.localStorage.getItem('beautySkinReadings:dev@test.io') === null);
+    const longId = 'X'.repeat(80);
+    await SkinBaseline.addReading([61, 10, 15], longId);
+    check('analysisId 截到 64 字（伺服器上限）', JSON.parse(calls.filter(c => c.opts.method === 'PUT').pop().opts.body).readings.every(r => !r.analysisId || r.analysisId.length <= 64));
+
+    // 伺服器有 readings：以伺服器為準，整份清單送上去
     Auth.getProfile = () => ({ email: 'srv@test.io' });
     nextResponse = { status: 200, body: { lab: [60, 10, 15], readings: [{ lab: [60, 10, 15], at: 't0' }] } };
     await SkinBaseline.load(true);
