@@ -41,7 +41,10 @@ check('分享：妝前可以取消', /data-with-before checked/.test(share));
 check('分享：手機走系統分享面板並帶圖片檔', /navigator\.share\(data\)/.test(share) && /files: \[file\]/.test(share));
 check('分享：Threads 發文連結', /threads\.net\/intent\/post\?text=/.test(share));
 check('分享：有 IG 限時動態 9:16（1080×1920）且為預設', /story: \{ w: 1080, h: 1920/.test(share) && /let format = 'story';/.test(share));
-check('分享：限時動態上下留 IG 介面的安全區', /const headY = story \? 260/.test(share));
+check('分享：限時動態上下留 IG 介面的安全區', /story \? \{ x0: 50, y0: 330, x1: 1030, y1: 1690/.test(share));
+check('分享圖用化妝包外框', /function drawBagFrame\(/.test(share) && /drawBagFrame\(ctx, W, H, P\)/.test(share));
+check('分享連結：帶妝容與來源，點進來有邀請卡', /ref: 'share', src/.test(share) && /function shareLandingHtml\(\)/.test(router));
+check('分享：有「複製連結」（IG 限動要用連結貼紙）', /data-copy-link/.test(share));
 check('分享：限時動態不夾文字（避免 IG 開成訊息）', /format === 'story'\s*\? \{ files: \[file\] \}/.test(share));
 check('index.html 在 makeup-flow.js 之前載入 look-share.js',
   html.indexOf('js/look-share.js') > 0 && html.indexOf('js/look-share.js') < html.indexOf('js/makeup-flow.js'));

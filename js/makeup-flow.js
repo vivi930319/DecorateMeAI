@@ -924,7 +924,7 @@
         area.querySelector('[data-products]').onclick = openProductsWithSaveReminder;
         area.querySelector('[data-share-look]')?.addEventListener('click', () => {
             // 分享圖的妝前用使用者自己的照片（資料包裡的壓縮版），沒有才用渲染端存的那份
-            window.LookShare.open({ before, after, styleName: resultStyle(style).name });
+            window.LookShare.open({ before, after, styleName: resultStyle(style).name, styleId: resultStyle(style).id });
         });
     };
 

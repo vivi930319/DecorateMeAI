@@ -10533,6 +10533,12 @@ function showApp(preferredPage) {
     updateCartBadge();
     refreshMemberTheme();
     restoreAnalysisDraft();
+    // 從分享連結進來：預選朋友試的那款妝（只在還沒選過時）
+    try {
+        const shared = sessionStorage.getItem('beautyShareLook');
+        if (shared && !Router.selectedStyleId && STYLES.some(s => s.id === shared)) Router.selectedStyleId = shared;
+        sessionStorage.removeItem('beautyShareLook');
+    } catch (_) {}
     syncRemoteFavorites();
     syncRemoteCart();
     const landing = (typeof AdminStore !== 'undefined' && AdminStore.isAdmin()) ? 'admin' : 'dashboard';
@@ -10653,6 +10659,24 @@ function sessionOwnerMatchesProfile(session) {
     return sub === email;
 }
 
+// 從 IG／Threads 分享連結點進來的人（?ref=share&look=hongKong）：登入頁上方告訴他
+// 朋友試了哪款妝，並給一顆「訪客直接試」——不必先註冊就能用。
+// 那款妝會預選好，進到選風格時就是它。
+function shareLandingHtml() {
+    let params;
+    try { params = new URLSearchParams(location.search); } catch (_) { return ''; }
+    if (params.get('ref') !== 'share') return '';
+    const style = STYLES.find(s => s.id === params.get('look')) || null;
+    if (style) { try { sessionStorage.setItem('beautyShareLook', style.id); } catch (_) {} }
+    const name = style ? (/[A-Za-z]\s*$/.test(style.name) ? style.name : `${style.name}妝`) : '';
+    return `<div class="share-landing">
+        <span class="share-landing-kicker">✦ 朋友分享給你</span>
+        <b>${name ? `朋友用 Decorate Me 試了「${escapeHtml(name)}」` : '朋友用 Decorate Me 做了臉部分析試妝'}</b>
+        <p>上傳一張正面照，就能看適合你的妝容、每個部位怎麼畫。不用註冊，先用訪客身分試試。</p>
+        <button class="btn-gold btn-full" type="button" onclick="doGuestLogin()">${name ? `我也來試${escapeHtml(name)} →` : '立即試試 →'}</button>
+    </div>`;
+}
+
 function showLogin() {
     Router.currentPage = null;
     Router._reloadAdmin = null;
@@ -10663,7 +10687,7 @@ function showLogin() {
         <div class="auth-overlay">
             <section class="auth-editorial" aria-label="Decorate Me 登入">
               <div class="auth-brand-panel"><span class="auth-kicker">DECORATE ME</span><h1>妝識<br>你的美</h1><p>從臉部分析開始，保存每一次妝容建議、收藏與專屬風格。</p></div>
-              <div class="auth-form-panel"><div class="auth-card"><span class="auth-kicker">會員登入</span><h2>歡迎回來</h2><p class="auth-description">登入後同步分析紀錄、收藏商品與會員主題。</p>
+              <div class="auth-form-panel"><div class="auth-card">${shareLandingHtml()}<span class="auth-kicker">會員登入</span><h2>歡迎回來</h2><p class="auth-description">登入後同步分析紀錄、收藏商品與會員主題。</p>
                 <div class="input-group"><label>電子郵件</label>
                   <div class="ig-field">
                     <span class="ig-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3.5 7l8.5 6 8.5-6"/></svg></span>
