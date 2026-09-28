@@ -5230,7 +5230,10 @@ const PageInit = {
                 bar.style.display = 'none'; fill.style.width = '0';
                 Router.analysisPackage = AnalysisPackage.update(Router.analysisPackage, {
                     status: 'failed',
-                    async: { ...Router.analysisPackage.async, error: err.message }
+                    // errorCode／failedAt 給新手導覽用：分辨「照片不能用」和「服務連不上」，
+                    // 並認出這是一次新的失敗（同一張照片重試又失敗，錯誤訊息可能一字不差）
+                    async: { ...Router.analysisPackage.async, error: err.message,
+                        errorCode: err.code || null, failedAt: new Date().toISOString() }
                 });
                 AnalysisDraft.save(Router.analysisPackage);
                 updatePackageStatus();
