@@ -228,6 +228,8 @@ UPSTREAMS = {
             r"api/admin/referrals/[^/]+/reject",
             # 粉底用的妝前膚色基準（2026-09-28）。會員只能讀寫自己的，路徑帶 email。
             r"api/members/[^/]+/skin-baseline",
+            # 分享任務（2026-09-28）：前端回報「按了分享」，點數與每日上限由會員資料庫判定。
+            r"api/members/[^/]+/share-events",
         ),
         requires_upstream_api_key=False,
         requires_cloud_run_iam=False,

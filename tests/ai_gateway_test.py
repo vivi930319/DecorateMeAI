@@ -631,7 +631,7 @@ class AiGatewayTest(unittest.TestCase):
     def test_referral_and_skin_baseline_routes_are_allowed(self):
         from gateway.ai_gateway import UPSTREAMS, is_path_allowed
         member_db = UPSTREAMS["member-database"]
-        for path in ("api/members/a@b.c/referral", "api/members/a@b.c/skin-baseline",
+        for path in ("api/members/a@b.c/referral", "api/members/a@b.c/skin-baseline", "api/members/a@b.c/share-events",
                      "api/admin/referrals", "api/admin/referrals/7/reject"):
             self.assertTrue(is_path_allowed(member_db, path), path)
         claims = {"sub": "a@b.c", "role": "member"}
