@@ -5266,3 +5266,10 @@ body[data-member-theme="noir"] #bagStyleModal .makeup-style-dialog.bag-dialog { 
 /* 有任何視窗打開時收起「?」，免得蓋住視窗底部的按鈕 */
 body:has(.makeup-style-modal.open) .help-fab { display: none; }
 .fb-cats .chip.active { background: var(--gold-deep); color: var(--white); border-color: var(--gold-deep); box-shadow: none; }
+/* 分享格式切換：IG 限時動態 9:16／貼文 4:5 */
+.look-share-formats { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.look-share-formats .chip { padding: 7px 14px; font-size: 13px; }
+.look-share-formats .chip small { font-size: 11px; opacity: .75; margin-left: 4px; }
+.look-share-formats .chip.active { background: var(--gold-deep); color: var(--white); border-color: var(--gold-deep); box-shadow: none; }
+.look-share-preview.is-story { aspect-ratio: 9 / 16; max-height: 62vh; width: auto; justify-self: center; }
+@media (max-width: 760px) { .look-share-preview.is-story { max-width: 240px; } }
