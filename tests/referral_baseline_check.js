@@ -123,6 +123,45 @@ const lastBody = () => JSON.parse(calls[calls.length - 1].opts.body);
     check('訪客不打基準 API', calls.length === guestCalls);
     Auth.getProfile = () => ({ email: 'Member@Test.io' });
 
+    console.log('\n=== 1b. 多張素顏取中位數 ===');
+    // 伺服器還不支援 readings：清單存這台裝置，只送中位數 {lab}
+    Auth.getProfile = () => ({ email: 'multi@test.io' });
+    const seqM = [{ status: 404, body: {} }];
+    const fetchM = sandbox.fetch;
+    sandbox.fetch = async (u, o) => { nextResponse = seqM.shift() || { status: 200, body: {} }; return fetchM(u, o); };
+    const c1 = await SkinBaseline.captureFromAnalysis({ skinTone: { lab: { L: 60, a: 10, b: 15 }, labReliable: true } }, 'AN-A');
+    check('第一筆自動建立', c1.created && SkinBaseline.count() === 1);
+    const putsBefore = calls.filter(c => c.opts.method === 'PUT').length;
+    const c2 = await SkinBaseline.captureFromAnalysis({ skinTone: { lab: { L: 70, a: 12, b: 20 }, labReliable: true } }, 'AN-B');
+    check('第二次分析不自動加入，只回 canAdd 讓畫面問「是素顏嗎」',
+        !c2.created && c2.canAdd === true && calls.filter(c => c.opts.method === 'PUT').length === putsBefore);
+    const r2 = await SkinBaseline.addReading({ L: 70, a: 12, b: 20 }, 'AN-B');
+    const r3 = await SkinBaseline.addReading([64, 30, 16], 'AN-C');
+    const lastPut = JSON.parse(calls.filter(c => c.opts.method === 'PUT').pop().opts.body);
+    check('三筆取各軸中位數', r3.ok && r3.count === 3 && JSON.stringify(lastPut.lab) === '[64,12,16]', JSON.stringify(lastPut));
+    check('伺服器不支援清單時只送 {lab}', !('readings' in lastPut));
+    check('清單存在這台裝置', JSON.parse(sandbox.localStorage.getItem('beautySkinReadings:multi@test.io')).length === 3);
+    check('推薦用的是中位數', JSON.stringify(SkinBaseline.current()) === '[64,12,16]');
+    const dup = await SkinBaseline.addReading({ L: 99, a: 0, b: 0 }, 'AN-C');
+    check('同一次分析不重複加入', dup.duplicate === true && SkinBaseline.count() === 3);
+    const c4 = await SkinBaseline.captureFromAnalysis({ skinTone: { lab: { L: 64, a: 30, b: 16 }, labReliable: true } }, 'AN-C');
+    check('已加入過的那次分析不再詢問', c4.canAdd === false);
+    for (const [i, L] of [61, 62, 63].entries()) await SkinBaseline.addReading([L, 11, 17], `AN-X${i}`);
+    check('最多保留 5 筆（最舊的丟掉）', SkinBaseline.count() === 5
+        && !SkinBaseline._cache.readings.some(r => r.analysisId === 'AN-A'));
+    sandbox.fetch = fetchM;
+
+    // 伺服器支援 readings：整份清單送上去
+    Auth.getProfile = () => ({ email: 'srv@test.io' });
+    nextResponse = { status: 200, body: { lab: [60, 10, 15], readings: [{ lab: [60, 10, 15], at: 't0' }] } };
+    await SkinBaseline.load(true);
+    nextResponse = { status: 200, body: {} };
+    await SkinBaseline.addReading([62, 11, 16], 'AN-S');
+    const srvPut = JSON.parse(calls.filter(c => c.opts.method === 'PUT').pop().opts.body);
+    check('伺服器有 readings 時整份清單一起送', Array.isArray(srvPut.readings) && srvPut.readings.length === 2
+        && JSON.stringify(srvPut.lab) === '[61,10.5,15.5]', JSON.stringify(srvPut));
+    Auth.getProfile = () => ({ email: 'Member@Test.io' });
+
     console.log('\n=== 2. 粉底狀態與比色來源 ===');
     nextResponse = { status: 200, body: {
         foundationMatchStatus: 'baseline_fallback', foundationLabSource: 'current_analysis',

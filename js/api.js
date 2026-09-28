@@ -4394,16 +4394,27 @@ const Referral = {
 
 // ═══ 妝前膚色基準（粉底比色用，2026-09-28 推薦端＋會員資料庫端）═══════════════════
 // 上了妝的照片量到的是粉底的顏色，不是皮膚——拿它去比粉底色號，推薦出來的就是「你現在臉上那支」。
-// 所以第一次在素顏狀態做完分析、LAB 可信時，把那組 LAB 存成會員的基準；之後每次推薦都一起送。
-// 只存三個數字：不存照片、不存 email 以外的識別資料。
+// 所以在素顏狀態做完分析、LAB 可信時，把那組 LAB 存成會員的基準；之後每次推薦都一起送。
+// 只存數字：不存照片、不存 email 以外的識別資料。
+//
+// 多張取中位數（2026-09-28）：tools/measure_skin_consistency.py 實測同一個人換一張照片，
+// 膚色平均偏 ΔE00 7.7（粉底相鄰色號只差 2～3）；取 3 張中位數，最差一成的誤差約減半
+// （101 號 p90 12.8 → 7.1）。所以基準改成保留最近 5 次素顏量測、用中位數。
+//   · 第一筆自動建立（沒有基準時）；之後每一筆都要使用者確認「這張是素顏」才加入——
+//     帶妝照片混進來，中位數也救不回來。
+//   · 會員資料庫若回傳 readings 清單，就整份存在伺服器；還沒支援時存在這台裝置，
+//     只把中位數用 {lab} 送上去——現在就能用，伺服器支援後自動改存伺服器。
 const SkinBaseline = {
-    _cache: null,   // { email, lab: [L,a,b] | null, loaded: true }
+    MAX_READINGS: 5,
+    TARGET_READINGS: 3,
+    _cache: null,   // { email, lab: 中位數 [L,a,b] | null, readings: [{lab, at, analysisId}], serverReadings: bool }
     _base() { return Api.config.services.memberDatabase.baseUrl || ''; },
     _email() {
         const email = String(Auth.getProfile()?.email || '').trim().toLowerCase();
         return email && email !== 'guest' ? email : '';
     },
     _url(email) { return `${this._base()}/api/members/${encodeURIComponent(email)}/skin-baseline`; },
+    _localKey(email) { return `beautySkinReadings:${email}`; },
     // 會員資料庫的格式是陣列 [L, a, b]；前端分析結果裡的是物件 { L, a, b }。兩種都收，一律轉成陣列。
     // （_labToArrayStrict 只認物件——直接拿它讀伺服器回應，每一筆基準都會被當成不存在。）
     _toArray(lab) {
@@ -4414,10 +4425,39 @@ const SkinBaseline = {
         const lab = this._toArray(data?.lab ?? data?.baselineLab ?? data?.baseline?.lab);
         return Api._isUsableLab(lab) ? lab : null;
     },
+    _cleanReadings(list) {
+        return (Array.isArray(list) ? list : [])
+            .map(r => ({ lab: this._toArray(r?.lab), at: r?.at || null, analysisId: r?.analysisId || null }))
+            .filter(r => Api._isUsableLab(r.lab))
+            .slice(-this.MAX_READINGS);
+    },
+    // 三軸各自取中位數。偶數筆取中間兩筆平均。
+    median(readings) {
+        const labs = readings.map(r => r.lab).filter(Boolean);
+        if (!labs.length) return null;
+        return [0, 1, 2].map(i => {
+            const v = labs.map(l => l[i]).sort((x, y) => x - y);
+            const m = v.length >> 1;
+            return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+        });
+    },
+    _loadLocal(email) {
+        try { return this._cleanReadings(JSON.parse(localStorage.getItem(this._localKey(email)) || '[]')); } catch (_) { return []; }
+    },
+    _saveLocal(email, readings) {
+        try { localStorage.setItem(this._localKey(email), JSON.stringify(readings)); } catch (_) {}
+    },
     // 同步讀：推薦請求組 body 時用；還沒讀過或換了帳號就是 null（推薦端會自己從會員資料庫補）
     current() {
         const email = this._email();
         return (email && this._cache?.email === email) ? this._cache.lab : null;
+    },
+    count() {
+        const email = this._email();
+        return (email && this._cache?.email === email) ? this._cache.readings.length : 0;
+    },
+    has(analysisId) {
+        return !!analysisId && this.count() > 0 && this._cache.readings.some(r => r.analysisId === analysisId);
     },
     async load(force = false) {
         const email = this._email();
@@ -4425,45 +4465,66 @@ const SkinBaseline = {
         if (!force && this._cache?.email === email) return this._cache.lab;
         try {
             const res = await Api._fetchWithRelogin(this._url(email), { method: 'GET', credentials: 'include', cache: 'no-store' });
-            if (res.status === 404) { this._cache = { email, lab: null }; return null; }
+            if (res.status === 404) {
+                this._cache = { email, lab: null, readings: [], serverReadings: false };
+                return null;
+            }
             if (!res.ok) return null;   // 暫時失敗不寫快取，下次再試
-            const lab = this._pickLab(await res.json().catch(() => ({})));
-            this._cache = { email, lab };
-            return lab;
+            const data = await res.json().catch(() => ({}));
+            const serverReadings = Array.isArray(data?.readings);
+            let readings = serverReadings ? this._cleanReadings(data.readings) : this._loadLocal(email);
+            const serverLab = this._pickLab(data);
+            // 舊資料或別台裝置建的：伺服器只有一組 lab、這台沒有清單 → 當成第一筆
+            if (!readings.length && serverLab) readings = [{ lab: serverLab, at: null, analysisId: null }];
+            this._cache = { email, lab: this.median(readings) || serverLab, readings, serverReadings };
+            return this._cache.lab;
         } catch (_) {
             return null;
         }
     },
-    async save(lab) {
+    // 加入一筆素顏量測，重算中位數並存回。同一次分析不重複加入。
+    async addReading(lab, analysisId = null) {
         const email = this._email();
         const clean = this._toArray(lab);
         if (!email || !this._base() || !Api._isUsableLab(clean)) return { ok: false };
+        if (this._cache?.email !== email) await this.load();
+        if (this._cache?.email !== email) return { ok: false };   // 讀不到現況就不寫，免得蓋掉別的量測
+        if (analysisId && this.has(analysisId)) return { ok: false, duplicate: true, count: this.count() };
+        const readings = [...this._cache.readings, { lab: clean, at: new Date().toISOString(), analysisId }].slice(-this.MAX_READINGS);
+        const median = this.median(readings);
+        const body = { lab: median, ...(this._cache.serverReadings ? { readings } : {}) };
         try {
             const res = await Api._fetchWithRelogin(this._url(email), {
                 method: 'PUT', credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ lab: clean }),
+                body: JSON.stringify(body),
             });
             if (!res.ok) return { ok: false, status: res.status };
-            this._cache = { email, lab: clean };
-            return { ok: true, lab: clean };
+            if (!this._cache.serverReadings) this._saveLocal(email, readings);
+            this._cache = { ...this._cache, lab: median, readings };
+            return { ok: true, lab: median, count: readings.length };
         } catch (_) {
             return { ok: false, status: 0 };
         }
     },
-    // 分析完成時呼叫：只有「還沒有基準」而且這次 LAB 可信才自動建立。
-    // 已經有基準就不覆蓋——之後的照片可能是上了妝拍的；要重建由使用者自己按（見粉底的暫定色號提示）。
-    async captureFromAnalysis(faceAnalysis) {
+    // 相容舊呼叫：存一筆
+    async save(lab) { return this.addReading(lab); },
+    // 分析完成時呼叫。沒有基準 → 這次可信就自動建立第一筆。
+    // 已經有基準 → 不自動加（可能是帶妝照片），回傳 canAdd 讓畫面問使用者「這張是素顏嗎？」
+    async captureFromAnalysis(faceAnalysis, analysisId = null) {
         const skin = faceAnalysis?.skinTone;
         if (!this._email() || !skin || skin.labReliable === false) return { created: false };
         const lab = this._toArray(skin.lab);
         if (!Api._isUsableLab(lab)) return { created: false };
         const existing = await this.load();
-        if (existing) return { created: false, exists: true };
         // load() 失敗（非 404）時快取不會寫入：不要在不確定有沒有基準的情況下硬寫
         if (this._cache?.email !== this._email()) return { created: false };
-        const saved = await this.save(lab);
-        return { created: saved.ok };
+        if (existing) {
+            return { created: false, exists: true, count: this.count(),
+                canAdd: this.count() < this.MAX_READINGS && !this.has(analysisId) };
+        }
+        const saved = await this.addReading(lab, analysisId);
+        return { created: saved.ok, count: saved.count || 0 };
     },
 };
 

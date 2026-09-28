@@ -1390,6 +1390,16 @@ body[data-member-theme="noir"] .topbar-nav a:focus-visible { background: linear-
 .look-advice-body ol { padding-left: 18px; margin: 4px 0; }
 /* 抽屜打開時，頁面底部多留空間，最後面的按鈕才不會永遠被蓋住 */
 body:has(.look-advice-sheet.is-bottom:not([hidden])) .lookbook-result { padding-bottom: 48vh; }
+/* 手機抽屜（2026-09-28 使用者回報「點下去看不到妝容建議」）：
+   底部導覽列是 z-index 200、固定在最底下，抽屜只有 60——抽屜下緣約 60px 被蓋住，
+   而「你的○○建議」正好排在抽屜最下面。打開時抽屜要蓋過導覽列（右上有 × 可以關），
+   右下角「?」也收起來，不然它壓在建議文字上。 */
+.look-advice-sheet.is-bottom { z-index: 250; }
+body:has(.look-advice-sheet.is-bottom:not([hidden])) .help-fab { display: none; }
+/* 三顆控制鈕排成一列：原本兩列會把建議再往下推 70px */
+.look-advice-sheet.is-bottom .look-tutor-ctrl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+.look-advice-sheet.is-bottom .look-tutor-ctrl button { min-width: 0; padding: 8px 4px; font-size: 12.5px; }
+.look-advice-sheet.is-bottom .look-advice-more { margin-top: 10px; }
 @keyframes lookSheetIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes lookSheetUp { from { transform: translateY(100%); } to { transform: none; } }
 @media (prefers-reduced-motion: reduce) { .look-advice-sheet { animation: none; } }

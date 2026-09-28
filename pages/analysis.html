@@ -35,6 +35,7 @@
                 <button class="btn-outline btn-sm has-ico" id="startCameraBtn"><img class="btn-ico" src="assets/feature/ico-lens.webp" alt="" loading="lazy">開啟鏡頭</button>
                 <button class="btn-outline btn-sm has-ico" id="capturePhotoBtn"><img class="btn-ico" src="assets/feature/ico-camera.webp" alt="" loading="lazy">拍照使用</button>
             </div>
+            <label class="screen-light-toggle"><input type="checkbox" id="screenLightToggle"> 螢幕補光：拍照時整個螢幕變白當補光燈，膚色比較準（前鏡頭）</label>
             <div class="camera-box" id="cameraBox">
                 <video id="cameraVideo" autoplay playsinline></video>
                 <div class="camera-face-guide"></div>
@@ -143,6 +144,7 @@
             <div class="skin-title">膚 色 基 準 · M A C</div>
             <div class="skin-row"><div class="skin-swatch" id="skinSwatch"></div><div><div class="skin-name" id="skinName">—</div></div></div>
             <div class="skin-warn" id="skinReliabilityWarn" style="display:none;"></div>
+            <div class="skin-baseline-prompt" id="skinBaselinePrompt" hidden></div>
         </div>
         <div class="skin-box">
             <div class="skin-title">唇 色</div>

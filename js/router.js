@@ -1476,6 +1476,96 @@ function canCreateBaselineFromCurrent() {
     return !!skin && skin.labReliable !== false && Api._isUsableLab(SkinBaseline._toArray(skin.lab));
 }
 
+// 分析結果下方的「這張是素顏嗎？加入膚色基準」。
+// 只在已經有基準、這次量測可信、這次還沒加過時出現——第一筆是自動建立的。
+// 不自動加：帶妝的照片量到的是粉底，混進中位數會把基準往粉底色拉。
+// 螢幕補光拍照（2026-09-28 使用者提議「手機版白底佔滿全螢幕」）。
+//
+// 膚色量不準，最大的來源是光線：tools/measure_skin_consistency.py 實測同一張照片加上
+// 暖光／冷光色偏，膚色就偏 ΔE00 約 11；欠曝 30% 偏 18。照片本身分不出「皮膚深」還是「光線暗」。
+// 前鏡頭正對著螢幕，整片白色螢幕就是一盞**已知顏色、固定位置**的補光燈——
+// 室內環境光越弱，它佔的比例越高，每次拍照的光線就越一致。
+//
+// 流程：整個畫面變白（能全螢幕就全螢幕，把瀏覽器的列也藏起來）→ 上方一個小圓形預覽
+// 讓人對準臉（放在上方，靠近前鏡頭，眼睛看著它時臉是正的）→ 倒數 3 秒，
+// 這段時間讓相機的自動曝光與白平衡適應白光 → 拍下 → 恢復。
+// 網頁不能調整螢幕亮度，只能請使用者自己調到最亮。
+function captureWithScreenLight(stream) {
+    return new Promise((resolve, reject) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'screen-light';
+        overlay.setAttribute('role', 'dialog');
+        overlay.setAttribute('aria-label', '螢幕補光拍照');
+        overlay.innerHTML = `
+            <div class="sl-preview"><video autoplay playsinline muted></video></div>
+            <p class="sl-hint">把螢幕亮度調到最高，臉對準上面的圓圈、正對螢幕。<br>室內關掉旁邊的燈效果更好。</p>
+            <b class="sl-count" aria-live="assertive">3</b>
+            <button type="button" class="sl-cancel">取消</button>`;
+        document.body.appendChild(overlay);
+        const preview = overlay.querySelector('video');
+        preview.srcObject = stream;
+        preview.play?.().catch(() => {});
+        try { overlay.requestFullscreen?.().catch(() => {}); } catch (_) {}
+        let left = 3, timer = 0, done = false;
+        const finish = (ok) => {
+            if (done) return;
+            done = true;
+            clearInterval(timer);
+            // 先拍再收：resolve 的呼叫者在白光還在的時候擷取畫面
+            if (ok) resolve(() => cleanup());
+            else { cleanup(); reject(new Error('cancelled')); }
+        };
+        const cleanup = () => {
+            preview.srcObject = null;
+            if (document.fullscreenElement === overlay) document.exitFullscreen?.().catch(() => {});
+            overlay.remove();
+        };
+        overlay.querySelector('.sl-cancel').onclick = () => finish(false);
+        const count = overlay.querySelector('.sl-count');
+        timer = setInterval(() => {
+            left -= 1;
+            if (left > 0) { count.textContent = String(left); return; }
+            count.textContent = '';
+            // 數字消失後再等一下，確保畫面上只剩白光
+            setTimeout(() => finish(true), 250);
+            clearInterval(timer);
+        }, 1000);
+    });
+}
+
+function paintSkinBaselinePrompt(result, analysisId) {
+    const box = document.getElementById('skinBaselinePrompt');
+    if (!box || typeof SkinBaseline === 'undefined') return;
+    const n = SkinBaseline.count();
+    const target = SkinBaseline.TARGET_READINGS;
+    if (!result?.canAdd) {
+        box.hidden = !result?.created;
+        if (result?.created) {
+            box.innerHTML = `<p>✓ 已用這張照片建立素顏膚色基準（1 張）。之後再用素顏照分析 ${target - 1} 次，粉底色號會更準。</p>`;
+        }
+        return;
+    }
+    box.hidden = false;
+    box.innerHTML = `
+        <p><b>這張是素顏照嗎？</b>加入你的膚色基準，粉底色號會更準。
+        目前已收集 ${n} 張${n < target ? `，建議至少 ${target} 張` : `（最多保留最近 ${SkinBaseline.MAX_READINGS} 張）`}。</p>
+        <div class="skin-baseline-actions">
+            <button type="button" class="btn-outline btn-sm" data-baseline-skip>有上妝，不要加</button>
+            <button type="button" class="btn-gold btn-sm" data-baseline-add>是素顏，加入基準</button>
+        </div>`;
+    box.querySelector('[data-baseline-skip]').onclick = () => { box.hidden = true; };
+    box.querySelector('[data-baseline-add]').onclick = async (e) => {
+        e.currentTarget.disabled = true;
+        const r = await SkinBaseline.addReading(Router.analysisPackage?.faceAnalysis?.skinTone?.lab, analysisId);
+        if (r.ok) {
+            box.innerHTML = `<p>✓ 已加入膚色基準（${r.count} 張）。${r.count < target ? `再 ${target - r.count} 張素顏照會更準。` : '之後推薦粉底會用這幾張的中位數比色。'}</p>`;
+        } else {
+            e.currentTarget.disabled = false;
+            showToast(r.duplicate ? '這張已經加入過了' : '加入失敗，請稍後再試');
+        }
+    };
+}
+
 window.createSkinBaselineFromCurrent = function () {
     if (!canCreateBaselineFromCurrent()) {
         showAlert('這次分析的膚色數值不夠可靠。請卸妝、在自然光下重新做一次臉部分析。');
@@ -1484,8 +1574,9 @@ window.createSkinBaselineFromCurrent = function () {
     showConfirm('這次上傳的是素顏照片嗎？基準會用在之後每一次粉底比色，帶妝的照片會讓色號偏掉。', {
         title: '建立妝前素顏基準', okText: '是素顏，建立基準', cancelText: '先不要',
         onOk: async () => {
-            const r = await SkinBaseline.save(Router.analysisPackage.faceAnalysis.skinTone.lab);
-            showToast(r.ok ? '已建立素顏基準，下次推薦粉底會用它比色' : '建立失敗，請稍後再試');
+            const r = await SkinBaseline.addReading(Router.analysisPackage.faceAnalysis.skinTone.lab, Router.analysisPackage.id);
+            showToast(r.ok ? `已加入素顏基準（${r.count} 張），下次推薦粉底會用它比色`
+                : (r.duplicate ? '這張已經加入過了' : '建立失敗，請稍後再試'));
         }
     });
 };
@@ -4651,7 +4742,9 @@ const PageInit = {
             if (!analysisPageIsCurrent() || analysisBusy || bpOriginals[role] !== file) return;
             bpLuminance[role] = lum;
             // 首次上傳且滑桿在 0 時，自動建議提亮值（暗部照片）
-            if (Number(bpSlider.value) === 0 && lum < 110) {
+            // 螢幕補光拍的照片不自動提亮：它已經有補光，而提亮會把膚色的 L* 往上推——
+            // tools/measure_frontend_brighten.py 實測深膚色暗照最多偏 ΔE00 4.6（約兩個色號）。
+            if (Number(bpSlider.value) === 0 && lum < 110 && !/-screenlight\./.test(file.name)) {
                 bpSlider.value = Math.min(50, Math.round((110 - lum) / 2));
             }
             bpRefreshPanel();
@@ -4812,11 +4905,27 @@ const PageInit = {
             }
         };
 
-        document.getElementById('capturePhotoBtn').onclick = () => {
+        // 螢幕補光：手機（觸控、窄螢幕）預設開，桌機預設關；使用者改過就記住
+        const screenLightToggle = document.getElementById('screenLightToggle');
+        if (screenLightToggle) {
+            let saved = null;
+            try { saved = localStorage.getItem('beautyScreenLight'); } catch (_) {}
+            const phone = !!(window.matchMedia && window.matchMedia('(pointer: coarse) and (max-width: 900px)').matches);
+            screenLightToggle.checked = saved == null ? phone : saved === '1';
+            screenLightToggle.onchange = () => { try { localStorage.setItem('beautyScreenLight', screenLightToggle.checked ? '1' : '0'); } catch (_) {} };
+        }
+
+        document.getElementById('capturePhotoBtn').onclick = async () => {
             const video = document.getElementById('cameraVideo');
             if (!Router.cameraStream || !video.videoWidth) {
                 showAlert('請先開啟鏡頭');
                 return;
+            }
+            let closeLight = null;
+            if (screenLightToggle?.checked) {
+                try { closeLight = await captureWithScreenLight(Router.cameraStream); }
+                catch (_) { return; }   // 使用者按了取消
+                if (!Router.cameraStream || !video.videoWidth) { closeLight(); return; }
             }
             const canvas = document.getElementById('cameraCanvas');
             canvas.width = video.videoWidth;
@@ -4825,13 +4934,17 @@ const PageInit = {
             ctx.fillStyle = '#fff';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(video, 0, 0);
+            // 畫面擷取完才收掉白光
+            if (closeLight) closeLight();
+            const lit = !!closeLight;
             canvas.toBlob(async blob => {
                 if (analysisBusy || !analysisPageIsCurrent()) return;
                 if (!blob) {
                     showAlert('拍照失敗', { type:'error' });
                     return;
                 }
-                Router.selectedFile = new File([blob], 'basic-camera.jpg', { type: 'image/jpeg' });
+                // 檔名留下拍攝方式，之後比較「有補光／沒補光」的膚色一致性時分得出來
+                Router.selectedFile = new File([blob], lit ? 'basic-camera-screenlight.jpg' : 'basic-camera.jpg', { type: 'image/jpeg' });
                 showPreview(Router.selectedFile);
                 saveDraft('camera-captured');
                 await bpRegisterFile('basic', Router.selectedFile);
@@ -5051,6 +5164,9 @@ const PageInit = {
 
             const startedAt = Date.now();
             const runId = ++analysisRunId;
+            // 上一次分析的「加入膚色基準」提示要收掉，不然會把舊照片的量測加進去
+            const baselinePrompt = document.getElementById('skinBaselinePrompt');
+            if (baselinePrompt) baselinePrompt.hidden = true;
             const mode = Router.analyzeMode;
             const actor = Api._pinnedActor?.() || '';
             let files = null;
@@ -5174,8 +5290,12 @@ const PageInit = {
                 AnalysisDraft.save(Router.analysisPackage);
                 // 妝前膚色基準：會員第一次拿到可信 LAB 時自動建立（已經有就不覆蓋，見 SkinBaseline）
                 if (typeof SkinBaseline !== 'undefined' && !isGuest()) {
-                    SkinBaseline.captureFromAnalysis(Router.analysisPackage.faceAnalysis)
-                        .then(r => { if (r?.created) showToast('已建立你的素顏膚色基準，之後推薦粉底會用它比色'); })
+                    const analysisId = Router.analysisPackage.id;
+                    SkinBaseline.captureFromAnalysis(Router.analysisPackage.faceAnalysis, analysisId)
+                        .then(r => {
+                            if (r?.created) showToast('已建立你的素顏膚色基準，之後推薦粉底會用它比色');
+                            paintSkinBaselinePrompt(r, analysisId);
+                        })
                         .catch(() => {});
                 }
                 updatePackageStatus();

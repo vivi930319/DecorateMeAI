@@ -5311,7 +5311,22 @@ body:has(.gt-root) .help-fab { display: none; }
 .share-landing b { font-family: var(--cjk); font-size: 16px; font-weight: 500; color: var(--ink-soft); }
 .share-landing p { margin: 0; font-family: var(--cjk); font-size: 13px; line-height: 1.7; color: var(--mid); }
 
+/* ── 螢幕補光拍照（2026-09-28）：整片純白就是補光燈，所以除了必要的字，其他都不要有顏色 ── */
+.screen-light-toggle { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-soft); cursor: pointer; }
+.screen-light-toggle input { margin-top: 4px; accent-color: var(--gold-deep); }
+.screen-light { position: fixed; inset: 0; z-index: 10200; background: #fff; display: flex; flex-direction: column; align-items: center;
+    padding: calc(18px + env(safe-area-inset-top, 0px)) 16px calc(18px + env(safe-area-inset-bottom, 0px)); text-align: center; }
+.sl-preview { width: min(46vw, 220px); aspect-ratio: 1; border-radius: 50%; overflow: hidden; border: 2px solid #e8e8e8; }
+.sl-preview video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; }
+.sl-hint { margin: 16px 0 0; font-size: 13px; line-height: 1.7; color: #8a8a8a; }
+.sl-count { margin-top: 10px; font-size: 44px; font-weight: 300; color: #b5b5b5; min-height: 56px; }
+.sl-cancel { margin-top: auto; padding: 10px 28px; border: 1px solid #e0e0e0; border-radius: 999px; background: #fff; color: #9a9a9a; font-size: 14px; }
+
 /* ── 推薦碼正式版／粉底妝前基準（2026-09-28）── */
+.skin-baseline-prompt { margin-top: 10px; padding: 12px 14px; border: 1px dashed var(--line-gold); border-radius: 12px; font-size: 13px; line-height: 1.7; }
+.skin-baseline-prompt[hidden] { display: none; }
+.skin-baseline-prompt p { margin: 0; }
+.skin-baseline-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 .referral-hint { display: block; min-height: 1.2em; margin-top: 4px; font-size: 12px; color: var(--text-muted, #8a7a74); }
 .referral-hint.ok { color: #2f7a4f; }
 .referral-hint.bad { color: #b0453b; }
