@@ -124,7 +124,8 @@
 
     // ── 漫畫塗鴉風的濃度 ────────────────────────────────────────────
     // 原規格是 TINT 0.23 / LINE 0.50，在照片上太淡，會被照片本身的妝色吃掉。
-    const TINT_A = 0.40, LINE_A = 0.88, APPLY = 1.45, STEP_TIME = 3.3;
+    // 2026-09-28 使用者反映太快：刷色 1.45→2.6 秒、每步 3.3→5.2 秒。
+    const TINT_A = 0.40, LINE_A = 0.88, APPLY = 2.6, STEP_TIME = 5.2;
     // 柔和羽化的部位（腮紅、修容、打亮、底妝…）用較柔的邊，其餘保持漫畫線條的銳利
     const SOFT_KINDS = new Set(['base', 'basePatch', 'blush', 'contour', 'highlight', 'aegyo', 'lowerShadow', 'undereye', 'shimmer']);
 
@@ -489,7 +490,7 @@
         function sweepShadow(sh, st, pos) {
             const trace = sh.type === 'poly' ? c => pathPoly(c, sh.pts) : c => pathEllipse(c, sh.e);
             const shade = ink(st.color);
-            const a = 0.5 * Math.min(1, st.k + 0.2);
+            const a = 0.72 * Math.min(1, st.k + 0.25);
             octx.save(); trace(octx); octx.clip();
             let g;
             if (sh.radial) {
@@ -497,13 +498,13 @@
                 const b = sh.type === 'poly' ? bbox(sh.pts) : ebox(sh.e);
                 const R = Math.hypot(b.maxX - b.minX, b.maxY - b.minY) * 0.55 + 2;
                 g = octx.createRadialGradient(c.x, c.y, 0, c.x, c.y, R);
-                const m = clamp(pos, 0.08, 0.95), w = 0.14;
+                const m = clamp(pos, 0.08, 0.95), w = 0.2;
                 g.addColorStop(0, rgba(shade, 0)); g.addColorStop(Math.max(0, m - w), rgba(shade, 0));
                 g.addColorStop(m, rgba(shade, a)); g.addColorStop(Math.min(1, m + w), rgba(shade, 0)); g.addColorStop(1, rgba(shade, 0));
             } else {
                 const ax = axisOf(sh);
                 g = octx.createLinearGradient(ax.S.x, ax.S.y, ax.E.x, ax.E.y);
-                const m = clamp(pos, 0, 1), w = 0.16;
+                const m = clamp(pos, 0, 1), w = 0.22;
                 g.addColorStop(0, rgba(shade, 0));
                 if (m - w > 0) g.addColorStop(m - w, rgba(shade, 0));
                 g.addColorStop(m, rgba(shade, a));
@@ -596,10 +597,13 @@
             if (finished) { drawStep(st, { fill: 0.9, line: 0.7, reveal: false }); return; }
             const p = reduceMotion ? 1 : smooth(clamp((stepT - 0.18) / applyTime(st), 0, 1));
             // 陰影位置：刷色時跟著前緣；刷完後以 1.1 秒一趟來回掃（0→1→0），直到下一步
+            // 陰影像刷子一樣左右來回：從一開始就在「已刷到的範圍」內來回掃（範圍隨刷色擴大），
+            // 刷完後在整個區塊來回。一趟 1.4 秒。
             let sweep = null;
             if (!reduceMotion) {
-                if (p < 1) sweep = Math.min(1, p * 1.08);
-                else { const t = (stepT - 0.18 - applyTime(st)) / 1.1; sweep = 0.5 - 0.5 * Math.cos(Math.PI * t); }
+                const t = Math.max(0, stepT - 0.18) / 1.4;
+                const swing = 0.5 - 0.5 * Math.cos(Math.PI * t);   // 0→1→0 來回
+                sweep = Math.min(1, p * 1.05) * swing;
             }
             drawStep(st, { fill: 1, line: 1, reveal: !reduceMotion, p, flow: !reduceMotion, sweep });
         }
