@@ -5282,9 +5282,17 @@ const PageInit = {
                     ${RecommendationNotice.foundationNoticeHtml()}
                     ${RecFilter.html(recommendedAll)}
                     ${!recommendedByCat.length ? RecFilter.emptyHtml() : ''}
+                    ${(() => {
+                        // 推薦裡有幾件是使用者化妝包已經有的——先講清楚，免得以為系統叫他再買一次
+                        const shown = recommendedByCat.slice(0, RECOMMENDED_DISPLAY_LIMIT);
+                        const ownedN = shown.filter(p => p.candidateKey && MakeupBag.has(p.candidateKey)).length;
+                        return shown.length ? `<p class="rec-bag-summary">${ownedN
+                            ? `其中 <b>${ownedN}</b> 件你的化妝包已經有了，標有「化妝包已有」。`
+                            : '這些都不在你的化妝包裡；手上已經有的，可以按「加入化妝包」登記。'}</p>` : '';
+                    })()}
                     <div class="prod-grid recommended-grid">${recommendedByCat.slice(0, RECOMMENDED_DISPLAY_LIMIT).map((p, i) => `
                         <div class="prod-card reveal-in" data-rec-pid="${escapeHtml(p.id)}" style="animation-delay:${Math.min(i*0.035,0.2)}s">
-                            <div class="pc-imgwrap">${phBox('', p.name, p.img)}</div>
+                            <div class="pc-imgwrap">${phBox('', p.name, p.img)}${p.candidateKey && MakeupBag.has(p.candidateKey) ? '<span class="pc-bag-badge">化妝包已有</span>' : ''}</div>
                             <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}${p.brand ? ` · ${escapeHtml(p.brand)}` : ''}</div>
                             <div class="pc-name">${escapeHtml(p.name)}</div>
                             <!-- 色號單獨拉出來。它是使用者實際要記住、要拿去櫃上問的那個字串，
@@ -5295,7 +5303,11 @@ const PageInit = {
                             ${(!p.recommendationPresentation?.headline && p.matchReason) ? `<div class="pc-reason">${escapeHtml(p.matchReason)}</div>` : ''}
                             ${colorCompareHtml(p)}
                             ${recommendationCardHtml(p)}
-                            <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span></div>
+                            <div class="pc-foot"><span class="pc-price">${escapeHtml(p.price)}</span>
+                                ${p.candidateKey ? `<button type="button" class="pc-own${MakeupBag.has(p.candidateKey) ? ' is-own' : ''}"
+                                    data-own="${escapeHtml(p.candidateKey)}" data-own-label="化妝包已有"
+                                    aria-label="把「${escapeHtml(p.name)}」登記為我已經有的">${MakeupBag.has(p.candidateKey) ? '化妝包已有' : '＋ 加入化妝包'}</button>` : ''}
+                            </div>
                         </div>`).join('')}
                     </div>
                 </section>` : ''}
@@ -5526,7 +5538,9 @@ const PageInit = {
                         ownBtn.disabled = false;
                         if (!result.ok) { showToast(result.error); return; }
                         ownBtn.classList.add('is-own');
-                        ownBtn.textContent = '已有';
+                        ownBtn.textContent = ownBtn.dataset.ownLabel || '已有';
+                        const wrap = card.querySelector('.pc-imgwrap');
+                        if (wrap && !wrap.querySelector('.pc-bag-badge')) wrap.insertAdjacentHTML('beforeend', '<span class="pc-bag-badge">化妝包已有</span>');
                         showToast(result.already ? '已經在化妝包裡了' : '已加入化妝包');
                     };
                     const heart = card.querySelector('.pc-heart');

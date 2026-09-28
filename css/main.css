@@ -5134,3 +5134,16 @@ body[data-member-theme="noir"] #bagStyleModal .makeup-style-dialog.bag-dialog { 
 @media (prefers-reduced-motion: reduce) {
     #bagStyleModal .bag-dialog.is-opening, .bag-dialog.is-opening *, .bag-dialog-pull, .bag-dialog-doodle { animation: none !important; }
 }
+
+/* 商品頁「本次個人化推薦」：標出化妝包已有的，並可直接加入化妝包 */
+.pc-bag-badge { position: absolute; top: 8px; left: 8px; z-index: 4; padding: 4px 9px; border-radius: 999px;
+    font-family: var(--cjk); font-size: 11px; letter-spacing: .04em; color: var(--white); background: var(--gold-deep);
+    box-shadow: 0 2px 8px rgba(0,0,0,.15); pointer-events: none; }
+.rec-bag-summary { margin: 4px 0 14px; font-family: var(--cjk); font-size: 13px; color: var(--mid); }
+.rec-bag-summary b { color: var(--gold-deep); font-weight: 600; }
+.recommended-grid .pc-foot { flex-wrap: wrap; row-gap: 8px; }
+.recommended-grid .pc-own.is-own { cursor: default; }
+@media (max-width: 620px) {
+    .recommended-grid .pc-foot .pc-own { flex: 1 1 100%; text-align: center; padding: 6px 8px; font-size: 11.5px; }
+    .pc-bag-badge { top: 6px; left: 6px; font-size: 10px; padding: 3px 7px; }
+}
