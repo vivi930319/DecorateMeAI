@@ -9,7 +9,8 @@
 (function (window, document) {
     'use strict';
 
-    const TOUR_KEY = 'beautyTourSeen';
+    // V2：2026-09-28 改成實作導覽。舊的卡片版看過的人也要再自動出現一次真正帶著做的版本。
+    const TOUR_KEY = 'beautyTourSeenV2';
     const STEPS = [
         { img: 'assets/brand/decorate-me-logo.png', title: '歡迎來到妝識你的美',
           body: '用一張正面照分析你的臉型、五官與膚色，再依你的條件推薦妝容、示範怎麼畫、推薦適合的商品。花 30 秒看看怎麼用。' },
@@ -73,9 +74,20 @@
         draw();
     }
     // 第一次進入系統時自動出現一次；後台不出現
+    // 2026-09-28 起「使用導覽」改成實際帶著做一遍（js/guided-tour.js）：切到真的頁面、
+    // 框出真正要按的按鈕、等使用者做完才進下一步。上面的卡片版只在實作導覽沒載入時備用。
+    function startGuide() {
+        if (typeof GuidedTour !== 'undefined') GuidedTour.start();
+        else startTour();
+    }
     function maybeStartTour() {
-        if (isAdminPage() || seenMap()[email()]) return;
-        setTimeout(() => { if (!document.getElementById('onboardingTour')) startTour(); }, 700);
+        if (isAdminPage()) return;
+        setTimeout(() => {
+            // 做到一半的（重新整理、中途離開）從同一步繼續；沒做過的從頭開始
+            if (typeof GuidedTour !== 'undefined' && GuidedTour.resumeIfUnfinished()) return;
+            if (seenMap()[email()] || document.getElementById('onboardingTour')) return;
+            startGuide();
+        }, 700);
     }
 
     // ── 意見回饋 ──────────────────────────────────────────────
@@ -171,7 +183,7 @@
         const menu = wrap.querySelector('.help-fab-menu'), btn = wrap.querySelector('.help-fab-btn');
         const toggle = (open) => { menu.hidden = !open; btn.setAttribute('aria-expanded', String(open)); };
         btn.onclick = () => toggle(menu.hidden);
-        wrap.querySelector('[data-help-tour]').onclick = () => { toggle(false); startTour(); };
+        wrap.querySelector('[data-help-tour]').onclick = () => { toggle(false); startGuide(); };
         wrap.querySelector('[data-help-feedback]').onclick = () => { toggle(false); openFeedback(); };
         document.addEventListener('click', e => { if (!wrap.contains(e.target)) toggle(false); });
         // 換頁（含進後台、登出回登入畫面）時重新判斷要不要顯示
@@ -185,5 +197,5 @@
         if (fab) fab.hidden = isAdminPage() || !appShown;
     }
 
-    window.HelpCenter = { startTour, maybeStartTour, openFeedback, mountButton, syncVisibility, STEPS };
+    window.HelpCenter = { startTour, startGuide, maybeStartTour, openFeedback, mountButton, syncVisibility, markTourSeen: markSeen, STEPS };
 })(window, document);

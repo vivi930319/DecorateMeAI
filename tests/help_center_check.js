@@ -33,10 +33,12 @@ let started = 0;
 box.HelpCenter.startTour = () => { started += 1; };
 check('HelpCenter 有匯出導覽、回饋、按鈕', ['startTour', 'maybeStartTour', 'openFeedback', 'mountButton'].every(k => typeof box.HelpCenter[k] === 'function'));
 check(`導覽有 6 步（${box.HelpCenter.STEPS.length}）`, box.HelpCenter.STEPS.length === 6);
-check('沒看過的帳號會判定要自動開導覽', !JSON.parse(store.beautyTourSeen || '{}')['a@b.c']);
-store.beautyTourSeen = JSON.stringify({ 'a@b.c': '2026-09-28' });
-check('看過的帳號記錄得到', JSON.parse(store.beautyTourSeen)['a@b.c'] === '2026-09-28');
-check('後台不自動開導覽', /if \(isAdminPage\(\) \|\| seenMap\(\)\[email\(\)\]\) return;/.test(hc));
+check('沒看過的帳號會判定要自動開導覽', !JSON.parse(store.beautyTourSeenV2 || '{}')['a@b.c']);
+store.beautyTourSeenV2 = JSON.stringify({ 'a@b.c': '2026-09-28' });
+check('看過的帳號記錄得到', JSON.parse(store.beautyTourSeenV2)['a@b.c'] === '2026-09-28');
+check('後台不自動開導覽', /function maybeStartTour\(\) \{\s*if \(isAdminPage\(\)\) return;/.test(hc));
+check('做到一半的導覽會從同一步繼續', /GuidedTour\.resumeIfUnfinished\(\)/.test(hc));
+check('「使用導覽」與第一次進入都走實作導覽', /data-help-tour\]'\)\.onclick = \(\) => \{ toggle\(false\); startGuide\(\); \}/.test(hc));
 check('關閉或看完都記為看過', /const close = \(\) => \{ markSeen\(\); modal\.remove\(\); \};/.test(hc));
 check('進入系統後掛上「?」並判斷要不要開導覽', /HelpCenter\.mountButton\(\);[\s\S]{0,120}HelpCenter\.maybeStartTour\(\)/.test(router));
 
