@@ -78,28 +78,14 @@ console.log('=== 規劃方式分岔 ===\n');
   check('  此時不該直接開舊視窗', calls.direct, 0);
 }
 
-// 2. 選了系統推薦 → 原封不動走舊流程
-{
-  const { sandbox, calls } = makeSandbox({ plan: 'system', bagCount: 3 });
+// 2～4. 2026-09-28 起：選過任何方式，下次選風格也**一律先問規劃方式**（使用者要求），
+//        不再直接跳進上次那一條。預選上次的選擇，由規劃視窗處理。
+for (const [plan, bagCount, label] of [['system', 3, '上次選系統推薦'], ['makeupBag', 5, '上次選化妝包'], ['makeupBag', 0, '上次選化妝包但包已清空']]) {
+  const { sandbox, calls } = makeSandbox({ plan, bagCount });
   sandbox.openMakeupStyleModal('hongKong');
-  check('選系統推薦時直接開舊視窗', calls.direct, 1);
-  check('  不再問一次規劃方式', calls.created.includes('makeupPlanModal'), false);
-}
-
-// 3. 選了化妝包且包裡有東西 → 走反推
-{
-  const { sandbox, calls } = makeSandbox({ plan: 'makeupBag', bagCount: 5 });
-  sandbox.openMakeupStyleModal('hongKong');
-  check('選化妝包且有商品時走反推視窗', calls.created.includes('bagStyleModal'), true);
-  check('  不走舊視窗', calls.direct, 0);
-}
-
-// 4. 記著要用化妝包、但包是空的 → 落回舊流程，不能卡住
-{
-  const { sandbox, calls } = makeSandbox({ plan: 'makeupBag', bagCount: 0 });
-  sandbox.openMakeupStyleModal('hongKong');
-  check('化妝包被清空時落回舊流程', calls.direct, 1);
-  check('  不會卡在反推視窗', calls.created.includes('bagStyleModal'), false);
+  check(`${label}：仍先開規劃視窗`, calls.created.includes('makeupPlanModal'), true);
+  check('  不直接開七選一', calls.direct, 0);
+  check('  不直接開化妝包推薦', calls.created.includes('bagStyleModal'), false);
 }
 
 // 5. 舊視窗必須被保留下來，而不是被取代
@@ -117,7 +103,8 @@ console.log('=== 規劃方式分岔 ===\n');
   vm.runInContext(src, sandbox);
   check('重複載入不會重複包裝', sandbox.__openStyleModalDirect === first, true);
   sandbox.openMakeupStyleModal('hongKong');
-  check('  仍然只呼叫舊視窗一次', calls.direct, 1);
+  // 現在一律先開規劃視窗；重複包裝的話會開兩次，或變成直接開舊視窗
+  check('  只開一次規劃視窗、不直接開舊視窗', calls.created.filter(id => id === 'makeupPlanModal').length === 1 && calls.direct === 0, true);
 }
 
 console.log('\n規劃方式分岔測試通過');

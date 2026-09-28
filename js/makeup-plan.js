@@ -148,7 +148,7 @@
                     <div>
                         <span class="eyebrow">Plan</span>
                         <h2 id="makeupPlanModalTitle">這次想怎麼規劃妝容？</h2>
-                        <p>兩種方式都可以，之後在會員中心隨時能改。</p>
+                        <p>${MakeupPlan.get() ? '已幫你選好上次用的方式，也可以換另一種。' : '兩種方式都可以，每次選風格前都能重新選。'}</p>
                     </div>
                     <button class="makeup-style-close" type="button" aria-label="關閉">×</button>
                 </div>
@@ -637,15 +637,13 @@
         if (typeof window.openMakeupStyleModal !== 'function') return false;
         if (window.__openStyleModalDirect) return true;
         window.__openStyleModalDirect = window.openMakeupStyleModal;
+        // 選擇風格一律先問規劃方式（2026-09-28 使用者要求）。
+        //
+        // 先前是「選過就記住、之後不再問」，結果選過一次化妝包的人，每次按「選擇風格」
+        // 都直接跳進化妝包推薦，看不到另一種規劃方式，也不知道怎麼換回來。
+        // 現在每次都先開規劃視窗，並預選上次的選擇——照舊的人只要多按一次「下一步」。
         window.openMakeupStyleModal = function (preselectedStyleId) {
-            if (MakeupPlan.shouldAsk()) { openMakeupPlanModal(preselectedStyleId); return; }
-            if (MakeupPlan.get() === 'makeupBag' && typeof MakeupBag !== 'undefined' && MakeupBag.count()) {
-                openBagStyleModal(preselectedStyleId);
-                return;
-            }
-            // 記著要用化妝包、但包被清空了：不要卡住，直接走系統推薦。
-            BagTryOn.clear();
-            window.__openStyleModalDirect(preselectedStyleId);
+            openMakeupPlanModal(preselectedStyleId);
         };
         return true;
     }
