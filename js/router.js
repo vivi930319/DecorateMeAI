@@ -5540,7 +5540,12 @@ const PageInit = {
         // 一般瀏覽也要有品牌、價格與排序——使用者不是只在「推薦」那一區買東西，
         // 一般商品頁就是逛街的地方，而逛街本來就會照價格與品牌看。
         loadProductFacets(() => {
-            if (Router.currentPage === 'products') renderShop(Router.shopFilter || 'all');
+            // 使用者正在看某件商品的詳情時不要重畫清單。先前這裡一律 renderShop，
+            // 從推薦視窗、收藏或相關商品點進來的詳情頁，會在選單載完的那一刻被清單蓋掉，
+            // 看起來就是「點進去沒東西／又回到清單」（2026-09-29 回報）。選單已經快取，回清單時照樣有。
+            if (Router.currentPage === 'products' && !document.querySelector('#productsArea .pd-info')) {
+                renderShop(Router.shopFilter || 'all');
+            }
         });
         //
         // 價格、搜尋與排序仍在本機做；品牌則改用 Product API 的 brand 查詢，

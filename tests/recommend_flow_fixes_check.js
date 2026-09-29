@@ -83,6 +83,12 @@ console.log('\n=== 3. 後台意見回饋的回應格式 ===');
         check('snake_case 欄位也對得上（member_email → memberEmail、created_at → createdAt）',
             b.items[0].memberEmail === 'a@b.c' && b.items[0].createdAt === '2026-09-28T16:49:45Z');
 
+        console.log('\n=== 5. 詳情頁不會被背景載完的清單蓋掉 ===');
+        const productsInit = cut(router, 'products(opts) {');
+        const facetsCb = productsInit.slice(productsInit.indexOf('loadProductFacets('), productsInit.indexOf('loadProductFacets(') + 700);
+        check('選單載完時，正在看詳情就不重畫清單',
+            facetsCb.includes("if (Router.currentPage === 'products' && !document.querySelector('#productsArea .pd-info'))"));
+
         console.log('\n=== 4. 商品詳情可以加入化妝包 ===');
         check('詳情頁有「＋ 加入化妝包」按鈕', /data-own-detail="\$\{escapeHtml\(p\.candidateKey\)\}"/.test(router));
         check('按鈕走 MakeupBag.add', /MakeupBag\.add\(ownDetail\.dataset\.ownDetail\)/.test(router));
