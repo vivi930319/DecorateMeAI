@@ -49,6 +49,16 @@ const deps = [
 ];
 for (const [name, src, needle] of deps) check(`${name} 存在`, src.includes(needle));
 
+// 2026-09-29「滑鼠或滑太快跟不上」：實測舊版捲動中框落後目標中位數 46px、最多 97px。
+// 原因是框與小卡一直掛著 0.25 秒的位置過渡，而且只聽 window 的 scroll。
+const mainCss = read('css/main.css');
+const ruleOf = (sel) => (mainCss.match(new RegExp(sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}')) || [])[1] || '';
+check('每一格畫面追蹤目標位置（requestAnimationFrame）', /function follow\(\)/.test(tour) && /requestAnimationFrame\(follow\)/.test(tour));
+check('聚光框平常沒有位置過渡（捲動時不會一直追）', !/transition/.test(ruleOf('.gt-hole')));
+check('說明小卡平常沒有位置過渡', !/transition/.test(ruleOf('.gt-card')));
+check('只有換目標時才滑過去（.gt-moving）', /\.gt-root\.gt-moving \.gt-hole \{[^}]*transition/.test(mainCss) && /markMoving\(\)/.test(tour));
+check('閃爍不再動 9999px 的遮罩陰影', !/@keyframes gtPulse \{[^}]*9999px/.test(mainCss));
+check('停止導覽時取消追蹤、拿掉監聽', /cancelAnimationFrame\(rafId\)/.test(tour) && /removeEventListener\('resize', onResize\)/.test(tour));
 check('聚光燈不擋點擊（使用者要能自己操作）', /\.gt-root \{[^}]*pointer-events: none/.test(read('css/main.css')));
 check('層級高過所有視窗（360）', /\.gt-root \{[^}]*z-index: 10050/.test(read('css/main.css')));
 check('看不到的元素（收起的抽屜）不當成目標', /checkVisibility\(/.test(tour) && /r\.right <= 0 \|\| r\.left >= window\.innerWidth/.test(tour));

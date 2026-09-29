@@ -5280,15 +5280,21 @@ body:has(.makeup-style-modal.open) .help-fab { display: none; }
    聚光燈與背景都不擋點擊（pointer-events:none），使用者照常操作頁面與視窗；
    只有說明小卡可以按。層級高過所有視窗（360）與購物車（9000）。 */
 .gt-root { position: fixed; inset: 0; z-index: 10050; pointer-events: none; }
+/* 位置不加過渡：捲動時框要同一格畫面就對上目標。只有換目標（.gt-moving）才滑過去。
+   閃爍不再動那圈 9999px 的遮罩陰影（每格都要整片重畫，滾輪捲動會卡），改由 ::after 只動透明度與縮放。 */
 .gt-hole { position: fixed; border-radius: 14px; border: 2px solid var(--gold-lt);
-    box-shadow: 0 0 0 9999px rgba(27,18,19,.52), 0 0 0 6px color-mix(in srgb, var(--gold) 45%, transparent), 0 0 26px var(--gold);
-    transition: left .25s ease, top .25s ease, width .25s ease, height .25s ease; animation: gtPulse 1.6s ease-in-out infinite; }
-.gt-hole.is-off { left: 50% !important; top: 50% !important; width: 0 !important; height: 0 !important; border: 0; animation: none;
+    box-shadow: 0 0 0 9999px rgba(27,18,19,.52), 0 0 0 6px color-mix(in srgb, var(--gold) 45%, transparent); }
+.gt-hole::after { content: ''; position: absolute; inset: -8px; border-radius: 20px; box-shadow: 0 0 30px var(--gold);
+    pointer-events: none; will-change: opacity, transform; animation: gtPulse 1.6s ease-in-out infinite; }
+.gt-root.gt-moving .gt-hole { transition: left .25s ease, top .25s ease, width .25s ease, height .25s ease; }
+.gt-root.gt-moving .gt-card { transition: left .25s ease, top .25s ease; }
+.gt-hole.is-off { left: 50% !important; top: 50% !important; width: 0 !important; height: 0 !important; border: 0;
     box-shadow: 0 0 0 9999px rgba(27,18,19,.52); }
-@keyframes gtPulse { 50% { box-shadow: 0 0 0 9999px rgba(27,18,19,.52), 0 0 0 10px color-mix(in srgb, var(--gold) 25%, transparent), 0 0 34px var(--gold); } }
+.gt-hole.is-off::after { display: none; }
+@keyframes gtPulse { 50% { opacity: .35; transform: scale(1.03); } }
 .gt-card { position: fixed; pointer-events: auto; max-width: calc(100vw - 24px); padding: 16px 18px 14px;
     border: 1px solid var(--line-gold); border-radius: 16px; background: var(--paper);
-    box-shadow: 0 18px 44px rgba(27,18,19,.35); transition: left .25s ease, top .25s ease; }
+    box-shadow: 0 18px 44px rgba(27,18,19,.35); }
 .gt-card.is-center { left: 50% !important; top: 50% !important; transform: translate(-50%, -50%); width: min(380px, calc(100vw - 24px)) !important; }
 .gt-step { font-family: var(--sans); font-size: 10.5px; letter-spacing: .18em; color: var(--gold-deep); text-transform: uppercase; }
 .gt-title { display: block; margin: 6px 0 6px; font-family: var(--cjk); font-size: 17px; font-weight: 500; color: var(--ink-soft); }
@@ -5299,7 +5305,7 @@ body:has(.makeup-style-modal.open) .help-fab { display: none; }
 .gt-card.is-problem { border-color: #c9796d; box-shadow: 0 18px 44px rgba(150, 60, 50, .22); }
 .gt-card.is-problem .gt-title { color: #a8483c; }
 .gt-wait { font-family: var(--cjk); font-size: 12px; color: var(--gold-deep); }
-@media (prefers-reduced-motion: reduce) { .gt-hole, .gt-card { transition: none; animation: none; } }
+@media (prefers-reduced-motion: reduce) { .gt-root.gt-moving .gt-hole, .gt-root.gt-moving .gt-card { transition: none; } .gt-hole::after { animation: none; } }
 /* 導覽進行中不顯示右下角「?」，免得擋到說明小卡 */
 body:has(.gt-root) .help-fab { display: none; }
 /* 分享視窗的連結列 */

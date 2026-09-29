@@ -298,6 +298,28 @@
     const stepIndex = id => Math.max(0, STEPS.findIndex(s => s.id === id));
 
     let idx = -1, timer = 0, root = null, hole = null, card = null, lastEl = null, missingSince = 0, onKey = null, onClick = null;
+    // 位置追蹤（2026-09-29 使用者回報「滑鼠或滑太快跟不上」）：
+    //   · 先前靠 window 的 scroll 事件＋每 0.4 秒的 tick 重算位置，而框與小卡又有 0.25 秒的位置過渡——
+    //     捲動時每一次更新都重新開始一段 0.25 秒的動畫，框永遠在後面追。
+    //   · 視窗內部捲動（選妝容、推薦商品）不會觸發 window 的 scroll，要等下一次 tick 才跳過去。
+    // 改成導覽進行中每一格畫面讀一次目標位置，有變才更新，而且不加過渡；
+    // 只有「換到下一個目標」那一刻加上滑動效果（.gt-moving）。
+    let rafId = 0, lastRectKey = '', moveTimer = 0, onResize = null;
+    function follow() {
+        rafId = requestAnimationFrame(follow);
+        if (!root || !lastEl || !lastEl.isConnected) return;
+        const r = lastEl.getBoundingClientRect();
+        const key = `${Math.round(r.left)},${Math.round(r.top)},${Math.round(r.width)},${Math.round(r.height)},${window.innerWidth},${window.innerHeight}`;
+        if (key === lastRectKey) return;
+        lastRectKey = key;
+        place(lastEl);
+    }
+    function markMoving() {
+        if (!root) return;
+        root.classList.add('gt-moving');
+        clearTimeout(moveTimer);
+        moveTimer = setTimeout(() => root && root.classList.remove('gt-moving'), 320);
+    }
 
     const save = () => { try { localStorage.setItem(PROGRESS_KEY, JSON.stringify({ step: STEPS[idx]?.id || null, at: Date.now() })); } catch (_) {} };
     const clearProgress = done => { try { localStorage.setItem(PROGRESS_KEY, JSON.stringify({ step: null, done: !!done, at: Date.now() })); } catch (_) {} };
@@ -327,6 +349,9 @@
     }
     function stop(done) {
         clearInterval(timer); timer = 0;
+        cancelAnimationFrame(rafId); rafId = 0; lastRectKey = '';
+        clearTimeout(moveTimer);
+        if (onResize) { window.removeEventListener('resize', onResize); onResize = null; }
         if (root) root.remove();
         root = hole = card = lastEl = null;
         if (onKey) document.removeEventListener('keydown', onKey);
@@ -419,11 +444,13 @@
         const key = pb ? `${idx}|pb|${pb.key}`
             : `${idx}|${el ? 'y' : 'n'}|${Date.now() - missingSince > 2500 ? 'late' : ''}|${typeof st.text === 'function' ? st.text() : ''}`;
         if (card.dataset.key !== key) { card.dataset.key = key; if (pb) drawProblem(pb); else drawCard(st, !!el); }
+        if (el !== lastEl) markMoving();   // 換目標才滑過去；同一個目標跟著捲動時不加過渡
         if (el && el !== lastEl) {
             const r = el.getBoundingClientRect();
             if (r.top < 70 || r.bottom > window.innerHeight - 40) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
         }
         lastEl = el;
+        lastRectKey = '';
         place(el);
     }
 
@@ -448,8 +475,10 @@
         const i = fromStepId ? stepIndex(fromStepId) : 0;
         clearInterval(timer);
         timer = setInterval(tick, 400);
-        window.addEventListener('resize', tick);
-        window.addEventListener('scroll', () => { if (root && lastEl) place(lastEl); }, { passive: true });
+        // 監聽只掛一次（先前每次 start 都多掛一組，stop 也沒拿掉）
+        if (!onResize) { onResize = () => tick(); window.addEventListener('resize', onResize); }
+        cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(follow);
         goto(i);
     }
     // 上次做到一半（重新整理、中途離開）：從同一步繼續
