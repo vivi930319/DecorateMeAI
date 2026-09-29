@@ -17,7 +17,8 @@ const check = (name, ok) => { console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`); if
 
 const ids = [...tour.matchAll(/\{ id: '([a-zA-Z]+)'/g)].map(m => m[1]);
 check(`步驟順序：${ids.join(' → ')}`,
-  ids.join(',') === 'intro,goAnalysis,upload,analyze,waitAnalysis,checkResult,feedback,goStyle,pickPlan,waitAdvice,render,checkLook,pins,tutorAll,saveLook,share,products,addBag,bag,help');
+  // 2026-09-29：先看完整示範再看單一部位（tutorAll 在 pins 前）；系統每個功能都要實際做一次
+  ids.join(',') === 'intro,goAnalysis,upload,analyze,waitAnalysis,checkResult,tryCorrect,feedback,goStyle,pickPlan,waitAdvice,render,checkLook,tutorAll,pins,saveLook,share,products,addBag,openDetail,favProduct,addCart,openCart,favorites,history,checkin,referral,bag,bagSearch,help,feedbackBox');
 
 // 每一步框的東西都要真的存在
 const deps = [
@@ -52,7 +53,8 @@ for (const [name, src, needle] of deps) check(`${name} 存在`, src.includes(nee
 // 2026-09-29「滑鼠或滑太快跟不上」：實測舊版捲動中框落後目標中位數 46px、最多 97px。
 // 原因是框與小卡一直掛著 0.25 秒的位置過渡，而且只聽 window 的 scroll。
 const mainCss = read('css/main.css');
-const ruleOf = (sel) => (mainCss.match(new RegExp(sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}')) || [])[1] || '';
+// 只認行首的規則本身：`.gt-root.gt-moving .gt-card { … }` 也含 `.gt-card {`，而那條本來就該有過渡
+const ruleOf = (sel) => (mainCss.match(new RegExp('^' + sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}', 'm')) || [])[1] || '';
 check('每一格畫面追蹤目標位置（requestAnimationFrame）', /function follow\(\)/.test(tour) && /requestAnimationFrame\(follow\)/.test(tour));
 check('聚光框平常沒有位置過渡（捲動時不會一直追）', !/transition/.test(ruleOf('.gt-hole')));
 check('說明小卡平常沒有位置過渡', !/transition/.test(ruleOf('.gt-card')));
@@ -86,7 +88,7 @@ check('index.html 在 help-center.js 之前載入 guided-tour.js',
       querySelector: s => els[s] || null,
       addEventListener() {}, removeEventListener() {},
       createElement: () => el({ querySelector: () => null, remove() {} }),
-      body: { appendChild() {} },
+      body: { appendChild() {}, classList: { toggle() {}, add() {}, remove() {} } },
     },
     setInterval: () => 0, clearInterval() {}, Date,
   };
@@ -95,6 +97,7 @@ check('index.html 在 help-center.js 之前載入 guided-tour.js',
   vm.createContext(sb);
   vm.runInContext(tour, sb);
   const S = Object.fromEntries(sb.GuidedTour.STEPS.map(s => [s.id, s]));
+  const STEPS_ALL = () => sb.GuidedTour.STEPS;
   const file = (name, size = 1000, lm = 1) => ({ name, size, lastModified: lm });
 
   // 上傳：選了照片算完成；按「照片挑錯了」之後，再選同一張（新的 File 物件）不算，換一張才算
@@ -177,7 +180,37 @@ check('index.html 在 help-center.js 之前載入 guided-tour.js',
     ['share', 'addBag', 'bag', 'help'].every(id => !S[id].manual && typeof S[id].done === 'function'));
   Router.currentPage = 'makeupBag';
   check('打開化妝包頁才算完成', S.bag.done() === true);
-  check('最後一步完成就收尾', S.help.last === true && /if \(st\.last\) stop\(true\)/.test(tour));
+  check('最後一步（意見回饋）完成就收尾', S.feedbackBox.last === true && /if \(st\.last\) stop\(true\)/.test(tour));
+
+  // 2026-09-29「每一個功能都帶使用者做」
+  check('除了開場，沒有任何一步是「下一步」帶過（checkLook 是確認妝後照，保留）',
+    STEPS_ALL().filter(st => st.manual).map(st => st.id).join(',') === 'intro,checkLook');
+  // 試一次改判：確認視窗出現過、而且關掉才算
+  els['#dmConfirm'] = el();
+  check('改判說明視窗還開著 → 還沒完成', S.tryCorrect.done() === false);
+  delete els['#dmConfirm'];
+  check('看過說明並關掉 → 完成（不必真的改，避免導覽逼使用者送出錯的標註）', S.tryCorrect.done() === true);
+  // 會員中心：訪客略過打卡與推薦碼；今天已打過卡也算完成
+  sb.isGuest = () => true;
+  check('訪客略過打卡、推薦碼', S.checkin.skip() === true && S.referral.skip() === true);
+  sb.isGuest = () => false;
+  Router.currentPage = 'profile';
+  els['#dailyCheckinBtn'] = el({ disabled: true });
+  check('今天已經打過卡（按鈕停用）也算完成', S.checkin.done() === true);
+  els['#profileReferralCard'] = el({ textContent: '暫時讀不到推薦碼，請稍後再試' });
+  check('推薦碼服務讀不到時不卡住（自動略過）', S.referral.skip() === true);
+  els['#profileReferralCard'] = el({ textContent: '讀取推薦碼中…' });
+  check('推薦碼還在讀取時不略過', S.referral.skip() === false);
+  // 化妝包搜尋：真的輸入了才算
+  els['#mbSearch'] = el({ value: '' });
+  check('化妝包沒輸入不算', S.bagSearch.done() === false);
+  els['#mbSearch'] = el({ value: 'MAC' });
+  check('化妝包輸入後才算完成', S.bagSearch.done() === true);
+  // 「?」在導覽中是藏起來的，只有最後兩步叫出來
+  check('導覽中「?」平常藏起來，help／feedbackBox 兩步才出現',
+    /body:has\(\.gt-root\):not\(\.gt-show-help\) \.help-fab \{ display: none; \}/.test(mainCss)
+    && /classList\.toggle\('gt-show-help', \['help', 'feedbackBox'\]\.includes/.test(tour));
+  check('先看完整示範，再看單一部位', ids.indexOf('tutorAll') < ids.indexOf('pins'));
 }
 
 if (failed) { console.log(`\n${failed} 項失敗`); process.exit(1); }

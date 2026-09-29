@@ -5307,7 +5307,7 @@ body:has(.makeup-style-modal.open) .help-fab { display: none; }
 .gt-wait { font-family: var(--cjk); font-size: 12px; color: var(--gold-deep); }
 @media (prefers-reduced-motion: reduce) { .gt-root.gt-moving .gt-hole, .gt-root.gt-moving .gt-card { transition: none; } .gt-hole::after { animation: none; } }
 /* 導覽進行中不顯示右下角「?」，免得擋到說明小卡 */
-body:has(.gt-root) .help-fab { display: none; }
+body:has(.gt-root):not(.gt-show-help) .help-fab { display: none; }
 /* 分享視窗的連結列 */
 .look-share-link { display: grid; gap: 6px; font-family: var(--cjk); font-size: 12px; color: var(--gold-deep); }
 .look-share-link code { display: block; padding: 8px 10px; border: 1px dashed var(--line-gold); border-radius: 10px;
