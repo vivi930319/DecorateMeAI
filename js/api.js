@@ -4874,7 +4874,20 @@ const UserFeedbackApi = {
             const res = await Api._fetchWithRelogin(`${this.base()}/api/feedback?${q}`, { credentials: 'include' });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) return { ok: false, status: res.status, items: [], error: data?.error?.message || '' };
-            return { ok: true, items: Array.isArray(data.items) ? data.items : [], total: Number(data.total ?? 0) };
+            // 規格書訂的是 { total, items }；回應的外層名稱不同時（feedback／data／純陣列）
+            // 以前會安靜地變成「0 則」，後台看起來像沒人回饋（2026-09-29 回報）。幾種都收。
+            const list = Array.isArray(data) ? data
+                : [data.items, data.feedback, data.feedbacks, data.data, data.results, data.rows].find(Array.isArray) || [];
+            const items = list.map(it => ({
+                ...it,
+                id: it.id ?? it.feedbackId ?? it.feedback_id,
+                memberEmail: it.memberEmail ?? it.member_email ?? it.email,
+                memberName: it.memberName ?? it.member_name ?? it.name,
+                createdAt: it.createdAt ?? it.created_at,
+                appVersion: it.appVersion ?? it.app_version,
+                styleId: it.styleId ?? it.style_id,
+            }));
+            return { ok: true, items, total: Number(data.total ?? data.count ?? items.length) };
         } catch (_) {
             return { ok: false, status: 0, items: [], error: '連線失敗' };
         }

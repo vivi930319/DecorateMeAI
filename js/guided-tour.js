@@ -54,7 +54,16 @@
     // accepted：使用者看過警告仍選「先用這張繼續」
     // analyzeStepAt：進入「開始分析」的時間；完成時間早於它的分析是舊結果，不算
     let rejectedFile = null, dismissed = '', accepted = '', analyzeStepAt = 0;
-    const clicked = { tutorAll: false, products: false };
+    const clicked = { tutorAll: false, products: false, own: false, skipOwn: false };
+    let stepAt = 0;   // 進入目前這一步的時間：回饋、收藏只認這之後做的
+    const guest = () => (typeof isGuest === 'function' ? isGuest() : false);
+    const atlasOpen = () => { const l = $('#featureAtlasLayer'); return !!(l && !l.hidden); };
+    // 回饋面板按「送出回饋」（或圖鑑按「改成…」）時會寫一筆 AnalysisFeedback；只算進這一步之後寫的
+    const feedbackSent = () => {
+        if (typeof AnalysisFeedback === 'undefined' || !pkg()) return false;
+        const row = AnalysisFeedback.forPackage(pkg().id);
+        return !!row && (Date.parse(row.createdAt || '') || 0) >= stepAt - 1000;
+    };
 
     // 導覽列的目標：桌機直接框選單項目；手機先框「≡」請他打開選單，打開後再框選單裡的項目
     function navTarget(pageId) {
@@ -205,53 +214,86 @@
           target: () => firstVisible('#analysisSteps', '#loadingStatus'),
           done: () => freshAnalysisDone() && visible($('#goStyleBtn')),
           problem: analysisProblem },
-        { id: 'checkResult', title: '④ 確認分析結果',
-          text: '分析完成！看一下結果：臉型、眉眼、唇形大致對嗎？個別判斷不準的，可以在下方的分析結果回饋直接改。如果照片本身選錯了（不是本人、不是正面、戴了口罩），按「照片挑錯了」重新來。',
-          target: () => firstVisible('.result-grid', '#goStyleBtn'),
+        { id: 'checkResult', title: '④ 看看你的五官分析',
+          text: '分析完成！點框起來的任一格（例如「臉型」），會打開五官圖鑑：每一類長什麼樣、系統判斷你是哪一類。如果照片本身選錯了（不是本人、不是正面、戴了口罩），按「照片挑錯了」重新來。',
+          target: () => firstVisible('.result-grid [data-fa-field]', '.result-grid'),
+          done: atlasOpen,
           problem: skinWarning,
           extra: [{ label: '照片挑錯了，重新上傳', run: () => redoPhoto() }],
-          manual: true, nextLabel: '結果沒問題' },
-        { id: 'goStyle', title: '⑤ 選擇妝容風格',
+          ensurePage: 'analysis' },
+        { id: 'feedback', title: '⑤ 回饋判斷準不準',
+          text: () => (atlasOpen()
+              ? '這是五官圖鑑。系統判斷的那一類有標記；覺得不對，就點你覺得正確的那一類，按「改成…」，會直接送出修正。判斷正確的話，關掉圖鑑，到下方按「送出回饋」。'
+              : '在下方的「這些判斷準嗎？」：不準的那一項選正確答案，然後按「送出回饋」；都準就直接按「送出回饋」。你的回饋會用來改善分析模型。'),
+          target: () => firstVisible('#featureAtlasLayer:not([hidden]) .fa-sheet', '#afSubmit', '#analysisFeedback'),
+          done: feedbackSent,
+          ensurePage: 'analysis' },
+        { id: 'goStyle', title: '⑥ 選擇妝容風格',
           text: '按「選擇風格 →」開始挑妝容。',
           target: () => firstVisible('#goStyleBtn'),
           done: () => !!anyStyleModal() },
-        { id: 'pickPlan', title: '⑥ 選一種規劃方式',
+        { id: 'pickPlan', title: '⑦ 選一種規劃方式',
           text: () => ($('#makeupPlanModal')
               ? '兩種方式：從七種妝容挑一款，或「用我的化妝包」依你已有的化妝品推薦。第一次建議先選「依想嘗試的風格」，選好按「下一步」。'
               : '挑一款想試的妝容（卡片上的星星是新手難易度，星越少越好上手），選好按「產生妝容建議 →」。'),
           target: () => firstVisible('#makeupPlanModal .makeup-style-grid', '#makeupStyleModal.open .makeup-style-grid', '#bagStyleModal .makeup-style-grid'),
           done: () => !!$('#journeyModal'),
           go: () => window.openMakeupStyleModal?.(Router.selectedStyleId) },
-        { id: 'waitAdvice', title: '⑦ 產生妝容建議',
+        { id: 'waitAdvice', title: '⑧ 產生妝容建議',
           text: '系統正在依你的臉部分析寫專屬的妝容建議，大約 10～30 秒。',
           target: () => firstVisible('#journeyModal .makeup-style-dialog'),
           done: () => visible($('#journeyModal [data-render]')) || page() === 'suggestion',
           problem: adviceProblem },
-        { id: 'render', title: '⑧ 產生妝後照',
+        { id: 'render', title: '⑨ 產生妝後照',
           text: '建議好了！按「開始妝容渲染 →」，系統會把這個妝畫在你的照片上（約 1～2 分鐘，請保持頁面開啟）。',
           target: () => firstVisible('#journeyModal [data-render]', '#journeyModal .render-estimate'),
           done: () => page() === 'suggestion' && !!$('.look-pin'),
           problem: renderProblem },
-        { id: 'checkLook', title: '⑨ 確認妝後照',
+        { id: 'checkLook', title: '⑩ 確認妝後照',
           text: '這是你的妝後照。看起來是你本人、妝感也是你想要的風格嗎？不像你或不是你要的感覺，可以換一款妝容重新產生（每天有次數上限）。',
           target: () => firstVisible('.look-portrait-frame'),
           extra: [{ label: '不太對，換個妝容重做', run: () => redoStyle() }],
           manual: true, nextLabel: '看起來不錯' },
-        { id: 'pins', title: '⑩ 看每個部位怎麼畫',
+        { id: 'pins', title: '⑪ 看每個部位怎麼畫',
           text: '點照片兩側的任一個部位標籤（例如「眼妝」），會直接在照片上示範這個部位怎麼畫，旁邊有你的專屬做法。點一個試試。',
           target: () => firstVisible('.look-pin-lane.right-lane', '.look-pin'),
           done: () => !!$('.look-pin.is-demo') },
-        { id: 'tutorAll', title: '⑪ 完整上妝示範',
+        { id: 'tutorAll', title: '⑫ 完整上妝示範',
           text: '想從頭看一遍？按「▶ 上妝示範」，會依照上妝順序一步步示範。',
           target: () => firstVisible('[data-tutor-all]'),
           done: () => clicked.tutorAll },
-        { id: 'products', title: '⑫ 推薦商品、收藏與分享',
-          text: '最後，按「查看推薦商品」看依你的臉部分析推薦的商品。這一排也可以收藏這次的妝容，或分享到 IG 限時動態／Threads。',
+        { id: 'saveLook', title: '⑬ 收藏這次妝容',
+          text: '按「收藏這次妝容」，之後可以在「收藏」頁隨時再看這組妝前妝後（收藏前會請你確認授權說明）。',
+          target: () => firstVisible('[data-save-look]'),
+          skip: guest,   // 訪客不能收藏
+          done: () => typeof Router !== 'undefined' && Router.pendingLookSaved === true },
+        { id: 'share', title: '⑭ 分享到 IG／Threads',
+          text: '按「分享到 IG／Threads」，看看分享圖長什麼樣子。不一定要真的發出去，看完關掉視窗就好。',
+          target: () => firstVisible('#lookShareModal .look-share-dialog', '[data-share-look]'),
+          done: () => clicked.share },
+        { id: 'products', title: '⑮ 看推薦商品',
+          text: () => ($('#lookShareModal') ? '先關掉分享視窗，再按「查看推薦商品 →」。' : '按「查看推薦商品 →」，看依你的臉部分析推薦的商品。'),
           target: () => firstVisible('[data-products]', '.lookbook-actions'),
-          done: () => clicked.products || page() === 'products' },
-        { id: 'bag', title: '⑬ 我的化妝包（之後可以做）',
-          text: () => `「我的化妝包」在「會員中心」裡：把手邊已經有的化妝品登記進去，下次選妝容時就能「用我的化妝包」，只補你缺的。${navHint('profile')}`,
-          target: () => navTarget('profile'), manual: true, last: true },
+          done: () => clicked.products || !!$('#productRecommendationModal') },
+        { id: 'addBag', title: '⑯ 登記你已經有的商品',
+          text: () => ($('#lookSaveReminder')
+              ? '先選要不要收藏妝容圖（兩個都可以），商品清單就會出現。'
+              : '推薦清單裡，手上已經有的商品按「＋ 加入化妝包」登記；都沒有的話按「稍後再看」。'),
+          target: () => firstVisible('#lookSaveReminder .look-save-reminder', '#productRecommendationModal .pc-own', '#productRecommendationModal [data-close]'),
+          done: () => clicked.own || clicked.skipOwn },
+        { id: 'bag', title: '⑰ 打開我的化妝包',
+          text: () => (page() === 'profile'
+              ? '按框起來的「我的化妝包」：登記過的商品都在這裡，也可以搜尋加入。下次選妝容時選「用我的化妝包」，就會用你已經有的商品試妝。'
+              : `先打開「會員中心」，「我的化妝包」在裡面。${navHint('profile')}`),
+          // 化妝包入口在會員中心的「我的化妝包」卡片（#profileBagGo）；不在會員中心時先框會員中心
+          target: () => firstVisible('#profileBagGo') || navTarget('profile'),
+          done: () => page() === 'makeupBag',
+          go: () => Router.go('makeupBag') },
+        { id: 'help', title: '⑱ 隨時找得到說明',
+          text: '最後，點右下角的「?」。之後想重看導覽、或有意見想告訴我們，都從這裡進來。',
+          target: () => firstVisible('.help-fab-btn'),
+          done: () => { const m = $('.help-fab-menu'); return !!(m && !m.hidden); },
+          last: true },
     ];
     const stepIndex = id => Math.max(0, STEPS.findIndex(s => s.id === id));
 
@@ -277,6 +319,9 @@
             if (!t || !t.closest) return;
             if (t.closest('[data-tutor-all]')) clicked.tutorAll = true;
             if (t.closest('[data-products]')) clicked.products = true;
+            if (t.closest('[data-share-look]')) clicked.share = true;
+            if (t.closest('#productRecommendationModal .pc-own')) clicked.own = true;
+            if (t.closest('#productRecommendationModal [data-close]')) clicked.skipOwn = true;
         };
         document.addEventListener('click', onClick, true);
     }
@@ -362,10 +407,11 @@
         if (!st || !root) return;
         if (st.ensurePage && page() !== st.ensurePage && typeof Router !== 'undefined') Router.go(st.ensurePage);
         // 先看有沒有做壞：做壞了就停在這一步，小卡換成「哪裡出錯＋帶我重做」
+        if (st.skip && st.skip()) { goto(idx + 1); return; }
         let pb = null;
         try { pb = st.problem ? st.problem() : null; } catch (_) { pb = null; }
         if (pb && pb.key === dismissed) pb = null;
-        if (!pb && st.done && st.done()) { goto(idx + 1); return; }
+        if (!pb && st.done && st.done()) { if (st.last) stop(true); else goto(idx + 1); return; }
         // 有問題時聚光燈照樣框著目標（例如照片區），讓人知道問題出在哪
         const el = st.target ? st.target() : null;
         if (el) missingSince = 0; else if (!missingSince) missingSince = Date.now();
@@ -383,9 +429,11 @@
 
     function goto(i) {
         if (i >= STEPS.length) { stop(true); return; }
-        idx = i; missingSince = 0; lastEl = null;
+        idx = i; missingSince = 0; lastEl = null; stepAt = Date.now();
         if (STEPS[idx].id === 'tutorAll') clicked.tutorAll = false;
         if (STEPS[idx].id === 'products') clicked.products = false;
+        if (STEPS[idx].id === 'share') clicked.share = false;
+        if (STEPS[idx].id === 'addBag') { clicked.own = false; clicked.skipOwn = false; }
         try { STEPS[idx].onEnter?.(); } catch (_) {}
         if (card) card.dataset.key = '';
         save();

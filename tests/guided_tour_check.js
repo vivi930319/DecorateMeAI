@@ -17,7 +17,7 @@ const check = (name, ok) => { console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`); if
 
 const ids = [...tour.matchAll(/\{ id: '([a-zA-Z]+)'/g)].map(m => m[1]);
 check(`步驟順序：${ids.join(' → ')}`,
-  ids.join(',') === 'intro,goAnalysis,upload,analyze,waitAnalysis,checkResult,goStyle,pickPlan,waitAdvice,render,checkLook,pins,tutorAll,products,bag');
+  ids.join(',') === 'intro,goAnalysis,upload,analyze,waitAnalysis,checkResult,feedback,goStyle,pickPlan,waitAdvice,render,checkLook,pins,tutorAll,saveLook,share,products,addBag,bag,help');
 
 // 每一步框的東西都要真的存在
 const deps = [
@@ -140,6 +140,34 @@ check('index.html 在 help-center.js 之前載入 guided-tour.js',
   check('部位標籤、上妝示範、推薦商品都要實際按過才算完成',
     ['pins', 'tutorAll', 'products'].every(id => !S[id].manual && typeof S[id].done === 'function'));
   check('問題小卡的按鈕按下後，同一個舊錯誤不會再把人拉回來', /dismissed = pb\.key/.test(tour));
+
+  // 2026-09-29「每個東西都帶她操作」：回饋、收藏、分享、加入化妝包、打開化妝包、「?」都要實際做
+  check('看分析結果要實際點開圖鑑（不是按下一步）', !S.checkResult.manual && typeof S.checkResult.done === 'function');
+  els['#featureAtlasLayer'] = el({ hidden: false });
+  check('點開圖鑑才算完成', S.checkResult.done() === true);
+  delete els['#featureAtlasLayer'];
+  check('點開圖鑑前不算完成', S.checkResult.done() === false);
+  // 回饋：只認進入這一步之後送出的
+  const fbRows = {};
+  sb.AnalysisFeedback = { forPackage: id => fbRows[id] || null };
+  Router.analysisPackage = { id: 'P9', status: 'completed', async: { completedAt: new Date().toISOString() } };
+  fbRows.P9 = { createdAt: new Date(Date.now() - 600000).toISOString() };
+  check('十分鐘前送過的回饋不算這一步', S.feedback.done() === false);
+  fbRows.P9 = { createdAt: new Date(Date.now() + 5000).toISOString() };
+  check('這一步送出回饋才算完成', S.feedback.done() === true);
+  // 收藏：訪客略過
+  sb.isGuest = () => true;
+  check('訪客自動略過收藏（訪客不能收藏）', S.saveLook.skip() === true);
+  sb.isGuest = () => false;
+  Router.pendingLookSaved = false;
+  check('會員要真的收藏才算完成', S.saveLook.skip() === false && S.saveLook.done() === false);
+  Router.pendingLookSaved = true;
+  check('收藏後完成', S.saveLook.done() === true);
+  check('分享、加入化妝包、打開化妝包、「?」都不是「下一步」帶過',
+    ['share', 'addBag', 'bag', 'help'].every(id => !S[id].manual && typeof S[id].done === 'function'));
+  Router.currentPage = 'makeupBag';
+  check('打開化妝包頁才算完成', S.bag.done() === true);
+  check('最後一步完成就收尾', S.help.last === true && /if \(st\.last\) stop\(true\)/.test(tour));
 }
 
 if (failed) { console.log(`\n${failed} 項失敗`); process.exit(1); }

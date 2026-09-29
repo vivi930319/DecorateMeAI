@@ -1668,16 +1668,21 @@ function currentFoundationCrossBrandAlternatives(product = null) {
 }
 
 function currentFoundationAvailableTargetBrands(product = null) {
-    if (Array.isArray(product?.foundationCrossBrand?.availableTargetBrands)) {
-        return product.foundationCrossBrand.availableTargetBrands;
-    }
-    if (Array.isArray(Router.foundationAvailableTargetBrands)
-        && Router.foundationAvailableTargetBrands.length) return Router.foundationAvailableTargetBrands;
-    const fromPackage = Router?.analysisPackage?.recommendations?.foundationAvailableTargetBrands;
-    if (Array.isArray(fromPackage)) return fromPackage;
+    const nonEmpty = v => (Array.isArray(v) && v.length ? v : null);
     const draft = typeof AnalysisDraft !== 'undefined' ? AnalysisDraft.load() : null;
-    const saved = draft?.recommendations?.foundationAvailableTargetBrands;
-    return Array.isArray(saved) ? saved : [];
+    const fromBackend = nonEmpty(product?.foundationCrossBrand?.availableTargetBrands)
+        || nonEmpty(Router.foundationAvailableTargetBrands)
+        || nonEmpty(Router?.analysisPackage?.recommendations?.foundationAvailableTargetBrands)
+        || nonEmpty(draft?.recommendations?.foundationAvailableTargetBrands);
+    if (fromBackend) return fromBackend;
+    // 保底（2026-09-29）：推薦端目前沒有回傳 availableTargetBrands，整塊「選擇品牌」因此消失，
+    // 連已經回傳的跨品牌結果（例如 NARS、MAYBELLINE）都看不到。
+    // 這裡只用**這次推薦已經回傳的**跨品牌結果裡的品牌——不是猜資料庫有哪些品牌；
+    // 後端清單一回來就以後端為準。
+    return [...new Set(currentFoundationCrossBrandAlternatives(product)
+        .filter(item => item?.product && item?.shadeCode)
+        .map(item => String(item.brand || '').trim())
+        .filter(Boolean))];
 }
 
 function crossBrandFoundationCard(item) {
@@ -3624,7 +3629,10 @@ function openProductRecommendationModal(){
             card.onclick=e=>{
                 if(e.target.closest('.heart-btn')||e.target.closest('.pc-own'))return;
                 closeProductRecommendationModal();
-                Router.go('products',{productId:card.dataset.pid});
+                // 從推薦視窗點商品是同一趟流程，不是離開：不跳「離開前要收藏嗎」。
+                // 先前會跳，而那個視窗的「不要收藏」會清空整個暫存（含這批推薦商品），
+                // 接著才開商品頁——商品已經查不到，使用者看到的是空頁（2026-09-29 回報）。
+                Router.go('products',{productId:card.dataset.pid,skipLeaveGuard:true});
             };
         });
         // 只加不刪，跟商品頁一樣：要移除請去化妝包頁。
@@ -3660,7 +3668,7 @@ function openProductRecommendationModal(){
 
     modal.querySelector('.makeup-style-close').onclick=closeProductRecommendationModal;
     modal.querySelector('[data-close]').onclick=closeProductRecommendationModal;
-    modal.querySelector('[data-all]').onclick=()=>{closeProductRecommendationModal();Router.go('products');};
+    modal.querySelector('[data-all]').onclick=()=>{closeProductRecommendationModal();Router.go('products',{skipLeaveGuard:true});};
     modal.onclick=e=>{if(e.target===modal)closeProductRecommendationModal();};
 }
 
@@ -4335,6 +4343,10 @@ const Router = {
     needsLookLeaveGuard(nextPage) {
         if (this.leaveGuardOpen) return false;
         if (this.pendingLookSaved) return false;
+        // 已經在「看商品之前要收藏嗎？」回答過「只看商品，不收藏」：同一張妝後圖不再問第二次
+        const rd = this.analysisPackage?.render || {};
+        const after = rd.afterImageUrl || rd.afterImageDataUrl || rd.makeupOutput?.imageUrl || rd.makeupOutput?.imageDataUrl || '';
+        if (after && this.lookSaveDeclinedFor === after) return false;
         if (nextPage === this.currentPage) return false;
         if (this.currentPage !== 'suggestion' && this.currentPage !== 'compare') return false;
         return !!(this.pendingLook || hasStartedJourney());
@@ -6119,6 +6131,8 @@ const PageInit = {
                         ${crossBrandFoundationHtml(p)}
                         <div class="pd-actions">
                             <button class="add-bag" data-bag="${p.id}">加入購物車</button>
+                            ${p.candidateKey && typeof MakeupBag !== 'undefined' ? `<button type="button" class="pd-own${MakeupBag.has(p.candidateKey) ? ' is-own' : ''}" data-own-detail="${escapeHtml(p.candidateKey)}"
+                                aria-label="把「${escapeHtml(p.name)}」登記為我已經有的">${MakeupBag.has(p.candidateKey) ? '化妝包已有' : '＋ 加入化妝包'}</button>` : ''}
                             <button class="heart-btn pd-heart ${Fav.has(p.id)?'fav':''}" data-fav-detail="${p.id}" aria-label="收藏">${HEART_SVG}</button>
                         </div>
                         <div class="pd-desc">${escapeHtml(p.desc || p.matchReason || '商品詳細說明區域。可放入完整描述、使用方式、成分說明等資訊。')}</div>
@@ -6161,6 +6175,18 @@ const PageInit = {
                     renderProductDetail(btn.dataset.shadeGo);
                 };
             });
+            // 商品詳情也能登記「我已經有」（2026-09-29 使用者要求）：跟推薦視窗同一個 MakeupBag.add，只加不刪
+            const ownDetail = area.querySelector('[data-own-detail]');
+            if (ownDetail) ownDetail.onclick = async () => {
+                if (ownDetail.classList.contains('is-own')) { showToast('已經在化妝包裡了'); return; }
+                ownDetail.disabled = true;
+                const result = await MakeupBag.add(ownDetail.dataset.ownDetail);
+                ownDetail.disabled = false;
+                if (!result.ok) { showToast(result.error); return; }
+                ownDetail.classList.add('is-own');
+                ownDetail.textContent = '化妝包已有';
+                showToast(result.already ? '已經在化妝包裡了' : '已加入化妝包');
+            };
             const crossBrandSelect = area.querySelector('[data-cross-brand-select]');
             const crossBrandResult = area.querySelector('[data-cross-brand-result]');
             const goToCrossBrandProduct = (btn) => {
