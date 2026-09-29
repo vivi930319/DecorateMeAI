@@ -60,7 +60,14 @@ const readApiOptions = (field) => {
   const match = api.match(new RegExp(`['"]${escaped}['"]\\s*:\\s*\\[([^\\]]*)\\]`));
   return match ? [...match[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]) : null;
 };
-for (const [field, file] of Object.entries(modelFiles)) {
+// GitHub 的 Frontend CI 只 checkout 前端分支，旁邊沒有後端 repo，整個資料夾都不存在。
+// 那是環境沒有資料，不是分類不同步：整段略過並講清楚。本機（deploy.ps1 部署前）有後端 repo，
+// 照樣嚴格比對——資料夾在、但少了某一個檔，仍然算失敗。
+const modelRootPresent = fs.existsSync(modelRoot);
+if (!modelRootPresent) {
+  console.log(`SKIP 模型分類比對：找不到 ${modelRoot}（CI 沒有後端 repo；本機部署前會比對）`);
+}
+for (const [field, file] of Object.entries(modelRootPresent ? modelFiles : {})) {
   const modelPath = path.join(modelRoot, file);
   if (!fs.existsSync(modelPath)) {
     check(`${field} 模型分類檔存在`, false, modelPath);
