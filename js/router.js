@@ -2391,6 +2391,52 @@ function renderAnalysisFeedback(result, packageId) {
   });
 
   let allowTraining = false;
+  let submitting = false;
+
+  // 回饋面板唯一的送出出口。圖鑑的「套用」也走這裡，避免只改本機資料、
+  // 或另寫一條漏掉 token / 同意條款 / 影像欄位的 API 路徑。
+  const submitFeedback = async () => {
+    const submit = box.querySelector('#afSubmit');
+    if (!submit || submitting) return { ok: false, delivered: false, msg: '回饋正在送出，請稍候。' };
+    submitting = true;
+    submit.disabled = true;
+    AnalysisFeedback.save(packageId, predicted, corrections);
+    applyAnalysisCorrections(corrections, predicted);
+    // 訪客走既有票券與 job token，會員沿用原本身分驗證；都送至後台覆核。
+    let delivery = { ok: false };
+    if (Api.sendAnalysisFeedback) {
+        delivery = await Api.sendAnalysisFeedback({
+            mode: Router.analyzeMode,
+            jobId: Router.analysisPackage?.async?.jobId,
+            resultToken: Router.analysisPackage?.async?.resultToken,
+            packageId,
+            predicted,
+            corrections,
+            allowTrainingUse: allowTraining,
+            // 只有勾選時才取照片。沒勾選就連讀都不讀，照片不會離開這個瀏覽器。
+            imageDataUrl: allowTraining
+                ? (Router.analysisPackage?.images?.front?.compressedDataUrl
+                   || Router.analysisPackage?.images?.front?.dataUrl || '')
+                : '',
+            // PRO 才會有側面照。側臉鼻型模型吃整張側臉圖，正面照對它沒有訓練價值。
+            sideImageDataUrl: allowTraining
+                ? (Router.analysisPackage?.images?.side?.compressedDataUrl
+                   || Router.analysisPackage?.images?.side?.dataUrl || '')
+                : ''
+        }).catch(() => ({ ok: false }));
+    }
+    const changed = Object.keys(corrections).length;
+    const localMsg = changed ? `已套用 ${changed} 項修正，之後的建議與收藏都會以你的答案為準` : '已記錄「判斷正確」，謝謝';
+    showToast(localMsg);
+    const note = box.querySelector('#afNote');
+    const deliveryMsg = delivery?.ok
+        ? (changed ? '回饋已送至模型修正複核，可再修改' : '已送出判斷正確紀錄')
+        : '修正已套用於本機，但未送達後台，請再按送出回饋重試';
+    if (note) note.textContent = deliveryMsg;
+    submit.disabled = false;
+    submitting = false;
+    return { ok: true, delivered: Boolean(delivery?.ok), msg: `${localMsg}。${deliveryMsg}` };
+  };
 
   const draw = () => {
     box.innerHTML = `
@@ -2479,42 +2525,19 @@ function renderAnalysisFeedback(result, packageId) {
     const consent = document.getElementById('afAllowTraining');
     if (consent) consent.onchange = () => { allowTraining = consent.checked; };
     const submit = document.getElementById('afSubmit');
-    if (submit) submit.onclick = async () => {
-      if (submit.disabled) return;
-      submit.disabled = true;
-      AnalysisFeedback.save(packageId, predicted, corrections);
-      applyAnalysisCorrections(corrections, predicted);
-      // 訪客走既有票券與 job token，會員沿用原本身分驗證；都送至後台覆核。
-      let delivery = { ok: false };
-      if (Api.sendAnalysisFeedback) {
-          delivery = await Api.sendAnalysisFeedback({
-              mode: Router.analyzeMode,
-              jobId: Router.analysisPackage?.async?.jobId,
-              resultToken: Router.analysisPackage?.async?.resultToken,
-              packageId,
-              predicted,
-              corrections,
-              allowTrainingUse: allowTraining,
-              // 只有勾選時才取照片。沒勾選就連讀都不讀，照片不會離開這個瀏覽器。
-              imageDataUrl: allowTraining
-                  ? (Router.analysisPackage?.images?.front?.compressedDataUrl
-                     || Router.analysisPackage?.images?.front?.dataUrl || '')
-                  : '',
-              // PRO 才會有側面照。側臉鼻型模型吃整張側臉圖，正面照對它沒有訓練價值。
-              sideImageDataUrl: allowTraining
-                  ? (Router.analysisPackage?.images?.side?.compressedDataUrl
-                     || Router.analysisPackage?.images?.side?.dataUrl || '')
-                  : ''
-          }).catch(() => ({ ok: false }));
-      }
-      const changed = Object.keys(corrections).length;
-      showToast(changed ? `已套用 ${changed} 項修正，之後的建議與收藏都會以你的答案為準` : '已記錄「判斷正確」，謝謝');
-      const note = document.getElementById('afNote');
-      if (note) note.textContent = delivery?.ok
-          ? (changed ? '回饋已送至模型修正複核，可再修改' : '已送出判斷正確紀錄')
-          : '修正已套用於本機，但未送達後台，請再按送出回饋重試';
-      submit.disabled = false;
-    };
+    if (submit) submit.onclick = submitFeedback;
+  };
+
+  // Feature Atlas 先顯示分類定義，確認後直接把修正交給這個面板送出。
+  // 屬性掛在 DOM 節點上，不新增全域 API，也不會影響一般下拉操作。
+  box._featureAtlasApply = async (field, value) => {
+    const options = AnalysisFeedback.OPTIONS[field] || [];
+    if (!options.includes(value)) return { ok: false, msg: `「${value}」不在目前的可選清單裡。` };
+    if (value === predicted[field]) delete corrections[field];
+    else corrections[field] = value;
+    applyAnalysisCorrections(corrections, predicted);
+    draw();
+    return submitFeedback();
   };
 
   draw();

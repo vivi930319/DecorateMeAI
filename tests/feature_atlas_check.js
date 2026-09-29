@@ -19,6 +19,7 @@ const atlas = fs.readFileSync(path.join(ROOT, 'js/feature-atlas.js'), 'utf8').re
 const api = fs.readFileSync(path.join(ROOT, 'js/api.js'), 'utf8').replace(/\r\n/g, '\n');
 const router = fs.readFileSync(path.join(ROOT, 'js/router.js'), 'utf8').replace(/\r\n/g, '\n');
 const css = fs.readFileSync(path.join(ROOT, 'css/main.css'), 'utf8').replace(/\r\n/g, '\n');
+const flowCss = fs.readFileSync(path.join(ROOT, 'css/makeup-flow.css'), 'utf8').replace(/\r\n/g, '\n');
 const html = fs.readFileSync(path.join(ROOT, 'pages/analysis.html'), 'utf8').replace(/\r\n/g, '\n');
 const index = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').replace(/\r\n/g, '\n');
 
@@ -41,10 +42,50 @@ const eyeLine = (api.match(/'眼型':\s*\[([^\]]*)\]/) || [, ''])[1];
 check('眼型不再包含已合併的「細長眼」', !eyeLine.includes('細長眼'), eyeLine.trim());
 check('眼型是四類', (eyeLine.match(/'/g) || []).length / 2 === 4, eyeLine.trim());
 
+console.log('\n=== 2b. 線上選項表要跟模型 classes 完全一致 ===');
+// 這裡直接讀目前訓練端的 classes JSON，避免測試只把同一份前端文字
+// 再抄一次來自我驗證。若模型新增、刪除或重排分類，測試應該立刻失敗。
+const modelRoot = process.argv[3]
+  || process.env.MODEL_CLASSES_ROOT
+  || path.resolve(ROOT, '..', 'PythonProject12', 'models', 'basic_features_roi');
+const modelFiles = {
+  '臉型': 'face_shape_classes.json',
+  '眉型': 'brow_shape_classes.json',
+  '眼型': 'eye_shape_classes.json',
+  '鼻型': 'nose_shape_classes.json',
+  '嘴型': 'lip_shape_classes.json',
+};
+const readApiOptions = (field) => {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = api.match(new RegExp(`['"]${escaped}['"]\\s*:\\s*\\[([^\\]]*)\\]`));
+  return match ? [...match[1].matchAll(/['"]([^'"]+)['"]/g)].map((m) => m[1]) : null;
+};
+for (const [field, file] of Object.entries(modelFiles)) {
+  const modelPath = path.join(modelRoot, file);
+  if (!fs.existsSync(modelPath)) {
+    check(`${field} 模型分類檔存在`, false, modelPath);
+    continue;
+  }
+  let modelClasses = null;
+  try {
+    modelClasses = JSON.parse(fs.readFileSync(modelPath, 'utf8')).classes;
+  } catch (error) {
+    check(`${field} 模型分類檔可讀`, false, `${modelPath}: ${error.message}`);
+    continue;
+  }
+  const apiClasses = readApiOptions(field);
+  check(`${field} 與模型 classes 完全一致`,
+    Array.isArray(apiClasses) && Array.isArray(modelClasses)
+      && JSON.stringify(apiClasses) === JSON.stringify(modelClasses),
+    `前端=${JSON.stringify(apiClasses)} 模型=${JSON.stringify(modelClasses)}`);
+}
+
 console.log('\n=== 3. 改答案走回饋面板，不自己送出 ===');
 check('去操作 data-af-field 的 select', atlas.includes('[data-af-field='));
 check('有觸發 change 事件（不然 router 的處理器不會跑）',
   /dispatchEvent\(new Event\('change'/.test(atlas));
+check('圖鑑套用會交給回饋面板的送出 bridge',
+  /_featureAtlasApply/.test(atlas) && /_featureAtlasApply/.test(router));
 // 自己打 API 就是繞過同意條款那一段
 check('沒有自己呼叫送出回饋的 API',
   !/submitFaceFeedback|jobFeedbackPath|\/feedback['"`]/.test(atlas));
@@ -80,9 +121,15 @@ check('feature-atlas 排在 router 之前',
   index.indexOf('feature-atlas.js') < index.indexOf('js/router.js'));
 check('分析頁初始化時 attach', /FeatureAtlas\.attach\(/.test(router));
 check('修正套用後會 refresh', /FeatureAtlas\.refresh\(\)/.test(router));
+check('回饋面板與圖鑑共用同一個送出函式',
+  /const submitFeedback = async/.test(router)
+  && /submit\.onclick = submitFeedback/.test(router)
+  && /return submitFeedback\(\)/.test(router));
 
 console.log('\n=== 8. 樣式 ===');
 check('浮層樣式存在', css.includes('.fa-sheet'));
+check('線上化妝流程有套用圖鑑視覺樣式',
+  flowCss.includes('Feature Atlas polish') && flowCss.includes('.fa-sheet'));
 check('手機是底部 sheet、桌機置中',
   /@media \(min-width:700px\)[\s\S]{0,400}\.fa-layer \{ align-items:center/.test(css));
 // 「看說明」在**每一種**裝置上都要看得到，不能只在 hover 時才浮現。

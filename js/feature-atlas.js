@@ -348,17 +348,21 @@ const FeatureAtlas = (() => {
       </div></details>`;
     }
 
-    // 改答案：去操作回饋面板既有的 select，不自己送出。
-    // 找不到就只提示，不靜默失敗——靜默失敗會讓使用者以為改好了。
-    function applyChange(field, name) {
+    // 改答案：交給回饋面板既有的 bridge。bridge 會共用面板的保存、同意、
+    // token 與送出流程；這裡不另寫一套 API。沒有 bridge 時才退回只選取
+    // 下拉選單的相容路徑，並明白告知使用者還要按送出。
+    async function applyChange(field, name) {
         const sel = document.querySelector(`[data-af-field="${CSS.escape(field)}"]`);
         if (!sel) return { ok: false, msg: '回饋面板還沒載入，請捲到下方的「這些判斷準嗎？」直接修改。' };
         if (![...sel.options].some(o => o.value === name)) {
             return { ok: false, msg: `「${name}」不在目前的可選清單裡，請用下方的回饋面板確認。` };
         }
+        const panel = sel.closest('.analysis-feedback');
+        if (panel && typeof panel._featureAtlasApply === 'function') {
+            return panel._featureAtlasApply(field, name);
+        }
         sel.value = name;
         sel.dispatchEvent(new Event('change', { bubbles: true }));
-        const panel = sel.closest('.analysis-feedback');
         if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
         return { ok: true, msg: `已改成「${name}」，請到下方的回饋面板按「送出回饋」。` };
     }
@@ -468,8 +472,9 @@ const FeatureAtlas = (() => {
             b.onclick = () => { selected = b.dataset.faKind; render(); };
         });
         const adopt = body.querySelector('#faAdopt');
-        if (adopt) adopt.onclick = () => {
-            const r = applyChange(field, sel);
+        if (adopt) adopt.onclick = async () => {
+            adopt.disabled = true;
+            const r = await applyChange(field, sel);
             body.querySelector('#faToast').textContent = r.msg;
             // 改成功就關掉：目的地是下面的回饋面板，浮層留著會擋住它
             if (r.ok) setTimeout(close, 900);
