@@ -765,7 +765,8 @@ class FaceAnalyzer:
     SKIN_SPREAD_UNRELIABLE = float(os.getenv("FACE_SKIN_SPREAD_UNRELIABLE", "9.5"))
 
     #   4. 分塊共識取樣（見 _patch_consensus_mask）。上面三層處理的都是「這個像素
-    #      不是皮膚」；這一層處理的是「這片皮膚上有妝」。取樣區原本只有雙頰，而那
+    #      不是皮膚」；這一層處理的是「這片皮膚局部上了妝」（腮紅、修容），全臉均勻
+    #      的粉底挑不掉，見 get_skin_color 呼叫處的說明。取樣區原本只有雙頰，而那
     #      正是腮紅與修容的位置——選頰部是為了避開頭髮與陰影，那份考量裡沒有化妝。
     #      門檻在 tools/calibrate_patch_sampling.py 上量出來的分布訂的（不是
     #      compare_skin_sampling.py，那支比的是分割 vs 紋理，跟分塊無關）。
@@ -1491,15 +1492,26 @@ class FaceAnalyzer:
             return region_mask
         return kept
 
+    def _unmeasured_skin_reliability(self) -> dict:
+        return {"measured": False, "reliable": None,
+                "threshold": self.SKIN_SPREAD_UNRELIABLE, "hint": ""}
+
     def _skin_sample_reliability(self, lab_img, roi_mask) -> dict:
         """頰部取樣區的亮度離散程度——遮擋的偵測訊號，門檻由實測決定。
 
         量的是顏色過濾之前的幾何取樣區：污染的證據就在那些被過濾掉、或沒被
         過濾掉但明顯偏離的像素裡。過濾之後才量等於先把證據刪掉再找證據。
+
+        reliable 有三種值：True（量了、沒超標）、False（量了、超標）、None（沒量）。
+        頰部樣本不足時是 None，不是 True——沒量過不能回報成「量過而且可信」，
+        否則下游分不出這兩種情況。
+
+        它只量亮度離散，偵測的是遮擋（頭髮、陰影）。整張臉被黃光均勻照亮時
+        離散度照樣很低，所以 True 不代表顏色沒有偏，只代表沒有偵測到遮擋。
         """
         l_vals = lab_img[:, :, 0][roi_mask > 0].astype(np.float32) / 2.55
         if l_vals.size < 100:
-            return {"measured": False, "reliable": True, "hint": ""}
+            return self._unmeasured_skin_reliability()
         spread = float(np.median(np.abs(l_vals - np.median(l_vals))))
         reliable = spread <= self.SKIN_SPREAD_UNRELIABLE
         return {
@@ -1650,7 +1662,10 @@ class FaceAnalyzer:
         # 一張走退路，色差就差很多，而畫面上看不出差在哪。
         self.skin_mask_source = source
 
-        # 分塊共識：上面三層挑掉的是「不是皮膚的像素」，這一層挑掉的是「有妝的皮膚」。
+        # 分塊共識：上面三層挑掉的是「不是皮膚的像素」，這一層挑掉的是「顏色局部偏離
+        # 其他區塊的皮膚」——腮紅、修容、痣、反光這種只占一部分的東西。全臉均勻的
+        # 粉底不會被挑掉：它沒有偏離任何區塊，共識本身就是粉底的顏色。要量素顏膚色，
+        # 只能請使用者拍素顏照，這一層做不到。
         # 季型與膚色分級各算一次，因為兩者的輸入本來就不同——季型吃紋理過濾**前**的
         # 遮罩（它的 clear 判定要看完整的明暗離散度），膚色分級吃過濾後的。
         if self.SKIN_PATCH_ENABLED:
@@ -1765,7 +1780,7 @@ class FaceAnalyzer:
                 "LAB": {"L": float(round(L,2)), "a": float(round(a,2)), "b": float(round(b,2))},
                 # 頭髮／陰影遮住臉頰時這裡會是 reliable:false。值照樣給——它仍是最好的
                 # 估計，但下游要拿它去算 ΔE 比色號之前應該先看這個旗標。
-                "可信度": getattr(self, "skin_reliability", {"measured": False, "reliable": True, "hint": ""}),
+                "可信度": getattr(self, "skin_reliability", None) or self._unmeasured_skin_reliability(),
                 # 這次的膚色是走哪一條取樣路徑算出來的：segmentation（分割模型認出
                 # 臉部皮膚）、texture（退回紋理啟發式）、unfiltered（兩條都濾太兇）。
                 # 沒有這個欄位就查不出「為什麼這張的色差特別大」。

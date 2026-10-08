@@ -164,7 +164,10 @@ def normalize_face_analysis(raw_result: dict[str, Any]) -> dict[str, Any]:
             # 它量的是臉頰取樣區的亮度離散度（MAD），不是直接偵測頭髮——
             # 離散大代表混進了非皮膚的像素，可能是頭髮、陰影或別的東西，程式分不出來。
             # 只量臉頰是因為門檻 9.5 在頰部校準；換成整臉，乾淨照片誤報率會從 5% 跳到 37.5%。
-            "labReliable": bool((skin.get("可信度") or {}).get("reliable", True)),
+            # 可信度的 reliable 有三種值，沒量時是 None。labReliable 是給推薦端的布林旗標，
+            # 只有「量了而且超標」才是 False；沒量照舊放行比色，要分辨「沒量」請看
+            # labReliability.measured。
+            "labReliable": (skin.get("可信度") or {}).get("reliable") is not False,
             "labReliability": deepcopy(skin.get("可信度")),
         },
         "lipLab": deepcopy(raw.get("嘴唇_LAB")),

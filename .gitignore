@@ -87,6 +87,7 @@
 # 分塊共識取樣：擋一整片妝，而且不能把季型要的離散度一起濾掉——
 # 2026-08 已經用紋理過濾踩過一次同樣的坑，只靠註解提醒不夠。
 !skin_patch_sampling_test.py
+!skin_reliability_states_test.py
 # 上游掛掉時送回瀏覽器的東西：Cloudflare 的 tunnel 錯誤頁裡印著上游主機名稱，
 # 而 Gateway 存在的理由之一就是瀏覽器永遠不會知道上游網址。
 !upstream_failure_test.py
