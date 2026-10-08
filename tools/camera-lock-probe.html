@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>相機鎖定測試</title>
+<style>
+/* 單欄工具頁：步驟由上而下，結果出現在最下方 */
+:root{
+  --bg:#f6f5f2; --fg:#23211d; --muted:#6b675f; --line:#dcd8cf; --card:#fff;
+  --accent:#b0475a; --ok:#2f7d4f; --warn:#a86a10; --bad:#b3362c;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#1b1a18; --fg:#ece9e3; --muted:#a29d93; --line:#3a3833; --card:#24231f;
+  --accent:#e07a8c; --ok:#6cc08d; --warn:#e0a54a; --bad:#ec7a70; color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,-apple-system,"PingFang TC","Noto Sans TC",sans-serif}
+main{max-width:640px;margin:0 auto;padding:20px 16px 48px;display:grid;gap:18px}
+h1{font-size:22px;margin:0}
+h2{font-size:16px;margin:0 0 6px}
+p,ol{margin:0}
+ol{padding-left:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;gap:10px}
+.muted{color:var(--muted);font-size:13px}
+button{font:inherit;padding:12px 16px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;color:var(--accent)}
+button:disabled{opacity:.45;cursor:default}
+button:focus-visible{outline:3px solid var(--fg);outline-offset:2px}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.cam{position:relative;width:100%;max-width:320px;aspect-ratio:3/4;background:#000;border-radius:8px;overflow:hidden;margin:0 auto}
+.cam video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}
+.cam .box{position:absolute;left:30%;top:28%;width:40%;height:40%;border:2px dashed #fff;border-radius:50%}
+pre{margin:0;font:12px/1.5 var(--mono);white-space:pre-wrap;word-break:break-all;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;max-height:260px;overflow:auto}
+.verdict{display:grid;gap:8px}
+.v{display:flex;gap:10px;align-items:baseline}
+.pill{flex:none;font-size:12px;font-weight:700;padding:2px 8px;border-radius:99px;border:1px solid currentColor}
+.pill.ok{color:var(--ok)} .pill.warn{color:var(--warn)} .pill.bad{color:var(--bad)}
+canvas.plot{width:100%;height:120px;border:1px solid var(--line);border-radius:6px}
+#flash{position:fixed;inset:0;z-index:10;display:flex;align-items:flex-end;justify-content:center;padding-bottom:calc(24px + env(safe-area-inset-bottom,0px));font:600 14px system-ui;background:#000;color:#888}
+table{border-collapse:collapse;font:13px var(--mono);font-variant-numeric:tabular-nums;width:100%}
+td,th{border-bottom:1px solid var(--line);padding:4px 6px;text-align:right}
+td:first-child,th:first-child{text-align:left}
+.scroll{overflow-x:auto}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>相機鎖定測試</h1>
+    <p class="muted">測你的手機在螢幕突然變白時，能不能把曝光與白平衡固定住。結果用來決定「差分補光」做不做得到。約 30 秒。</p>
+  </header>
+
+  <section class="card">
+    <h2>開始前</h2>
+    <ol>
+      <li>在一般室內燈下（不要全暗，也不要太陽直射）。</li>
+      <li>把手機螢幕亮度<strong>調到最亮</strong>，關掉自動亮度與夜覽／護眼模式。</li>
+      <li>手機拿在臉前約 25～30 公分，臉對準虛線框，測試中不要動。</li>
+      <li>測試時螢幕會黑 2 秒、白 3 秒，連續兩輪。</li>
+    </ol>
+  </section>
+
+  <section class="card">
+    <div class="cam"><video id="video" playsinline muted autoplay></video><div class="box"></div></div>
+    <div class="row">
+      <button id="startCam">1. 開啟前鏡頭</button>
+      <button id="runTest" disabled>2. 開始測試</button>
+    </div>
+    <p id="status" class="muted">尚未開啟鏡頭。</p>
+  </section>
+
+  <section class="card" id="resultCard" hidden>
+    <h2>結果</h2>
+    <div class="verdict" id="verdict"></div>
+    <canvas class="plot" id="plot" width="600" height="120"></canvas>
+    <p class="muted">灰線：自動模式；紅線：嘗試鎖定。虛線是螢幕變白的時間點。鎖得住的話，紅線變白後會停在高處，不會慢慢掉回來。</p>
+    <div class="scroll"><table id="summary"></table></div>
+    <div class="row">
+      <button id="copy">複製完整結果</button>
+      <button class="ghost" id="again">再測一次</button>
+    </div>
+    <p class="muted">按「複製完整結果」後貼到群組給語宸。</p>
+    <pre id="raw"></pre>
+  </section>
+</main>
+<div id="flash" hidden></div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const video = $('video'), flash = $('flash');
+let stream = null, track = null, report = null;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const BLACK_MS = 2000, WHITE_MS = 3000;
+
+// 中央 40% 方框（臉頰與鼻子一帶）的平均 RGB。縮到 64x64 再算，夠快、每幀都能取。
+const probe = document.createElement('canvas'); probe.width = probe.height = 64;
+const pctx = probe.getContext('2d', { willReadFrequently: true });
+function sampleCenter() {
+  const w = video.videoWidth, h = video.videoHeight;
+  if (!w) return null;
+  pctx.drawImage(video, w * 0.3, h * 0.3, w * 0.4, h * 0.4, 0, 0, 64, 64);
+  const d = pctx.getImageData(0, 0, 64, 64).data;
+  let r = 0, g = 0, b = 0;
+  for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+  const n = d.length / 4;
+  return [r / n, g / n, b / n];
+}
+
+function safe(fn) { try { return fn(); } catch (e) { return { error: String(e && e.message || e) }; } }
+function snapshotTrack() {
+  return {
+    capabilities: track.getCapabilities ? safe(() => track.getCapabilities()) : 'getCapabilities 不存在',
+    settings: track.getSettings ? safe(() => track.getSettings()) : 'getSettings 不存在',
+  };
+}
+
+$('startCam').onclick = async () => {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+  } catch (e) {
+    $('status').textContent = '開不了鏡頭：' + (e.message || e.name) + '。請確認瀏覽器已允許相機。';
+    return;
+  }
+  video.srcObject = stream;
+  track = stream.getVideoTracks()[0];
+  await video.play().catch(() => {});
+  $('status').textContent = '鏡頭已開啟。臉對準虛線框後按「開始測試」。';
+  $('runTest').disabled = false;
+  $('startCam').disabled = true;
+};
+
+// 每一幀記一筆 [毫秒, 階段, R, G, B]
+async function trial(name, beforeWhite) {
+  const rows = [];
+  let phase = 'black', t0 = performance.now(), running = true;
+  const loop = () => {
+    if (!running) return;
+    const s = sampleCenter();
+    if (s) rows.push([Math.round(performance.now() - t0), phase, ...s.map(v => +v.toFixed(1))]);
+    requestAnimationFrame(loop);
+  };
+  flash.style.background = '#000'; flash.style.color = '#888';
+  flash.textContent = name + '：保持不動'; flash.hidden = false;
+  requestAnimationFrame(loop);
+  await sleep(BLACK_MS - 500);
+  const lockInfo = beforeWhite ? await beforeWhite() : null;
+  await sleep(500);
+  phase = 'white';
+  const whiteAt = Math.round(performance.now() - t0);
+  flash.style.background = '#fff'; flash.style.color = '#bbb';
+  await sleep(WHITE_MS);
+  running = false;
+  flash.hidden = true;
+  return { name, whiteAt, lockInfo, rows };
+}
+
+async function tryLock() {
+  const caps = safe(() => track.getCapabilities()) || {};
+  const out = {};
+  for (const [key, label] of [['exposureMode', '曝光'], ['whiteBalanceMode', '白平衡']]) {
+    const modes = caps[key];
+    if (!Array.isArray(modes)) { out[key] = '不支援（capabilities 沒有這一項）'; continue; }
+    if (!modes.includes('manual')) { out[key] = '不支援 manual，只有：' + modes.join(','); continue; }
+    try {
+      await track.applyConstraints({ advanced: [{ [key]: 'manual' }] });
+      out[key] = 'applyConstraints 成功，設定後為 ' + (track.getSettings()[key] ?? '（未回報）');
+    } catch (e) { out[key] = 'applyConstraints 失敗：' + (e.message || e.name); }
+  }
+  out.settingsAfterLock = safe(() => track.getSettings());
+  return out;
+}
+
+async function unlock() {
+  const caps = safe(() => track.getCapabilities()) || {};
+  const adv = {};
+  if (Array.isArray(caps.exposureMode) && caps.exposureMode.includes('continuous')) adv.exposureMode = 'continuous';
+  if (Array.isArray(caps.whiteBalanceMode) && caps.whiteBalanceMode.includes('continuous')) adv.whiteBalanceMode = 'continuous';
+  if (Object.keys(adv).length) await track.applyConstraints({ advanced: [adv] }).catch(() => {});
+}
+
+const luma = r => 0.299 * r[2] + 0.587 * r[3] + 0.114 * r[4];
+const mean = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : NaN;
+
+function analyse(t) {
+  const black = t.rows.filter(r => r[1] === 'black' && r[0] >= t.whiteAt - 600);
+  const white = t.rows.filter(r => r[1] === 'white');
+  const late = white.filter(r => r[0] >= t.whiteAt + WHITE_MS - 800);
+  const b0 = mean(black.map(luma));
+  // 峰值用 3 幀移動平均，避免單幀雜訊
+  let peak = -Infinity, peakAt = null;
+  for (let i = 1; i < white.length - 1; i++) {
+    const v = (luma(white[i - 1]) + luma(white[i]) + luma(white[i + 1])) / 3;
+    if (v > peak) { peak = v; peakAt = white[i][0] - t.whiteAt; }
+  }
+  const wl = mean(late.map(luma));
+  const rise = white.find(r => luma(r) - b0 >= 0.9 * (peak - b0));
+  const ch = rows => [mean(rows.map(r => r[2])), mean(rows.map(r => r[3])), mean(rows.map(r => r[4]))];
+  const peakWin = white.filter(r => Math.abs(r[0] - t.whiteAt - peakAt) <= 150);
+  const [pr, pg, pb] = ch(peakWin), [lr, lg, lb] = ch(late);
+  return {
+    fps: +(t.rows.length / ((t.whiteAt + WHITE_MS) / 1000)).toFixed(1),
+    blackLuma: +b0.toFixed(1),
+    peakLuma: +peak.toFixed(1),
+    lateLuma: +wl.toFixed(1),
+    gainKept: +((wl - b0) / (peak - b0)).toFixed(2),       // 1 = 變白後亮度一直保持；0 = 被自動曝光完全拉回
+    riseMs: rise ? rise[0] - t.whiteAt : null,              // 螢幕變白到相機看到 90% 亮度的延遲
+    peakMs: peakAt,
+    rgDrift: +((lr / lg) / (pr / pg) - 1).toFixed(3),       // 峰值到結束的 R/G 變化，看白平衡有沒有在動
+    bgDrift: +((lb / lg) / (pb / pg) - 1).toFixed(3),
+  };
+}
+
+function judge(auto, locked, lockInfo) {
+  const items = [];
+  const expOk = typeof lockInfo.exposureMode === 'string' && lockInfo.exposureMode.startsWith('applyConstraints 成功');
+  const wbOk = typeof lockInfo.whiteBalanceMode === 'string' && lockInfo.whiteBalanceMode.startsWith('applyConstraints 成功');
+  const held = locked.gainKept >= 0.85;
+  const wbStable = Math.abs(locked.rgDrift) < 0.03 && Math.abs(locked.bgDrift) < 0.03;
+  items.push(expOk && held ? ['ok', '曝光鎖得住', `變白後亮度保留 ${Math.round(locked.gainKept * 100)}%`]
+    : expOk ? ['warn', '曝光回報鎖住，但亮度仍被拉回', `只保留 ${Math.round(locked.gainKept * 100)}%`]
+    : ['bad', '曝光無法鎖定', String(lockInfo.exposureMode)]);
+  items.push(wbOk && wbStable ? ['ok', '白平衡鎖得住', `色比變化 ${(locked.rgDrift * 100).toFixed(1)}% / ${(locked.bgDrift * 100).toFixed(1)}%`]
+    : wbOk ? ['warn', '白平衡回報鎖住，但顏色仍在漂', `色比變化 ${(locked.rgDrift * 100).toFixed(1)}% / ${(locked.bgDrift * 100).toFixed(1)}%`]
+    : ['bad', '白平衡無法鎖定', String(lockInfo.whiteBalanceMode)]);
+  items.push(auto.riseMs != null && auto.peakMs != null
+    ? ['ok', `相機延遲約 ${auto.riseMs} ms`, `不鎖定時，亮度在變白後 ${auto.peakMs} ms 到頂，結束時保留 ${Math.round(auto.gainKept * 100)}%`]
+    : ['warn', '量不到延遲', '臉可能沒對準框，或螢幕亮度不夠']);
+  return items;
+}
+
+function drawPlot(trials) {
+  const c = $('plot'), ctx = c.getContext('2d');
+  const css = getComputedStyle(document.documentElement);
+  ctx.clearRect(0, 0, c.width, c.height);
+  const all = trials.flatMap(t => t.rows.map(luma));
+  const lo = Math.min(...all) - 5, hi = Math.max(...all) + 5;
+  const tmax = BLACK_MS + WHITE_MS;
+  const x = ms => ms / tmax * c.width, y = v => c.height - (v - lo) / (hi - lo) * c.height;
+  ctx.setLineDash([4, 4]); ctx.strokeStyle = css.getPropertyValue('--muted');
+  ctx.beginPath(); ctx.moveTo(x(trials[0].whiteAt), 0); ctx.lineTo(x(trials[0].whiteAt), c.height); ctx.stroke();
+  ctx.setLineDash([]);
+  trials.forEach((t, i) => {
+    ctx.strokeStyle = i === 0 ? css.getPropertyValue('--muted') : css.getPropertyValue('--accent');
+    ctx.lineWidth = 2; ctx.beginPath();
+    t.rows.forEach((r, j) => { const ms = r[0] - t.whiteAt + trials[0].whiteAt; j ? ctx.lineTo(x(ms), y(luma(r))) : ctx.moveTo(x(ms), y(luma(r))); });
+    ctx.stroke();
+  });
+}
+
+$('runTest').onclick = async () => {
+  $('runTest').disabled = true;
+  $('resultCard').hidden = true;
+  try { await document.documentElement.requestFullscreen?.(); } catch (_) {}
+  try { await navigator.wakeLock?.request('screen'); } catch (_) {}
+  const before = snapshotTrack();
+  await unlock();
+  const auto = await trial('第 1 輪（自動）');
+  await sleep(1200);
+  const locked = await trial('第 2 輪（鎖定）', tryLock);
+  await unlock();
+  try { if (document.fullscreenElement) await document.exitFullscreen(); } catch (_) {}
+
+  const a = analyse(auto), l = analyse(locked);
+  const items = judge(a, l, locked.lockInfo);
+  $('verdict').innerHTML = '';
+  for (const [cls, title, note] of items) {
+    const div = document.createElement('div'); div.className = 'v';
+    const pill = document.createElement('span'); pill.className = 'pill ' + cls; pill.textContent = cls === 'ok' ? '可以' : cls === 'warn' ? '待確認' : '不行';
+    const txt = document.createElement('span'); txt.innerHTML = '<strong></strong><br><span class="muted"></span>';
+    txt.querySelector('strong').textContent = title; txt.querySelector('.muted').textContent = note;
+    div.append(pill, txt); $('verdict').append(div);
+  }
+  const keys = [['fps', '每秒幀數'], ['blackLuma', '黑屏亮度'], ['peakLuma', '白屏峰值'], ['lateLuma', '白屏結束'], ['gainKept', '亮度保留率'], ['riseMs', '延遲 ms'], ['rgDrift', 'R/G 漂移'], ['bgDrift', 'B/G 漂移']];
+  $('summary').innerHTML = '<tr><th></th><th>自動</th><th>鎖定</th></tr>' +
+    keys.map(([k, label]) => `<tr><td>${label}</td><td>${a[k] ?? '-'}</td><td>${l[k] ?? '-'}</td></tr>`).join('');
+  drawPlot([auto, locked]);
+
+  report = {
+    when: new Date().toISOString(),
+    userAgent: navigator.userAgent,
+    screen: { w: screen.width, h: screen.height, dpr: devicePixelRatio },
+    track: before, lockInfo: locked.lockInfo,
+    auto: a, locked: l,
+    verdict: items.map(i => i.slice(0, 2).join(' ')),
+    series: { auto: { whiteAt: auto.whiteAt, rows: auto.rows }, locked: { whiteAt: locked.whiteAt, rows: locked.rows } },
+  };
+  const brief = { ...report, series: undefined };
+  $('raw').textContent = JSON.stringify(brief, null, 2);
+  $('resultCard').hidden = false;
+  $('runTest').disabled = false;
+  $('resultCard').scrollIntoView({ behavior: 'smooth' });
+};
+
+$('again').onclick = () => $('runTest').click();
+$('copy').onclick = async () => {
+  const text = JSON.stringify(report);
+  try { await navigator.clipboard.writeText(text); $('copy').textContent = '已複製'; }
+  catch (_) {
+    const pre = $('raw'); pre.textContent = text;
+    const range = document.createRange(); range.selectNodeContents(pre);
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    $('copy').textContent = '已選取，請手動複製';
+  }
+};
+</script>
+</body>
+</html>
