@@ -64,7 +64,13 @@ ALLOW_EXTERNAL_TEXT_UPSTREAM = os.getenv("GATEWAY_ALLOW_EXTERNAL_TEXT_UPSTREAM",
 # 改名的話兩處要一起改；沒有共用模組是因為 gateway 與 face 是兩個部署，
 # 為了一個常數多一個共用檔不划算，但值得在這裡指出關聯。
 FACE_FEEDBACK_COL = "face_feedback"
-FACE_TRAINING_RUNS_COL = "face_training_runs"
+# staging 的 Gateway 設 GATEWAY_COLLECTION_PREFIX=staging_，下面五個「後台下單、
+# 訓練機執行」的集合就跟正式環境分開：本機的訓練機與 promotion_worker 只看沒有前綴
+# 的那份，所以在 staging 後台按「送訓」「換上線」「重新部署」不會真的動到正式服務。
+# face_feedback 與 render_jobs 刻意不加——它們的寫入方是臉部分析服務與渲染服務，
+# staging 接的是正式的那兩支，加了前綴就讀不到。正式環境不設這個變數，行為不變。
+_COLLECTION_PREFIX = os.getenv("GATEWAY_COLLECTION_PREFIX", "").strip()
+FACE_TRAINING_RUNS_COL = f"{_COLLECTION_PREFIX}face_training_runs"
 # BASIC 五官分類的訓練集只吃這五個部位。側臉鼻型是 PRO 的模型，不在這裡。
 # 這份清單必須跟 training/training_run_store.py 的 _TRAINABLE_FIELDS 一致——
 # 兩邊不一致的症狀是「批次建得起來但訓練一定失敗」，而那筆回饋會被蓋上
@@ -72,21 +78,21 @@ FACE_TRAINING_RUNS_COL = "face_training_runs"
 BASIC_TRAINABLE_FIELDS = frozenset({"臉型", "眉型", "眼型", "鼻型", "嘴型"})
 # 訓練機的心跳。後台需要它才能分辨「批次還在排隊是因為訓練機沒開」與
 # 「訓練失敗了」——兩者在畫面上長得一樣，處理方式卻完全不同。
-FACE_TRAINING_WORKERS_COL = "face_training_workers"
+FACE_TRAINING_WORKERS_COL = f"{_COLLECTION_PREFIX}face_training_workers"
 # 換模型上線的請求。Gateway 只負責記下「要換哪個批次的哪些部位」——模型檔在訓練機
 # 的檔案系統上，雲端這裡碰不到，所以實際的複製、類別檢查與 manifest 更新都由
 # tools/promote_model.py 在本機執行，跟訓練批次是同一套「後台下單、本機執行」的模式。
-FACE_MODEL_PROMOTIONS_COL = "face_model_promotions"
+FACE_MODEL_PROMOTIONS_COL = f"{_COLLECTION_PREFIX}face_model_promotions"
 # 純部署請求：不換模型，只把目前的程式碼重新建置並部署。
 # 換模型那條路徑本來就會部署，這一條是給「只改了程式碼」的情況用的。
-FACE_DEPLOYMENTS_COL = "face_service_deployments"
+FACE_DEPLOYMENTS_COL = f"{_COLLECTION_PREFIX}face_service_deployments"
 # 能從後台觸發的服務。Ollama 建議服務不在裡面——它跑在另一台機器上，
 # 這邊的訓練機碰不到，列進來只會做出一顆按了沒反應的按鈕。
 DEPLOYABLE_SERVICES = ("face", "gateway", "render")
 # 這份清單必須跟 tools/promote_model.py 的 PARTS 一致。兩邊都是寫死的中文部位名，
 # 因為後台、回饋表與訓練報告用的都是中文；不一致時 worker 會找不到對應檔名而整批失敗。
 PROMOTABLE_PARTS = ("臉型", "眉型", "眼型", "鼻型", "唇型")
-FACE_MODEL_METRICS_COL = "face_model_metrics"
+FACE_MODEL_METRICS_COL = f"{_COLLECTION_PREFIX}face_model_metrics"
 
 # 中文部位名 → 模型檔的部位代號。換上線請求記的是中文（後台、回饋表、訓練報告都用
 # 中文），但分數是以代號為鍵存在 face_model_metrics 的 parts 底下，要比較就得換算。

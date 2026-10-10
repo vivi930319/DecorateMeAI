@@ -88,6 +88,7 @@
 # 2026-08 已經用紋理過濾踩過一次同樣的坑，只靠註解提醒不夠。
 !skin_patch_sampling_test.py
 !skin_reliability_states_test.py
+!gateway_collection_prefix_test.py
 # 上游掛掉時送回瀏覽器的東西：Cloudflare 的 tunnel 錯誤頁裡印著上游主機名稱，
 # 而 Gateway 存在的理由之一就是瀏覽器永遠不會知道上游網址。
 !upstream_failure_test.py
@@ -157,6 +158,8 @@
 !training/*.py
 !deploy_face_cloudrun.ps1
 !deploy_gateway_cloudrun.ps1
+!deploy_gateway_staging.ps1
+!promote_gateway_staging.ps1
 !setup.bat
 !start_backend_local.bat
 !start_full_stack_local.bat
