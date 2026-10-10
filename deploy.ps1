@@ -14,13 +14,19 @@ param(
     # 這個要逐一寫出路徑，所以「我知道這幾個會消失」跟「我沒在看」是兩件事——
     # 前者是決定，後者是疏忽，不該用同一個開關表達。
     #   .\deploy.ps1 -AllowDelete '/pages/makeup-bag.html'
-    [string[]]$AllowDelete = @()
+    [string[]]$AllowDelete = @(),
+    # 部署到 staging（decorate-me-staging.web.app），API 接 ai-gateway-staging。
+    # 檢查一項都不少，只換目標站點與 Gateway。說明書：後端 repo 的
+    # docs/專案管理與交接/SIT_契約書.md
+    #   .\deploy.ps1 -Staging
+    [switch]$Staging
 )
 
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$site = if ($Staging) { "decorate-me-staging" } else { "decorate-me" }
 $indexPath = Join-Path $PSScriptRoot "index.html"
 
 # 底下每一個檢查都要**真的擋得住部署**，所以一律走這個函式，不要直接寫 `node ...`。
@@ -174,13 +180,18 @@ if (-not $SkipLiveCheck) {
     Write-Host "比對線上檔案清單..." -ForegroundColor DarkGray
     $headers = @{ Authorization = "Bearer $liveToken"; "x-goog-user-project" = "decorate-me" }
     $rel = Invoke-RestMethod -Headers $headers -Method Get `
-        -Uri "https://firebasehosting.googleapis.com/v1beta1/sites/decorate-me/releases?pageSize=1"
-    $liveVersion = ($rel.releases[0].version.name -split "/")[-1]
+        -Uri "https://firebasehosting.googleapis.com/v1beta1/sites/$site/releases?pageSize=1"
+    $liveVersion = if ($rel.releases) { ($rel.releases[0].version.name -split "/")[-1] } else { $null }
+    # 只有 staging 第一次部署會沒有線上版本。正式站讀不到版本一定是查詢出了問題，
+    # 不能因此安靜跳過比對——這一關擋的是整批刪檔。
+    if (-not $liveVersion -and -not $Staging) { throw "部署中止：讀不到 $site 的線上版本，無法比對檔案清單。" }
+}
+if (-not $SkipLiveCheck -and $liveVersion) {
 
     $livePaths = New-Object System.Collections.Generic.HashSet[string]
     $pageToken = $null
     do {
-        $uri = "https://firebasehosting.googleapis.com/v1beta1/sites/decorate-me/versions/$liveVersion/files?pageSize=1000"
+        $uri = "https://firebasehosting.googleapis.com/v1beta1/sites/$site/versions/$liveVersion/files?pageSize=1000"
         if ($pageToken) { $uri += "&pageToken=$pageToken" }
         $page = Invoke-RestMethod -Headers $headers -Method Get -Uri $uri
         foreach ($f in $page.files) { [void]$livePaths.Add($f.path) }
@@ -297,10 +308,31 @@ $updated = [regex]::Replace($content, '\.(js|css)\?v=[^"]+"', ".`$1?v=$stamp`"")
 [System.IO.File]::WriteAllText($indexPath, $updated, (New-Object System.Text.UTF8Encoding($false)))
 
 Write-Host "版本號已戳為 $stamp" -ForegroundColor Green
-Write-Host "開始部署到 Firebase Hosting..." -ForegroundColor Cyan
-firebase deploy --only hosting
-if ($LASTEXITCODE -ne 0) {
-    throw "Firebase Hosting 部署失敗（exit code $LASTEXITCODE）；不得顯示為部署完成。"
+Write-Host "開始部署到 Firebase Hosting（$site）..." -ForegroundColor Cyan
+if ($Staging) {
+    # staging 的設定檔從 firebase.json 當場產生，不另外維護一份——兩份手寫的設定遲早分岔，
+    # 而分岔的樣子是「staging 測過、正式環境壞掉」，正好是 staging 要防的事。
+    # 只換兩件事：站點，以及所有 rewrite 指向的 Cloud Run 服務。
+    $stagingConfigPath = Join-Path $PSScriptRoot "firebase.staging.json"
+    $cfg = Get-Content (Join-Path $PSScriptRoot "firebase.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+    $cfg.hosting.site = $site
+    $cfg.hosting.ignore = @($cfg.hosting.ignore) + "firebase.staging.json"
+    foreach ($r in $cfg.hosting.rewrites) {
+        if ($r.run -and $r.run.serviceId -eq "ai-gateway") { $r.run.serviceId = "ai-gateway-staging" }
+    }
+    [System.IO.File]::WriteAllText($stagingConfigPath, ($cfg | ConvertTo-Json -Depth 20), (New-Object System.Text.UTF8Encoding($false)))
+    try {
+        firebase deploy --only hosting --config firebase.staging.json --project decorate-me
+        $deployExit = $LASTEXITCODE
+    } finally {
+        Remove-Item $stagingConfigPath -Force -ErrorAction SilentlyContinue
+    }
+} else {
+    firebase deploy --only hosting
+    $deployExit = $LASTEXITCODE
+}
+if ($deployExit -ne 0) {
+    throw "Firebase Hosting 部署失敗（exit code $deployExit）；不得顯示為部署完成。"
 }
 
 Write-Host "部署完成。使用者一般重新整理即可拿到最新版（版本號已更新）。" -ForegroundColor Green
