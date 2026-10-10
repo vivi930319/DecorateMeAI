@@ -16,8 +16,8 @@ param(
     #   .\deploy.ps1 -AllowDelete '/pages/makeup-bag.html'
     [string[]]$AllowDelete = @(),
     # 部署到 staging（decorate-me-staging.web.app），API 接 ai-gateway-staging。
-    # 檢查一項都不少，只換目標站點與 Gateway。說明書：後端 repo 的
-    # docs/專案管理與交接/SIT_契約書.md
+    # 檢查一項都不少，只換目標站點與 Gateway。說明書（SIT 契約書）：
+    # https://claude.ai/code/artifact/3d1acf29-4f86-4a29-9c78-a9c500831d73
     #   .\deploy.ps1 -Staging
     [switch]$Staging
 )
