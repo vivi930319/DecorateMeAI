@@ -21,7 +21,7 @@
     "note": "圖示與主視覺素材。"
   },
   "recommendation": {
-    "minFiles": 10,
-    "note": "推薦頁資源。"
+    "minFiles": 5,
+    "note": "推薦頁資源（原本門檻 10 是把 __pycache__ 算進去才達到；那些 .pyc 現在由 firebase.json 排除，不再部署）。"
   }
 }
