@@ -1,4 +1,4 @@
-# 把 staging Gateway 正在跑的 image，原封不動放上正式的 ai-gateway。說明書（SIT 契約書）：https://claude.ai/code/artifact/3d1acf29-4f86-4a29-9c78-a9c500831d73
+﻿# 把 staging Gateway 正在跑的 image，原封不動放上正式的 ai-gateway。說明書（SIT 契約書）：https://claude.ai/code/artifact/3d1acf29-4f86-4a29-9c78-a9c500831d73
 #
 # 用法（SIT 通過之後才跑）：
 #   .\promote_gateway_staging.ps1

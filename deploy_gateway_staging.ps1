@@ -1,4 +1,4 @@
-# staging 的 Gateway（ai-gateway-staging）。說明書（SIT 契約書）：https://claude.ai/code/artifact/3d1acf29-4f86-4a29-9c78-a9c500831d73
+﻿# staging 的 Gateway（ai-gateway-staging）。說明書（SIT 契約書）：https://claude.ai/code/artifact/3d1acf29-4f86-4a29-9c78-a9c500831d73
 #
 # 用法
 #   .\deploy_gateway_staging.ps1                 用目前的程式碼建新 image，部署到 staging
