@@ -206,6 +206,10 @@ if (-not $SkipLiveCheck -and $liveVersion) {
         # /__/ 底下是 Firebase 自己注入的保留路徑（firebase/init.js 等），
         # 不是從本機上傳的，本機永遠不會有——不排除的話每次部署都誤報。
         if ($p.StartsWith("/__/")) { continue }
+        # 點開頭資料夾（.git、.claude、.idea…）裡的檔案由 firebase.json 的 "**/.*/**" 排除，不會上傳。
+        # 2026-10-16 以前只有 "**/.*"，那條只擋得到檔名本身是點開頭的檔，擋不到資料夾裡面的檔，
+        # 於是 .git 整包與 .claude/settings.local.json 一直公開在線上。這些線上殘留被移除是應該的。
+        if ($p -match '^/(?:[^/]+/)*\.[^/]+/') { continue }
         $localPath = Join-Path $PSScriptRoot ($p.TrimStart('/'))
         if (Test-Path $localPath) { continue }
         $leaf = Split-Path $p -Leaf
