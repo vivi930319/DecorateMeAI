@@ -1,4 +1,4 @@
-# Decorate Me 前端部署腳本
+﻿# Decorate Me 前端部署腳本
 # 用途：部署前自動把 index.html 裡本地 JS 的 ?v=... 版本號戳成當下時間戳，
 #       再跑 firebase deploy。避免忘記手動 bump 版本、瀏覽器讀到舊 JS。
 # 用法：在 web_frontend 目錄執行  ->  .\deploy.ps1
