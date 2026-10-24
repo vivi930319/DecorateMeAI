@@ -325,6 +325,20 @@ function productCatalogLoaded() {
     return Array.isArray(Router?.generalProductCatalog);
 }
 
+// 目錄還在背景翻頁時進來的頁面，排在這裡等翻完再重畫一次。
+//
+// 以前「別人已經在載」就直接 return，回呼被丟掉。化妝包頁因此會在下面這個時機壞掉：
+// 首頁或商品頁先開始載目錄，第一頁（100 件，全部約 3,800 件）一到 productCatalogLoaded()
+// 就是 true，此時打開化妝包，卡片要用的商品多半還在後面幾頁——畫面停在
+// 「商品資料載入中…」，而目錄翻完之後沒有人叫它重畫。使用者看到的是「我的化妝包沒東西」，
+// 換一頁再回來又好了，所以只是「有時候」。
+const generalProductWaiters = new Map();
+function whenGeneralProductCatalogSettles(key, onDone) {
+    if (!Router?.generalProductLoading) return false;
+    generalProductWaiters.set(key, onDone);
+    return true;
+}
+
 function loadGeneralProductCatalog(onDone) {
     if (productCatalogLoaded()) {
         if (typeof onDone === 'function') onDone();
@@ -384,6 +398,9 @@ function loadGeneralProductCatalog(onDone) {
         })
         .finally(() => {
             Router.generalProductLoading = false;
+            const waiters = [...generalProductWaiters.values()];
+            generalProductWaiters.clear();
+            waiters.forEach(fn => { try { fn(); } catch (err) { console.error(err); } });
             // 第一頁成功且還有後續資料時，這次回呼讓搜尋、品牌篩選與商品總數
             // 切換到完整清單；若第一頁就是完整結果，前面已經畫過，不必重畫一次。
             if (typeof onDone === 'function' && (!firstPageNotified || hasMorePages)) onDone();
@@ -6337,8 +6354,12 @@ const PageInit = {
         }
 
         // 商品目錄是解析 candidateKey 的依據，沒有它畫不出任何一張卡。
+        const redrawBag = () => { if (Router.currentPage === 'makeupBag') PageInit.makeupBag(); };
         if (!productCatalogLoaded() && !Router.generalProductLoading) {
-            loadGeneralProductCatalog(() => { if (Router.currentPage === 'makeupBag') PageInit.makeupBag(); });
+            loadGeneralProductCatalog(redrawBag);
+        } else {
+            // 目錄可能只到第一頁、還在背景翻；翻完要重畫，否則後面幾頁的商品永遠畫不出來。
+            whenGeneralProductCatalogSettles('makeupBag', redrawBag);
         }
         const catalog = Array.isArray(Router.generalProductCatalog) ? Router.generalProductCatalog : [];
         const byKey = new Map(catalog.filter(p => p.candidateKey).map(p => [p.candidateKey, p]));

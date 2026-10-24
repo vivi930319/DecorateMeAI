@@ -59,8 +59,10 @@ function tick() {
   vm.createContext(sandbox);
   vm.runInContext(
     'const PRODUCT_API_PAGE_SIZE = 100; const PRODUCT_MAX_PAGES = 50;\n' +
-      `${cutBlock('function productCatalogLoaded()')}\n${cutBlock('function loadGeneralProductCatalog(')}\n` +
-      'globalThis.__load = loadGeneralProductCatalog;',
+      'const generalProductWaiters = new Map();\n' +
+      `${cutBlock('function productCatalogLoaded()')}\n${cutBlock('function whenGeneralProductCatalogSettles(')}\n` +
+      `${cutBlock('function loadGeneralProductCatalog(')}\n` +
+      'globalThis.__load = loadGeneralProductCatalog; globalThis.__wait = whenGeneralProductCatalogSettles;',
     sandbox,
   );
 
@@ -77,6 +79,12 @@ function tick() {
   }
   if (sandbox.Router.generalProductLoading !== true) throw new Error('背景補齊期間仍應標示載入中');
 
+  // 化妝包頁在背景翻頁途中打開：它不是發起載入的那一頁，回呼不能被丟掉。
+  // 同一頁重畫兩次只排一個（以 key 去重），翻完只叫一次。
+  let bagRedraws = 0;
+  if (!sandbox.__wait('makeupBag', () => { bagRedraws += 1; })) throw new Error('載入中時應接受等待者');
+  sandbox.__wait('makeupBag', () => { bagRedraws += 1; });
+
   releaseSecond({ ok: true, products: [{ id: 'second-page' }], total: 101, nextCursor: null });
   await tick();
   await tick();
@@ -84,6 +92,8 @@ function tick() {
   if (callbacks !== 2) throw new Error(`完整目錄完成應再回呼一次，實際 ${callbacks} 次`);
   if (sandbox.Router.generalProductLoading !== false) throw new Error('完整目錄完成後仍標示載入中');
   if (sandbox.Router.generalProductCatalog?.length !== 2) throw new Error('完整目錄缺少背景補齊的商品');
+  if (bagRedraws !== 1) throw new Error(`目錄翻完應叫化妝包頁重畫一次，實際 ${bagRedraws} 次——化妝包會停在「商品資料載入中」看起來是空的`);
+  if (sandbox.__wait('makeupBag', () => {})) throw new Error('沒有在載入時不應排隊（呼叫端會無限重畫）');
   console.log('商品漸進式載入測試通過');
 })().catch(error => {
   console.error(error.message);

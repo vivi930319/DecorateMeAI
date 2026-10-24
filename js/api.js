@@ -4926,7 +4926,8 @@ const MakeupBag = {
     _syncTotal(total) {
         if (typeof total !== 'number') return;
         if (total === this.count()) return;
-        Promise.resolve(this.list()).catch(() => {});
+        // 排到下一輪：呼叫端是寫入途中，等那筆寫入收尾後再讀，才不會被判成過時而略過。
+        setTimeout(() => { Promise.resolve(this.list()).catch(() => {}); }, 0);
     },
 
     // 最後一次跟伺服器往來的結果。化妝包的價值在於**後端拿得到**（RAG 在那端跑），
@@ -4937,6 +4938,19 @@ const MakeupBag = {
     syncState: 'unknown',
     syncError: '',
     _mark(state, error) { this.syncState = state; this.syncError = error || ''; },
+
+    // 本機寫入的世代號與進行中的寫入數。list() 用它們判斷伺服器那份是不是比本機舊。
+    //
+    // 加入／移除是「先寫本機、再送伺服器」。若讀取在寫入完成之前就送出（或剛好在寫入
+    // 途中回來），伺服器回的是加入前那份；以前會直接拿它蓋掉本機，剛放進去的東西就
+    // 從畫面上消失——包裡只有那一件時，整個化妝包看起來是空的。
+    _writeGen: 0,
+    _writesInFlight: 0,
+    async _write(fn) {
+        this._writeGen += 1;
+        this._writesInFlight += 1;
+        try { return await fn(); } finally { this._writesInFlight -= 1; }
+    },
 
     has(candidateKey) { return this.localList().includes(candidateKey); },
     // candidateKey 的前綴是商品 type slug（lipsticks:2813 → 唇彩）。
@@ -4960,6 +4974,7 @@ const MakeupBag = {
         }
         const base = MakeupBagApi.base();
         if (!base) return { ok: false, items: this._asItems(this.localList()) };
+        const genAtStart = this._writeGen;
         try {
             const res = await Api._fetchWithRelogin(`${base}${MakeupBagApi.paths().list}`, {
                 method: 'GET', credentials: 'include', cache: 'no-store',
@@ -4969,6 +4984,11 @@ const MakeupBag = {
                 return { ok: false, status: res.status, items: this._asItems(this.localList()) };
             }
             const items = MakeupBagApi.normalize(await res.json().catch(() => ({})));
+            if (this._writeGen !== genAtStart || this._writesInFlight > 0) {
+                // 這份讀取期間本機又被改過，伺服器那份已經過時：保留本機，寫入完成後再對一次。
+                if (this._writesInFlight === 0) Promise.resolve().then(() => this.list()).catch(() => {});
+                return { ok: true, stale: true, items: this._asItems(this.localList()) };
+            }
             this._saveLocal(items.map(i => i.candidateKey));
             this._mark('synced');
             return { ok: true, items };
@@ -5002,7 +5022,10 @@ const MakeupBag = {
         if (!/^[a-z_]+:[1-9][0-9]*$/.test(key)) return { ok: false, error: '商品識別格式不正確。' };
         if (this.has(key)) return { ok: true, already: true };
         if (this.isFull()) return { ok: false, error: `化妝包最多 ${MakeupBagApi.limit} 件，請先移除一些再加入。` };
+        return this._write(() => this._addNow(key));
+    },
 
+    async _addNow(key) {
         this._saveLocal([...this.localList(), key]);
         if (!Auth.isLoggedIn?.()) return { ok: true, offline: true };
         if (!(await this._ensureBag())) return { ok: false, error: '化妝包暫時無法建立，請稍後再試。' };
@@ -5042,6 +5065,10 @@ const MakeupBag = {
     },
 
     async remove(candidateKey, itemId) {
+        return this._write(() => this._removeNow(candidateKey, itemId));
+    },
+
+    async _removeNow(candidateKey, itemId) {
         const key = String(candidateKey || '').trim();
         this._saveLocal(this.localList().filter(k => k !== key));
         if (!Auth.isLoggedIn?.()) return { ok: true, offline: true };

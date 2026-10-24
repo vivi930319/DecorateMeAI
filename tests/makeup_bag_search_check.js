@@ -67,6 +67,7 @@ const tick = () => new Promise(r => setTimeout(r, 0));
     // 沒有臉部分析：「返回試妝選擇」不出現，這支只測搜尋。
     hasStartedJourney: () => false,
     loadGeneralProductCatalog() {},
+    whenGeneralProductCatalogSettles: () => false,
     loadProductFacets: (cb) => cb && cb(),
     productFacetBrands: () => [],
     Api: {
