@@ -141,7 +141,11 @@ check('reasonTexts 也濾掉色差句',
 console.log('');
 console.log('=== 8. 三色階為 null 是降級不是錯誤 ===');
 check('粉底顯示降級提示',
-    /shade-rec-empty[\s\S]{0,200}?目前無法提供色號比較/.test(src));
+    /shade-rec-empty[\s\S]{0,200}?shadeUnavailableText\(p\)/.test(src)
+    && /other:\s*'目前無法提供色號比較/.test(src));
+check('降級提示分得出「膚色取樣不可信」與「還沒做分析」',
+    /code === 'SKIN_TONE_LAB_UNRELIABLE'[\s\S]{0,120}?SHADE_UNAVAILABLE_TEXT\.unreliable/.test(src)
+    && /if \(!face\) return SHADE_UNAVAILABLE_TEXT\.noAnalysis/.test(src));
 check('非粉底維持不顯示（眼影沒有色階這個概念）',
     /if \(!isFoundationProduct\(p\)\) return '';/.test(src));
 check('不跳 error toast',

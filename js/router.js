@@ -1768,6 +1768,26 @@ function userSkinRow() {
     </div>`;
 }
 
+// 拿不到色號比較時，要講出是哪一種原因。
+//
+// 以前一律顯示「目前無法提供色號比較，請至實體專櫃試色」，使用者看不出是壞了、
+// 是照片不行、還是自己少做了一步（2026-10-24 回報「這邊是哪裡的問題」）。
+// 實測推薦端：膚色取樣可信時一定回色號錨點；標成不可信時回
+// SKIN_TONE_LAB_UNRELIABLE、不給色號。後者自 10/08 臉頰樣本太小改判「未量到」後變常見。
+const SHADE_UNAVAILABLE_TEXT = {
+    unreliable: '這次照片的膚色取樣不夠準（臉頰被頭髮或陰影遮住、或光線不均），無法比對色號。請在光線均勻的地方、露出雙頰重新拍一次。',
+    noAnalysis: '完成臉部分析後，就能比對最接近你膚色的色號。',
+    other: '目前無法提供色號比較，請至實體專櫃試色。',
+};
+function shadeUnavailableText(p) {
+    const code = String(currentFoundationMatchStatus(p)?.code || '').trim();
+    const draft = typeof AnalysisDraft !== 'undefined' ? AnalysisDraft.load() : null;
+    const face = Router?.analysisPackage?.faceAnalysis || draft?.faceAnalysis || null;
+    if (code === 'SKIN_TONE_LAB_UNRELIABLE' || face?.skinTone?.labReliable === false) return SHADE_UNAVAILABLE_TEXT.unreliable;
+    if (!face) return SHADE_UNAVAILABLE_TEXT.noAnalysis;
+    return SHADE_UNAVAILABLE_TEXT.other;
+}
+
 function shadeRecommendationHtml(p) {
     const sr = currentShadeRecommendation(p);
     // 沒有後端回傳的結構化色階就不畫，也不由 foundationSkinMatch、seriesId
@@ -1790,7 +1810,7 @@ function shadeRecommendationHtml(p) {
         // `.shade-rec-empty` 本來就是為這個空狀態寫的（虛線框＋次要文字色），
         // 只是從來沒有人接上去——在這之前色階為 null 是整塊不出現。
         return `<div class="shade-rec"><div class="shade-rec-empty">
-            <p>目前無法提供色號比較，請至實體專櫃試色。</p>
+            <p>${escapeHtml(shadeUnavailableText(p))}</p>
         </div></div>`;
     }
     // 只在看的就是主推薦那件商品時顯示，否則會出現在不相干的商品頁上。
