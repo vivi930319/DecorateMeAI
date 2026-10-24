@@ -3758,8 +3758,30 @@ async def _makeup_bag_suggest_body(request: Request, body: bytes, claims: dict, 
     products = data.get("ownedProducts")
     if not isinstance(products, list) or not products:
         raise _tryon_error(502, "PRODUCT_DB_UNAVAILABLE", "Product data is temporarily unavailable.")
-    payload["ownedProducts"] = products
+    payload["ownedProducts"] = _ollama_owned_products(products)
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+def _ollama_owned_products(products: list) -> dict:
+    """演算法端 v2 的扁平陣列 → Ollama `/suggest` 收的「部位 → 商品陣列」。
+
+    2026-10-25 上線當天實測：原樣轉交時 Ollama 回 422 `ownedProducts: Input should be a valid
+    dictionary`，前端只看得到「Request failed.」。Ollama 的 `paletteColors` 也只收字串陣列，
+    v2 給的是 `{position, name, hex}` 物件——照 position 排、只留有 hex 的格子，
+    缺色的格子不補（補了就是自己猜一個官方沒給的顏色）。其餘欄位原樣保留。
+    """
+    grouped: dict[str, list] = {}
+    for item in products:
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "").strip() or str(item.get("candidateKey") or "").split(":")[0]
+        palette = item.get("paletteColors")
+        cells = sorted((c for c in palette if isinstance(c, dict)), key=lambda c: c.get("position") or 0) \
+            if isinstance(palette, list) else []
+        strings = [c for c in palette if isinstance(c, str)] if isinstance(palette, list) else []
+        converted = dict(item, paletteColors=strings + [str(c["hex"]) for c in cells if c.get("hex")])
+        grouped.setdefault(category, []).append(converted)
+    return grouped
 
 
 # PUT 是 2026-08-13 加的：會員資料庫的購物車覆蓋寫入只接受 PUT，而這條路由當時沒開

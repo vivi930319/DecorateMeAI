@@ -2173,6 +2173,18 @@ class MakeupBagTryOnSuggestTest(unittest.TestCase):
 
     BAG = {"items": [{"candidateKey": "lipsticks:2734"}, {"candidateKey": "eyeshadows:882"}, {"candidateKey": "blushes:44"}]}
     PRODUCTS = [{"candidateKey": "lipsticks:2734", "category": "唇彩", "brand": "MAC", "hex": "#803329"}]
+    PRODUCTS_PALETTE_STRINGS = [dict(PRODUCTS[0], paletteColors=[])]
+
+    def test_v2_products_are_reshaped_for_ollama(self):
+        """實測 Ollama 的 /suggest：ownedProducts 要是 dict，paletteColors 要是字串陣列。"""
+        palette = {"candidateKey": "eyeshadows:882", "category": "眼影", "paletteColors": [
+            {"position": 2, "name": "b", "hex": "#222222"}, {"position": 1, "name": "a", "hex": "#111111"},
+            {"position": 3, "name": "c", "hex": None}]}
+        grouped = gateway._ollama_owned_products([palette, self.PRODUCTS[0]])
+        self.assertEqual(set(grouped), {"眼影", "唇彩"})
+        # 照格號排，缺色的格子不補色
+        self.assertEqual(grouped["眼影"][0]["paletteColors"], ["#111111", "#222222"])
+        self.assertEqual(grouped["唇彩"][0]["brand"], "MAC")
 
     def _request(self):
         request = Mock()
@@ -2207,7 +2219,7 @@ class MakeupBagTryOnSuggestTest(unittest.TestCase):
         forged = [{"candidateKey": "lipsticks:1", "hex": "#000000"}]
         body, calls = self._run({"mode": "makeup_bag", "style": "港風", "ownedProducts": forged,
                                  "selectedProducts": ["lipsticks:2734", "eyeshadows:882"]})
-        self.assertEqual(body["ownedProducts"], self.PRODUCTS)
+        self.assertEqual(body["ownedProducts"], {"唇彩": self.PRODUCTS_PALETTE_STRINGS})
         self.assertNotIn("selectedProducts", body)
         self.assertEqual(body["style"], "港風")
         bag_call, tryon_call = calls
@@ -2281,7 +2293,7 @@ class MakeupBagTryOnSuggestTest(unittest.TestCase):
             response = asyncio.run(proxy("text-suggestion", "suggest", request))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(sent["url"], "https://ollama.test/suggest")
-        self.assertEqual(sent["body"]["ownedProducts"], self.PRODUCTS)
+        self.assertEqual(sent["body"]["ownedProducts"], {"唇彩": self.PRODUCTS_PALETTE_STRINGS})
 
 
 class DotSegmentPathTest(unittest.TestCase):
