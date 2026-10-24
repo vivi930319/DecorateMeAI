@@ -1706,6 +1706,32 @@ async def _apply_pending_member_cookie(request: Request, call_next):
     return response
 
 
+def _has_dot_segment(path: str) -> bool:
+    """路徑裡有沒有 `.` 或 `..` 段（含 %2e、%252e 這類編碼過的寫法）。"""
+    for segment in path.split("/"):
+        decoded = segment
+        for _ in range(3):
+            decoded = unquote(decoded)
+        if decoded.strip() in {".", ".."}:
+            return True
+    return False
+
+
+# 白名單是用正則比對「原樣」的路徑，但轉發用的 httpx 會把 `..` 正規化掉。
+# 2026-10-24 實測：`DELETE /member-database/api/members/<自己>/makeup-bag/..` 會被當成
+# 刪化妝包放行，送到上游卻變成 `DELETE /api/members/<自己>`——刪帳號前清臉部照片的
+# 那一步就被跳過。瀏覽器自己會先把 `..` 解掉，正常用戶端永遠不會送出這種路徑，
+# 所以在最外層直接拒絕，不必讓每一條代理路由各自記得處理。
+@app.middleware("http")
+async def _reject_dot_segments(request: Request, call_next):
+    if _has_dot_segment(request.scope.get("path") or ""):
+        return JSONResponse(
+            status_code=400,
+            content={"error": {"code": "INVALID_PATH", "message": "Path segments '.' and '..' are not allowed."}},
+        )
+    return await call_next(request)
+
+
 @app.get("/health")
 async def health():
     configured = all(upstream.base_url for upstream in UPSTREAMS.values() if upstream.required_in_production)

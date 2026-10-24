@@ -2145,5 +2145,35 @@ class PublicProductPathTest(unittest.TestCase):
         self.assertFalse(self._allowed("api/admin/product-audit-logs"))
 
 
+class DotSegmentPathTest(unittest.TestCase):
+    """httpx 轉發時會把 `..` 解掉，白名單比對的卻是原樣路徑——兩者對不上就能繞過。"""
+
+    def test_httpx_really_collapses_dot_segments(self):
+        # 這條測試記錄的是「為什麼要擋」：哪天 httpx 不再正規化，這裡會先紅。
+        url = httpx.URL("https://member.test/api/members/a@b.test/makeup-bag/..")
+        self.assertEqual(url.path, "/api/members/a@b.test")
+
+    def test_dot_segments_are_detected_in_any_encoding(self):
+        for path in (
+            "/member-database/api/members/a@b.test/makeup-bag/..",
+            "/member-database/api/members/a@b.test/makeup-bag/%2e%2e",
+            "/member-database/api/members/a@b.test/makeup-bag/%252E%252E",
+            "/face-basic/./v1/face/jobs",
+        ):
+            self.assertTrue(gateway._has_dot_segment(path), path)
+        for path in ("/member-database/api/members/a.b@c.test/makeup-bag", "/health", "/face-basic/v1/face/jobs/JOB-1.2"):
+            self.assertFalse(gateway._has_dot_segment(path), path)
+
+    def test_gateway_rejects_dot_segment_requests_before_routing(self):
+        from fastapi.testclient import TestClient
+
+        client = TestClient(gateway.app)
+        # TestClient 本身也是 httpx，字面上的 `..` 送出前就被它解掉了，所以用編碼過的寫法。
+        response = client.delete("/member-database/api/members/a@b.test/makeup-bag/%2e%2e")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["error"]["code"], "INVALID_PATH")
+        self.assertEqual(client.get("/health").status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()

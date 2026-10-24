@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import cv2
 import numpy as np
 
-from fastapi import FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -271,9 +271,11 @@ def _job_view(job, include_token=False):
     return {k: v for k, v in job.items() if k not in hidden}
 
 
-def _verify_job_token(job, x_job_token=None, result_token=None):
+def _verify_job_token(job, x_job_token=None):
+    # 沒有 resultToken 的 job 一律拒絕（建 job 時一定會發，缺了就是資料異常，不能當成免驗證）。
+    # 只收 X-Job-Token 標頭：放在網址參數會被寫進存取紀錄。比對用固定時間比較。
     expected = job.get("resultToken")
-    if expected and (x_job_token or result_token) != expected:
+    if not expected or not secret_equals(x_job_token, expected):
         raise HTTPException(
             status_code=403,
             detail={"error": {"message": "job token 不正確或未提供"}},
@@ -458,12 +460,11 @@ async def create_pro_job(
 async def get_pro_job(
     job_id: str,
     x_job_token: str | None = Header(default=None),
-    result_token: str | None = Query(default=None),
 ):
     job = job_store.get(_COL, job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
-    _verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
+    _verify_job_token(job, x_job_token=x_job_token)
     return _job_view(job)
 
 
@@ -471,12 +472,11 @@ async def get_pro_job(
 async def get_pro_job_result(
     job_id: str,
     x_job_token: str | None = Header(default=None),
-    result_token: str | None = Query(default=None),
 ):
     job = job_store.get(_COL, job_id)
     if not job:
         raise HTTPException(status_code=404, detail={"error": {"message": "找不到 job"}})
-    _verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
+    _verify_job_token(job, x_job_token=x_job_token)
     if job["status"] != "completed":
         raise HTTPException(status_code=409, detail={"error": {"message": "job 尚未完成", "status": job["status"]}})
     return {

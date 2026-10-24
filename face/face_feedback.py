@@ -385,8 +385,7 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
         job_id: str,
         payload: FeedbackIn,
         x_job_token: str | None = Header(default=None),
-        result_token: str | None = Query(default=None),
-    ):
+        ):
         """收下使用者對這個 job 的五官修正。
 
         驗證與其他 job 路由同一套：要帶得出建 job 時發的 token，才算得上這個 job 的主人。
@@ -398,7 +397,7 @@ def register_route(app, *, mode: str, jobs_collection: str, verify_job_token) ->
                 status_code=404,
                 detail={"error": {"code": "JOB_NOT_FOUND", "message": "找不到 job"}},
             )
-        verify_job_token(job, x_job_token=x_job_token, result_token=result_token)
+        verify_job_token(job, x_job_token=x_job_token)
         try:
             data = payload.model_dump()
             save(mode, job_id, data, owner_id=job.get("ownerId"))
