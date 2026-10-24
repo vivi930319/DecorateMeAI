@@ -3670,6 +3670,98 @@ async def public_product_proxy(path: str, request: Request):
     return await proxy_public_product_request(request, path)
 
 
+# ── 化妝包試妝（2026-10-25 規格 v2）──────────────────────────────────
+#
+# `/suggest` 帶 `mode: "makeup_bag"` 時，Ollama 會照 `ownedProducts` 點名商品、寫渲染指令。
+# 這份清單**只能由這裡組**：以前 `/suggest` 是原樣轉發，瀏覽器送什麼 Ollama 就信什麼，
+# 等於任何人都能塞一支不存在的口紅、一個自編的色碼進簽章過的渲染 prompt。
+#
+# 瀏覽器只送 `selectedProducts`（candidateKey）。這裡依登入身分讀他的化妝包，交給
+# 演算法端驗證「選的都在包裡、每部位一件」並查回商品資料，再把回來的 `ownedProducts`
+# 原樣交給 Ollama。演算法端的 422／401／502 原碼轉回，前端依錯誤碼顯示。
+TRYON_PRODUCTS_PATH = "api/makeup-bag/tryon-products"
+TRYON_MAX_SELECTED = 8
+TRYON_MAX_OWNED = 200
+TRYON_KEY_RE = re.compile(r"^[a-z_]+:[A-Za-z0-9_-]{1,64}$")
+
+
+def _tryon_error(status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"error": {"code": code, "message": message}})
+
+
+async def _makeup_bag_suggest_body(request: Request, body: bytes, claims: dict, member_cookie: str) -> bytes:
+    """把 `/suggest` 的請求內容換成伺服器端組好的化妝包版本。非化妝包模式只拿掉偽造欄位。"""
+    try:
+        payload = json.loads(body or b"{}")
+    except ValueError:
+        return body
+    if not isinstance(payload, dict):
+        return body
+    # 不論哪個模式，商品清單都不收瀏覽器給的。
+    forged = payload.pop("ownedProducts", None) is not None
+    selected = payload.pop("selectedProducts", None)
+    if payload.get("mode") != "makeup_bag":
+        return json.dumps(payload, ensure_ascii=False).encode("utf-8") if forged or selected is not None else body
+
+    email = str(claims.get("sub") or "").strip().lower()
+    if not email or not member_cookie:
+        raise _tryon_error(401, "UNAUTHENTICATED", "Member sign-in is required for makeup bag try-on.")
+    if not isinstance(selected, list) or not selected:
+        raise _tryon_error(422, "INVALID_TRYON_SELECTION", "selectedProducts must list 1-8 candidate keys.")
+    keys = list(dict.fromkeys(str(k or "").strip() for k in selected))
+    if not (1 <= len(keys) <= TRYON_MAX_SELECTED) or not all(TRYON_KEY_RE.fullmatch(k) for k in keys):
+        raise _tryon_error(422, "INVALID_TRYON_SELECTION", "selectedProducts must list 1-8 candidate keys.")
+
+    client = request.app.state.http_client
+    member_db = UPSTREAMS["member-database"].base_url
+    headers = with_member_gateway_key({"Accept": "application/json", "Cookie": member_cookie})
+    try:
+        bag_res = await request_upstream(
+            client, method="GET", url=f"{member_db}/api/members/{quote(email, safe='@')}/makeup-bag",
+            headers=headers, timeout=upstream_timeout("member-database"))
+    except httpx.HTTPError:
+        raise _tryon_error(502, "PRODUCT_DB_UNAVAILABLE", "Makeup bag is temporarily unavailable.")
+    if bag_res.status_code == 401:
+        raise _tryon_error(401, "UNAUTHENTICATED", "Member sign-in is required for makeup bag try-on.")
+    if not bag_res.is_success:
+        raise _tryon_error(502, "PRODUCT_DB_UNAVAILABLE", "Makeup bag is temporarily unavailable.")
+    try:
+        rows = (bag_res.json() or {}).get("items") or []
+    except ValueError:
+        raise _tryon_error(502, "PRODUCT_DB_UNAVAILABLE", "Makeup bag is temporarily unavailable.")
+    owned = list(dict.fromkeys(
+        str(row.get("candidateKey") or "").strip() for row in rows if isinstance(row, dict)))
+    owned = [k for k in owned if k][:TRYON_MAX_OWNED]
+    if not owned or any(k not in owned for k in keys):
+        # 演算法端也會驗，這裡先擋：包是空的時候它的 ownedProducts 下限是 1 筆，會回 422 格式錯。
+        raise _tryon_error(422, "SELECTED_PRODUCT_NOT_IN_MAKEUP_BAG", "A selected product is not in the makeup bag.")
+
+    try:
+        tryon_res = await request_upstream(
+            client, method="POST", url=f"{PRODUCT_DATABASE_URL}/{TRYON_PRODUCTS_PATH}",
+            headers=with_member_gateway_key({"Accept": "application/json", "Content-Type": "application/json"}),
+            content=json.dumps({"ownedProducts": owned, "selectedProducts": keys}).encode("utf-8"),
+            timeout=upstream_timeout("member-database"))
+    except httpx.HTTPError:
+        raise _tryon_error(502, "PRODUCT_DB_UNAVAILABLE", "Product data is temporarily unavailable.")
+    try:
+        data = tryon_res.json()
+    except ValueError:
+        data = None
+    if not tryon_res.is_success or not isinstance(data, dict) or data.get("success") is False:
+        upstream_code = ((data or {}).get("error") or {}).get("code") if isinstance(data, dict) else None
+        if tryon_res.status_code == 422 and upstream_code in {
+                "SELECTED_PRODUCT_NOT_IN_MAKEUP_BAG", "SELECTED_PRODUCT_NOT_FOUND", "INVALID_TRYON_SELECTION"}:
+            raise _tryon_error(422, upstream_code, str(((data or {}).get("error") or {}).get("message") or upstream_code))
+        # 演算法端的 401 是 Gateway 金鑰的問題，不是使用者沒登入；不能回 UNAUTHENTICATED 讓前端把人登出。
+        raise _tryon_error(502, "PRODUCT_DB_UNAVAILABLE", "Product data is temporarily unavailable.")
+    products = data.get("ownedProducts")
+    if not isinstance(products, list) or not products:
+        raise _tryon_error(502, "PRODUCT_DB_UNAVAILABLE", "Product data is temporarily unavailable.")
+    payload["ownedProducts"] = products
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
 # PUT 是 2026-08-13 加的：會員資料庫的購物車覆蓋寫入只接受 PUT，而這條路由當時沒開
 # PUT，於是前端送 POST 被上游擋成 405、改送 PUT 又會被 Gateway 自己擋成 405——兩邊
 # 都不通，購物車同步整條是死的。PUT 已在 STATE_CHANGING_METHODS 裡，因此 CSRF 與
@@ -3800,6 +3892,14 @@ async def proxy(service: str, path: str, request: Request):
     body = await request.body()
     if len(body) > MAX_BODY_BYTES:
         raise HTTPException(status_code=413, detail={"error": {"code": "PAYLOAD_TOO_LARGE", "message": "Request body is too large."}})
+    if service == "text-suggestion" and path == "suggest" and str(request.method).upper() == "POST":
+        bag_cookie = ""
+        if not guest_id:
+            try:
+                bag_cookie = unseal_member_cookie(selected_sealed) if MULTI_SESSION_ENABLED else require_upstream_member_cookie(request)
+            except HTTPException:
+                bag_cookie = ""
+        body = await _makeup_bag_suggest_body(request, body, claims, bag_cookie)
 
     try:
         identity_token = ""

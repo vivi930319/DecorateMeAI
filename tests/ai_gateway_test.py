@@ -2168,6 +2168,122 @@ class MemberDataCacheTest(unittest.TestCase):
         self.assertEqual(response.headers.get("cache-control"), "private, no-store")
 
 
+class MakeupBagTryOnSuggestTest(unittest.TestCase):
+    """化妝包試妝的商品清單只能由 Gateway 組，瀏覽器只送 candidateKey（2026-10-25 規格 v2）。"""
+
+    BAG = {"items": [{"candidateKey": "lipsticks:2734"}, {"candidateKey": "eyeshadows:882"}, {"candidateKey": "blushes:44"}]}
+    PRODUCTS = [{"candidateKey": "lipsticks:2734", "category": "唇彩", "brand": "MAC", "hex": "#803329"}]
+
+    def _request(self):
+        request = Mock()
+        request.app.state.http_client = Mock()
+        return request
+
+    def _run(self, payload, *, tryon=None, bag=None, cookie="session=x"):
+        calls = []
+
+        async def fake(client, *, method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            if url.endswith("/makeup-bag"):
+                return bag or httpx.Response(200, json=self.BAG, request=httpx.Request(method, url))
+            return tryon or httpx.Response(200, json={"success": True, "ownedProducts": self.PRODUCTS},
+                                           request=httpx.Request(method, url))
+
+        configured = dataclasses.replace(gateway.UPSTREAMS["member-database"], base_url="https://member.test")
+        with patch.dict(gateway.UPSTREAMS, {"member-database": configured}), \
+                patch.object(gateway, "PRODUCT_DATABASE_URL", "https://product.test"), \
+                patch.object(gateway, "request_upstream", side_effect=fake):
+            body = asyncio.run(gateway._makeup_bag_suggest_body(
+                self._request(), json.dumps(payload).encode("utf-8"),
+                {"sub": "Member@Example.com"}, cookie))
+        return json.loads(body), calls
+
+    def _error(self, payload, **kwargs):
+        with self.assertRaises(gateway.HTTPException) as caught:
+            self._run(payload, **kwargs)
+        return caught.exception.status_code, caught.exception.detail["error"]["code"]
+
+    def test_server_builds_owned_products_and_ignores_browser_copy(self):
+        forged = [{"candidateKey": "lipsticks:1", "hex": "#000000"}]
+        body, calls = self._run({"mode": "makeup_bag", "style": "港風", "ownedProducts": forged,
+                                 "selectedProducts": ["lipsticks:2734", "eyeshadows:882"]})
+        self.assertEqual(body["ownedProducts"], self.PRODUCTS)
+        self.assertNotIn("selectedProducts", body)
+        self.assertEqual(body["style"], "港風")
+        bag_call, tryon_call = calls
+        self.assertEqual(bag_call[1], "https://member.test/api/members/member@example.com/makeup-bag")
+        self.assertEqual(tryon_call[1], "https://product.test/api/makeup-bag/tryon-products")
+        sent = json.loads(tryon_call[2]["content"])
+        self.assertEqual(sent, {"ownedProducts": ["lipsticks:2734", "eyeshadows:882", "blushes:44"],
+                                "selectedProducts": ["lipsticks:2734", "eyeshadows:882"]})
+
+    def test_other_modes_drop_forged_products_without_calling_upstream(self):
+        body, calls = self._run({"style": "港風", "ownedProducts": [{"candidateKey": "x:1"}]})
+        self.assertEqual(body, {"style": "港風"})
+        self.assertEqual(calls, [])
+
+    def test_product_outside_the_bag_is_rejected_before_the_algorithm_call(self):
+        status, code = self._error({"mode": "makeup_bag", "selectedProducts": ["lipsticks:9999"]})
+        self.assertEqual((status, code), (422, "SELECTED_PRODUCT_NOT_IN_MAKEUP_BAG"))
+
+    def test_selection_size_and_shape_are_checked(self):
+        too_many = [f"lipsticks:{i}" for i in range(9)]
+        for selected in ([], too_many, ["<script>"], "lipsticks:2734", None):
+            self.assertEqual(self._error({"mode": "makeup_bag", "selectedProducts": selected}),
+                             (422, "INVALID_TRYON_SELECTION"), selected)
+
+    def test_signed_out_member_gets_unauthenticated(self):
+        self.assertEqual(self._error({"mode": "makeup_bag", "selectedProducts": ["lipsticks:2734"]}, cookie=""),
+                         (401, "UNAUTHENTICATED"))
+
+    def test_algorithm_selection_errors_pass_through(self):
+        url = "https://product.test/api/makeup-bag/tryon-products"
+        for code in ("SELECTED_PRODUCT_NOT_FOUND", "INVALID_TRYON_SELECTION", "SELECTED_PRODUCT_NOT_IN_MAKEUP_BAG"):
+            res = httpx.Response(422, json={"success": False, "error": {"code": code, "message": "m"}},
+                                 request=httpx.Request("POST", url))
+            self.assertEqual(self._error({"mode": "makeup_bag", "selectedProducts": ["lipsticks:2734"]}, tryon=res),
+                             (422, code))
+
+    def test_algorithm_key_failure_is_not_reported_as_member_signed_out(self):
+        url = "https://product.test/api/makeup-bag/tryon-products"
+        res = httpx.Response(401, json={"error": {"code": "UNAUTHENTICATED"}}, request=httpx.Request("POST", url))
+        self.assertEqual(self._error({"mode": "makeup_bag", "selectedProducts": ["lipsticks:2734"]}, tryon=res),
+                         (502, "PRODUCT_DB_UNAVAILABLE"))
+
+    def test_proxy_forwards_the_server_built_body_to_ollama(self):
+        token, _ = issue_access_token("member@example.com", "member", "active")
+        request = Mock()
+        request.method = "POST"
+        request.headers = {"authorization": f"Bearer {token}", "content-type": "application/json",
+                           "x-expected-actor": opaque_actor_id("member@example.com")}
+        request.cookies = session_cookies(token, seal_member_cookie("session=x"))
+        request.body = AsyncMock(return_value=json.dumps({
+            "mode": "makeup_bag", "selectedProducts": ["lipsticks:2734"],
+            "ownedProducts": [{"candidateKey": "lipsticks:1"}]}).encode("utf-8"))
+        request.query_params.multi_items = Mock(return_value=[])
+        sent = {}
+
+        async def fake(client, *, method, url, **kwargs):
+            if url.endswith("/makeup-bag"):
+                return httpx.Response(200, json=self.BAG, request=httpx.Request(method, url))
+            if url.endswith("/tryon-products"):
+                return httpx.Response(200, json={"success": True, "ownedProducts": self.PRODUCTS},
+                                      request=httpx.Request(method, url))
+            sent["url"], sent["body"] = url, json.loads(kwargs["content"])
+            return httpx.Response(200, json={"suggestion": "ok"}, request=httpx.Request(method, url))
+
+        member = dataclasses.replace(gateway.UPSTREAMS["member-database"], base_url="https://member.test")
+        text = dataclasses.replace(gateway.UPSTREAMS["text-suggestion"], base_url="https://ollama.test")
+        with patch.dict(gateway.UPSTREAMS, {"member-database": member, "text-suggestion": text}), \
+                patch.object(gateway, "ALLOW_EXTERNAL_TEXT_UPSTREAM", True), \
+                patch.object(gateway, "PRODUCT_DATABASE_URL", "https://product.test"), \
+                patch.object(gateway, "request_upstream", side_effect=fake):
+            response = asyncio.run(proxy("text-suggestion", "suggest", request))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(sent["url"], "https://ollama.test/suggest")
+        self.assertEqual(sent["body"]["ownedProducts"], self.PRODUCTS)
+
+
 class DotSegmentPathTest(unittest.TestCase):
     """httpx 轉發時會把 `..` 解掉，白名單比對的卻是原樣路徑——兩者對不上就能繞過。"""
 
