@@ -267,6 +267,15 @@ const ApiConfig = {
     }
 };
 
+// 化妝包試妝的錯誤碼（Gateway 原碼轉回演算法端的判斷）。不可以拿近似商品頂替——
+// 使用者選的是自己有的那支，換掉就不是他的化妝包了。
+const MAKEUP_BAG_TRYON_ERRORS = Object.freeze({
+    SELECTED_PRODUCT_NOT_IN_MAKEUP_BAG: '此商品不在目前化妝包中，請重新選擇。',
+    SELECTED_PRODUCT_NOT_FOUND: '商品已下架或暫時無法試妝。',
+    INVALID_TRYON_SELECTION: '同一部位一次只能選一件商品。',
+    PRODUCT_DB_UNAVAILABLE: '商品資料暫時無法讀取，請稍後再試。',
+});
+
 // API 串接層。
 const Api = {
     config: ApiConfig,
@@ -768,13 +777,21 @@ const Api = {
     },
 
     // 文字建議只需要 faceAnalysis；不要傳送含有臉部照片的完整資料包。
-    async suggestMakeup({ faceAnalysis, style, userNote }) {
+    //
+    // 化妝包試妝（2026-10-25 規格 v2）：只送使用者選的 candidateKey。品牌、名稱、色票一律
+    // 由 Gateway 依登入身分讀化妝包、向演算法端查回再交給 Ollama——前端給的不會被採用。
+    async suggestMakeup({ faceAnalysis, style, userNote, selectedProducts = null }) {
+        const payload = { faceAnalysis, style, language: 'zh-TW', userNote };
+        if (Array.isArray(selectedProducts) && selectedProducts.length) {
+            payload.mode = 'makeup_bag';
+            payload.selectedProducts = selectedProducts;
+        }
         let res;
         try {
             res = await this._protectedFetch(this.config.url('textSuggestion', 'suggestPath'), {
                 method: 'POST',
                 headers: this._textSuggestionHeaders(),
-                body: JSON.stringify({ faceAnalysis, style, language: 'zh-TW', userNote }),
+                body: JSON.stringify(payload),
             });
         } catch (err) {
             throw new Error('無法連線到建議服務：' + err.message);
@@ -787,6 +804,16 @@ const Api = {
             if (code === 'EXTERNAL_TEXT_UPSTREAM_DISABLED') {
                 throw new Error('妝容建議服務目前停用中（尚未接上受信任的文字服務），其他功能不受影響。');
             }
+            const tryOnMessage = MAKEUP_BAG_TRYON_ERRORS[code];
+            if (tryOnMessage) {
+                // 包裡的東西跟伺服器對不上，多半是別的裝置刪過：重抓一次，下次選的才會是對的。
+                if (code === 'SELECTED_PRODUCT_NOT_IN_MAKEUP_BAG' && typeof MakeupBag !== 'undefined') {
+                    MakeupBag.list().catch(() => {});
+                }
+                const tryOnErr = new Error(tryOnMessage);
+                tryOnErr.code = code;
+                throw tryOnErr;
+            }
             // 401 有兩種完全不同的來源，先前一律當成「上游授權問題」——
             // 於是 session 過期時畫面會寫「與你的登入狀態無關」，那句話正好是反的，
             // 使用者照著它去找服務問題，永遠不會想到只要重新登入。
@@ -796,7 +823,8 @@ const Api = {
             if (res.status === 401) {
                 const sessionCodes = [
                     'MEMBER_AUTH_REQUIRED', 'MEMBER_AUTH_INVALID',
-                    'MEMBER_SESSION_REQUIRED', 'MEMBER_SESSION_INVALID', 'MEMBER_SESSION_MISSING'
+                    'MEMBER_SESSION_REQUIRED', 'MEMBER_SESSION_INVALID', 'MEMBER_SESSION_MISSING',
+                    'UNAUTHENTICATED'
                 ];
                 if (sessionCodes.includes(code)) {
                     // 不要在訊息裡寫死有效期。它是伺服器端的環境變數

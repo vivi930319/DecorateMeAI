@@ -3731,7 +3731,8 @@ async function runMakeupSuggestion(onProgress) {
         const response = await Api.suggestMakeup({
             faceAnalysis: pkg?.faceAnalysis || AnalysisPackage.fromRawFaceAnalysis(latestAnalysis, Router.analyzeMode),
             style: style?.name || '日常自然妝',
-            userNote: style?.tags?.join('、') || ''
+            userNote: style?.tags?.join('、') || '',
+            selectedProducts: (typeof BagTryOn !== 'undefined') ? BagTryOn.selectedProducts() : null
         });
         const structured = window.MakeupSuggestionContract?.normalize
             ? window.MakeupSuggestionContract.normalize(response, { palette: Array.isArray(style?.palette) ? style.palette : [] })

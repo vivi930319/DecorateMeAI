@@ -331,7 +331,8 @@
             const response = await Api.suggestMakeup({
                 faceAnalysis: pkg.faceAnalysis || AnalysisPackage.fromRawFaceAnalysis(Router.analysisResult, Router.analyzeMode),
                 style: style.name,
-                userNote: style.tags.join('、')
+                userNote: style.tags.join('、'),
+                selectedProducts: (typeof BagTryOn !== 'undefined') ? BagTryOn.selectedProducts() : null
             });
             const structured = Contract.normalize(response, contractContext(style));
             const rawSuggestion = suggestionText(response, structured);

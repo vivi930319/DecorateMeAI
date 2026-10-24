@@ -94,6 +94,19 @@
             };
         },
         clear() { Router.makeupBagPlan = null; },
+        // 這次要交給 Gateway 試妝的商品：每部位一件、最多 8 件（規格 v2 的上限，後端也會驗）。
+        // 只給 key——商品資料由 Gateway 依登入身分自己查，前端送了也不會被採用。
+        // 不在化妝包路線時回 null，建議請求維持原本的風格模式。
+        selectedProducts(plan = this.active()) {
+            if (!plan) return null;
+            const byCat = new Map();
+            for (const k of plan.usedKeys || []) {
+                const c = MakeupBag.categoryOf(k) || k.split(':')[0];
+                if (!byCat.has(c)) byCat.set(c, k);
+            }
+            const keys = [...byCat.values()].slice(0, 8);
+            return keys.length ? keys : null;
+        },
         // 風格要對得上：使用者之後改走系統推薦、或換了風格，就不再套用。
         active() {
             const plan = Router.makeupBagPlan;

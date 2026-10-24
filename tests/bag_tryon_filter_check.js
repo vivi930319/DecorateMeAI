@@ -81,6 +81,17 @@ check(`挑了之後每類只留那一件（得到 ${used}）`, used === 'blushes
 check('choices 有記下來', Router.makeupBagPlan.choices.唇彩 === 'lipsticks:2');
 check('沒挑的類別不受影響', BagTryOn.usedKeys(contributing, bag, { 唇彩: 'lipsticks:1' }).includes('blushes:1'));
 
+// 交給 Gateway 試妝的商品：每部位一件、只有 key（2026-10-25 規格 v2）
+const picked = BagTryOn.selectedProducts().slice().sort().join(',');
+check(`selectedProducts 每部位一件（得到 ${picked}）`, picked === 'blushes:1,foundations:8,lipsticks:2');
+BagTryOn.record('hongKong', contributing);
+const unpicked = BagTryOn.selectedProducts();
+check('還沒挑時同部位也只送一件', unpicked.length === new Set(unpicked.map(k => k.split(':')[0])).size);
+bag = Array.from({ length: 12 }, (_, i) => `cat${i}:1`);
+BagTryOn.record('hongKong', bag);
+check('最多 8 件', BagTryOn.selectedProducts().length === 8);
+BagTryOn.record('hongKong', contributing, { 唇彩: 'lipsticks:2', 底妝: 'foundations:8' });
+
 // 換了風格 → 不再套用
 Router.selectedStyleId = 'yandere';
 check('換風格後回到完整推薦', BagTryOn.filter(products).length === products.length);
@@ -89,6 +100,7 @@ check('換風格後回到完整推薦', BagTryOn.filter(products).length === pro
 Router.selectedStyleId = 'hongKong';
 BagTryOn.clear();
 check('clear 之後回到完整推薦', BagTryOn.filter(products).length === products.length);
+check('不在化妝包路線時不送 selectedProducts', BagTryOn.selectedProducts() === null);
 
 // ── 新手難易度 ──
 const dataSrc = fs.readFileSync(path.join(root, 'js/data.js'), 'utf8');
