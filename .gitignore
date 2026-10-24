@@ -123,6 +123,7 @@
 !requirements.gateway.txt
 !Dockerfile.gateway
 !cloudbuild.gateway.yaml
+!cloudbuild.face.yaml
 !deploy_render_cloudrun.ps1
 !tools/
 !tools/*.py
