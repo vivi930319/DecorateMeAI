@@ -2145,6 +2145,29 @@ class PublicProductPathTest(unittest.TestCase):
         self.assertFalse(self._allowed("api/admin/product-audit-logs"))
 
 
+class MemberDataCacheTest(unittest.TestCase):
+    def test_member_reads_are_never_cacheable_even_if_upstream_says_public(self):
+        """組員服務對部分 GET 回 public, max-age=10；照抄會讓 Hosting CDN 回舊的化妝包。"""
+        token, _ = issue_access_token("member@example.com", "member", "active")
+        request = Mock()
+        request.method = "GET"
+        request.headers = {"authorization": f"Bearer {token}"}
+        request.cookies = session_cookies(token, seal_member_cookie("session=x"))
+        request.body = AsyncMock(return_value=b"")
+        request.query_params.multi_items = Mock(return_value=[])
+        upstream = httpx.Response(
+            200,
+            json={"items": [{"candidateKey": "lipsticks:2"}]},
+            headers={"cache-control": "public, max-age=10, stale-while-revalidate=20"},
+            request=httpx.Request("GET", "https://member.test/api/members/member@example.com/makeup-bag"),
+        )
+        configured = dataclasses.replace(gateway.UPSTREAMS["member-database"], base_url="https://member.test")
+        with patch.dict(gateway.UPSTREAMS, {"member-database": configured}),                 patch.object(gateway, "request_upstream", AsyncMock(return_value=upstream)):
+            response = asyncio.run(proxy("member-database", "api/members/member@example.com/makeup-bag", request))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("cache-control"), "private, no-store")
+
+
 class DotSegmentPathTest(unittest.TestCase):
     """httpx 轉發時會把 `..` 解掉，白名單比對的卻是原樣路徑——兩者對不上就能繞過。"""
 

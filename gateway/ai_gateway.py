@@ -3898,6 +3898,12 @@ async def proxy(service: str, path: str, request: Request):
     for header in ("content-type", "cache-control", "retry-after"):
         if response.headers.get(header):
             response_headers[header] = response.headers[header]
+    # 會員資料（化妝包、收藏、購物車…）一律不准任何一層快取。組員的服務會對部分 GET
+    # 回 `public, max-age=10, stale-while-revalidate=20`（商品清單實測如此），照抄過去的話
+    # Firebase Hosting 的 CDN 會把它存起來：剛加進化妝包、馬上打開化妝包，拿到的是
+    # 加入前那份，前端又拿它覆蓋本機——畫面上就變成「化妝包是空的」。
+    if service == "member-database":
+        response_headers["cache-control"] = "private, no-store"
     response_content = response.content
     # 上游失敗而且回的不是 JSON（Cloudflare 的 tunnel 錯誤頁就是這樣）時換掉。
     # 底下的稽核與訪客扣次仍然看 response.status_code，也就是上游真正回的那個——
