@@ -5913,7 +5913,7 @@ const PageInit = {
                             <span class="pc-price">${escapeHtml(p.price)}</span>
                             ${p.candidateKey ? `<button type="button" class="pc-own${MakeupBag.has(p.candidateKey) ? ' is-own' : ''}"
                                 data-own="${escapeHtml(p.candidateKey)}"
-                                aria-label="把「${escapeHtml(p.name)}」登記為我已經有的">${MakeupBag.has(p.candidateKey) ? '已有' : '我有'}</button>` : ''}
+                                aria-label="把「${escapeHtml(p.name)}」登記為我已經有的">${MakeupBag.has(p.candidateKey) ? '✓ 化妝包' : '＋ 化妝包'}</button>` : ''}
                             <button type="button" class="pc-add" data-add="${escapeHtml(p.id)}"
                                 aria-label="把「${escapeHtml(p.name)}」加入購物車">＋</button>
                         </div>
@@ -5937,6 +5937,8 @@ const PageInit = {
                         showToast('已加入購物車');
                     };
                     // 「我有這個」＝登記為已擁有，跟收藏（想要）、購物車（要買）是三件事。
+                    // 按鈕字樣曾是「我有／已有」：「我有」讀起來像狀態，化妝包是空的也像是已經擁有
+                    // （2026-10-24 回報容易誤會）。改成「＋ 化妝包」（動作）與「✓ 化妝包」（狀態）。
                     // 只加不刪：要移除請去化妝包頁，那裡看得到全部內容。
                     // 在商品頁做「取消擁有」太容易誤觸，而誤刪的代價是推薦品質悄悄變差。
                     const ownBtn = card.querySelector('.pc-own');
@@ -5948,7 +5950,7 @@ const PageInit = {
                         ownBtn.disabled = false;
                         if (!result.ok) { showToast(result.error); return; }
                         ownBtn.classList.add('is-own');
-                        ownBtn.textContent = ownBtn.dataset.ownLabel || '已有';
+                        ownBtn.textContent = ownBtn.dataset.ownLabel || '✓ 化妝包';
                         const wrap = card.querySelector('.pc-imgwrap');
                         if (wrap && !wrap.querySelector('.pc-bag-badge')) wrap.insertAdjacentHTML('beforeend', '<span class="pc-bag-badge">化妝包內容</span>');
                         showToast(result.already ? '已經在化妝包裡了' : '已加入化妝包');
