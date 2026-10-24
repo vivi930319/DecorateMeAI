@@ -4894,6 +4894,13 @@ select.fb-fix:focus-visible { outline:2px solid var(--gold-deep); outline-offset
 .pc-own.is-own { background:rgba(201,169,110,0.16); color:var(--gold-deep); border-color:var(--gold); }
 .pc-own:disabled { opacity:.5; cursor:default; }
 .pc-foot { gap:8px; }
+/* 「＋ 化妝包」比舊的「我有」長，手機兩欄的卡片放不下價格＋它＋加購，會被擠成三行直排。
+   不准斷行；手機上讓它換到下一列、撐滿整寬（同推薦視窗的做法）。 */
+.pc-own { white-space:nowrap; }
+@media (max-width: 620px) {
+    .prod-grid .pc-foot { flex-wrap:wrap; row-gap:8px; }
+    .prod-grid .pc-foot .pc-own { order:3; flex:1 1 100%; text-align:center; padding:6px 8px; }
+}
 
 /* 延伸推薦的商品格。視窗裡的格子要比商品頁小一階，不然一頁放不下幾張。 */
 .mp-more-grid { grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:14px; margin-top:6px; }
