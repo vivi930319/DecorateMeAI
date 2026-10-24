@@ -521,10 +521,10 @@ function renderDashboardProductArea() {
             : '<div class="empty-state compact">目前沒有商品資料</div>';
     } else {
         glow.innerHTML = picks.map((p) => `
-        <div class="glow-card reveal-in" data-pid="${p.id}">
+        <div class="glow-card reveal-in" data-pid="${escapeHtml(p.id)}">
             <div class="gc-img">
                 ${phBox('', p.name, p.img)}
-                <button class="heart-btn gc-heart ${Fav.has(p.id)?'fav':''}" data-fav="${p.id}" aria-label="收藏">${HEART_SVG}</button>
+                <button class="heart-btn gc-heart ${Fav.has(p.id)?'fav':''}" data-fav="${escapeHtml(p.id)}" aria-label="收藏">${HEART_SVG}</button>
             </div>
             <div class="gc-meta">
                 <div class="gc-top"><span class="gc-name">${escapeHtml(p.name)}</span><span class="gc-price">${escapeHtml(p.price)}</span></div>
@@ -4412,11 +4412,11 @@ const PageInit = {
                 if (!picks?.length || Router.currentPage !== 'dashboard') return;
                 personalSection.style.display = '';
                 personalArea.innerHTML = picks.map(p => `
-                    <div class="glow-card reveal-in" data-pid="${p.id}">
+                    <div class="glow-card reveal-in" data-pid="${escapeHtml(p.id)}">
                         <div class="gc-img">${phBox('', p.name, p.img)}</div>
                         <div class="gc-meta">
                             <div class="gc-top"><span class="gc-name">${escapeHtml(p.name)}</span><span class="gc-price">${escapeHtml(p.price)}</span></div>
-                            <div class="gc-rating"><span class="stars">★★★★★</span><span class="gc-rev">${p.similarity != null ? `契合度 ${p.similarity}%` : (p.brand || '')}</span></div>
+                            <div class="gc-rating"><span class="stars">★★★★★</span><span class="gc-rev">${p.similarity != null && Number.isFinite(Number(p.similarity)) ? `契合度 ${Number(p.similarity)}%` : escapeHtml(p.brand || '')}</span></div>
                         </div>
                     </div>`).join('');
                 personalArea.querySelectorAll('.glow-card[data-pid]').forEach(card => {
@@ -6135,10 +6135,10 @@ const PageInit = {
                         ${shadeRecommendationHtml(p)}
                         ${crossBrandFoundationHtml(p)}
                         <div class="pd-actions">
-                            <button class="add-bag" data-bag="${p.id}">加入購物車</button>
+                            <button class="add-bag" data-bag="${escapeHtml(p.id)}">加入購物車</button>
                             ${p.candidateKey && typeof MakeupBag !== 'undefined' ? `<button type="button" class="pd-own${MakeupBag.has(p.candidateKey) ? ' is-own' : ''}" data-own-detail="${escapeHtml(p.candidateKey)}"
                                 aria-label="把「${escapeHtml(p.name)}」登記為我已經有的">${MakeupBag.has(p.candidateKey) ? '化妝包已有' : '＋ 加入化妝包'}</button>` : ''}
-                            <button class="heart-btn pd-heart ${Fav.has(p.id)?'fav':''}" data-fav-detail="${p.id}" aria-label="收藏">${HEART_SVG}</button>
+                            <button class="heart-btn pd-heart ${Fav.has(p.id)?'fav':''}" data-fav-detail="${escapeHtml(p.id)}" aria-label="收藏">${HEART_SVG}</button>
                         </div>
                         <div class="pd-desc">${escapeHtml(p.desc || p.matchReason || '商品詳細說明區域。可放入完整描述、使用方式、成分說明等資訊。')}</div>
                         ${colorCompareHtml(p)}
@@ -6626,10 +6626,10 @@ const PageInit = {
             <span class="fs-heart" aria-hidden="true">${HEART_SVG}</span>
             <span>${items.length} 件收藏</span>
         </div><div class="prod-grid">` + items.map((p, i) => `
-            <div class="prod-card reveal-in" data-pid="${p.id}" style="animation-delay:${Math.min(i*0.035,0.4)}s">
+            <div class="prod-card reveal-in" data-pid="${escapeHtml(p.id)}" style="animation-delay:${Math.min(i*0.035,0.4)}s">
                 <div class="pc-imgwrap">
                     ${phBox('', p.name, p.img)}
-                    <button class="heart-btn pc-heart fav" data-unfav="${p.id}" aria-label="移除收藏">${HEART_SVG}</button>
+                    <button class="heart-btn pc-heart fav" data-unfav="${escapeHtml(p.id)}" aria-label="移除收藏">${HEART_SVG}</button>
                 </div>
                 <div class="pc-cat">${escapeHtml(CAT_EN[p.cat]||p.cat)}</div>
                 <div class="pc-name">${escapeHtml(p.name)}</div>
@@ -8145,7 +8145,7 @@ const PageInit = {
                             <b>${escapeHtml(member.name || member.email.split('@')[0])}${perm.vipRequested && member.level !== 'VIP會員' ? ' <span class="admin-fail warn">申請升級中</span>' : ''}</b>
                             <span>${escapeHtml(member.email)}</span>
                             <span class="admin-look-count" data-look-email="${escapeHtml(member.email)}" style="margin-top:4px;font-size:12px;color:#7A4A42;cursor:pointer;text-decoration:underline dotted;" title="點開看這位會員的妝容收藏（從資料庫即時抓）">妝容收藏：${lookCountLabel(member.email)}</span>
-                            <span style="margin-top:2px;font-size:12px;color:#7A4A42;" title="會員目前點數餘額">點數：${member.points != null ? member.points : pointsLabel(member.email)}</span>
+                            <span style="margin-top:2px;font-size:12px;color:#7A4A42;" title="會員目前點數餘額">點數：${member.points != null ? escapeHtml(member.points) : pointsLabel(member.email)}</span>
                         </div>
                     </td>
                     <td>
