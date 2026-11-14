@@ -161,6 +161,7 @@
 !deploy_gateway_cloudrun.ps1
 !deploy_gateway_staging.ps1
 !promote_gateway_staging.ps1
+!toggle_render_lock.ps1
 !setup.bat
 !start_backend_local.bat
 !start_full_stack_local.bat

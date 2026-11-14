@@ -97,6 +97,17 @@ $overrides = [ordered]@{
     "ADMIN_AUDIT_COLLECTION"          = "staging_admin_audit_events"
 }
 foreach ($k in $overrides.Keys) { $plain[$k] = $overrides[$k] }
+
+# 試妝實驗期間（2026-11）staging 改接渲染副本 replicate-render-lock，好讓身分鎖定可以
+# 單獨開關而不影響正式站。副本存在就接它；實驗做完刪掉副本，下次同步就自動接回正式的。
+$previousEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$lockRenderUrl = (& gcloud.cmd run services describe replicate-render-lock --project $ProjectId --region $Region --format="value(status.url)" 2>$null)
+$ErrorActionPreference = $previousEap
+if ($LASTEXITCODE -eq 0 -and $lockRenderUrl) {
+    $plain["RENDER_URL"] = $lockRenderUrl.Trim()
+    Write-Host "注意：staging 的渲染改接實驗副本 $($plain['RENDER_URL'])" -ForegroundColor Yellow
+}
 $secretRefs["GATEWAY_SESSION_SECRET"] = "${SessionSecret}:latest"
 
 # 環境變數用檔案傳，不用 --set-env-vars。CORS_ORIGINS 的值有逗號，得用 gcloud 的
@@ -145,3 +156,4 @@ Write-Host "  image    : $Image"
 Write-Host "  網址     : $url"
 Write-Host "  上游     : 會員 $($plain['MEMBER_DATABASE_URL'])"
 Write-Host "             Ollama $($plain['TEXT_SUGGESTION_URL'])"
+Write-Host "             渲染   $($plain['RENDER_URL'])"
