@@ -3829,6 +3829,248 @@ const AnalysisDraft = {
     }
 };
 
+// ═══ 試妝實驗紀錄（2026-11-15，只在 staging 與本機啟用）═══
+//
+// 審稿回應要做消融實驗與量色：每次臉部分析、每次試妝都要留下「用了什麼、得到什麼」。
+// 以前靠截圖跟手抄，容易抄錯也查不回來；這裡在前端已經拿到的資料當場記一列，
+// 做完一批按一下下載 CSV。只存在這台瀏覽器（localStorage），不送到任何伺服器。
+//
+// 為什麼在前端記：Ollama 回的指令與系統推薦的商品伺服器都沒存；臉部分析結果
+// （face_jobs_basic）只留 1 小時。渲染紀錄（render_jobs）伺服器有長期留，
+// 這裡記下的渲染編號可以回頭跟它核對。
+//
+// 正式站不啟用：一般使用者不需要，也不該在他們的瀏覽器累積這些資料。
+const TryOnExperimentLog = {
+    _key: 'tryonExperimentLog',
+    _pkgKey: 'tryonExperimentPackages',
+    _settingKey: 'tryonExperimentSetting',
+    _max: 500,
+    // 完整資料包比 CSV 一列大得多（約數十 KB），localStorage 只有約 5MB，所以另外設上限；
+    // 滿了就丟最舊的。照片的 base64 一律拿掉，網址照留。
+    _maxPackages: 150,
+    // 渲染端身分鎖定開啟時，渲染服務會把這句接在最終指令後面（render/replicate_render.py 的
+    // IDENTITY_LOCK_SENTENCES 第一句）。用它判斷這張圖有沒有加渲染端鎖定。
+    _renderLockMarker: 'Keep the same face, skin texture and hair as the original photo',
+    COLUMNS: Object.freeze([
+        '紀錄編號', '類型', '時間', '設定代號', '原始檔名', '分析編號',
+        '膚色L', '膚色a', '膚色b', '唇色L', '唇色a', '唇色b', '膚色分級', '四季型',
+        '臉型', '眉型', '眼型', '鼻型', '嘴型',
+        '妝容風格', '模式', '化妝包商品', '系統推薦商品',
+        'Ollama指令', '最終指令', '渲染端鎖定', '生圖模型', '指令來源', '渲染編號',
+        '妝前圖網址', '妝後圖網址'
+    ]),
+
+    enabled() {
+        try {
+            const host = String(location.hostname || '');
+            return /^decorate-me-staging\./.test(host) || host === 'localhost' || host === '127.0.0.1';
+        } catch (_) { return false; }
+    },
+    list() {
+        try { return JSON.parse(localStorage.getItem(this._key) || '[]'); } catch (_) { return []; }
+    },
+    _save(rows) {
+        try { localStorage.setItem(this._key, JSON.stringify(rows.slice(-this._max))); } catch (_) {}
+    },
+    setting() {
+        try { return sessionStorage.getItem(this._settingKey) || ''; } catch (_) { return ''; }
+    },
+    setSetting(value) {
+        try { sessionStorage.setItem(this._settingKey, String(value || '')); } catch (_) {}
+    },
+    clear() {
+        try { localStorage.removeItem(this._key); localStorage.removeItem(this._pkgKey); } catch (_) {}
+        this._refreshPanel();
+    },
+    packages() {
+        try { return JSON.parse(localStorage.getItem(this._pkgKey) || '[]'); } catch (_) { return []; }
+    },
+    // 存資料包前拿掉照片：data: 開頭的字串（base64 影像）換成一句說明，其餘原樣保留。
+    _strip(value) {
+        try {
+            return JSON.parse(JSON.stringify(value ?? null, (k, v) =>
+                (typeof v === 'string' && v.startsWith('data:')) ? '[已省略影像資料]' : v));
+        } catch (_) { return null; }
+    },
+    _savePackage(entry) {
+        let list = this.packages();
+        list.push(entry);
+        list = list.slice(-this._maxPackages);
+        // 空間不夠就一次丟掉最舊的十筆再試，最多試到只剩這一筆。
+        while (list.length) {
+            try { localStorage.setItem(this._pkgKey, JSON.stringify(list)); return true; }
+            catch (_) { if (list.length === 1) return false; list = list.slice(Math.min(10, list.length - 1)); }
+        }
+        return false;
+    },
+    _now() {
+        try { return new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Taipei' }); }
+        catch (_) { return new Date().toISOString(); }
+    },
+    _newId() {
+        return 'E' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 5).toUpperCase();
+    },
+
+    _lab(v) {
+        const ok = v && [v.L, v.a, v.b].every(x => Number.isFinite(Number(x)));
+        return ok ? [Number(v.L), Number(v.a), Number(v.b)] : ['', '', ''];
+    },
+    _faceColumns(raw, fa) {
+        const skin = raw?.['膚色'] || {};
+        const skinLab = this._lab(raw?.['膚色']?.['LAB'] || fa?.skinTone?.lab);
+        const lipLab = this._lab(raw?.['嘴唇_LAB'] || fa?.lipLab);
+        return {
+            '膚色L': skinLab[0], '膚色a': skinLab[1], '膚色b': skinLab[2],
+            '唇色L': lipLab[0], '唇色a': lipLab[1], '唇色b': lipLab[2],
+            '膚色分級': skin['膚色分級'] || fa?.skinTone?.level || '',
+            '四季型': skin['四季型'] || fa?.skinTone?.season || '',
+            '臉型': raw?.['臉型'] || fa?.faceShape || '', '眉型': raw?.['眉型'] || fa?.browShape || '',
+            '眼型': raw?.['眼型'] || fa?.eyeShape || '', '鼻型': raw?.['鼻型'] || fa?.noseFront || '',
+            '嘴型': raw?.['嘴型'] || fa?.lipShape || ''
+        };
+    },
+    _productLine(p) {
+        const lab = this._lab(p?.lab && !Array.isArray(p.lab) ? p.lab
+            : (Array.isArray(p?.lab) ? { L: p.lab[0], a: p.lab[1], b: p.lab[2] } : null));
+        const hex = p?.hex || p?.hexPrimary || p?.hex_primary
+            || (lab[0] !== '' && typeof Api !== 'undefined' ? Api.labToHex(lab[0], lab[1], lab[2]) + '(由LAB換算)' : '');
+        const score = p?.score ?? p?.fitScore ?? p?.matchScore ?? p?.recommendationScore ?? '';
+        return [p?.candidateKey || p?.id || '', p?.cat || p?.apiType || '', p?.brand || '', p?.name || '', hex,
+            Array.isArray(p?.paletteColors) ? p.paletteColors.map(c => (c && c.hex) || c).filter(Boolean).join('/') : '',
+            score].join('|');
+    },
+    // 記一列 CSV，同時存一份完整資料包（同一個紀錄編號），兩邊可以對回去。
+    _push(row, extra) {
+        if (!this.enabled()) return;
+        const id = this._newId();
+        const full = {};
+        this.COLUMNS.forEach(c => { full[c] = row[c] ?? ''; });
+        full['紀錄編號'] = id;
+        full['時間'] = this._now();
+        full['設定代號'] = this.setting();
+        const rows = this.list();
+        rows.push(full);
+        this._save(rows);
+        this._savePackage({ 紀錄編號: id, 類型: full['類型'], 時間: full['時間'], 設定代號: full['設定代號'],
+            原始檔名: full['原始檔名'], ...this._strip(extra || {}) });
+        this._refreshPanel();
+    },
+
+    // 臉部分析完成時記一列（量色的人上傳妝前原圖、妝後圖都會走這裡）。
+    recordAnalysis(raw, pkg, fileName) {
+        try {
+            this._push({
+                '類型': '分析', '原始檔名': fileName || '', '分析編號': pkg?.async?.jobId || '',
+                ...this._faceColumns(raw, pkg?.faceAnalysis)
+            }, { analysisResult: raw, analysisPackage: pkg });
+        } catch (_) {}
+    },
+
+    // 試妝完成時記一列（消融實驗的人每試妝一次都會走這裡）。
+    recordRender(pkg, result, fileName) {
+        try {
+            const finalPrompt = String(result?.renderPrompt || pkg?.render?.renderPrompt || '');
+            const bagKeys = (typeof BagTryOn !== 'undefined' && BagTryOn.selectedProducts) ? (BagTryOn.selectedProducts() || []) : [];
+            const recommended = Array.isArray(pkg?.recommendations?.products) ? pkg.recommendations.products.slice(0, 12) : [];
+            this._push({
+                '類型': '試妝', '原始檔名': fileName || '', '分析編號': pkg?.async?.jobId || '',
+                ...this._faceColumns(null, pkg?.faceAnalysis),
+                '妝容風格': pkg?.recommendations?.style || pkg?.render?.styleId || '',
+                '模式': bagKeys.length ? '化妝包' : '系統推薦',
+                '化妝包商品': bagKeys.join('; '),
+                '系統推薦商品': recommended.map(p => this._productLine(p)).join('; '),
+                'Ollama指令': pkg?.generativeText?.ollamaRenderPromptEn || '',
+                '最終指令': finalPrompt,
+                '渲染端鎖定': finalPrompt ? (finalPrompt.includes(this._renderLockMarker) ? '開' : '關') : '',
+                '生圖模型': result?.model || '',
+                '指令來源': result?.promptSource || '',
+                '渲染編號': result?.jobId || result?.renderJobId || '',
+                '妝前圖網址': result?.beforeImageUrl || pkg?.render?.beforeImageUrl || '',
+                '妝後圖網址': result?.afterImageUrl || pkg?.render?.afterImageUrl || ''
+            }, { renderResult: result, makeupBagSelection: bagKeys, analysisPackage: pkg });
+        } catch (_) {}
+    },
+
+    toCsv(rows = this.list()) {
+        const esc = v => {
+            const s = String(v ?? '');
+            return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+        };
+        const lines = [this.COLUMNS.map(esc).join(',')]
+            .concat(rows.map(r => this.COLUMNS.map(c => esc(r[c])).join(',')));
+        return '﻿' + lines.join('\r\n');  // BOM 讓 Excel 正確顯示中文
+    },
+    _downloadBlob(blob, name) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    },
+    _stamp() {
+        return this._now().replace(/[-: ]/g, '').slice(0, 12);
+    },
+    download() {
+        this._downloadBlob(new Blob([this.toCsv()], { type: 'text/csv;charset=utf-8' }),
+            `試妝實驗紀錄_${this._stamp()}.csv`);
+    },
+    // 完整資料包（JSON）：每筆對應 CSV 的同一個紀錄編號，含原始分析結果、Ollama 回應、
+    // 推薦商品全部欄位、渲染結果。照片的 base64 已拿掉。
+    downloadPackages() {
+        const body = JSON.stringify({ 匯出時間: this._now(), 筆數: this.packages().length, 紀錄: this.packages() }, null, 2);
+        this._downloadBlob(new Blob([body], { type: 'application/json;charset=utf-8' }),
+            `試妝實驗資料包_${this._stamp()}.json`);
+    },
+
+    // 右下角的小面板：選設定代號、看筆數、下載、清除。
+    mountPanel() {
+        if (!this.enabled() || document.getElementById('tryonExperimentPanel')) return;
+        const box = document.createElement('div');
+        box.id = 'tryonExperimentPanel';
+        box.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:9999;background:#fff;border:1px solid #d8c8cb;'
+            + 'border-radius:10px;padding:8px 10px;font-size:12px;color:#4a3438;box-shadow:0 2px 8px rgba(0,0,0,.12);'
+            + 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:calc(100vw - 24px);';
+        const options = ['', 'S1', 'S2', 'S3', 'S4', '妝前量色', '妝後量色', '其他'];
+        box.innerHTML = '<strong>實驗紀錄</strong>'
+            + '<label>設定 <select data-exp-setting>' + options.map(o => `<option value="${o}">${o || '（未選）'}</option>`).join('') + '</select></label>'
+            + '<span data-exp-count></span>'
+            + '<button type="button" data-exp-download>下載 CSV</button>'
+            + '<button type="button" data-exp-packages>下載資料包</button>'
+            + '<button type="button" data-exp-clear>清除</button>';
+        document.body.appendChild(box);
+        const select = box.querySelector('[data-exp-setting]');
+        select.value = this.setting();
+        select.onchange = () => this.setSetting(select.value);
+        box.querySelector('[data-exp-download]').onclick = () => this.download();
+        box.querySelector('[data-exp-packages]').onclick = () => this.downloadPackages();
+        box.querySelector('[data-exp-clear]').onclick = () => {
+            if (!this.list().length) return;
+            // 不用 confirm()：瀏覽器對話框會卡住自動化測試。改成連按兩次才清除。
+            const btn = box.querySelector('[data-exp-clear]');
+            if (btn.dataset.armed === '1') { this.clear(); btn.dataset.armed = ''; btn.textContent = '清除'; return; }
+            btn.dataset.armed = '1'; btn.textContent = '再按一次確認清除';
+            setTimeout(() => { btn.dataset.armed = ''; btn.textContent = '清除'; }, 4000);
+        };
+        this._refreshPanel();
+    },
+    _refreshPanel() {
+        const el = document.querySelector('#tryonExperimentPanel [data-exp-count]');
+        if (el) el.textContent = `已記 ${this.list().length} 筆（資料包 ${this.packages().length}）`;
+    }
+};
+// 掛面板失敗不能影響頁面（例如測試用的替身 document 沒有完整 DOM），所以整段包 try。
+try {
+    if (TryOnExperimentLog.enabled() && typeof document !== 'undefined'
+        && typeof document.getElementById === 'function' && typeof document.createElement === 'function') {
+        const mountTryOnPanel = () => { try { TryOnExperimentLog.mountPanel(); } catch (_) {} };
+        if (document.readyState === 'loading' && typeof document.addEventListener === 'function') {
+            document.addEventListener('DOMContentLoaded', mountTryOnPanel);
+        } else {
+            mountTryOnPanel();
+        }
+    }
+} catch (_) {}
+
 // ═══ Auth 模組 ═══
 const Auth = {
     _membersKey: 'beautyRegisteredMembers',

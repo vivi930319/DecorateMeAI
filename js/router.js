@@ -3186,8 +3186,8 @@ analysis: `
             <div class="result-cell"><span class="ricon" aria-hidden="true"><img src="assets/feature/lip.webp" alt="" loading="lazy" decoding="async"></span><div class="rlabel">嘴型</div><div class="rvalue" id="r-lip">—</div></div>
             <div class="result-cell"><span class="ricon" aria-hidden="true"><img src="assets/feature/season.webp" alt="" loading="lazy" decoding="async"></span><div class="rlabel">色彩季型</div><div class="rvalue" id="r-season">—</div></div>
         </div>
-        <div class="skin-box"><div class="skin-title">膚 色 基 準 · M A C</div><div class="skin-row"><div class="skin-swatch" id="skinSwatch"></div><div><div class="skin-name" id="skinName">—</div></div></div><div class="skin-warn" id="skinReliabilityWarn" style="display:none;"></div></div>
-        <div class="skin-box"><div class="skin-title">唇 色</div><div class="skin-row"><div class="skin-swatch" id="lipSwatch"></div></div></div>
+        <div class="skin-box"><div class="skin-title">膚 色 基 準 · M A C</div><div class="skin-row"><div class="skin-swatch" id="skinSwatch"></div><div><div class="skin-name" id="skinName">—</div><div class="skin-lab" id="skinLabText" style="display:none;font-size:12px;color:#7a6a6d;margin-top:4px;font-variant-numeric:tabular-nums;user-select:text;"></div></div></div><div class="skin-warn" id="skinReliabilityWarn" style="display:none;"></div></div>
+        <div class="skin-box"><div class="skin-title">唇 色</div><div class="skin-row"><div class="skin-swatch" id="lipSwatch"></div><div><div class="skin-lab" id="lipLabText" style="display:none;font-size:12px;color:#7a6a6d;margin-top:4px;font-variant-numeric:tabular-nums;user-select:text;"></div><div class="skin-lab" id="analysisJobText" style="display:none;font-size:11px;color:#9a8a8d;margin-top:4px;user-select:text;"></div></div></div></div>
         <div id="analysisFeedback" class="analysis-feedback" style="display:none;"></div>
         <div style="text-align:center;margin-top:20px;"><button class="btn-gold" id="goStyleBtn" style="display:none;">選擇風格 →</button></div>
     </div>
@@ -3889,6 +3889,10 @@ async function runMakeupRender(onProgress) {
             }
         });
         AnalysisDraft.save(Router.analysisPackage);
+        // 試妝實驗紀錄：只在 staging／本機有作用，正式站 enabled() 為 false 直接略過。
+        if (typeof TryOnExperimentLog !== 'undefined') {
+            TryOnExperimentLog.recordRender(Router.analysisPackage, result, Router.selectedFile?.name);
+        }
         // 成功才記額度：渲染要 60~150 秒，失敗或逾時卻扣次數會讓人很火大。
         if (typeof UsageQuota !== 'undefined') UsageQuota.record(UsageQuota.KINDS.RENDER);
         return { ok: true, result };
@@ -5361,6 +5365,10 @@ const PageInit = {
                     }
                 });
                 AnalysisDraft.save(Router.analysisPackage);
+                // 試妝實驗紀錄：量色的人上傳原圖或妝後圖做分析時記一列（只在 staging／本機）。
+                if (typeof TryOnExperimentLog !== 'undefined') {
+                    TryOnExperimentLog.recordAnalysis(data, Router.analysisPackage, files?.front?.name || Router.selectedFile?.name);
+                }
                 // 妝前膚色基準：會員第一次拿到可信 LAB 時自動建立（已經有就不覆蓋，見 SkinBaseline）
                 if (typeof SkinBaseline !== 'undefined' && !isGuest()) {
                     const analysisId = Router.analysisPackage.id;
@@ -5414,6 +5422,24 @@ const PageInit = {
                 // 同上：唇色 LAB 不顯示，只留色塊。
                 const lipSwatch = document.getElementById('lipSwatch');
                 if (lipSwatch) lipSwatch.style.background = Api.labToRgb(lipLab.L||40, lipLab.a||0, lipLab.b||0);
+
+                // 試妝實驗量色用（2026-11-15）：只在 staging 與本機把 LAB 數值和分析編號印出來，
+                // 讓量色的人直接抄，不必開 Console。正式站照舊只顯示色塊（理由見上面膚色那段）。
+                // 數值就是分析服務回傳的 膚色.LAB／嘴唇_LAB，沒有換算；分析編號用來跟伺服器端
+                // face_jobs_basic 那筆紀錄（含 imageHash）核對。
+                const showLabNumbers = /^decorate-me-staging\./.test(location.hostname)
+                    || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+                const labLine = v => (v && Number.isFinite(Number(v.L)) && Number.isFinite(Number(v.a)) && Number.isFinite(Number(v.b)))
+                    ? `L ${Number(v.L).toFixed(2)}　a ${Number(v.a).toFixed(2)}　b ${Number(v.b).toFixed(2)}`
+                    : 'LAB —';
+                const jobIdForLab = Router.analysisPackage?.async?.jobId || '';
+                [['skinLabText', labLine(lab)], ['lipLabText', labLine(lipLab)],
+                    ['analysisJobText', jobIdForLab ? `分析編號 ${jobIdForLab}` : '']].forEach(([id, text]) => {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    el.textContent = text;
+                    el.style.display = showLabNumbers && text ? '' : 'none';
+                });
 
                 const goStyleBtn = document.getElementById('goStyleBtn');
                 if (goStyleBtn) goStyleBtn.style.display = 'inline-block';
