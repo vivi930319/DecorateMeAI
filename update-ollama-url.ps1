@@ -37,7 +37,8 @@ if ($NewUrl -notmatch '^https://') {
 # 先確認新網址活著，不要把壞網址推上去
 Write-Host "檢查新網址..." -ForegroundColor Cyan
 try {
-    Invoke-WebRequest -Uri "$NewUrl/health" -TimeoutSec 25 | Out-Null
+    # -UseBasicParsing：PowerShell 5.1 沒加這個會跳安全性確認，非互動模式下直接失敗，看起來像網址死了。
+    Invoke-WebRequest -UseBasicParsing -Uri "$NewUrl/health" -TimeoutSec 25 | Out-Null
     Write-Host "  /health ok" -ForegroundColor Green
 } catch {
     Write-Host "  /health 連不上：$NewUrl" -ForegroundColor Red
