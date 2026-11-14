@@ -4023,39 +4023,89 @@ const TryOnExperimentLog = {
     },
 
     // 右下角的小面板：選設定代號、看筆數、下載、清除。
+    // 樣式跟網站一致（玫瑰色、圓角、膠囊按鈕）；全部限定在 #tryonExperimentPanel 底下，不影響其他畫面。
+    _panelCss: `
+#tryonExperimentPanel{position:fixed;left:16px;bottom:16px;z-index:9999;width:272px;max-width:calc(100vw - 32px);
+  box-sizing:border-box;padding:14px 16px;border:1px solid #ead7d2;border-radius:18px;
+  background:rgba(255,250,248,.97);box-shadow:0 10px 28px rgba(74,52,56,.14);color:#4a3438;font-size:13px;line-height:1.45;}
+#tryonExperimentPanel *{box-sizing:border-box;font-family:inherit;}
+#tryonExperimentPanel .exp-head{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+#tryonExperimentPanel .exp-title{font-size:12px;letter-spacing:.24em;color:#a4675a;font-weight:600;}
+#tryonExperimentPanel .exp-toggle{border:0;background:none;color:#9a8a8d;font-size:12px;cursor:pointer;padding:2px 4px;}
+#tryonExperimentPanel .exp-count{margin:6px 0 10px;font-size:12px;color:#8a7276;}
+#tryonExperimentPanel .exp-label{display:block;font-size:12px;color:#8a7276;margin-bottom:4px;}
+#tryonExperimentPanel select{width:100%;appearance:none;-webkit-appearance:none;padding:7px 30px 7px 12px;
+  border:1px solid #e2cbc6;border-radius:12px;color:#4a3438;font-size:13px;cursor:pointer;
+  background:#fff url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23a4675a' stroke-width='1.5'/></svg>") no-repeat right 12px center;}
+#tryonExperimentPanel .exp-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;}
+#tryonExperimentPanel .exp-btn{padding:8px 0;border-radius:999px;border:1px solid #d9bdb7;background:#fff;color:#4a3438;
+  font-size:12px;cursor:pointer;transition:background .15s,color .15s;}
+#tryonExperimentPanel .exp-btn:hover{background:#f6e9e6;}
+#tryonExperimentPanel .exp-btn.primary{background:#a4675a;border-color:#a4675a;color:#fff;}
+#tryonExperimentPanel .exp-btn.primary:hover{background:#8f5649;}
+#tryonExperimentPanel .exp-clear{grid-column:1 / -1;border:0;background:none;color:#a99a9c;font-size:12px;cursor:pointer;padding:2px 0;}
+#tryonExperimentPanel .exp-clear[data-armed="1"]{color:#b23a48;font-weight:600;}
+#tryonExperimentPanel.collapsed{width:auto;padding:8px 14px;border-radius:999px;cursor:pointer;}
+#tryonExperimentPanel.collapsed .exp-body{display:none;}
+#tryonExperimentPanel.collapsed .exp-title{letter-spacing:.12em;}`,
+    _collapsedKey: 'tryonExperimentPanelCollapsed',
     mountPanel() {
         if (!this.enabled() || document.getElementById('tryonExperimentPanel')) return;
+        if (!document.getElementById('tryonExperimentPanelCss')) {
+            const style = document.createElement('style');
+            style.id = 'tryonExperimentPanelCss';
+            style.textContent = this._panelCss;
+            document.head.appendChild(style);
+        }
         const box = document.createElement('div');
         box.id = 'tryonExperimentPanel';
-        box.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:9999;background:#fff;border:1px solid #d8c8cb;'
-            + 'border-radius:10px;padding:8px 10px;font-size:12px;color:#4a3438;box-shadow:0 2px 8px rgba(0,0,0,.12);'
-            + 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;max-width:calc(100vw - 24px);';
         const options = ['', 'S1', 'S2', 'S3', 'S4', '妝前量色', '妝後量色', '其他'];
-        box.innerHTML = '<strong>實驗紀錄</strong>'
-            + '<label>設定 <select data-exp-setting>' + options.map(o => `<option value="${o}">${o || '（未選）'}</option>`).join('') + '</select></label>'
-            + '<span data-exp-count></span>'
-            + '<button type="button" data-exp-download>下載 CSV</button>'
-            + '<button type="button" data-exp-packages>下載資料包</button>'
-            + '<button type="button" data-exp-clear>清除</button>';
+        box.innerHTML = '<div class="exp-head"><span class="exp-title">實 驗 紀 錄</span>'
+            + '<button type="button" class="exp-toggle" data-exp-toggle>收合</button></div>'
+            + '<div class="exp-body">'
+            + '<div class="exp-count" data-exp-count></div>'
+            + '<span class="exp-label">這次的設定</span>'
+            + '<select data-exp-setting>' + options.map(o => `<option value="${o}">${o || '尚未選擇'}</option>`).join('') + '</select>'
+            + '<div class="exp-actions">'
+            + '<button type="button" class="exp-btn primary" data-exp-download>下載 CSV</button>'
+            + '<button type="button" class="exp-btn" data-exp-packages>下載資料包</button>'
+            + '<button type="button" class="exp-clear" data-exp-clear>清除全部紀錄</button>'
+            + '</div></div>';
         document.body.appendChild(box);
         const select = box.querySelector('[data-exp-setting]');
         select.value = this.setting();
         select.onchange = () => this.setSetting(select.value);
         box.querySelector('[data-exp-download]').onclick = () => this.download();
         box.querySelector('[data-exp-packages]').onclick = () => this.downloadPackages();
+        const setCollapsed = on => {
+            box.classList.toggle('collapsed', on);
+            box.querySelector('[data-exp-toggle]').textContent = on ? '' : '收合';
+            try { localStorage.setItem(this._collapsedKey, on ? '1' : ''); } catch (_) {}
+            this._refreshPanel();
+        };
+        box.querySelector('[data-exp-toggle]').onclick = e => { e.stopPropagation(); setCollapsed(true); };
+        box.onclick = () => { if (box.classList.contains('collapsed')) setCollapsed(false); };
         box.querySelector('[data-exp-clear]').onclick = () => {
             if (!this.list().length) return;
             // 不用 confirm()：瀏覽器對話框會卡住自動化測試。改成連按兩次才清除。
             const btn = box.querySelector('[data-exp-clear]');
-            if (btn.dataset.armed === '1') { this.clear(); btn.dataset.armed = ''; btn.textContent = '清除'; return; }
+            if (btn.dataset.armed === '1') { this.clear(); btn.dataset.armed = ''; btn.textContent = '清除全部紀錄'; return; }
             btn.dataset.armed = '1'; btn.textContent = '再按一次確認清除';
-            setTimeout(() => { btn.dataset.armed = ''; btn.textContent = '清除'; }, 4000);
+            setTimeout(() => { btn.dataset.armed = ''; btn.textContent = '清除全部紀錄'; }, 4000);
         };
-        this._refreshPanel();
+        let collapsed = false;
+        try { collapsed = localStorage.getItem(this._collapsedKey) === '1'; } catch (_) {}
+        setCollapsed(collapsed);
     },
     _refreshPanel() {
-        const el = document.querySelector('#tryonExperimentPanel [data-exp-count]');
-        if (el) el.textContent = `已記 ${this.list().length} 筆（資料包 ${this.packages().length}）`;
+        const box = document.getElementById('tryonExperimentPanel');
+        if (box) {
+            const n = this.list().length;
+            const count = box.querySelector('[data-exp-count]');
+            if (count) count.textContent = `已記 ${n} 筆・資料包 ${this.packages().length} 份`;
+            const title = box.querySelector('.exp-title');
+            if (title) title.textContent = box.classList.contains('collapsed') ? `實驗紀錄 · ${n} 筆` : '實 驗 紀 錄';
+        }
         this._refreshBanner();
     },
 
@@ -4077,8 +4127,10 @@ const TryOnExperimentLog = {
         const bar = document.getElementById('stagingExperimentBanner');
         if (!bar) return;
         const last = this.list().filter(r => r['類型'] === '試妝').pop();
-        const lock = last ? `最近一次試妝（${last['時間'].slice(5, 16)}）渲染端鎖定：${last['渲染端鎖定'] || '不明'}`
-            : '尚未試妝，渲染端鎖定以第一次試妝的結果為準';
+        // 2026-11-15：判斷方式只有程式碼依據，還沒在鎖定開著時實際跑過一次，所以標「尚未實測」。
+        // 實測確認 renderPrompt 真的帶鎖定句之後，再拿掉這幾個字。
+        const lock = last ? `最近一次試妝（${last['時間'].slice(5, 16)}）渲染端鎖定：${last['渲染端鎖定'] || '不明'}（依最終指令判斷，尚未實測）`
+            : '尚未試妝';
         bar.textContent = `STAGING 實驗環境｜渲染接副本 replicate-render-lock｜${lock}`;
     }
 };
