@@ -4056,13 +4056,40 @@ const TryOnExperimentLog = {
     _refreshPanel() {
         const el = document.querySelector('#tryonExperimentPanel [data-exp-count]');
         if (el) el.textContent = `已記 ${this.list().length} 筆（資料包 ${this.packages().length}）`;
+        this._refreshBanner();
+    },
+
+    // 頂端橫幅：一打開就知道自己在 staging，而且渲染接的是副本。
+    // 前端讀不到副本「現在」的鎖定設定（渲染服務的健康檢查沒開放給 Gateway 轉送），
+    // 所以顯示的是「最近一次試妝實際有沒有加鎖定」——從那次的最終指令判斷，是真的發生過的事。
+    // pointer-events:none：橫幅蓋在最上面但不擋點擊。
+    mountBanner() {
+        if (!this.enabled() || document.getElementById('stagingExperimentBanner')) return;
+        const bar = document.createElement('div');
+        bar.id = 'stagingExperimentBanner';
+        bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:10000;pointer-events:none;'
+            + 'background:rgba(178,58,72,.92);color:#fff;font-size:12px;line-height:20px;text-align:center;'
+            + 'padding:0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+        document.body.appendChild(bar);
+        this._refreshBanner();
+    },
+    _refreshBanner() {
+        const bar = document.getElementById('stagingExperimentBanner');
+        if (!bar) return;
+        const last = this.list().filter(r => r['類型'] === '試妝').pop();
+        const lock = last ? `最近一次試妝（${last['時間'].slice(5, 16)}）渲染端鎖定：${last['渲染端鎖定'] || '不明'}`
+            : '尚未試妝，渲染端鎖定以第一次試妝的結果為準';
+        bar.textContent = `STAGING 實驗環境｜渲染接副本 replicate-render-lock｜${lock}`;
     }
 };
 // 掛面板失敗不能影響頁面（例如測試用的替身 document 沒有完整 DOM），所以整段包 try。
 try {
     if (TryOnExperimentLog.enabled() && typeof document !== 'undefined'
         && typeof document.getElementById === 'function' && typeof document.createElement === 'function') {
-        const mountTryOnPanel = () => { try { TryOnExperimentLog.mountPanel(); } catch (_) {} };
+        const mountTryOnPanel = () => {
+            try { TryOnExperimentLog.mountBanner(); } catch (_) {}
+            try { TryOnExperimentLog.mountPanel(); } catch (_) {}
+        };
         if (document.readyState === 'loading' && typeof document.addEventListener === 'function') {
             document.addEventListener('DOMContentLoaded', mountTryOnPanel);
         } else {
